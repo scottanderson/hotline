@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hotline-proto",
+    "crates/hotline-codec",
+    "crates/hotline-client",
+    "crates/hotline-server",
+    "crates/hotline-tracker",
+    "apps/hlc",
+    "apps/hls",
+    "apps/hltui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/scottanderson/hotline"
+rust-version = "1.75"
+
+[workspace.dependencies]
+hotline-proto = { path = "crates/hotline-proto" }
+hotline-codec = { path = "crates/hotline-codec" }
+hotline-client = { path = "crates/hotline-client" }
+hotline-server = { path = "crates/hotline-server" }
+hotline-tracker = { path = "crates/hotline-tracker" }
+
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+bytes = "1"
+thiserror = "1"
+anyhow = "1"
+bitflags = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "~4.4", features = ["derive"] }
+ratatui = "0.26"
+crossterm = { version = "0.27", features = ["event-stream"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

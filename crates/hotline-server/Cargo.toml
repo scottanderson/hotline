@@ -1,0 +1,17 @@
+[package]
+name = "hotline-server"
+description = "Async Hotline server framework built on hotline-proto + Tokio."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hotline-proto = { workspace = true }
+hotline-codec = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

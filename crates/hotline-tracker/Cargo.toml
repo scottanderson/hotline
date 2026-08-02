@@ -1,0 +1,12 @@
+[package]
+name = "hotline-tracker"
+description = "HTRK tracker sub-protocol: server list query/reply and server->tracker beacon encoding."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hotline-proto = { workspace = true }
+thiserror = { workspace = true }

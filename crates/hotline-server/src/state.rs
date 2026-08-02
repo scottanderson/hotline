@@ -1,0 +1,265 @@
+//! Shared, cross-session server state: the connected-user table, chat
+//! rooms, classic news, and the two delivery channels sessions use to
+//! reach each other (broadcast to everyone, targeted to one user).
+
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tokio::sync::{broadcast, RwLock};
+
+use hotline_proto::consts::AccessPrivileges;
+use hotline_proto::types::FileNameWithInfo;
+use hotline_proto::Transaction;
+
+/// How long without any request before a user is considered idle.
+pub const IDLE_THRESHOLD: Duration = Duration::from_secs(10 * 60);
+
+/// One connected user, as tracked by the server.
+#[derive(Debug, Clone)]
+pub struct UserEntry {
+    /// Socket/user ID assigned at connect time.
+    pub user_id: u16,
+    /// Display name (post `SET_CLIENT_USER_INFO`).
+    pub name: String,
+    /// Icon ID.
+    pub icon: u16,
+    /// Privileges granted at login. Kept here too (in addition to
+    /// [`crate::session::Session`], which is what handlers actually
+    /// check against) since other code - an admin tool, `GET_USER_INFO`
+    /// - may want to look a user's privileges up by ID without going
+    /// through their live connection.
+    pub access: AccessPrivileges,
+    /// Whether this login was recognized as an admin account. Drives
+    /// [`UserEntry::is_admin`]'s color-coding rather than an access-bit
+    /// heuristic, since "admin" here is currently a login identity, not
+    /// a privilege combination.
+    pub is_admin: bool,
+    /// Last time this user sent any request. Compared against
+    /// [`IDLE_THRESHOLD`] by [`UserEntry::is_idle`].
+    pub last_active: Instant,
+}
+
+impl UserEntry {
+    /// `true` if this user hasn't sent a request in over
+    /// [`IDLE_THRESHOLD`].
+    pub fn is_idle(&self) -> bool {
+        self.last_active.elapsed() > IDLE_THRESHOLD
+    }
+}
+
+/// A private chat room: a set of member user IDs plus a subject line.
+#[derive(Debug, Clone, Default)]
+pub struct ChatRoom {
+    /// Currently joined members.
+    pub members: HashSet<u16>,
+    /// Room subject, settable by any member.
+    pub subject: String,
+}
+
+/// A transaction addressed to exactly one connected user (private
+/// message, chat-room traffic, a kick notice) rather than everyone -
+/// see [`SharedState::send_to`].
+#[derive(Debug, Clone)]
+pub struct Targeted {
+    /// Recipient's user ID. Every session subscribes to the same
+    /// channel and forwards only what's addressed to itself.
+    pub target_user_id: u16,
+    /// The transaction to forward.
+    pub tx: Transaction,
+}
+
+/// State shared by every [`crate::Session`], behind cheap `Arc` clones.
+#[derive(Clone)]
+pub struct SharedState {
+    users: Arc<RwLock<HashMap<u16, UserEntry>>>,
+    next_user_id: Arc<AtomicU16>,
+    /// Server-initiated transactions meant for everyone (public chat,
+    /// user list changes) get published here; each session subscribes
+    /// and forwards them to its own client.
+    broadcast: broadcast::Sender<Transaction>,
+    /// Transactions meant for exactly one user (private messages, chat
+    /// rooms, kicks) - see [`Targeted`].
+    targeted: broadcast::Sender<Targeted>,
+    /// Root-folder file listing. In-memory placeholder for now (see
+    /// `SharedState::root_files`), swap for a real filesystem-backed
+    /// implementation (with path traversal checks!) when wiring up
+    /// download/upload.
+    files: Arc<RwLock<Vec<FileNameWithInfo>>>,
+    /// Classic (pre-threaded) news: one flat, newest-first text blob,
+    /// matching how the original news system actually worked before
+    /// per-article threading existed.
+    news: Arc<RwLock<String>>,
+    chat_rooms: Arc<RwLock<HashMap<u16, ChatRoom>>>,
+    next_chat_id: Arc<AtomicU16>,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        let (broadcast, _rx) = broadcast::channel(256);
+        let (targeted, _rx) = broadcast::channel(256);
+        let files = vec![
+            FileNameWithInfo {
+                file_type: *b"fldr",
+                creator: *b"\0\0\0\0",
+                size: 0,
+                name: "Uploads".to_string(),
+            },
+            FileNameWithInfo {
+                file_type: *b"TEXT",
+                creator: *b"ttxt",
+                size: 0,
+                name: "readme.txt".to_string(),
+            },
+        ];
+        Self {
+            users: Arc::new(RwLock::new(HashMap::new())),
+            next_user_id: Arc::new(AtomicU16::new(1)),
+            broadcast,
+            targeted,
+            files: Arc::new(RwLock::new(files)),
+            news: Arc::new(RwLock::new(String::new())),
+            chat_rooms: Arc::new(RwLock::new(HashMap::new())),
+            next_chat_id: Arc::new(AtomicU16::new(1)),
+        }
+    }
+}
+
+impl SharedState {
+    /// Allocate the next free user/socket ID.
+    pub fn next_user_id(&self) -> u16 {
+        self.next_user_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Register a newly logged-in (or info-changed) user.
+    pub async fn insert_user(&self, entry: UserEntry) {
+        self.users.write().await.insert(entry.user_id, entry);
+    }
+
+    /// Remove a user on disconnect.
+    pub async fn remove_user(&self, user_id: u16) {
+        self.users.write().await.remove(&user_id);
+    }
+
+    /// Snapshot of all currently connected users.
+    pub async fn users(&self) -> Vec<UserEntry> {
+        self.users.read().await.values().cloned().collect()
+    }
+
+    /// Look up one connected user by ID.
+    pub async fn user(&self, user_id: u16) -> Option<UserEntry> {
+        self.users.read().await.get(&user_id).cloned()
+    }
+
+    /// Record that `user_id` just sent a request, resetting their idle
+    /// timer. Called once per received frame in the session loop.
+    pub async fn touch_user(&self, user_id: u16) {
+        if let Some(entry) = self.users.write().await.get_mut(&user_id) {
+            entry.last_active = Instant::now();
+        }
+    }
+
+    /// Publish a transaction to every session (e.g. a chat message or a
+    /// user list change notification). Sessions that are slow/gone just
+    /// miss it; delivery is best-effort like the real protocol's chat.
+    pub fn publish(&self, tx: Transaction) {
+        let _ = self.broadcast.send(tx);
+    }
+
+    /// Subscribe to the broadcast (everyone) stream. Called once per
+    /// session.
+    pub fn subscribe(&self) -> broadcast::Receiver<Transaction> {
+        self.broadcast.subscribe()
+    }
+
+    /// Send a transaction to exactly one connected user (private
+    /// message, chat-room traffic, a kick notice). A no-op if that user
+    /// isn't connected - same best-effort delivery as [`Self::publish`].
+    pub fn send_to(&self, target_user_id: u16, tx: Transaction) {
+        let _ = self.targeted.send(Targeted { target_user_id, tx });
+    }
+
+    /// Subscribe to the targeted-delivery stream. Called once per
+    /// session; each session filters for its own `user_id`.
+    pub fn subscribe_targeted(&self) -> broadcast::Receiver<Targeted> {
+        self.targeted.subscribe()
+    }
+
+    /// Snapshot of the (currently root-only) file listing. `path` is
+    /// accepted for API shape but ignored until real subfolder support
+    /// lands.
+    pub async fn root_files(&self) -> Vec<FileNameWithInfo> {
+        self.files.read().await.clone()
+    }
+
+    /// The full classic news text.
+    pub async fn news(&self) -> String {
+        self.news.read().await.clone()
+    }
+
+    /// Prepend a new post to the classic news, matching the reference
+    /// server's default divider/attribution format.
+    pub async fn post_news(&self, poster: &str, text: &str) {
+        const DIVIDER: &str = "_________________________________________________________";
+        let entry = format!("{DIVIDER}\rFrom {poster}\r\r{text}\r\r");
+        self.news.write().await.insert_str(0, &entry);
+    }
+
+    /// Create a new private chat room with `creator` as its only member,
+    /// returning the new room's ID.
+    pub async fn create_chat_room(&self, creator: u16) -> u16 {
+        let id = self.next_chat_id.fetch_add(1, Ordering::Relaxed);
+        self.chat_rooms.write().await.insert(
+            id,
+            ChatRoom {
+                members: HashSet::from([creator]),
+                subject: String::new(),
+            },
+        );
+        id
+    }
+
+    /// Current members of a chat room, if it exists.
+    pub async fn chat_room_members(&self, chat_id: u16) -> Option<HashSet<u16>> {
+        self.chat_rooms
+            .read()
+            .await
+            .get(&chat_id)
+            .map(|r| r.members.clone())
+    }
+
+    /// Add `user_id` to a chat room. `false` if the room doesn't exist.
+    pub async fn join_chat_room(&self, chat_id: u16, user_id: u16) -> bool {
+        match self.chat_rooms.write().await.get_mut(&chat_id) {
+            Some(room) => {
+                room.members.insert(user_id);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Remove `user_id` from a chat room, deleting the room once its
+    /// last member leaves.
+    pub async fn leave_chat_room(&self, chat_id: u16, user_id: u16) {
+        let mut rooms = self.chat_rooms.write().await;
+        if let Some(room) = rooms.get_mut(&chat_id) {
+            room.members.remove(&user_id);
+            if room.members.is_empty() {
+                rooms.remove(&chat_id);
+            }
+        }
+    }
+
+    /// Set a chat room's subject. `false` if the room doesn't exist.
+    pub async fn set_chat_subject(&self, chat_id: u16, subject: String) -> bool {
+        match self.chat_rooms.write().await.get_mut(&chat_id) {
+            Some(room) => {
+                room.subject = subject;
+                true
+            }
+            None => false,
+        }
+    }
+}

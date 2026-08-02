@@ -1,0 +1,19 @@
+[package]
+name = "hls"
+description = "hotline-rs server binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "hls"
+path = "src/main.rs"
+
+[dependencies]
+hotline-server = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

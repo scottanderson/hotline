@@ -1,0 +1,22 @@
+[package]
+name = "hltui"
+description = "Terminal UI Hotline client, built on hotline-client."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "hltui"
+path = "src/main.rs"
+
+[dependencies]
+hotline-client = { workspace = true }
+hotline-proto = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+directories = "5"
