@@ -31,11 +31,6 @@ pub struct UserEntry {
     /// - may want to look a user's privileges up by ID without going
     /// through their live connection.
     pub access: AccessPrivileges,
-    /// Whether this login was recognized as an admin account. Drives
-    /// [`UserEntry::is_admin`]'s color-coding rather than an access-bit
-    /// heuristic, since "admin" here is currently a login identity, not
-    /// a privilege combination.
-    pub is_admin: bool,
     /// Last time this user sent any request. Compared against
     /// [`IDLE_THRESHOLD`] by [`UserEntry::is_idle`].
     pub last_active: Instant,

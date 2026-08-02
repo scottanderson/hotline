@@ -26,10 +26,6 @@ pub struct Session {
     /// the one place in the process that's guaranteed not to change
     /// concurrently out from under a single connection's handler calls.
     access: AccessPrivileges,
-    /// Set at login for the hardcoded `admin`/`admin` account (see
-    /// [`Session::on_login`]). Drives the admin color in clients that
-    /// read [`UserNameWithInfo::flags`]'s admin bit.
-    is_admin: bool,
 }
 
 impl Session {
@@ -52,7 +48,6 @@ impl Session {
             // user without SEND_CHAT would hit, rather than needing a
             // separate "have they logged in yet" gate.
             access: AccessPrivileges::empty(),
-            is_admin: false,
         };
 
         let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::default()).split();
@@ -193,9 +188,9 @@ impl Session {
         // No real account database yet - "admin"/"admin" is a hardcoded
         // stand-in for one, granting every privilege; everyone else gets
         // the server's configured flat guest grant.
-        (self.access, self.is_admin) = match (login.as_deref(), password.as_deref()) {
-            (Some("admin"), Some("admin")) => (AccessPrivileges::all(), true),
-            _ => (config.default_access, false),
+        self.access = match (login.as_deref(), password.as_deref()) {
+            (Some("admin"), Some("admin")) => AccessPrivileges::all(),
+            _ => config.default_access,
         };
 
         // Real clients commonly embed the display name and icon directly
@@ -256,7 +251,6 @@ impl Session {
                 name: self.name.clone(),
                 icon,
                 access: self.access,
-                is_admin: self.is_admin,
                 last_active: Instant::now(),
             })
             .await;
@@ -274,7 +268,9 @@ impl Session {
     }
 
     /// This session's current [`UserNameWithInfo::flags`] value: admin
-    /// (fixed at login) OR'd with idle (recomputed from the wall clock
+    /// (derived from the `DISCONNECT_USERS` privilege, same as mhxd's
+    /// `disconnect_users`-driven color assignment - not a separately
+    /// tracked identity) OR'd with idle (recomputed from the wall clock
     /// every time this is called, since idleness isn't an event, just a
     /// property of "how long since the last request").
     fn user_flags(&self) -> u16 {
@@ -283,7 +279,7 @@ impl Session {
         // user-list snapshot compute it from `UserEntry::is_idle`
         // instead; this is only the admin half, used where a single
         // session pushes its own flags.
-        if self.is_admin {
+        if self.access.contains(AccessPrivileges::DISCONNECT_USERS) {
             UserFlags::ADMIN.bits()
         } else {
             0
@@ -346,7 +342,7 @@ impl Session {
             .await
             .into_iter()
             .map(|u| {
-                let mut bits = if u.is_admin {
+                let mut bits = if u.access.contains(AccessPrivileges::DISCONNECT_USERS) {
                     UserFlags::ADMIN.bits()
                 } else {
                     0
@@ -383,7 +379,11 @@ impl Session {
         let text = format!(
             "{}{}\rPrivileges: {}",
             target.name,
-            if target.is_admin { " (admin)" } else { "" },
+            if target.access.contains(AccessPrivileges::DISCONNECT_USERS) {
+                " (admin)"
+            } else {
+                ""
+            },
             if privileges.is_empty() {
                 "none"
             } else {
@@ -628,7 +628,6 @@ mod tests {
             user_id: 1,
             name: name.to_string(),
             access,
-            is_admin: false,
         }
     }
 
