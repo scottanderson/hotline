@@ -41,7 +41,10 @@ pub struct Transaction {
     pub type_: u32,
     /// Transaction ID. Client-assigned and nonzero on a request; echoed
     /// back on the matching reply. Always `0` on a server-initiated push.
-    pub trans: u32,
+    /// Private so a reply can only be built through [`Transaction::reply`]/
+    /// [`Transaction::reply_error`], which copy it from the request they're
+    /// answering rather than letting a caller pass the wrong id by hand.
+    trans: u32,
     /// Bit 0 is the error flag; the rest is reserved on the wire.
     pub flag: u32,
     /// Total size of the data section across every part of a (possibly
@@ -65,9 +68,9 @@ impl Transaction {
         Self::assemble(opcode.as_u32(), trans, 0, fields)
     }
 
-    /// Build a reply transaction from a set of fields.
-    pub fn reply(trans: u32, is_error: bool, fields: Vec<Field>) -> Self {
-        Self::assemble(TASK_REPLY, trans, is_error as u32, fields)
+    /// Build a reply to this (request) transaction, carrying `fields`.
+    pub fn reply(&self, fields: Vec<Field>) -> Self {
+        Self::assemble(TASK_REPLY, self.trans, 0, fields)
     }
 
     /// Build a server-initiated push transaction (chat relay, user list
@@ -78,13 +81,15 @@ impl Transaction {
         Self::assemble(opcode.as_u32(), 0, 0, fields)
     }
 
-    /// Build a bare error reply (error flag set + an `ERROR_TEXT` field).
-    /// `ERROR_TEXT` (`HTLS_DATA_TASKERROR`) is server-only: only a
-    /// server ever sends one of these.
-    pub fn error_reply(trans: u32, message: impl Into<String>) -> Self {
-        Self::reply(
-            trans,
-            true,
+    /// Build an error reply to this (request) transaction: the error flag
+    /// set and an `ERROR_TEXT` field carrying `message`. `ERROR_TEXT`
+    /// (`HTLS_DATA_TASKERROR`) is server-only, only a server ever sends
+    /// one of these.
+    pub fn reply_error(&self, message: impl Into<String>) -> Self {
+        Self::assemble(
+            TASK_REPLY,
+            self.trans,
+            1,
             vec![Field::string(ServerFieldId::ErrorText, message)],
         )
     }
@@ -136,6 +141,13 @@ impl Transaction {
     /// `true` if bit 0 of `flag` is set.
     pub const fn is_error(&self) -> bool {
         self.flag & 1 != 0
+    }
+
+    /// The transaction ID: client-assigned and nonzero on a request,
+    /// echoed back on the matching reply, always `0` on a push. Used to
+    /// match a reply to the request that's still awaiting it.
+    pub const fn trans(&self) -> u32 {
+        self.trans
     }
 
     /// Find the first field with the given ID, if present.
@@ -417,14 +429,16 @@ mod tests {
 
     #[test]
     fn reply_carries_task_reply_sentinel_not_zero() {
-        let tx = Transaction::reply(42, false, vec![]);
+        let request = Transaction::request(ClientOpcode::Ping, 42, vec![]);
+        let tx = request.reply(vec![]);
         assert_eq!(tx.type_, TASK_REPLY);
         assert!(tx.is_reply());
     }
 
     #[test]
     fn error_reply_shape() {
-        let tx = Transaction::error_reply(42, "nope");
+        let request = Transaction::request(ClientOpcode::Ping, 42, vec![]);
+        let tx = request.reply_error("nope");
         assert_eq!(tx.trans, 42);
         assert!(tx.is_error());
         assert!(tx.is_reply());
@@ -482,7 +496,7 @@ mod tests {
         assert!(request_debug.contains("HTLC_DATA_TEXT"));
         assert!(!request_debug.contains("HTLS_DATA"));
 
-        let reply = Transaction::reply(1, false, vec![Field::string(ServerFieldId::Text, "hi")]);
+        let reply = request.reply(vec![Field::string(ServerFieldId::Text, "hi")]);
         let reply_debug = format!("{reply:?}");
         assert!(reply_debug.contains("HTLS_DATA"));
         assert!(!reply_debug.contains("HTLC_DATA"));

@@ -139,7 +139,7 @@ impl Session {
         // `type_` as a `ClientOpcode` directly.
         let Opcode::Request(opcode) = tx.opcode() else {
             tracing::debug!(type_ = tx.type_, "not a recognized client request");
-            return vec![Transaction::error_reply(tx.trans, "not implemented")];
+            return vec![tx.reply_error("not implemented")];
         };
 
         match opcode {
@@ -161,10 +161,10 @@ impl Session {
             ClientOpcode::ChatAccept => vec![self.on_chat_accept(tx, state).await],
             ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
             ClientOpcode::ChatSubject => vec![self.on_chat_subject(tx, state).await],
-            ClientOpcode::Ping => vec![Transaction::reply(tx.trans, false, vec![])],
+            ClientOpcode::Ping => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "unhandled opcode");
-                vec![Transaction::error_reply(tx.trans, "not implemented")]
+                vec![tx.reply_error("not implemented")]
             }
         }
     }
@@ -173,7 +173,7 @@ impl Session {
     /// where the bit has one) if `self.access` doesn't hold `required`.
     /// Returns a reason string rather than a ready `Transaction`, since
     /// callers need different delivery shapes: a reply-expecting
-    /// transaction must get a proper [`Transaction::error_reply`] (the
+    /// transaction must get a proper [`Transaction::reply_error`] (the
     /// client's `request()` is awaiting exactly that trans ID), while a
     /// fire-and-forget one (chat) has nothing to award a reply to and
     /// needs an unsolicited push instead. Handing back a ready
@@ -234,7 +234,7 @@ impl Session {
         }
 
         vec![
-            Transaction::reply(tx.trans, false, fields),
+            tx.reply(fields),
             // Granted privileges go out as a separate push
             // (`ServerOpcode::UserSelfinfo`) rather than folding
             // `USER_ACCESS` into the login reply itself - real clients
@@ -319,7 +319,7 @@ impl Session {
             // fails, such as trying to send public chat when they don't
             // have chat privs." Sent straight back to the denied client
             // only - never broadcast. CHAT_SEND has no reply mechanism
-            // at all, so this can't be a `Transaction::error_reply`
+            // at all, so this can't be a `Transaction::reply_error`
             // either - there's no pending request on the client side to
             // resolve.
             return vec![Transaction::push(
@@ -384,20 +384,20 @@ impl Session {
             })
             .map(|entry| Field::bytes(ServerFieldId::UserList, entry.encode()))
             .collect();
-        Transaction::reply(tx.trans, false, fields)
+        tx.reply(fields)
     }
 
     /// 303: another user's info text (name, icon, and a short
     /// privilege summary via [`AccessPrivileges::describe`]).
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::GET_USER_INFO) {
-            return Transaction::error_reply(tx.trans, reason);
+            return tx.reply_error(reason);
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
-            return Transaction::error_reply(tx.trans, "missing user id");
+            return tx.reply_error("missing user id");
         };
         let Some(target) = state.user(target_id).await else {
-            return Transaction::error_reply(tx.trans, "no such user");
+            return tx.reply_error("no such user");
         };
 
         let privileges = target.access.describe().join(", ");
@@ -416,35 +416,28 @@ impl Session {
             }
         );
 
-        Transaction::reply(
-            tx.trans,
-            false,
-            vec![
-                Field::string(ServerFieldId::Name, target.name),
-                Field::u16(ServerFieldId::UserId, target.user_id),
-                Field::string(ServerFieldId::Text, text),
-            ],
-        )
+        tx.reply(vec![
+            Field::string(ServerFieldId::Name, target.name),
+            Field::u16(ServerFieldId::UserId, target.user_id),
+            Field::string(ServerFieldId::Text, text),
+        ])
     }
 
     /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
     /// fuller implementation ban) another user.
     async fn on_user_kick(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::DISCONNECT_USERS) {
-            return vec![Transaction::error_reply(tx.trans, reason)];
+            return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
-            return vec![Transaction::error_reply(tx.trans, "missing user id")];
+            return vec![tx.reply_error("missing user id")];
         };
         if state
             .user(target_id)
             .await
             .is_some_and(|u| u.access.contains(AccessPrivileges::CANT_BE_DISCONNECTED))
         {
-            return vec![Transaction::error_reply(
-                tx.trans,
-                "that user can't be disconnected",
-            )];
+            return vec![tx.reply_error("that user can't be disconnected")];
         }
 
         state.send_to(
@@ -457,19 +450,19 @@ impl Session {
                 )],
             ),
         );
-        vec![Transaction::reply(tx.trans, false, vec![])]
+        vec![tx.reply(vec![])]
     }
 
     /// 108: a private instant message to one other user.
     async fn on_private_msg(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::SEND_MSGS) {
-            return vec![Transaction::error_reply(tx.trans, reason)];
+            return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
-            return vec![Transaction::error_reply(tx.trans, "missing user id")];
+            return vec![tx.reply_error("missing user id")];
         };
         let Some(message) = tx.field(ClientFieldId::Text) else {
-            return vec![Transaction::error_reply(tx.trans, "missing message")];
+            return vec![tx.reply_error("missing message")];
         };
 
         state.send_to(
@@ -483,13 +476,13 @@ impl Session {
                 ],
             ),
         );
-        vec![Transaction::reply(tx.trans, false, vec![])]
+        vec![tx.reply(vec![])]
     }
 
     /// 200
     async fn on_get_file_name_list(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILES) {
-            return Transaction::error_reply(tx.trans, reason);
+            return tx.reply_error(reason);
         }
 
         // FILE_PATH (202) is optional in the request; root is assumed
@@ -501,45 +494,37 @@ impl Session {
             .into_iter()
             .map(|entry| Field::bytes(ServerFieldId::FileList, entry.encode()))
             .collect();
-        Transaction::reply(tx.trans, false, fields)
+        tx.reply(fields)
     }
 
     /// 101: read the classic (non-threaded) news.
     async fn on_newsfile_get(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::READ_NEWS) {
-            return Transaction::error_reply(tx.trans, reason);
+            return tx.reply_error(reason);
         }
         let news = state.news().await;
-        Transaction::reply(
-            tx.trans,
-            false,
-            vec![Field::string(ServerFieldId::Text, news)],
-        )
+        tx.reply(vec![Field::string(ServerFieldId::Text, news)])
     }
 
     /// 103: post to the classic (non-threaded) news.
     async fn on_newsfile_post(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::POST_NEWS) {
-            return Transaction::error_reply(tx.trans, reason);
+            return tx.reply_error(reason);
         }
         let Some(text) = tx.field(ClientFieldId::Text) else {
-            return Transaction::error_reply(tx.trans, "missing post text");
+            return tx.reply_error("missing post text");
         };
         state.post_news(&self.name, &text.as_string()).await;
-        Transaction::reply(tx.trans, false, vec![])
+        tx.reply(vec![])
     }
 
     /// 112: create a private chat room.
     async fn on_chat_create(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::CREATE_PCHATS) {
-            return Transaction::error_reply(tx.trans, reason);
+            return tx.reply_error(reason);
         }
         let chat_id = state.create_chat_room(self.user_id).await;
-        Transaction::reply(
-            tx.trans,
-            false,
-            vec![Field::u16(ServerFieldId::ChatId, chat_id)],
-        )
+        tx.reply(vec![Field::u16(ServerFieldId::ChatId, chat_id)])
     }
 
     /// 113: invite another user to a room this session belongs to.
@@ -548,13 +533,13 @@ impl Session {
             tx.field(ClientFieldId::ChatId).and_then(Field::as_u16),
             tx.field(ClientFieldId::Uid).and_then(Field::as_u16),
         ) else {
-            return Transaction::error_reply(tx.trans, "missing chat id or user id");
+            return tx.reply_error("missing chat id or user id");
         };
         let Some(members) = state.chat_room_members(chat_id).await else {
-            return Transaction::error_reply(tx.trans, "no such chat room");
+            return tx.reply_error("no such chat room");
         };
         if !members.contains(&self.user_id) {
-            return Transaction::error_reply(tx.trans, "you are not in that chat room");
+            return tx.reply_error("you are not in that chat room");
         }
 
         state.send_to(
@@ -567,16 +552,16 @@ impl Session {
                 ],
             ),
         );
-        Transaction::reply(tx.trans, false, vec![])
+        tx.reply(vec![])
     }
 
     /// 114: accept an invitation (join a room).
     async fn on_chat_accept(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
-            return Transaction::error_reply(tx.trans, "missing chat id");
+            return tx.reply_error("missing chat id");
         };
         if !state.join_chat_room(chat_id, self.user_id).await {
-            return Transaction::error_reply(tx.trans, "no such chat room");
+            return tx.reply_error("no such chat room");
         }
 
         let notify = Transaction::push(
@@ -592,13 +577,13 @@ impl Session {
                 state.send_to(member, notify.clone());
             }
         }
-        Transaction::reply(tx.trans, false, vec![])
+        tx.reply(vec![])
     }
 
     /// 115: leave a chat room.
     async fn on_chat_part(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
-            return Transaction::error_reply(tx.trans, "missing chat id");
+            return tx.reply_error("missing chat id");
         };
         let remaining = state.chat_room_members(chat_id).await.unwrap_or_default();
         state.leave_chat_room(chat_id, self.user_id).await;
@@ -613,7 +598,7 @@ impl Session {
         for member in remaining.into_iter().filter(|&m| m != self.user_id) {
             state.send_to(member, notify.clone());
         }
-        Transaction::reply(tx.trans, false, vec![])
+        tx.reply(vec![])
     }
 
     /// 120: set a chat room's subject.
@@ -622,10 +607,10 @@ impl Session {
             tx.field(ClientFieldId::ChatId).and_then(Field::as_u16),
             tx.field(ClientFieldId::ChatSubject).map(Field::as_string),
         ) else {
-            return Transaction::error_reply(tx.trans, "missing chat id or subject");
+            return tx.reply_error("missing chat id or subject");
         };
         if !state.set_chat_subject(chat_id, subject.clone()).await {
-            return Transaction::error_reply(tx.trans, "no such chat room");
+            return tx.reply_error("no such chat room");
         }
 
         let notify = Transaction::push(
@@ -640,7 +625,7 @@ impl Session {
                 state.send_to(member, notify.clone());
             }
         }
-        Transaction::reply(tx.trans, false, vec![])
+        tx.reply(vec![])
     }
 }
 

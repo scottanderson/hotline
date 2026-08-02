@@ -116,7 +116,7 @@ mod tests {
         // Decode always produces `FieldValue::Bytes` (no schema to
         // interpret against), so compare interpreted values rather than
         // raw struct equality against the locally-built, typed original.
-        assert_eq!(decoded.trans, tx.trans);
+        assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
             decoded.field(ClientFieldId::Text).unwrap().as_string(),
             "hello"
@@ -159,7 +159,7 @@ mod tests {
             ],
         );
         let decoded = feed_byte_by_byte(&tx);
-        assert_eq!(decoded.trans, tx.trans);
+        assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
             decoded.field(ClientFieldId::Name).unwrap().as_string(),
             "RustHL"
@@ -185,10 +185,10 @@ mod tests {
         codec.encode(second.clone(), &mut buf).unwrap();
 
         let decoded_first = codec.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(decoded_first.trans, first.trans);
+        assert_eq!(decoded_first.trans(), first.trans());
 
         let decoded_second = codec.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(decoded_second.trans, second.trans);
+        assert_eq!(decoded_second.trans(), second.trans());
         assert_eq!(
             decoded_second
                 .field(ClientFieldId::Text)

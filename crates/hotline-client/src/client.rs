@@ -246,7 +246,7 @@ async fn read_loop(
     while let Some(Ok(tx)) = reader.next().await {
         if tx.is_reply() {
             let sender = match &mut *pending.lock().await {
-                PendingState::Open(map) => map.remove(&tx.trans),
+                PendingState::Open(map) => map.remove(&tx.trans()),
                 PendingState::Closed => None,
             };
             if let Some(sender) = sender {
