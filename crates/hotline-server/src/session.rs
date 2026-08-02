@@ -17,7 +17,7 @@ use crate::server::ServerConfig;
 use crate::state::{SharedState, UserEntry};
 
 /// A single client connection: handshake state plus the transaction
-/// dispatch loop. Not `Clone` - one per socket.
+/// dispatch loop. Not `Clone`, one per socket.
 pub struct Session {
     user_id: u16,
     name: String,
@@ -176,7 +176,7 @@ impl Session {
     /// transaction must get a proper [`Transaction::error_reply`] (the
     /// client's `request()` is awaiting exactly that trans ID), while a
     /// fire-and-forget one (chat) has nothing to award a reply to and
-    /// needs an unsolicited push instead - handing back a ready
+    /// needs an unsolicited push instead. Handing back a ready
     /// `Transaction` here would force one shape on every caller and
     /// silently hang whichever kind it guessed wrong for.
     fn require(&self, required: AccessPrivileges) -> std::result::Result<(), String> {
@@ -294,7 +294,7 @@ impl Session {
 
     /// This session's current [`UserNameWithInfo::flags`] value: admin
     /// (derived from the `DISCONNECT_USERS` privilege, same as mhxd's
-    /// `disconnect_users`-driven color assignment - not a separately
+    /// `disconnect_users`-driven color assignment, not a separately
     /// tracked identity) OR'd with idle (recomputed from the wall clock
     /// every time this is called, since idleness isn't an event, just a
     /// property of "how long since the last request").
@@ -311,7 +311,7 @@ impl Session {
         }
     }
 
-    /// 105 - public or (if `ChatId` is present) private-room chat.
+    /// 105: public or (if `ChatId` is present) private-room chat.
     async fn on_chat(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::SEND_CHAT) {
             // Per the older protocol guide: "Server transaction #104
@@ -387,7 +387,7 @@ impl Session {
         Transaction::reply(tx.trans, false, fields)
     }
 
-    /// 303 - another user's info text (name, icon, and a short
+    /// 303: another user's info text (name, icon, and a short
     /// privilege summary via [`AccessPrivileges::describe`]).
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::GET_USER_INFO) {
@@ -427,7 +427,7 @@ impl Session {
         )
     }
 
-    /// 110 - disconnect (and, per the `Options` kick-to-ban bit, in a
+    /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
     /// fuller implementation ban) another user.
     async fn on_user_kick(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::DISCONNECT_USERS) {
@@ -460,7 +460,7 @@ impl Session {
         vec![Transaction::reply(tx.trans, false, vec![])]
     }
 
-    /// 108 - a private instant message to one other user.
+    /// 108: a private instant message to one other user.
     async fn on_private_msg(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::SEND_MSGS) {
             return vec![Transaction::error_reply(tx.trans, reason)];
@@ -504,7 +504,7 @@ impl Session {
         Transaction::reply(tx.trans, false, fields)
     }
 
-    /// 101 - read the classic (non-threaded) news.
+    /// 101: read the classic (non-threaded) news.
     async fn on_newsfile_get(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::READ_NEWS) {
             return Transaction::error_reply(tx.trans, reason);
@@ -517,7 +517,7 @@ impl Session {
         )
     }
 
-    /// 103 - post to the classic (non-threaded) news.
+    /// 103: post to the classic (non-threaded) news.
     async fn on_newsfile_post(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::POST_NEWS) {
             return Transaction::error_reply(tx.trans, reason);
@@ -529,7 +529,7 @@ impl Session {
         Transaction::reply(tx.trans, false, vec![])
     }
 
-    /// 112 - create a private chat room.
+    /// 112: create a private chat room.
     async fn on_chat_create(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::CREATE_PCHATS) {
             return Transaction::error_reply(tx.trans, reason);
@@ -542,7 +542,7 @@ impl Session {
         )
     }
 
-    /// 113 - invite another user to a room this session belongs to.
+    /// 113: invite another user to a room this session belongs to.
     async fn on_chat_invite(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let (Some(chat_id), Some(target_id)) = (
             tx.field(ClientFieldId::ChatId).and_then(Field::as_u16),
@@ -570,7 +570,7 @@ impl Session {
         Transaction::reply(tx.trans, false, vec![])
     }
 
-    /// 114 - accept an invitation (join a room).
+    /// 114: accept an invitation (join a room).
     async fn on_chat_accept(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
             return Transaction::error_reply(tx.trans, "missing chat id");
@@ -595,7 +595,7 @@ impl Session {
         Transaction::reply(tx.trans, false, vec![])
     }
 
-    /// 115 - leave a chat room.
+    /// 115: leave a chat room.
     async fn on_chat_part(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
             return Transaction::error_reply(tx.trans, "missing chat id");
@@ -616,7 +616,7 @@ impl Session {
         Transaction::reply(tx.trans, false, vec![])
     }
 
-    /// 120 - set a chat room's subject.
+    /// 120: set a chat room's subject.
     async fn on_chat_subject(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let (Some(chat_id), Some(subject)) = (
             tx.field(ClientFieldId::ChatId).and_then(Field::as_u16),

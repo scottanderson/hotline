@@ -15,7 +15,7 @@
 //! `Debug` shows the actual typed value instead of guessing from length
 //! and ASCII-ness at print time. A field just decoded off the wire is
 //! [`FieldValue::Bytes`] until something interprets it (`as_string()`,
-//! `as_u16()`, ...) - there's no schema table telling decode what a raw
+//! `as_u16()`, ...). There's no schema table telling decode what a raw
 //! id "should" mean, so it stays honestly untyped until a caller who
 //! knows the field says otherwise.
 
@@ -30,20 +30,20 @@ use crate::wire::VecWriter;
 pub enum FieldValue {
     /// UTF-8 text (see [`Field::as_string`] for the encoding rationale).
     Text(String),
-    /// XOR-0xFF obfuscated text - `LOGIN`/`PASSWORD` on the wire.
+    /// XOR-0xFF obfuscated text, used for `LOGIN`/`PASSWORD` on the wire.
     ObfuscatedText(String),
     /// A 16-bit field (`UID`, `ICON`, length prefixes, ...).
     U16(u16),
     /// A 32-bit field (file/transfer sizes, chat/thread IDs, ...).
     U32(u32),
-    /// The 64-bit `USER_ACCESS` bitmask - the only genuinely 64-bit
+    /// The 64-bit `USER_ACCESS` bitmask, the only genuinely 64-bit
     /// field on the wire.
     U64(u64),
     /// A generic signed integer, encoded as the smaller of 2 or 4 bytes
     /// (see [`crate::numbers`]).
     Integer(i32),
-    /// Anything else: a packed record, an image, or - for a field just
-    /// decoded off the wire - unin interpreted bytes.
+    /// Anything else: a packed record, an image, or, for a field just
+    /// decoded off the wire, uninterpreted bytes.
     Bytes(Vec<u8>),
 }
 
@@ -84,7 +84,7 @@ pub struct Field {
     /// since that's what's actually on the wire and what decoding
     /// produces before direction is known.
     pub id: u16,
-    /// The typed payload - see [`FieldValue`].
+    /// The typed payload. See [`FieldValue`].
     pub value: FieldValue,
 }
 
@@ -149,7 +149,7 @@ impl Field {
     /// was actually constructed/decoded (an obfuscated field decoded off
     /// the wire is [`FieldValue::Bytes`], not
     /// [`FieldValue::ObfuscatedText`], since decode doesn't know a
-    /// field's semantics - see the [module docs](self)).
+    /// field's semantics, see the [module docs](self)).
     pub fn as_deobfuscated_string(&self) -> String {
         match &self.value {
             FieldValue::ObfuscatedText(s) => s.clone(),
@@ -212,7 +212,7 @@ impl Field {
 
     /// Interpret this field's data as text, decoded as UTF-8 (lossily,
     /// substituting U+FFFD for any invalid sequence). The protocol has
-    /// no mandated text encoding - field bytes are opaque on the wire,
+    /// no mandated text encoding: field bytes are opaque on the wire,
     /// and servers may convert between encodings. UTF-8 works when both
     /// ends speak it; bytes from a legacy client using another encoding
     /// (historically Mac OS Roman) won't round-trip correctly here.
@@ -234,7 +234,7 @@ impl Field {
 
     /// `field_id (2) | field_size (2) | data`.
     ///
-    /// Fails if the encoded value is longer than 65535 bytes - the
+    /// Fails if the encoded value is longer than 65535 bytes, the
     /// length prefix is a `u16`. This is reachable with
     /// attacker-controlled input (see [`ProtoError::TooLong`]), not just
     /// a theoretical limit: don't silently truncate it.
@@ -253,7 +253,7 @@ impl Field {
 
     /// Decode one field from the front of `buf`, returning the field and
     /// the number of bytes consumed. Always produces
-    /// [`FieldValue::Bytes`] - see the [module docs](self) for why
+    /// [`FieldValue::Bytes`]. See the [module docs](self) for why
     /// decode can't know a field's semantic type.
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
         if buf.len() < 4 {

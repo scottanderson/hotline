@@ -4,7 +4,7 @@
 //! The client's opening 12 bytes are the literal ASCII string
 //! `"TRTPHOTL"` (protocol tag `TRTP` + sub-protocol tag `HOTL`, both
 //! fixed) followed by a big-endian `u16` version (`1`) and `u16`
-//! sub-version (`2`) - not `"TRTP"` followed by a generic sub-protocol
+//! sub-version (`2`), not `"TRTP"` followed by a generic sub-protocol
 //! field.
 
 use crate::error::{ProtoError, Result};

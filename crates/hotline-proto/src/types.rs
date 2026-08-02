@@ -49,7 +49,7 @@ impl HlDate {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HlPath {
     /// Directory components, root-to-leaf (does not include the file name
-    /// itself for file operations - that's a separate `FILE_NAME` field).
+    /// itself for file operations, that's a separate `FILE_NAME` field).
     pub components: Vec<String>,
 }
 

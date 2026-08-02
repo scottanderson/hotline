@@ -15,7 +15,7 @@
 
 /// Field tags as they appear in a **client**-directed message.
 ///
-/// A distinct type from [`ServerFieldId`] - even where the same numeric
+/// A distinct type from [`ServerFieldId`], even where the same numeric
 /// tag is used in both directions (e.g. `Name` is `102` on both sides),
 /// the two directions get separate variants so a `{:?}`-printed value is
 /// never ambiguous about which original constant it came from.
@@ -55,7 +55,7 @@ pub enum ClientFieldId {
     ///
     /// Original: `HTLC_DATA_STYLE`.
     Style = 109,
-    /// 64-bit access privilege bitmap - see `AccessPrivileges`.
+    /// 64-bit access privilege bitmap. See `AccessPrivileges`.
     ///
     /// Original: `HTLC_DATA_ACCESS`.
     Access = 110,
@@ -71,7 +71,7 @@ pub enum ClientFieldId {
     ///
     /// Original: `HTLC_DATA_CHAT_SUBJECT`.
     ChatSubject = 115,
-    /// Protocol version - the client's own version when client-sent, the server's version when server-sent.
+    /// Protocol version: the client's own version when client-sent, the server's version when server-sent.
     ///
     /// Original: `HTLC_DATA_CLIENTVERSION`.
     Version = 160,
@@ -324,7 +324,7 @@ pub enum ServerFieldId {
     ///
     /// Original: `HTLS_DATA_STYLE`.
     Style = 109,
-    /// 64-bit access privilege bitmap - see `AccessPrivileges`.
+    /// 64-bit access privilege bitmap. See `AccessPrivileges`.
     ///
     /// Original: `HTLS_DATA_ACCESS`.
     Access = 110,
@@ -360,7 +360,7 @@ pub enum ServerFieldId {
     ///
     /// Original: `HTLS_DATA_NOAGREEMENT`.
     Noagreement = 154,
-    /// Protocol version - the client's own version when client-sent, the server's version when server-sent.
+    /// Protocol version: the client's own version when client-sent, the server's version when server-sent.
     ///
     /// Original: `HTLS_DATA_SERVERVERSION`.
     Serverversion = 160,

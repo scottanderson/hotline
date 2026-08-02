@@ -27,8 +27,8 @@ pub struct UserEntry {
     pub icon: u16,
     /// Privileges granted at login. Kept here too (in addition to
     /// [`crate::session::Session`], which is what handlers actually
-    /// check against) since other code - an admin tool, `GET_USER_INFO`
-    /// - may want to look a user's privileges up by ID without going
+    /// check against) since other code (an admin tool, `GET_USER_INFO`)
+    /// may want to look a user's privileges up by ID without going
     /// through their live connection.
     pub access: AccessPrivileges,
     /// Last time this user sent any request. Compared against
@@ -65,13 +65,13 @@ pub struct Targeted {
     pub tx: Transaction,
 }
 
-/// A transaction broadcast to everyone *except* one user - currently
+/// A transaction broadcast to everyone *except* one user, currently
 /// only the login join notification, which isn't echoed back to the
 /// user who just joined; the joiner already knows its own name/icon and
 /// gets its own entry from the `GetUserNameList` reply it sends right
 /// after logging in. Contrast with [`Targeted`] (deliver to exactly one
 /// user) and plain [`SharedState::publish`] (deliver to everyone,
-/// including the sender - what later nick/icon changes use, since those
+/// including the sender, what later nick/icon changes use, since those
 /// are self-inclusive).
 #[derive(Debug, Clone)]
 pub struct Announcement {
@@ -91,9 +91,9 @@ pub struct SharedState {
     /// and forwards them to its own client.
     broadcast: broadcast::Sender<Transaction>,
     /// Transactions meant for exactly one user (private messages, chat
-    /// rooms, kicks) - see [`Targeted`].
+    /// rooms, kicks). See [`Targeted`].
     targeted: broadcast::Sender<Targeted>,
-    /// Transactions meant for everyone except one user - see
+    /// Transactions meant for everyone except one user. See
     /// [`Announcement`].
     announcements: broadcast::Sender<Announcement>,
     /// Root-folder file listing. In-memory placeholder for now (see
@@ -191,7 +191,7 @@ impl SharedState {
 
     /// Send a transaction to exactly one connected user (private
     /// message, chat-room traffic, a kick notice). A no-op if that user
-    /// isn't connected - same best-effort delivery as [`Self::publish`].
+    /// isn't connected, same best-effort delivery as [`Self::publish`].
     pub fn send_to(&self, target_user_id: u16, tx: Transaction) {
         let _ = self.targeted.send(Targeted { target_user_id, tx });
     }
@@ -203,7 +203,7 @@ impl SharedState {
     }
 
     /// Broadcast a transaction to every session except `exclude_user_id`
-    /// (the login join notification - see [`Announcement`]).
+    /// (the login join notification, see [`Announcement`]).
     pub fn announce(&self, exclude_user_id: u16, tx: Transaction) {
         let _ = self.announcements.send(Announcement {
             exclude_user_id,

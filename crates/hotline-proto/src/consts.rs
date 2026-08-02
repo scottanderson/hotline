@@ -2,7 +2,7 @@
 //!
 //! The bitmap is two big-endian `u32` words concatenated (high word
 //! first), so as a single 64-bit integer the first-declared flag
-//! occupies the most significant bit (63), counting down - not bit 0.
+//! occupies the most significant bit (63), counting down, not bit 0.
 //! There are five reserved gaps (2+2+7+8+8 = 27 bits) with no assigned
 //! meaning; those bits should always be zero on the wire.
 //!
@@ -13,12 +13,12 @@
 //!
 //! [`AccessPrivileges::VOICE_CHAT`] and [`AccessPrivileges::READ_CHAT_HISTORY`]
 //! are community extensions implemented by a subset of servers under a
-//! capability-negotiation scheme, not part of the base privilege set -
-//! see each flag's doc comment for the distinction.
+//! capability-negotiation scheme, not part of the base privilege set.
+//! See each flag's doc comment for the distinction.
 
 bitflags::bitflags! {
     /// The 64-bit `USER_ACCESS` privilege bitmap (plus two community
-    /// extension bits - see the [module docs](self)). Bits with no
+    /// extension bits, see the [module docs](self)). Bits with no
     /// named flag below (51, 50, 45, 44, 22..=9, 6..=0) are reserved
     /// and should always be zero on the wire unless a server
     /// specifically implements one of the extensions this module
@@ -140,13 +140,13 @@ bitflags::bitflags! {
         const SEND_MSGS              = 1 << 23;
         // bits 22..=9 reserved.
 
-        /// Join voice chat. Not part of the base protocol - a community
+        /// Join voice chat. Not part of the base protocol, a community
         /// extension (`HL_ACCESS_VOICE_CHAT`) gating `HTLC_HDR_VOICE_JOIN`
         /// (600) under capability negotiation. Servers that don't echo
         /// the voice capability should be treated as not supporting
         /// this at all, regardless of this bit's value.
         const VOICE_CHAT              = 1 << 8;
-        /// Query chat history. Not part of the base protocol - a
+        /// Query chat history. Not part of the base protocol, a
         /// community extension (`HL_ACCESS_READ_CHAT_HISTORY`) gating
         /// `HTLC_HDR_GET_CHAT_HISTORY`. Servers without this capability
         /// should be queried via [`AccessPrivileges::READ_CHAT`] instead.
@@ -184,7 +184,7 @@ impl AccessPrivileges {
 
     /// Short human-readable labels for a subset of privileges relevant to
     /// clients building UI around them (e.g. graying out an upload
-    /// button). Not exhaustive - covers the handful of flags a typical
+    /// button). Not exhaustive, covers the handful of flags a typical
     /// client cares about deciding, not the full 39.
     pub fn describe(self) -> Vec<&'static str> {
         [
@@ -203,7 +203,7 @@ impl AccessPrivileges {
     /// several flags, or an unnamed/reserved bit).
     ///
     /// `bitflags` has no built-in per-flag metadata attribute that
-    /// becomes queryable at runtime - attributes on a flag are passed
+    /// becomes queryable at runtime. Attributes on a flag are passed
     /// through as plain Rust attributes on the generated const (doc
     /// comments, `#[cfg(...)]`), not interpreted by the macro. This is a
     /// hand-written lookup instead.

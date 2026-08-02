@@ -180,7 +180,7 @@ impl App {
 }
 
 /// Send `line` as chat and report the outcome as a local (client-side)
-/// system/error line - a failed send doesn't necessarily come back as a
+/// system/error line, since a failed send doesn't necessarily come back as a
 /// server push (a transport error, for instance), so this covers that
 /// case explicitly rather than relying solely on `apply_server_event`.
 pub async fn send_chat(app: &mut App, client: &HotlineClient, line: String) {

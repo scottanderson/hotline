@@ -71,7 +71,7 @@ impl Transaction {
     }
 
     /// Build a server-initiated push transaction (chat relay, user list
-    /// change, news post, ...) - not a reply to anything, so it carries
+    /// change, news post, ...). It's not a reply to anything, so it carries
     /// `trans = 0` and the push's own opcode rather than the
     /// [`TASK_REPLY`] sentinel.
     pub fn push(opcode: ServerOpcode, fields: Vec<Field>) -> Self {
@@ -79,7 +79,7 @@ impl Transaction {
     }
 
     /// Build a bare error reply (error flag set + an `ERROR_TEXT` field).
-    /// `ERROR_TEXT` (`HTLS_DATA_TASKERROR`) is server-only - only a
+    /// `ERROR_TEXT` (`HTLS_DATA_TASKERROR`) is server-only: only a
     /// server ever sends one of these.
     pub fn error_reply(trans: u32, message: impl Into<String>) -> Self {
         Self::reply(
@@ -90,16 +90,16 @@ impl Transaction {
     }
 
     /// Shared constructor: every wire representation (request/reply/push)
-    /// differs only in `type_`, `trans`, and `flag` - `len`/`len2` are
+    /// differs only in `type_`, `trans`, and `flag`. `len`/`len2` are
     /// always derived the same way from `fields`.
     ///
     /// `len2` here is a size *estimate* computed with saturating (not
-    /// checked) arithmetic - it can't panic or silently wrap, but it also
+    /// checked) arithmetic, so it can't panic or silently wrap, but it also
     /// isn't the actual enforcement point for the "does this fit on the
     /// wire" question. That happens in [`Transaction::encode`], which
     /// every practical caller already treats as fallible (it's called
     /// from [`hotline_codec`]'s `Encoder::encode`, itself on the already
-    /// - `Result`-returning `Sink::send` path) - so the real check
+    /// `Result`-returning `Sink::send` path), so the real check
     /// happens exactly once, at the point the bytes are about to be
     /// written, rather than needing every `Transaction::request`/`reply`/
     /// `push` call site to handle a Result for a condition that, in
@@ -172,7 +172,7 @@ impl Transaction {
     ///
     /// Fails if `fields.len()` or any individual field's data exceeds
     /// what a `u16` can represent (65535). Both are reachable with
-    /// attacker-controlled input - see [`ProtoError::TooLong`] - so
+    /// attacker-controlled input (see [`ProtoError::TooLong`]), so
     /// this can't silently truncate a length prefix; it has to return
     /// an error that propagates all the way out to whoever's trying to
     /// send this.
@@ -202,7 +202,7 @@ impl Transaction {
     }
 
     /// Decode the fixed-size prefix only (everything through `len2`),
-    /// with an empty field list - [`Transaction::remaining_len`] says how
+    /// with an empty field list. [`Transaction::remaining_len`] says how
     /// many more bytes to read, then [`Transaction::finish_decode`]
     /// parses them.
     ///
@@ -235,7 +235,7 @@ impl Transaction {
 
     /// Finish decoding a transaction whose prefix was already read via
     /// [`Transaction::decode_prefix`]: `body` is exactly
-    /// [`Transaction::remaining_len`] bytes - the field count followed by
+    /// [`Transaction::remaining_len`] bytes, the field count followed by
     /// the fields.
     pub fn finish_decode(self, body: &[u8]) -> Result<Self> {
         if body.len() < 2 {
@@ -438,7 +438,7 @@ mod tests {
     /// combining two attacker-controlled decoded fields (e.g. a long
     /// nickname and a long chat message) into one relayed field. Each
     /// half is individually within the wire's own u16 limit, but the
-    /// combination isn't - `encode()` must fail here, not truncate the
+    /// combination isn't. `encode()` must fail here, not truncate the
     /// length prefix and desync every other client's read state.
     #[test]
     fn oversized_relay_field_fails_to_encode_instead_of_corrupting_the_wire() {

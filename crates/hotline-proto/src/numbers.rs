@@ -12,7 +12,7 @@
 use std::ops::Deref;
 
 /// A 2-or-4-byte big-endian encoded integer, held inline in a fixed
-/// `[u8; 4]` buffer rather than a `Vec<u8>` - avoids a heap allocation
+/// `[u8; 4]` buffer rather than a `Vec<u8>`, avoiding a heap allocation
 /// on the hot path of encoding a numeric field. Derefs to `&[u8]` for
 /// `Vec<u8>`-like ergonomics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

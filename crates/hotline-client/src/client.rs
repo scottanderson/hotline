@@ -23,7 +23,7 @@ type Conn = Framed<TcpStream, TransactionCodec>;
 /// requests, or permanently closed because the connection ended. See
 /// [`read_loop`]'s shutdown handling for why this needs to be a single
 /// state behind one lock rather than a plain map that just gets cleared
-/// once - a request racing the connection's death must never be able to
+/// once, since a request racing the connection's death must never be able to
 /// insert *after* that one-time clear and wait forever unanswered.
 enum PendingState {
     Open(HashMap<u32, oneshot::Sender<Transaction>>),

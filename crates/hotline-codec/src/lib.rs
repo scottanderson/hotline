@@ -6,7 +6,7 @@
 //! and returns `Ok(None)` to ask for more, so `Framed` handles TCP
 //! fragmentation without relying on a single read returning a complete
 //! frame. Callers get a `Stream<Item = Result<Transaction, _>>` +
-//! `Sink<Transaction>` - `.next().await` / `.send(tx).await`.
+//! `Sink<Transaction>`, used as `.next().await` / `.send(tx).await`.
 
 use bytes::{Buf, BytesMut};
 use hotline_proto::{ProtoError, Transaction, PREFIX_LEN};

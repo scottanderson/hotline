@@ -1,12 +1,12 @@
 //! [`PacketBuilder`]: one generic, consuming-builder-style writer for
-//! wire buffers, over a pluggable [`Storage`] backing - [`Fixed`] (a
+//! wire buffers, over a pluggable [`Storage`] backing: [`Fixed`] (a
 //! stack-allocated `[u8; N]`, no heap allocation, panics on overflow)
 //! when the total size is known at compile time, [`Growable`] (a
 //! `Vec<u8>`) when it isn't (e.g. a variable number of strings).
 //! [`PacketWriter`]/[`VecWriter`] are the two instantiations most call
 //! sites actually name.
 //!
-//! [`PacketReader`] is the read-side counterpart - always fixed-size,
+//! [`PacketReader`] is the read-side counterpart, always fixed-size,
 //! since you always know how many bytes you're about to read.
 
 /// Where a [`PacketBuilder`] writes its bytes.
@@ -55,7 +55,7 @@ impl Storage for Growable {
 
 /// A sequential, consuming-builder-style writer: `w.u32(x).u16(y).finish()`
 /// rather than `&mut self` methods, so a chain reads top-to-bottom as the
-/// wire layout itself. Generic over [`Storage`] - see the [module
+/// wire layout itself. Generic over [`Storage`], see the [module
 /// docs](self) for [`Fixed`] vs. [`Growable`].
 #[derive(Debug)]
 pub struct PacketBuilder<S> {
@@ -96,7 +96,7 @@ impl<S: Storage> PacketBuilder<S> {
 
     /// Write a Pascal-style string: a 1-byte length prefix followed by
     /// `s`'s UTF-8 bytes. Fails if `s` is longer than 255 bytes, since
-    /// the length prefix can't represent it - silently truncating the
+    /// the length prefix can't represent it. Silently truncating the
     /// stated length while still writing the full string would desync
     /// every field after it for whoever decodes this.
     pub fn pstring(mut self, s: &str) -> Result<Self, PStringTooLong> {
@@ -107,11 +107,11 @@ impl<S: Storage> PacketBuilder<S> {
     }
 }
 
-/// A sequential, builder-style writer that produces a fixed `[u8; N]` -
+/// A sequential, builder-style writer that produces a fixed `[u8; N]`,
 /// no heap allocation, panics if a write would run past the end.
 pub type PacketWriter<const N: usize> = PacketBuilder<Fixed<N>>;
 
-/// A sequential, builder-style writer that produces a `Vec<u8>` - for
+/// A sequential, builder-style writer that produces a `Vec<u8>`, for
 /// wire structures whose total size isn't known until you've written a
 /// variable number of pieces into it.
 pub type VecWriter = PacketBuilder<Growable>;
