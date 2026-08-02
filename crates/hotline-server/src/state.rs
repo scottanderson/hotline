@@ -65,6 +65,22 @@ pub struct Targeted {
     pub tx: Transaction,
 }
 
+/// A transaction broadcast to everyone *except* one user - currently
+/// only the login join notification, which isn't echoed back to the
+/// user who just joined; the joiner already knows its own name/icon and
+/// gets its own entry from the `GetUserNameList` reply it sends right
+/// after logging in. Contrast with [`Targeted`] (deliver to exactly one
+/// user) and plain [`SharedState::publish`] (deliver to everyone,
+/// including the sender - what later nick/icon changes use, since those
+/// are self-inclusive).
+#[derive(Debug, Clone)]
+pub struct Announcement {
+    /// User ID to skip when fanning this out.
+    pub exclude_user_id: u16,
+    /// The transaction to forward to everyone else.
+    pub tx: Transaction,
+}
+
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
 #[derive(Clone)]
 pub struct SharedState {
@@ -77,6 +93,9 @@ pub struct SharedState {
     /// Transactions meant for exactly one user (private messages, chat
     /// rooms, kicks) - see [`Targeted`].
     targeted: broadcast::Sender<Targeted>,
+    /// Transactions meant for everyone except one user - see
+    /// [`Announcement`].
+    announcements: broadcast::Sender<Announcement>,
     /// Root-folder file listing. In-memory placeholder for now (see
     /// `SharedState::root_files`), swap for a real filesystem-backed
     /// implementation (with path traversal checks!) when wiring up
@@ -94,6 +113,7 @@ impl Default for SharedState {
     fn default() -> Self {
         let (broadcast, _rx) = broadcast::channel(256);
         let (targeted, _rx) = broadcast::channel(256);
+        let (announcements, _rx) = broadcast::channel(256);
         let files = vec![
             FileNameWithInfo {
                 file_type: *b"fldr",
@@ -113,6 +133,7 @@ impl Default for SharedState {
             next_user_id: Arc::new(AtomicU16::new(1)),
             broadcast,
             targeted,
+            announcements,
             files: Arc::new(RwLock::new(files)),
             news: Arc::new(RwLock::new(String::new())),
             chat_rooms: Arc::new(RwLock::new(HashMap::new())),
@@ -179,6 +200,21 @@ impl SharedState {
     /// session; each session filters for its own `user_id`.
     pub fn subscribe_targeted(&self) -> broadcast::Receiver<Targeted> {
         self.targeted.subscribe()
+    }
+
+    /// Broadcast a transaction to every session except `exclude_user_id`
+    /// (the login join notification - see [`Announcement`]).
+    pub fn announce(&self, exclude_user_id: u16, tx: Transaction) {
+        let _ = self.announcements.send(Announcement {
+            exclude_user_id,
+            tx,
+        });
+    }
+
+    /// Subscribe to the announcement stream. Called once per session;
+    /// each session skips announcements that exclude its own `user_id`.
+    pub fn subscribe_announcements(&self) -> broadcast::Receiver<Announcement> {
+        self.announcements.subscribe()
     }
 
     /// Snapshot of the (currently root-only) file listing. `path` is

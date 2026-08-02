@@ -53,6 +53,7 @@ impl Session {
         let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::default()).split();
         let mut broadcast_rx = state.subscribe();
         let mut targeted_rx = state.subscribe_targeted();
+        let mut announce_rx = state.subscribe_announcements();
 
         loop {
             tokio::select! {
@@ -87,6 +88,18 @@ impl Session {
                             }
                         }
                         Ok(_) => continue, // addressed to someone else
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                // Everyone-except-one traffic (currently only the login
+                // join notification - see `SharedState::announce`).
+                msg = announce_rx.recv() => {
+                    match msg {
+                        Ok(a) if a.exclude_user_id != session.user_id => {
+                            writer.send(a.tx).await?;
+                        }
+                        Ok(_) => continue, // this is the join announcement about myself
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
@@ -206,7 +219,11 @@ impl Session {
             self.name = name;
         }
         let icon = tx.icon().unwrap_or(0);
-        self.announce_user_change(icon, state).await;
+        // The join notification isn't echoed back to the joiner itself -
+        // unlike later nick/icon changes, which are self-inclusive. This
+        // client already learns its own name/icon/color from the
+        // `GetUserNameList` reply it sends right after login.
+        self.announce_user_change(icon, state, true).await;
 
         let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 151)];
         if !config.server_name.is_empty() {
@@ -235,16 +252,20 @@ impl Session {
             self.name = name;
         }
         let icon = tx.icon().unwrap_or(0);
-        self.announce_user_change(icon, state).await;
+        // Later changes are self-inclusive, unlike the join-only
+        // exclusion in `announce_user_change`'s `exclude_self` path.
+        self.announce_user_change(icon, state, false).await;
     }
 
     /// Register this session's current name/icon in the shared user
-    /// table and broadcast a `UserChange` push so every connected
-    /// client (including this one, which is already subscribed by the
-    /// time either caller runs) picks it up. Shared by [`Session::on_login`]
-    /// (first announcement) and [`Session::on_user_change`] (later
-    /// nick/icon changes).
-    async fn announce_user_change(&self, icon: u16, state: &SharedState) {
+    /// table and broadcast a `UserChange` push.
+    ///
+    /// Shared by [`Session::on_login`] (first announcement,
+    /// `exclude_self: true` since the joiner doesn't need an echo of its
+    /// own join) and [`Session::on_user_change`] (later nick/icon
+    /// changes, `exclude_self: false` since those are genuine updates
+    /// every client including the sender should see reflected).
+    async fn announce_user_change(&self, icon: u16, state: &SharedState, exclude_self: bool) {
         state
             .insert_user(UserEntry {
                 user_id: self.user_id,
@@ -264,7 +285,11 @@ impl Session {
                 Field::u16(ServerFieldId::Color, self.user_flags()),
             ],
         );
-        state.publish(notify);
+        if exclude_self {
+            state.announce(self.user_id, notify);
+        } else {
+            state.publish(notify);
+        }
     }
 
     /// This session's current [`UserNameWithInfo::flags`] value: admin
@@ -654,7 +679,7 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::guest_default());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut broadcast_rx = state.subscribe();
+        let mut announce_rx = state.subscribe_announcements();
 
         // Real clients commonly send Name/Icon right in the Login
         // transaction rather than waiting to follow up with a separate
@@ -669,15 +694,20 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        // Already-connected clients (and this one, since it's subscribed
-        // before login runs) should see the join immediately.
-        let notify = broadcast_rx.try_recv().expect("login should broadcast a join");
+        // Already-connected clients should see the join immediately - as
+        // an announcement excluding the joiner itself; `Session::run`'s
+        // announce-stream arm is what actually applies that exclusion
+        // at delivery time.
+        let notify = announce_rx
+            .try_recv()
+            .expect("login should announce a join");
+        assert_eq!(notify.exclude_user_id, 1); // test_session()'s fixed user_id
         assert_eq!(
-            notify.field(ServerFieldId::Name).unwrap().as_string(),
+            notify.tx.field(ServerFieldId::Name).unwrap().as_string(),
             "Alice"
         );
         assert_eq!(
-            notify.field(ServerFieldId::Icon).and_then(Field::as_u16),
+            notify.tx.field(ServerFieldId::Icon).and_then(Field::as_u16),
             Some(42)
         );
 
@@ -700,7 +730,7 @@ mod tests {
         let state = SharedState::default();
         let mut config = ServerConfig::default();
         config.default_access = AccessPrivileges::DISCONNECT_USERS;
-        let mut broadcast_rx = state.subscribe();
+        let mut announce_rx = state.subscribe_announcements();
 
         let login = Transaction::request(
             ClientOpcode::Login,
@@ -709,8 +739,11 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        let notify = broadcast_rx.try_recv().expect("login should broadcast a join");
+        let notify = announce_rx
+            .try_recv()
+            .expect("login should announce a join");
         let color = notify
+            .tx
             .field(ServerFieldId::Color)
             .and_then(Field::as_u16)
             .unwrap_or(0);
