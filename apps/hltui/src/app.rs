@@ -123,16 +123,21 @@ impl App {
             .field(ServerFieldId::Icon)
             .and_then(|f| f.as_integer())
             .unwrap_or(0) as u16;
+        let flags = tx
+            .field(ServerFieldId::Color)
+            .and_then(|f| f.as_integer())
+            .unwrap_or(0) as u16;
 
         let is_new = !self.users.iter().any(|u| u.user_id == user_id);
         if let Some(existing) = self.users.iter_mut().find(|u| u.user_id == user_id) {
             existing.name = name.clone();
             existing.icon_id = icon_id;
+            existing.flags = flags;
         } else {
             self.users.push(UserNameWithInfo {
                 user_id,
                 icon_id,
-                flags: 0,
+                flags,
                 name: name.clone(),
             });
         }
@@ -205,5 +210,42 @@ mod tests {
     #[test]
     fn display_text_leaves_normal_text_alone() {
         assert_eq!(display_text("Alice: hi"), "Alice: hi");
+    }
+
+    #[test]
+    fn apply_user_change_carries_admin_color_for_new_and_existing_users() {
+        use hotline_proto::field_id::ServerFieldId;
+        use hotline_proto::opcode::ServerOpcode;
+        use hotline_proto::types::UserFlags;
+
+        let mut app = App::new("me".to_string(), Vec::new());
+        let admin_change = Transaction::push(
+            ServerOpcode::UserChange,
+            vec![
+                Field::u16(ServerFieldId::UserId, 2),
+                Field::u16(ServerFieldId::Icon, 0),
+                Field::string(ServerFieldId::Name, "Root"),
+                Field::u16(ServerFieldId::Color, UserFlags::ADMIN.bits()),
+            ],
+        );
+
+        // New user: flags should carry the admin bit from the start.
+        app.apply_server_event(&admin_change);
+        let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
+        assert!(UserFlags::from_bits_truncate(user.flags).contains(UserFlags::ADMIN));
+
+        // Existing user: a later update should still reflect current flags.
+        let demoted = Transaction::push(
+            ServerOpcode::UserChange,
+            vec![
+                Field::u16(ServerFieldId::UserId, 2),
+                Field::u16(ServerFieldId::Icon, 0),
+                Field::string(ServerFieldId::Name, "Root"),
+                Field::u16(ServerFieldId::Color, 0),
+            ],
+        );
+        app.apply_server_event(&demoted);
+        let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
+        assert!(!UserFlags::from_bits_truncate(user.flags).contains(UserFlags::ADMIN));
     }
 }
