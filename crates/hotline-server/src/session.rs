@@ -198,16 +198,20 @@ impl Session {
             _ => (config.default_access, false),
         };
 
-        state
-            .insert_user(UserEntry {
-                user_id: self.user_id,
-                name: self.name.clone(),
-                icon: 0,
-                access: self.access,
-                is_admin: self.is_admin,
-                last_active: Instant::now(),
-            })
-            .await;
+        // Real clients commonly embed the display name and icon directly
+        // in the Login transaction rather than (or in addition to)
+        // following up with a separate `SET_CLIENT_USER_INFO` (304) - so
+        // read them here the same way `on_user_change` does. Registering
+        // the user and broadcasting the join now (instead of waiting on
+        // a 304 that may never come) is what lets already-connected
+        // clients see this user appear, and lets this client's own entry
+        // show its real name/icon from the start rather than the
+        // `guestN`/icon-0 placeholder.
+        if let Some(name) = tx.name() {
+            self.name = name;
+        }
+        let icon = tx.icon().unwrap_or(0);
+        self.announce_user_change(icon, state).await;
 
         let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 151)];
         if !config.server_name.is_empty() {
@@ -236,7 +240,16 @@ impl Session {
             self.name = name;
         }
         let icon = tx.icon().unwrap_or(0);
+        self.announce_user_change(icon, state).await;
+    }
 
+    /// Register this session's current name/icon in the shared user
+    /// table and broadcast a `UserChange` push so every connected
+    /// client (including this one, which is already subscribed by the
+    /// time either caller runs) picks it up. Shared by [`Session::on_login`]
+    /// (first announcement) and [`Session::on_user_change`] (later
+    /// nick/icon changes).
+    async fn announce_user_change(&self, icon: u16, state: &SharedState) {
         state
             .insert_user(UserEntry {
                 user_id: self.user_id,
@@ -634,7 +647,45 @@ mod tests {
 
         let relay = broadcast_rx.try_recv().unwrap();
         let text = relay.field(ServerFieldId::Text).unwrap().as_string();
-        assert_eq!(text, "\rAlice: hi");
+        assert_eq!(text, "\r        Alice:  hi");
+    }
+
+    #[tokio::test]
+    async fn login_registers_name_and_icon_and_broadcasts_join() {
+        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        let mut broadcast_rx = state.subscribe();
+
+        // Real clients commonly send Name/Icon right in the Login
+        // transaction rather than waiting to follow up with a separate
+        // SET_CLIENT_USER_INFO.
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice"),
+                Field::u16(ClientFieldId::Icon, 42),
+            ],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        // Already-connected clients (and this one, since it's subscribed
+        // before login runs) should see the join immediately.
+        let notify = broadcast_rx.try_recv().expect("login should broadcast a join");
+        assert_eq!(
+            notify.field(ServerFieldId::Name).unwrap().as_string(),
+            "Alice"
+        );
+        assert_eq!(
+            notify.field(ServerFieldId::Icon).and_then(Field::as_u16),
+            Some(42)
+        );
+
+        let users = state.users().await;
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].name, "Alice");
+        assert_eq!(users[0].icon, 42);
     }
 
     #[tokio::test]
@@ -737,7 +788,7 @@ mod tests {
         let delivered = targeted_rx.try_recv().unwrap();
         assert_eq!(
             delivered.tx.field(ServerFieldId::Text).unwrap().as_string(),
-            "\rAlice: room only"
+            "\r        Alice:  room only"
         );
     }
 }
