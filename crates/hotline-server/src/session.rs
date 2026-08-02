@@ -688,6 +688,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn login_colors_by_privilege_not_by_admin_login_identity() {
+        // mhxd derives color purely from the `disconnect_users` privilege
+        // bit (`rcv_login`'s `htlc->color = htlc->access.disconnect_users
+        // ? 2 : 0`) - there's no separate "is admin" identity. A regular
+        // (non-"admin"/"admin") login whose granted access happens to
+        // include `DISCONNECT_USERS` should still show up admin-colored,
+        // and the color should already be correct in the *join*
+        // broadcast, not just after a later change.
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let mut config = ServerConfig::default();
+        config.default_access = AccessPrivileges::DISCONNECT_USERS;
+        let mut broadcast_rx = state.subscribe();
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![Field::string(ClientFieldId::Name, "Mod")],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        let notify = broadcast_rx.try_recv().expect("login should broadcast a join");
+        let color = notify
+            .field(ServerFieldId::Color)
+            .and_then(Field::as_u16)
+            .unwrap_or(0);
+        assert!(
+            UserFlags::from_bits_truncate(color).contains(UserFlags::ADMIN),
+            "join broadcast should already carry the admin color for a privileged non-admin-login user"
+        );
+    }
+
+    #[tokio::test]
     async fn newsfile_round_trips_through_post_and_get() {
         let session = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
