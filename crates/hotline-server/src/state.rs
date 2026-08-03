@@ -262,13 +262,14 @@ impl SharedState {
 
     /// Add `user_id` to a chat room. `false` if the room doesn't exist.
     pub async fn join_chat_room(&self, chat_id: u16, user_id: u16) -> bool {
-        match self.chat_rooms.write().await.get_mut(&chat_id) {
-            Some(room) => {
+        self.chat_rooms
+            .write()
+            .await
+            .get_mut(&chat_id)
+            .map(|room| {
                 room.members.insert(user_id);
-                true
-            }
-            None => false,
-        }
+            })
+            .is_some()
     }
 
     /// Remove `user_id` from a chat room, deleting the room once its
@@ -285,12 +286,13 @@ impl SharedState {
 
     /// Set a chat room's subject. `false` if the room doesn't exist.
     pub async fn set_chat_subject(&self, chat_id: u16, subject: String) -> bool {
-        match self.chat_rooms.write().await.get_mut(&chat_id) {
-            Some(room) => {
+        self.chat_rooms
+            .write()
+            .await
+            .get_mut(&chat_id)
+            .map(|room| {
                 room.subject = subject;
-                true
-            }
-            None => false,
-        }
+            })
+            .is_some()
     }
 }
