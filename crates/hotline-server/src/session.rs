@@ -362,21 +362,11 @@ impl Session {
             .users()
             .await
             .into_iter()
-            .map(|u| {
-                let mut bits = if u.access.contains(AccessPrivileges::DISCONNECT_USERS) {
-                    UserFlags::ADMIN.bits()
-                } else {
-                    0
-                };
-                if u.is_idle() {
-                    bits |= UserFlags::AWAY.bits();
-                }
-                UserNameWithInfo {
-                    user_id: u.user_id,
-                    icon: u.icon,
-                    flags: bits,
-                    name: u.name,
-                }
+            .map(|u| UserNameWithInfo {
+                user_id: u.user_id,
+                icon: u.icon,
+                flags: u.flags(),
+                name: u.name,
             })
             .map(|entry| Field::bytes(ServerFieldId::UserList, entry.encode()))
             .collect();
@@ -524,13 +514,33 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 112: create a private chat room.
+    /// 112: create a private chat room and invite its target user.
     async fn on_chat_create(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.require(AccessPrivileges::CREATE_PCHATS) {
             return tx.reply_error(reason);
         }
+        let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
+            return tx.reply_error("missing user id");
+        };
+        if state.user(target_id).await.is_none() {
+            return tx.reply_error("no such user");
+        }
+
         let chat_id = state.create_chat_room(self.user_id).await;
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
+        if target_id != self.user_id {
+            state.send_to(
+                target_id,
+                Transaction::push(
+                    ServerOpcode::ChatInvite,
+                    vec![
+                        Field::u16(ServerFieldId::ChatId, chat_id),
+                        Field::u16(ServerFieldId::UserId, self.user_id),
+                        Field::string(ServerFieldId::Name, self.name.clone()),
+                    ],
+                ),
+            );
+        }
         tx.reply(vec![
             Field::u16(ServerFieldId::ChatId, chat_id),
             Field::u16(ServerFieldId::UserId, self.user_id),
@@ -561,6 +571,7 @@ impl Session {
                 ServerOpcode::ChatInvite,
                 vec![
                     Field::u16(ServerFieldId::ChatId, chat_id),
+                    Field::u16(ServerFieldId::UserId, self.user_id),
                     Field::string(ServerFieldId::Name, self.name.clone()),
                 ],
             ),
@@ -576,21 +587,40 @@ impl Session {
         if !state.join_chat_room(chat_id, self.user_id).await {
             return tx.reply_error("no such chat room");
         }
+        let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
 
         let notify = Transaction::push(
             ServerOpcode::ChatUserChange,
             vec![
                 Field::u16(ServerFieldId::ChatId, chat_id),
                 Field::u16(ServerFieldId::UserId, self.user_id),
+                Field::u16(ServerFieldId::Icon, icon),
+                Field::u16(ServerFieldId::Color, self.user_flags()),
                 Field::string(ServerFieldId::Name, self.name.clone()),
             ],
         );
-        if let Some(members) = state.chat_room_members(chat_id).await {
-            for member in members.into_iter().filter(|&m| m != self.user_id) {
-                state.send_to(member, notify.clone());
+
+        let room = state.chat_room(chat_id).await.unwrap_or_default();
+        let mut fields = Vec::new();
+        for member_id in room.members {
+            if member_id != self.user_id {
+                state.send_to(member_id, notify.clone());
+            }
+            if let Some(entry) = state.user(member_id).await {
+                fields.push(Field::bytes(
+                    ServerFieldId::UserList,
+                    UserNameWithInfo {
+                        user_id: entry.user_id,
+                        icon: entry.icon,
+                        flags: entry.flags(),
+                        name: entry.name,
+                    }
+                    .encode(),
+                ));
             }
         }
-        tx.reply(vec![])
+        fields.push(Field::string(ServerFieldId::ChatSubject, room.subject));
+        tx.reply(fields)
     }
 
     /// 116: leave a chat room.
@@ -816,8 +846,31 @@ mod tests {
     async fn chat_room_create_invite_and_room_scoped_chat() {
         let creator = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 1,
+                name: "Alice".to_string(),
+                icon: 0,
+                access: AccessPrivileges::all(),
+                last_active: Instant::now(),
+            })
+            .await;
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                name: "Bob".to_string(),
+                icon: 0,
+                access: AccessPrivileges::all(),
+                last_active: Instant::now(),
+            })
+            .await;
 
-        let create = Transaction::request(ClientOpcode::ChatCreate, 1, vec![]);
+        let mut targeted_rx = state.subscribe_targeted();
+        let create = Transaction::request(
+            ClientOpcode::ChatCreate,
+            1,
+            vec![Field::u16(ClientFieldId::Uid, 2)],
+        );
         let reply = creator.on_chat_create(&create, &state).await;
         let chat_id = reply
             .field(ServerFieldId::ChatId)
@@ -825,10 +878,34 @@ mod tests {
             .as_u16()
             .unwrap();
 
-        // Bob joins directly (skipping the invite round trip, which just
-        // notifies - join is what actually adds a member).
-        let bob_joined = state.join_chat_room(chat_id, 2).await;
-        assert!(bob_joined);
+        let invite = targeted_rx.try_recv().unwrap();
+        assert_eq!(invite.target_user_id, 2);
+        assert_eq!(
+            invite.tx.field(ServerFieldId::ChatId).unwrap().as_u16(),
+            Some(chat_id)
+        );
+
+        let bob = test_session("Bob", AccessPrivileges::all());
+        let bob = Session { user_id: 2, ..bob };
+        let join = Transaction::request(
+            ClientOpcode::ChatJoin,
+            1,
+            vec![Field::u16(ClientFieldId::ChatId, chat_id)],
+        );
+        let join_reply = bob.on_chat_join(&join, &state).await;
+        let user_list_entries = join_reply
+            .fields
+            .iter()
+            .filter(|f| f.id == u16::from(ServerFieldId::UserList))
+            .count();
+        assert_eq!(user_list_entries, 2, "should list both room members");
+        assert_eq!(
+            join_reply
+                .field(ServerFieldId::ChatSubject)
+                .unwrap()
+                .as_string(),
+            ""
+        );
 
         let members = state.chat_room_members(chat_id).await.unwrap();
         assert_eq!(members.len(), 2);

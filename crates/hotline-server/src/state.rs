@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
 
 use hotline_proto::consts::AccessPrivileges;
-use hotline_proto::types::FileNameWithInfo;
+use hotline_proto::types::{FileNameWithInfo, UserFlags};
 use hotline_proto::Transaction;
 
 /// How long without any request before a user is considered idle.
@@ -41,6 +41,19 @@ impl UserEntry {
     /// [`IDLE_THRESHOLD`].
     pub fn is_idle(&self) -> bool {
         self.last_active.elapsed() > IDLE_THRESHOLD
+    }
+
+    /// Current `UserFlags` bits: admin (from `DISCONNECT_USERS`) plus idle.
+    pub fn flags(&self) -> u16 {
+        let mut bits = if self.access.contains(AccessPrivileges::DISCONNECT_USERS) {
+            UserFlags::ADMIN.bits()
+        } else {
+            0
+        };
+        if self.is_idle() {
+            bits |= UserFlags::AWAY.bits();
+        }
+        bits
     }
 }
 
@@ -258,6 +271,11 @@ impl SharedState {
             .await
             .get(&chat_id)
             .map(|r| r.members.clone())
+    }
+
+    /// Snapshot of a chat room (members and subject), if it exists.
+    pub async fn chat_room(&self, chat_id: u16) -> Option<ChatRoom> {
+        self.chat_rooms.read().await.get(&chat_id).cloned()
     }
 
     /// Add `user_id` to a chat room. `false` if the room doesn't exist.
