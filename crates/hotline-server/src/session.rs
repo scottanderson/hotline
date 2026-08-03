@@ -530,7 +530,14 @@ impl Session {
             return tx.reply_error(reason);
         }
         let chat_id = state.create_chat_room(self.user_id).await;
-        tx.reply(vec![Field::u16(ServerFieldId::ChatId, chat_id)])
+        let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
+        tx.reply(vec![
+            Field::u16(ServerFieldId::ChatId, chat_id),
+            Field::u16(ServerFieldId::UserId, self.user_id),
+            Field::u16(ServerFieldId::Icon, icon),
+            Field::u16(ServerFieldId::Color, self.user_flags()),
+            Field::string(ServerFieldId::Name, self.name.clone()),
+        ])
     }
 
     /// 113: invite another user to a room this session belongs to.
