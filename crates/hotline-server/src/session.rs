@@ -141,25 +141,22 @@ impl Session {
         };
 
         match opcode {
-            ClientOpcode::Login => self.on_login(tx, state, config).await,
-            ClientOpcode::UserChange => {
-                self.on_user_change(tx, state).await;
-                Vec::new()
-            }
-            ClientOpcode::Chat => self.on_chat(tx, state).await,
-            ClientOpcode::UserGetlist => vec![self.on_user_get_list(tx, state).await],
-            ClientOpcode::UserGetinfo => vec![self.on_user_get_info(tx, state).await],
-            ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
-            ClientOpcode::Msg => self.on_private_msg(tx, state).await,
-            ClientOpcode::FileList => vec![self.on_get_file_name_list(tx, state).await],
-            ClientOpcode::NewsfileGet => vec![self.on_newsfile_get(tx, state).await],
-            ClientOpcode::NewsfilePost => vec![self.on_newsfile_post(tx, state).await],
-            ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
-            ClientOpcode::ChatInvite => vec![self.on_chat_invite(tx, state).await],
-            ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
-            ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
-            ClientOpcode::ChatSubject => vec![self.on_chat_subject(tx, state).await],
-            ClientOpcode::Ping => vec![tx.reply(vec![])],
+            /* 101 */ ClientOpcode::NewsfileGet => self.on_newsfile_get(tx, state).await,
+            /* 103 */ ClientOpcode::NewsfilePost => self.on_newsfile_post(tx, state).await,
+            /* 105 */ ClientOpcode::Chat => self.on_chat(tx, state).await,
+            /* 107 */ ClientOpcode::Login => self.on_login(tx, state, config).await,
+            /* 108 */ ClientOpcode::Msg => self.on_private_msg(tx, state).await,
+            /* 110 */ ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
+            /* 112 */ ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
+            /* 113 */ ClientOpcode::ChatInvite => vec![self.on_chat_invite(tx, state).await],
+            /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
+            /* 116 */ ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
+            /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,
+            /* 200 */ ClientOpcode::FileList => self.on_get_file_name_list(tx, state).await,
+            /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
+            /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
+            /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
+            /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "unhandled opcode");
                 vec![tx.reply_error("not implemented")]
@@ -245,7 +242,7 @@ impl Session {
         ]
     }
 
-    async fn on_user_change(&mut self, tx: &Transaction, state: &SharedState) {
+    async fn on_user_change(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Some(name) = tx.name() {
             self.name = name;
         }
@@ -253,6 +250,7 @@ impl Session {
         // Later changes are self-inclusive, unlike the join-only
         // exclusion in `announce_user_change`'s `exclude_self` path.
         self.announce_user_change(icon, state, false).await;
+        Vec::new()
     }
 
     /// Register this session's current name/icon in the shared user
@@ -359,7 +357,7 @@ impl Session {
     }
 
     /// 300
-    async fn on_user_get_list(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_user_get_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let fields = state
             .users()
             .await
@@ -382,20 +380,20 @@ impl Session {
             })
             .map(|entry| Field::bytes(ServerFieldId::UserList, entry.encode()))
             .collect();
-        tx.reply(fields)
+        vec![tx.reply(fields)]
     }
 
     /// 303: another user's info text (name, icon, and a short
     /// privilege summary via [`AccessPrivileges::describe`]).
-    async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::GET_USER_INFO) {
-            return tx.reply_error(reason);
+            return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
-            return tx.reply_error("missing user id");
+            return vec![tx.reply_error("missing user id")];
         };
         let Some(target) = state.user(target_id).await else {
-            return tx.reply_error("no such user");
+            return vec![tx.reply_error("no such user")];
         };
 
         let privileges = target.access.describe().join(", ");
@@ -414,11 +412,11 @@ impl Session {
             }
         );
 
-        tx.reply(vec![
+        vec![tx.reply(vec![
             Field::string(ServerFieldId::Name, target.name),
             Field::u16(ServerFieldId::UserId, target.user_id),
             Field::string(ServerFieldId::Text, text),
-        ])
+        ])]
     }
 
     /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
@@ -478,9 +476,13 @@ impl Session {
     }
 
     /// 200
-    async fn on_get_file_name_list(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_get_file_name_list(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILES) {
-            return tx.reply_error(reason);
+            return vec![tx.reply_error(reason)];
         }
 
         // FILE_PATH (202) is optional in the request; root is assumed
@@ -492,28 +494,28 @@ impl Session {
             .into_iter()
             .map(|entry| Field::bytes(ServerFieldId::FileList, entry.encode()))
             .collect();
-        tx.reply(fields)
+        vec![tx.reply(fields)]
     }
 
     /// 101: read the classic (non-threaded) news.
-    async fn on_newsfile_get(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_newsfile_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::READ_NEWS) {
-            return tx.reply_error(reason);
+            return vec![tx.reply_error(reason)];
         }
         let news = state.news().await;
-        tx.reply(vec![Field::string(ServerFieldId::Text, news)])
+        vec![tx.reply(vec![Field::string(ServerFieldId::Text, news)])]
     }
 
     /// 103: post to the classic (non-threaded) news.
-    async fn on_newsfile_post(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_newsfile_post(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::POST_NEWS) {
-            return tx.reply_error(reason);
+            return vec![tx.reply_error(reason)];
         }
         let Some(text) = tx.field(ClientFieldId::Text) else {
-            return tx.reply_error("missing post text");
+            return vec![tx.reply_error("missing post text")];
         };
         state.post_news(&self.name, &text.as_string()).await;
-        tx.reply(vec![])
+        vec![tx.reply(vec![])]
     }
 
     /// 112: create a private chat room.
@@ -600,15 +602,15 @@ impl Session {
     }
 
     /// 120: set a chat room's subject.
-    async fn on_chat_subject(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_chat_subject(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let (Some(chat_id), Some(subject)) = (
             tx.field(ClientFieldId::ChatId).and_then(Field::as_u16),
             tx.field(ClientFieldId::ChatSubject).map(Field::as_string),
         ) else {
-            return tx.reply_error("missing chat id or subject");
+            return vec![tx.reply_error("missing chat id or subject")];
         };
         if !state.set_chat_subject(chat_id, subject.clone()).await {
-            return tx.reply_error("no such chat room");
+            return vec![tx.reply_error("no such chat room")];
         }
 
         let notify = Transaction::push(
@@ -623,7 +625,7 @@ impl Session {
                 state.send_to(member, notify.clone());
             }
         }
-        tx.reply(vec![])
+        vec![tx.reply(vec![])]
     }
 }
 
@@ -752,6 +754,7 @@ mod tests {
 
         let get = Transaction::request(ClientOpcode::NewsfileGet, 2, vec![]);
         let reply = session.on_newsfile_get(&get, &state).await;
+        let [reply] = reply.try_into().unwrap();
         let news = reply.field(ServerFieldId::Text).unwrap().as_string();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
