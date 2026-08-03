@@ -11,6 +11,7 @@ use hotline_proto::{AccessPrivileges, Field, Transaction};
 /// Where the UI is: still showing the server's agreement, or fully
 /// logged in and chatting.
 pub enum Mode {
+    Joining,
     Agreement(String),
     Chat,
 }
@@ -55,7 +56,7 @@ impl App {
         Self {
             nick,
             icon,
-            mode: Mode::Chat,
+            mode: Mode::Joining,
             users: Vec::new(),
             lines: vec![Line {
                 text: "connected - type a message and press Enter, Esc to quit".to_string(),
