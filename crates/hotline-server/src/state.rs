@@ -2,7 +2,7 @@
 //! rooms, classic news, and the two delivery channels sessions use to
 //! reach each other (broadcast to everyone, targeted to one user).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,11 +57,12 @@ impl UserEntry {
     }
 }
 
-/// A private chat room: a set of member user IDs plus a subject line.
+/// A private chat room: its member user IDs, in join order, plus a
+/// subject line.
 #[derive(Debug, Clone, Default)]
 pub struct ChatRoom {
-    /// Currently joined members.
-    pub members: HashSet<u16>,
+    /// Currently joined members, in the order they joined.
+    pub members: Vec<u16>,
     /// Room subject, settable by any member.
     pub subject: String,
 }
@@ -171,9 +172,13 @@ impl SharedState {
         self.users.write().await.remove(&user_id);
     }
 
-    /// Snapshot of all currently connected users.
+    /// Snapshot of all currently connected users, in connection order
+    /// (`user_id` is assigned monotonically, so sorting by it avoids the
+    /// underlying map's arbitrary iteration order).
     pub async fn users(&self) -> Vec<UserEntry> {
-        self.users.read().await.values().cloned().collect()
+        let mut users: Vec<UserEntry> = self.users.read().await.values().cloned().collect();
+        users.sort_by_key(|u| u.user_id);
+        users
     }
 
     /// Look up one connected user by ID.
@@ -257,15 +262,15 @@ impl SharedState {
         self.chat_rooms.write().await.insert(
             id,
             ChatRoom {
-                members: HashSet::from([creator]),
+                members: vec![creator],
                 subject: String::new(),
             },
         );
         id
     }
 
-    /// Current members of a chat room, if it exists.
-    pub async fn chat_room_members(&self, chat_id: u16) -> Option<HashSet<u16>> {
+    /// Current members of a chat room, in join order, if it exists.
+    pub async fn chat_room_members(&self, chat_id: u16) -> Option<Vec<u16>> {
         self.chat_rooms
             .read()
             .await
@@ -278,14 +283,17 @@ impl SharedState {
         self.chat_rooms.read().await.get(&chat_id).cloned()
     }
 
-    /// Add `user_id` to a chat room. `false` if the room doesn't exist.
+    /// Add `user_id` to a chat room, at the end of the join order.
+    /// `false` if the room doesn't exist.
     pub async fn join_chat_room(&self, chat_id: u16, user_id: u16) -> bool {
         self.chat_rooms
             .write()
             .await
             .get_mut(&chat_id)
             .map(|room| {
-                room.members.insert(user_id);
+                if !room.members.contains(&user_id) {
+                    room.members.push(user_id);
+                }
             })
             .is_some()
     }
@@ -295,7 +303,7 @@ impl SharedState {
     pub async fn leave_chat_room(&self, chat_id: u16, user_id: u16) {
         let mut rooms = self.chat_rooms.write().await;
         if let Some(room) = rooms.get_mut(&chat_id) {
-            room.members.remove(&user_id);
+            room.members.retain(|&id| id != user_id);
             if room.members.is_empty() {
                 rooms.remove(&chat_id);
             }
@@ -312,5 +320,30 @@ impl SharedState {
                 room.subject = subject;
             })
             .is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `HashMap`'s iteration order has no relation to insertion order, so
+    /// `users()` must sort explicitly rather than rely on it.
+    #[tokio::test]
+    async fn users_are_ordered_by_user_id_not_insertion_order() {
+        let state = SharedState::default();
+        for id in [3, 1, 2] {
+            state
+                .insert_user(UserEntry {
+                    user_id: id,
+                    name: format!("user{id}"),
+                    icon: 0,
+                    access: AccessPrivileges::empty(),
+                    last_active: Instant::now(),
+                })
+                .await;
+        }
+        let ids: Vec<u16> = state.users().await.into_iter().map(|u| u.user_id).collect();
+        assert_eq!(ids, vec![1, 2, 3]);
     }
 }

@@ -893,12 +893,17 @@ mod tests {
             vec![Field::u16(ClientFieldId::ChatId, chat_id)],
         );
         let join_reply = bob.on_chat_join(&join, &state).await;
-        let user_list_entries = join_reply
+        let user_list_ids: Vec<u16> = join_reply
             .fields
             .iter()
             .filter(|f| f.id == u16::from(ServerFieldId::UserList))
-            .count();
-        assert_eq!(user_list_entries, 2, "should list both room members");
+            .map(|f| UserNameWithInfo::decode(&f.as_bytes()).unwrap().user_id)
+            .collect();
+        assert_eq!(
+            user_list_ids,
+            vec![1, 2],
+            "should list members in join order, not reversed"
+        );
         assert_eq!(
             join_reply
                 .field(ServerFieldId::ChatSubject)
