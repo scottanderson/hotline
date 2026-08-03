@@ -310,6 +310,24 @@ impl SharedState {
         }
     }
 
+    /// Remove `user_id` from every chat room they belong to, deleting
+    /// any room that becomes empty. Returns, for each room they were
+    /// still in, its ID and the members who remain (to notify of the
+    /// departure).
+    pub async fn leave_all_chat_rooms(&self, user_id: u16) -> Vec<(u16, Vec<u16>)> {
+        let mut rooms = self.chat_rooms.write().await;
+        let mut left = Vec::new();
+        rooms.retain(|&chat_id, room| {
+            if !room.members.contains(&user_id) {
+                return true;
+            }
+            room.members.retain(|&id| id != user_id);
+            left.push((chat_id, room.members.clone()));
+            !room.members.is_empty()
+        });
+        left
+    }
+
     /// Set a chat room's subject. `false` if the room doesn't exist.
     pub async fn set_chat_subject(&self, chat_id: u16, subject: String) -> bool {
         self.chat_rooms
@@ -345,5 +363,21 @@ mod tests {
         }
         let ids: Vec<u16> = state.users().await.into_iter().map(|u| u.user_id).collect();
         assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn leave_all_chat_rooms_notifies_remaining_and_deletes_empty_rooms() {
+        let state = SharedState::default();
+        let solo = state.create_chat_room(1).await;
+        let shared = state.create_chat_room(2).await;
+        state.join_chat_room(shared, 1).await;
+
+        let left = state.leave_all_chat_rooms(1).await;
+
+        assert_eq!(left.len(), 2);
+        assert!(left.contains(&(solo, vec![])));
+        assert!(left.contains(&(shared, vec![2])));
+        assert!(state.chat_room(solo).await.is_none());
+        assert_eq!(state.chat_room_members(shared).await, Some(vec![2]));
     }
 }

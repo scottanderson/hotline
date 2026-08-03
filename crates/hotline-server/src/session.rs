@@ -109,6 +109,18 @@ impl Session {
         }
 
         state.remove_user(session.user_id).await;
+        for (chat_id, remaining) in state.leave_all_chat_rooms(session.user_id).await {
+            let notify = Transaction::push(
+                ServerOpcode::ChatUserPart,
+                vec![
+                    Field::u16(ServerFieldId::ChatId, chat_id),
+                    Field::u16(ServerFieldId::UserId, session.user_id),
+                ],
+            );
+            for member in remaining {
+                state.send_to(member, notify.clone());
+            }
+        }
         let leave = Transaction::push(
             ServerOpcode::UserPart,
             vec![Field::u16(ServerFieldId::UserId, session.user_id)],
