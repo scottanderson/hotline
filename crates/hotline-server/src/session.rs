@@ -175,11 +175,10 @@ impl Session {
     /// `Transaction` here would force one shape on every caller and
     /// silently hang whichever kind it guessed wrong for.
     fn require(&self, required: AccessPrivileges) -> std::result::Result<(), String> {
-        if self.access.contains(required) {
-            return Ok(());
-        }
-        let name = required.flag_name().unwrap_or("this privilege");
-        Err(format!("You are not allowed to do that ({name})."))
+        self.access.contains(required).then_some(()).ok_or_else(|| {
+            let name = required.flag_name().unwrap_or("this privilege");
+            format!("You are not allowed to do that ({name}).")
+        })
     }
 
     async fn on_login(
