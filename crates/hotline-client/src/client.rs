@@ -78,7 +78,7 @@ impl HotlineClient {
         stream.read_exact(&mut hello_buf).await?;
         ServerHello::decode(&hello_buf)?;
 
-        let (writer, reader) = Framed::new(stream, TransactionCodec::default()).split();
+        let (writer, reader) = Framed::new(stream, TransactionCodec::for_client()).split();
         let pending: PendingMap = Arc::new(Mutex::new(PendingState::Open(HashMap::new())));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 

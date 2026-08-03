@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(msg) = tx.field(ServerFieldId::Text) {
                 println!("{}", msg.as_string());
             } else {
-                tracing::debug!(type_ = tx.type_, "event");
+                tracing::debug!(type_ = tx.type_(), "event");
             }
         }
     });

@@ -10,8 +10,16 @@
 //! Client and server opcodes are separate enums ([`ClientOpcode`],
 //! [`ServerOpcode`]) since the same numeric value can mean different
 //! things depending on direction (`105` is a client's outgoing chat
-//! send; `106` is the server's chat relay). Both are
-//! `#[non_exhaustive]` so new variants aren't a breaking change.
+//! send; `106` is the server's chat relay), and for at least one value
+//! the two tables actually collide: `113` is both
+//! [`ClientOpcode::ChatInvite`] (a client asking to invite someone to a
+//! private chat) and [`ServerOpcode::ChatInvite`] (the server telling
+//! the invitee). That means [`Opcode::from_client_wire`]/
+//! [`Opcode::from_server_wire`] can't be merged into one "just figure it
+//! out" classifier; whichever table applies has to come from the caller
+//! already knowing who sent the value, not from the value itself. Both
+//! opcode enums are `#[non_exhaustive]` so new variants aren't a
+//! breaking change.
 //!
 //! Variant names track the tail of the original wire constant, matching
 //! [`crate::field_id`]'s convention.
@@ -264,6 +272,18 @@ pub enum ServerOpcode {
     /// The server is disconnecting this client, with a reason (111).
     /// Original: `HTLS_HDR_POLITEQUIT`.
     Politequit = 111,
+    /// This client was invited to a private chat room (113).
+    /// Original: `HTLS_HDR_CHAT_INVITE`.
+    ChatInvite = 113,
+    /// A user joined a private chat room (117).
+    /// Original: `HTLS_HDR_CHAT_USER_CHANGE`.
+    ChatUserChange = 117,
+    /// A user left a private chat room (118).
+    /// Original: `HTLS_HDR_CHAT_USER_PART`.
+    ChatUserPart = 118,
+    /// A private chat room's subject changed (119).
+    /// Original: `HTLS_HDR_CHAT_SUBJECT`.
+    ChatSubject = 119,
     /// A user's info changed, or a user joined (301).
     /// Original: `HTLS_HDR_USER_CHANGE`.
     UserChange = 301,
@@ -273,18 +293,6 @@ pub enum ServerOpcode {
     /// This client's access privileges were (re)set (354).
     /// Original: `HTLS_HDR_USER_SELFINFO`.
     UserSelfinfo = 354,
-    /// This client was invited to a private chat room (112).
-    /// Original: `HTLS_HDR_CHAT_INVITE`.
-    ChatInvite = 112,
-    /// A user joined a private chat room (113).
-    /// Original: `HTLS_HDR_CHAT_USER_CHANGE`.
-    ChatUserChange = 113,
-    /// A user left a private chat room (114).
-    /// Original: `HTLS_HDR_CHAT_USER_PART`.
-    ChatUserPart = 114,
-    /// A private chat room's subject changed (115).
-    /// Original: `HTLS_HDR_CHAT_SUBJECT`.
-    ChatSubject = 115,
 }
 
 impl ServerOpcode {
@@ -297,10 +305,10 @@ impl ServerOpcode {
             106 => Chat,
             109 => Agreement,
             111 => Politequit,
-            112 => ChatInvite,
-            113 => ChatUserChange,
-            114 => ChatUserPart,
-            115 => ChatSubject,
+            113 => ChatInvite,
+            117 => ChatUserChange,
+            118 => ChatUserPart,
+            119 => ChatSubject,
             301 => UserChange,
             302 => UserPart,
             354 => UserSelfinfo,
@@ -355,21 +363,37 @@ pub enum Opcode {
 }
 
 impl Opcode {
-    /// Classify a raw wire `type` value: checks the reply sentinel first
-    /// (masking the high 16 bits, tolerant of servers that OR the
-    /// request opcode into the low bits), then falls back to the
-    /// client/server opcode tables.
-    pub const fn from_wire(v: u32) -> Self {
+    /// Classify a raw wire `type` value known to have been sent **by a
+    /// client**: a recognized request, or `Unknown` if this build
+    /// doesn't recognize it. Never consults [`ServerOpcode`]'s table:
+    /// the two tables overlap numerically (`113` is both
+    /// [`ClientOpcode::ChatInvite`] and [`ServerOpcode::ChatInvite`]), so
+    /// which one applies has to come from the caller already knowing who
+    /// sent this value, not from the number itself. Call this only from
+    /// code that already knows that (a server reading its own incoming
+    /// traffic, or code inspecting a transaction it built via
+    /// [`crate::Transaction::request`]).
+    pub const fn from_client_wire(v: u32) -> Self {
+        match ClientOpcode::from_u32(v) {
+            Some(c) => Opcode::Request(c),
+            None => Opcode::Unknown(v),
+        }
+    }
+
+    /// Classify a raw wire `type` value known to have been sent **by a
+    /// server**: checks the reply sentinel first (masking the high 16
+    /// bits, tolerant of servers that OR the request opcode into the low
+    /// bits), then a recognized push, else `Unknown`. Never consults
+    /// [`ClientOpcode`]'s table; see [`Opcode::from_client_wire`] for why
+    /// direction has to come from the caller.
+    pub const fn from_server_wire(v: u32) -> Self {
         if v & 0xFFFF_0000 == TASK_REPLY {
             return Opcode::Reply;
         }
-        if let Some(c) = ClientOpcode::from_u32(v) {
-            return Opcode::Request(c);
+        match ServerOpcode::from_u32(v) {
+            Some(s) => Opcode::Push(s),
+            None => Opcode::Unknown(v),
         }
-        if let Some(s) = ServerOpcode::from_u32(v) {
-            return Opcode::Push(s);
-        }
-        Opcode::Unknown(v)
     }
 
     /// The wire `type` value this opcode encodes to.
@@ -389,29 +413,46 @@ mod tests {
 
     #[test]
     fn task_reply_sentinel_is_recognized_exactly() {
-        assert_eq!(Opcode::from_wire(TASK_REPLY), Opcode::Reply);
+        assert_eq!(Opcode::from_server_wire(TASK_REPLY), Opcode::Reply);
     }
 
     #[test]
     fn buggy_server_task_reply_with_opcode_in_low_bits_still_matches() {
         let buggy = TASK_REPLY | ClientOpcode::Login.as_u32();
-        assert_eq!(Opcode::from_wire(buggy), Opcode::Reply);
+        assert_eq!(Opcode::from_server_wire(buggy), Opcode::Reply);
     }
 
     #[test]
     fn known_client_and_server_opcodes_round_trip() {
         assert_eq!(
-            Opcode::from_wire(ClientOpcode::Login.as_u32()),
+            Opcode::from_client_wire(ClientOpcode::Login.as_u32()),
             Opcode::Request(ClientOpcode::Login)
         );
         assert_eq!(
-            Opcode::from_wire(ServerOpcode::Chat.as_u32()),
+            Opcode::from_server_wire(ServerOpcode::Chat.as_u32()),
             Opcode::Push(ServerOpcode::Chat)
         );
     }
 
     #[test]
     fn unrecognized_opcode_is_preserved_not_dropped() {
-        assert_eq!(Opcode::from_wire(0xDEAD), Opcode::Unknown(0xDEAD));
+        assert_eq!(Opcode::from_client_wire(0xDEAD), Opcode::Unknown(0xDEAD));
+        assert_eq!(Opcode::from_server_wire(0xDEAD), Opcode::Unknown(0xDEAD));
+    }
+
+    /// `113` is both `ClientOpcode::ChatInvite` (a client asking to
+    /// invite someone) and `ServerOpcode::ChatInvite` (the server
+    /// telling the invitee); only knowing who sent it, not the number
+    /// itself, can tell those apart.
+    #[test]
+    fn the_same_wire_value_means_different_things_depending_on_direction() {
+        assert_eq!(
+            Opcode::from_client_wire(113),
+            Opcode::Request(ClientOpcode::ChatInvite)
+        );
+        assert_eq!(
+            Opcode::from_server_wire(113),
+            Opcode::Push(ServerOpcode::ChatInvite)
+        );
     }
 }

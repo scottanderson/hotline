@@ -41,9 +41,37 @@ enum DecodeState {
 /// transaction's total size isn't known until its prefix has been read,
 /// and `Framed` may call `decode` again before a full transaction has
 /// arrived.
-#[derive(Debug, Default)]
+///
+/// Carries whichever of [`Transaction::decode_prefix_from_client`]/
+/// [`Transaction::decode_prefix_from_server`] matches which peer this
+/// codec's connection actually receives bytes from - set once at
+/// construction via [`TransactionCodec::for_client`]/
+/// [`TransactionCodec::for_server`], never re-guessed per frame.
+#[derive(Debug)]
 pub struct TransactionCodec {
     state: DecodeState,
+    decode_prefix: fn(&[u8; PREFIX_LEN]) -> Transaction,
+}
+
+impl TransactionCodec {
+    /// A codec for a client's connection: incoming bytes were sent by
+    /// the server it's connected to (replies to this client's own
+    /// requests, or unsolicited pushes).
+    pub fn for_client() -> Self {
+        Self {
+            state: DecodeState::default(),
+            decode_prefix: Transaction::decode_prefix_from_server,
+        }
+    }
+
+    /// A codec for a server's connection: incoming bytes were sent by
+    /// the client on the other end (requests).
+    pub fn for_server() -> Self {
+        Self {
+            state: DecodeState::default(),
+            decode_prefix: Transaction::decode_prefix_from_client,
+        }
+    }
 }
 
 impl Decoder for TransactionCodec {
@@ -61,7 +89,7 @@ impl Decoder for TransactionCodec {
                         .try_into()
                         .expect("slice length checked above");
                     src.advance(PREFIX_LEN);
-                    self.state = DecodeState::Body(Transaction::decode_prefix(&prefix));
+                    self.state = DecodeState::Body((self.decode_prefix)(&prefix));
                     // A small transaction can arrive in the same segment
                     // as its prefix, so loop instead of waiting for
                     // another decode() call.
@@ -109,7 +137,7 @@ mod tests {
         );
 
         let mut buf = BytesMut::new();
-        let mut codec = TransactionCodec::default();
+        let mut codec = TransactionCodec::for_server();
         codec.encode(tx.clone(), &mut buf).unwrap();
 
         let decoded = codec.decode(&mut buf).unwrap().unwrap();
@@ -129,7 +157,7 @@ mod tests {
     fn feed_byte_by_byte(tx: &Transaction) -> Transaction {
         let encoded = tx.encode().unwrap();
         let mut buf = BytesMut::new();
-        let mut codec = TransactionCodec::default();
+        let mut codec = TransactionCodec::for_server();
 
         for &byte in &encoded[..encoded.len() - 1] {
             buf.extend_from_slice(&[byte]);
@@ -180,7 +208,7 @@ mod tests {
         );
 
         let mut buf = BytesMut::new();
-        let mut codec = TransactionCodec::default();
+        let mut codec = TransactionCodec::for_server();
         codec.encode(first.clone(), &mut buf).unwrap();
         codec.encode(second.clone(), &mut buf).unwrap();
 

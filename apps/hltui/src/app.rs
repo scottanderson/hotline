@@ -61,7 +61,7 @@ impl App {
             /* 104 */ ServerOpcode::Msg => self.apply_msg(tx),
             /* 106 */ ServerOpcode::Chat => self.apply_chat(tx),
             /* 111 */ ServerOpcode::Politequit => self.apply_politequit(tx),
-            /* 112 */ ServerOpcode::ChatInvite => self.apply_chat_invite(tx),
+            /* 113 */ ServerOpcode::ChatInvite => self.apply_chat_invite(tx),
             /* 301 */ ServerOpcode::UserChange => self.apply_user_change(tx),
             /* 302 */ ServerOpcode::UserPart => self.apply_user_part(tx),
             /* 354 */ ServerOpcode::UserSelfinfo => self.apply_user_selfinfo(tx),
@@ -111,7 +111,7 @@ impl App {
         self.quit();
     }
 
-    // 112
+    // 113
     fn apply_chat_invite(&mut self, tx: &Transaction) {
         let from = tx
             .field(ServerFieldId::Name)
@@ -240,6 +240,29 @@ mod tests {
     #[test]
     fn display_text_leaves_normal_text_alone() {
         assert_eq!(display_text("Alice: hi"), "Alice: hi");
+    }
+
+    /// `113` is both `ClientOpcode::ChatInvite` and
+    /// `ServerOpcode::ChatInvite`; a value-based (rather than
+    /// direction-aware) opcode classification would misread this push as
+    /// the client-side variant and silently drop it here.
+    #[test]
+    fn chat_invite_push_is_recognized_despite_sharing_its_wire_value_with_a_client_opcode() {
+        use hotline_proto::field_id::ServerFieldId;
+        use hotline_proto::opcode::ServerOpcode;
+
+        let mut app = App::new("me".to_string(), Vec::new());
+        let invite = Transaction::push(
+            ServerOpcode::ChatInvite,
+            vec![
+                Field::string(ServerFieldId::Name, "Alice"),
+                Field::u16(ServerFieldId::ChatId, 7),
+            ],
+        );
+        app.apply_server_event(&invite);
+        assert!(app.lines.iter().any(|line| line
+            .text
+            .contains("Alice invited you to a private chat (id 7)")));
     }
 
     #[test]

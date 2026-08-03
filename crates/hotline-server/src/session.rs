@@ -50,7 +50,7 @@ impl Session {
             access: AccessPrivileges::empty(),
         };
 
-        let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::default()).split();
+        let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::for_server()).split();
         let mut broadcast_rx = state.subscribe();
         let mut targeted_rx = state.subscribe_targeted();
         let mut announce_rx = state.subscribe_announcements();
@@ -81,7 +81,8 @@ impl Session {
                 msg = targeted_rx.recv() => {
                     match msg {
                         Ok(targeted) if targeted.target_user_id == session.user_id => {
-                            let is_kick = targeted.tx.opcode() == Opcode::Push(ServerOpcode::Politequit);
+                            let is_kick =
+                                targeted.tx.opcode() == Opcode::Push(ServerOpcode::Politequit);
                             writer.send(targeted.tx).await?;
                             if is_kick {
                                 break; // the whole point of Politequit is disconnection
@@ -134,11 +135,8 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
-        // A session only ever receives requests, never replies, so
-        // classifying via `opcode()` here is equivalent to decoding
-        // `type_` as a `ClientOpcode` directly.
         let Opcode::Request(opcode) = tx.opcode() else {
-            tracing::debug!(type_ = tx.type_, "not a recognized client request");
+            tracing::debug!(type_ = tx.type_(), "not a recognized client request");
             return vec![tx.reply_error("not implemented")];
         };
 

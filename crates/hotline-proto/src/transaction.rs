@@ -13,20 +13,31 @@
 //!  22    …    fields   `hc` back-to-back `Field` chunks: tag(2) len(2) data(len)
 //! ```
 //!
-//! `Transaction` holds every field above directly (`type_`, `trans`,
-//! `flag`, `len`, `len2`, `fields`) rather than wrapping a separate
-//! header type. `hc` isn't stored either; it's always `fields.len()`.
-//! The prefix/body split only shows up in streaming decode
-//! ([`Transaction::decode_prefix`] + [`Transaction::finish_decode`]),
+//! `Transaction` holds every field above directly (`trans`, `flag`,
+//! `len`, `len2`, `fields`) rather than wrapping a separate header type.
+//! `hc` isn't stored either; it's always `fields.len()`. The prefix/body
+//! split only shows up in streaming decode
+//! ([`Transaction::decode_prefix_from_client`]/
+//! [`Transaction::decode_prefix_from_server`] + [`Transaction::finish_decode`]),
 //! since reading a variable-length frame off a socket requires knowing
 //! `len2` before you know how many more bytes to read.
+//!
+//! There's no raw `type_: u32` field: the wire's `type` value is
+//! resolved into an [`Opcode`] once, by whoever already knows which
+//! table it belongs to (a client building a request, a server building
+//! a reply/push, or a decode call told which side sent the bytes), and
+//! stored as that. Direction lives in *which [`Opcode`] variant* a
+//! transaction holds ([`Opcode::Request`] only a client sends,
+//! [`Opcode::Reply`]/[`Opcode::Push`] only a server does), not in a
+//! separate tag next to a still-raw number - so [`Transaction::opcode`]
+//! is a plain field read, never a re-guess.
 
 use std::fmt;
 
 use crate::error::{ProtoError, Result};
 use crate::field::Field;
 use crate::field_id::{ClientFieldId, ServerFieldId};
-use crate::opcode::{ClientOpcode, Opcode, ServerOpcode, TASK_REPLY};
+use crate::opcode::{ClientOpcode, Opcode, ServerOpcode};
 use crate::wire::{PacketReader, PacketWriter};
 
 /// A complete transaction: fixed fields plus its field list. `fields.len()`
@@ -37,8 +48,10 @@ use crate::wire::{PacketReader, PacketWriter};
 /// requires buffering across reads.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Transaction {
-    /// Raw opcode. Use [`Transaction::opcode`] to classify it.
-    pub type_: u32,
+    /// The wire `type` value, already resolved to which direction sent
+    /// it. See the [module docs](self) for why this replaces a raw
+    /// `type_: u32`.
+    opcode: Opcode,
     /// Transaction ID. Client-assigned and nonzero on a request; echoed
     /// back on the matching reply. Always `0` on a server-initiated push.
     /// Private so a reply can only be built through [`Transaction::reply`]/
@@ -65,20 +78,20 @@ pub const PREFIX_LEN: usize = 20;
 impl Transaction {
     /// Build a request transaction from a set of fields.
     pub fn request(opcode: ClientOpcode, trans: u32, fields: Vec<Field>) -> Self {
-        Self::assemble(opcode.as_u32(), trans, 0, fields)
+        Self::assemble(Opcode::Request(opcode), trans, 0, fields)
     }
 
     /// Build a reply to this (request) transaction, carrying `fields`.
     pub fn reply(&self, fields: Vec<Field>) -> Self {
-        Self::assemble(TASK_REPLY, self.trans, 0, fields)
+        Self::assemble(Opcode::Reply, self.trans, 0, fields)
     }
 
     /// Build a server-initiated push transaction (chat relay, user list
     /// change, news post, ...). It's not a reply to anything, so it carries
     /// `trans = 0` and the push's own opcode rather than the
-    /// [`TASK_REPLY`] sentinel.
+    /// [`crate::opcode::TASK_REPLY`] sentinel.
     pub fn push(opcode: ServerOpcode, fields: Vec<Field>) -> Self {
-        Self::assemble(opcode.as_u32(), 0, 0, fields)
+        Self::assemble(Opcode::Push(opcode), 0, 0, fields)
     }
 
     /// Build an error reply to this (request) transaction: the error flag
@@ -87,7 +100,7 @@ impl Transaction {
     /// one of these.
     pub fn reply_error(&self, message: impl Into<String>) -> Self {
         Self::assemble(
-            TASK_REPLY,
+            Opcode::Reply,
             self.trans,
             1,
             vec![Field::string(ServerFieldId::ErrorText, message)],
@@ -95,7 +108,7 @@ impl Transaction {
     }
 
     /// Shared constructor: every wire representation (request/reply/push)
-    /// differs only in `type_`, `trans`, and `flag`. `len`/`len2` are
+    /// differs only in `opcode`, `trans`, and `flag`. `len`/`len2` are
     /// always derived the same way from `fields`.
     ///
     /// `len2` here is a size *estimate* computed with saturating (not
@@ -110,13 +123,13 @@ impl Transaction {
     /// `push` call site to handle a Result for a condition that, in
     /// practice, is only reachable by handing it deliberately-oversized
     /// data.
-    fn assemble(type_: u32, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
+    fn assemble(opcode: Opcode, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
         let len2 = fields
             .iter()
             .map(|f| 4u32.saturating_add(u32::try_from(f.as_bytes().len()).unwrap_or(u32::MAX)))
             .fold(2u32, u32::saturating_add);
         Self {
-            type_,
+            opcode,
             trans,
             flag,
             len: len2,
@@ -125,17 +138,22 @@ impl Transaction {
         }
     }
 
-    /// Classify [`Transaction::type_`] (reply sentinel vs. a known
-    /// client/server opcode vs. unrecognized).
+    /// This transaction's opcode, already resolved to the correct
+    /// direction (see the [module docs](self)) - a plain field read, not
+    /// a guess from a raw number.
     pub const fn opcode(&self) -> Opcode {
-        Opcode::from_wire(self.type_)
+        self.opcode
     }
 
-    /// `true` if this transaction is a reply (`type_` carries the
-    /// [`TASK_REPLY`] sentinel; see [`crate::opcode`] for how that's
-    /// matched even against buggy servers).
+    /// `true` if this transaction is a reply.
     pub const fn is_reply(&self) -> bool {
-        matches!(self.opcode(), Opcode::Reply)
+        matches!(self.opcode, Opcode::Reply)
+    }
+
+    /// The raw wire `type` value, mainly for logging. Prefer
+    /// [`Transaction::opcode`] for anything that branches on it.
+    pub const fn type_(&self) -> u32 {
+        self.opcode.as_u32()
     }
 
     /// `true` if bit 0 of `flag` is set.
@@ -201,7 +219,7 @@ impl Transaction {
         }
 
         Ok(PacketWriter::<PREFIX_LEN>::new()
-            .u32(self.type_)
+            .u32(self.opcode.as_u32())
             .u32(self.trans)
             .u32(self.flag)
             .u32(self.len)
@@ -214,14 +232,17 @@ impl Transaction {
     }
 
     /// Decode the fixed-size prefix only (everything through `len2`),
-    /// with an empty field list. [`Transaction::remaining_len`] says how
-    /// many more bytes to read, then [`Transaction::finish_decode`]
-    /// parses them.
+    /// with an empty field list, resolving the wire `type` value under
+    /// the assumption that these bytes were sent **by a client** - call
+    /// this only when the surrounding code already knows that (a server
+    /// reading its own incoming traffic). [`Transaction::remaining_len`]
+    /// says how many more bytes to read, then
+    /// [`Transaction::finish_decode`] parses them.
     ///
     /// Exists for streaming transports that read off a socket in two
-    /// passes; [`Transaction::decode`] is the one-shot equivalent for
-    /// tests and other non-streaming contexts.
-    pub const fn decode_prefix(buf: &[u8; PREFIX_LEN]) -> Self {
+    /// passes; [`Transaction::decode_from_client`] is the one-shot
+    /// equivalent for tests and other non-streaming contexts.
+    pub const fn decode_prefix_from_client(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
         let (r, type_) = r.u32();
         let (r, trans) = r.u32();
@@ -229,7 +250,7 @@ impl Transaction {
         let (r, len) = r.u32();
         let (_, len2) = r.u32();
         Self {
-            type_,
+            opcode: Opcode::from_client_wire(type_),
             trans,
             flag,
             len,
@@ -238,7 +259,28 @@ impl Transaction {
         }
     }
 
-    /// Bytes to read after [`Transaction::decode_prefix`], before
+    /// Like [`Transaction::decode_prefix_from_client`], but for bytes
+    /// known to have been sent **by a server** (a client reading its own
+    /// incoming traffic).
+    pub const fn decode_prefix_from_server(buf: &[u8; PREFIX_LEN]) -> Self {
+        let r = PacketReader::new(*buf);
+        let (r, type_) = r.u32();
+        let (r, trans) = r.u32();
+        let (r, flag) = r.u32();
+        let (r, len) = r.u32();
+        let (_, len2) = r.u32();
+        Self {
+            opcode: Opcode::from_server_wire(type_),
+            trans,
+            flag,
+            len,
+            len2,
+            fields: Vec::new(),
+        }
+    }
+
+    /// Bytes to read after [`Transaction::decode_prefix_from_client`]/
+    /// [`Transaction::decode_prefix_from_server`], before
     /// [`Transaction::finish_decode`] can run: `len2`, i.e. the 2-byte
     /// field count plus every field's bytes.
     pub const fn remaining_len(&self) -> u32 {
@@ -246,7 +288,8 @@ impl Transaction {
     }
 
     /// Finish decoding a transaction whose prefix was already read via
-    /// [`Transaction::decode_prefix`]: `body` is exactly
+    /// [`Transaction::decode_prefix_from_client`]/
+    /// [`Transaction::decode_prefix_from_server`]: `body` is exactly
     /// [`Transaction::remaining_len`] bytes, the field count followed by
     /// the fields.
     pub fn finish_decode(self, body: &[u8]) -> Result<Self> {
@@ -275,10 +318,30 @@ impl Transaction {
     }
 
     /// Decode a complete, single-part transaction (prefix + body) from
-    /// one contiguous buffer. Convenience wrapper around
-    /// [`Transaction::decode_prefix`] + [`Transaction::finish_decode`],
-    /// mainly useful for tests and non-streaming contexts.
-    pub fn decode(buf: &[u8]) -> Result<Self> {
+    /// one contiguous buffer, resolving its opcode under the assumption
+    /// that it was sent **by a client**. Convenience wrapper around
+    /// [`Transaction::decode_prefix_from_client`] +
+    /// [`Transaction::finish_decode`], mainly useful for tests and other
+    /// non-streaming contexts.
+    pub fn decode_from_client(buf: &[u8]) -> Result<Self> {
+        Self::decode_with(buf, Self::decode_prefix_from_client)
+    }
+
+    /// Like [`Transaction::decode_from_client`], but for bytes known to
+    /// have been sent **by a server**.
+    pub fn decode_from_server(buf: &[u8]) -> Result<Self> {
+        Self::decode_with(buf, Self::decode_prefix_from_server)
+    }
+
+    /// Shared one-shot decoder: only the prefix step needs to know
+    /// direction, so this takes whichever of
+    /// [`Transaction::decode_prefix_from_client`]/
+    /// [`Transaction::decode_prefix_from_server`] the caller already
+    /// picked and drives it through [`Transaction::finish_decode`].
+    fn decode_with(
+        buf: &[u8],
+        decode_prefix: impl FnOnce(&[u8; PREFIX_LEN]) -> Self,
+    ) -> Result<Self> {
         let prefix: &[u8; PREFIX_LEN] = buf
             .get(..PREFIX_LEN)
             .and_then(|s| s.try_into().ok())
@@ -286,7 +349,7 @@ impl Transaction {
                 needed: PREFIX_LEN,
                 available: buf.len(),
             })?;
-        let partial = Self::decode_prefix(prefix);
+        let partial = decode_prefix(prefix);
         let body_end = PREFIX_LEN + partial.remaining_len() as usize;
         let body = buf
             .get(PREFIX_LEN..body_end)
@@ -299,11 +362,12 @@ impl Transaction {
 }
 
 impl fmt::Debug for Transaction {
-    /// This is where the direction context [`Field`] itself doesn't have
-    /// actually lives: [`Transaction::opcode`] says whether this is a
-    /// client request or a server reply/push, so each field's name can
-    /// be looked up in the *correct* one of [`crate::field_id::ClientFieldId`]
-    /// / [`crate::field_id::ServerFieldId`], never both, never a guess.
+    /// [`Transaction::opcode`] already knows whether this is a client
+    /// request or a server reply/push (see the [module docs](self)), so
+    /// each field's name is looked up in the *correct* one of
+    /// [`crate::field_id::ClientFieldId`]/[`crate::field_id::ServerFieldId`],
+    /// never both, never a guess, and never wrong the way re-deriving
+    /// direction from a raw number could be.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let opcode = self.opcode();
         let mut out = f.debug_struct("Transaction");
@@ -347,9 +411,9 @@ impl fmt::Debug for Transaction {
                     })
                     .collect::<Vec<_>>(),
             ),
-            // Direction genuinely can't be determined, so fall back to the
-            // plain, honest (unnamed) Field::Debug rather than guessing at
-            // one of the two tables.
+            // The wire value isn't a recognized opcode in either table,
+            // so there's no schema to name fields against; fall back to
+            // the plain, honest (unnamed) Field::Debug.
             Opcode::Unknown(_) => out.field("fields", &self.fields),
         }
         .finish()
@@ -377,7 +441,7 @@ mod tests {
                 .map(|i| Field::string(ClientFieldId::Text, format!("msg{i}")))
                 .collect::<Vec<_>>();
             let tx = Transaction::request(ClientOpcode::Chat, 1, fields);
-            let decoded = Transaction::decode(&tx.encode().unwrap()).unwrap();
+            let decoded = Transaction::decode_from_client(&tx.encode().unwrap()).unwrap();
             assert_eq!(decoded.fields.len(), n);
         }
     }
@@ -400,7 +464,7 @@ mod tests {
             "remaining_len() (== len2) must equal hc(2) + all field bytes"
         );
 
-        let decoded = Transaction::decode(&bytes).unwrap();
+        let decoded = Transaction::decode_from_client(&bytes).unwrap();
         // Decode always produces `FieldValue::Bytes` (see the field.rs
         // module docs), so a decoded transaction is never struct-equal
         // to the locally-built one that produced its bytes - compare
@@ -426,18 +490,18 @@ mod tests {
         let bytes = tx.encode().unwrap();
 
         let prefix: [u8; PREFIX_LEN] = bytes[..PREFIX_LEN].try_into().unwrap();
-        let partial = Transaction::decode_prefix(&prefix);
+        let partial = Transaction::decode_prefix_from_client(&prefix);
         let body = &bytes[PREFIX_LEN..PREFIX_LEN + partial.remaining_len() as usize];
         let streamed = partial.finish_decode(body).unwrap();
 
-        assert_eq!(streamed, Transaction::decode(&bytes).unwrap());
+        assert_eq!(streamed, Transaction::decode_from_client(&bytes).unwrap());
     }
 
     #[test]
     fn reply_carries_task_reply_sentinel_not_zero() {
         let request = Transaction::request(ClientOpcode::Ping, 42, vec![]);
         let tx = request.reply(vec![]);
-        assert_eq!(tx.type_, TASK_REPLY);
+        assert_eq!(tx.opcode(), Opcode::Reply);
         assert!(tx.is_reply());
     }
 

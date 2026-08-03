@@ -78,12 +78,10 @@ pub struct TrackedServer {
 /// Read a Pascal-style (1-byte length prefix) string starting at `offset`,
 /// returning it along with the offset just past it.
 fn read_pstring(buf: &[u8], offset: usize) -> Result<(String, usize)> {
-    let len = *buf
-        .get(offset)
-        .ok_or(TrackerError::UnexpectedEof {
-            needed: offset + 1,
-            available: buf.len(),
-        })? as usize;
+    let len = *buf.get(offset).ok_or(TrackerError::UnexpectedEof {
+        needed: offset + 1,
+        available: buf.len(),
+    })? as usize;
     let start = offset + 1;
     let end = start + len;
     if buf.len() < end {
