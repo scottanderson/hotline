@@ -2,7 +2,7 @@
 //! rooms, classic news, and the two delivery channels sessions use to
 //! reach each other (broadcast to everyone, targeted to one user).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -65,6 +65,8 @@ pub struct ChatRoom {
     pub members: Vec<u16>,
     /// Room subject, settable by any member.
     pub subject: String,
+    /// Users invited but not yet joined.
+    pub invited: HashSet<u16>,
 }
 
 /// A transaction addressed to exactly one connected user (private
@@ -271,7 +273,7 @@ impl SharedState {
             id,
             ChatRoom {
                 members: vec![creator],
-                subject: String::new(),
+                ..Default::default()
             },
         );
         id
@@ -291,8 +293,9 @@ impl SharedState {
         self.chat_rooms.read().await.get(&chat_id).cloned()
     }
 
-    /// Add `user_id` to a chat room, at the end of the join order.
-    /// `false` if the room doesn't exist.
+    /// Add `user_id` to a chat room, at the end of the join order, and
+    /// clear any pending invite for them. `false` if the room doesn't
+    /// exist.
     pub async fn join_chat_room(&self, chat_id: u32, user_id: u16) -> bool {
         self.chat_rooms
             .write()
@@ -302,8 +305,38 @@ impl SharedState {
                 if !room.members.contains(&user_id) {
                     room.members.push(user_id);
                 }
+                room.invited.remove(&user_id);
             })
             .is_some()
+    }
+
+    /// Mark `user_id` as invited to a chat room. `false` if the room
+    /// doesn't exist.
+    pub async fn invited(&self, chat_id: u32, user_id: u16) -> bool {
+        self.chat_rooms
+            .write()
+            .await
+            .get_mut(&chat_id)
+            .map(|room| {
+                room.invited.insert(user_id);
+            })
+            .is_some()
+    }
+
+    /// Clear a pending invite without joining, e.g. on decline.
+    pub async fn invite_declined(&self, chat_id: u32, user_id: u16) {
+        if let Some(room) = self.chat_rooms.write().await.get_mut(&chat_id) {
+            room.invited.remove(&user_id);
+        }
+    }
+
+    /// Whether `user_id` has a pending invite to a chat room.
+    pub async fn is_invited(&self, chat_id: u32, user_id: u16) -> bool {
+        self.chat_rooms
+            .read()
+            .await
+            .get(&chat_id)
+            .is_some_and(|r| r.invited.contains(&user_id))
     }
 
     /// Remove `user_id` from a chat room, deleting the room once its

@@ -161,7 +161,7 @@ impl Session {
             /* 110 */ ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
             /* 112 */ ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
             /* 113 */ ClientOpcode::ChatInvite => vec![self.on_chat_invite(tx, state).await],
-            /* 114 */ ClientOpcode::ChatDecline => vec![tx.reply(vec![])],
+            /* 114 */ ClientOpcode::ChatDecline => self.on_chat_decline(tx, state).await,
             /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
             /* 116 */ ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
             /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,
@@ -586,6 +586,10 @@ impl Session {
         if !members.contains(&self.user_id) {
             return tx.reply_error("you are not in that chat room");
         }
+        if members.contains(&target_id) {
+            return tx.reply_error("that user is already in the chat");
+        }
+        state.invited(chat_id, target_id).await;
 
         state.send_to(
             target_id,
@@ -664,6 +668,14 @@ impl Session {
             state.send_to(member, notify.clone());
         }
         tx.reply(vec![])
+    }
+
+    /// 114: decline a chat invitation.
+    async fn on_chat_decline(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) {
+            state.invite_declined(chat_id, self.user_id).await;
+        }
+        vec![tx.reply(vec![])]
     }
 
     /// 120: set a chat room's subject.
@@ -1080,5 +1092,71 @@ mod tests {
                 .map(Field::as_string),
             Some("Welcome".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn inviting_an_existing_member_is_an_error() {
+        let alice = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state.join_chat_room(chat_id, 2).await;
+
+        let invite = Transaction::request(
+            ClientOpcode::ChatInvite,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::u16(ClientFieldId::Uid, 2),
+            ],
+        );
+        let reply = alice.on_chat_invite(&invite, &state).await;
+
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn joining_clears_the_invite() {
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state.invited(chat_id, 2).await;
+        assert!(state.is_invited(chat_id, 2).await);
+
+        let bob = Session {
+            user_id: 2,
+            ..test_session("Bob", AccessPrivileges::all())
+        };
+        let join = Transaction::request(
+            ClientOpcode::ChatJoin,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        bob.on_chat_join(&join, &state).await;
+
+        assert!(!state.is_invited(chat_id, 2).await);
+    }
+
+    #[tokio::test]
+    async fn declining_clears_the_invite() {
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state.invited(chat_id, 2).await;
+
+        let bob = Session {
+            user_id: 2,
+            ..test_session("Bob", AccessPrivileges::all())
+        };
+        let decline = Transaction::request(
+            ClientOpcode::ChatDecline,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        let [reply] = bob
+            .on_chat_decline(&decline, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        assert!(!reply.is_error());
+        assert!(!state.is_invited(chat_id, 2).await);
     }
 }
