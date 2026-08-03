@@ -168,7 +168,7 @@ impl Session {
         config: &ServerConfig,
     ) -> Vec<Transaction> {
         match opcode {
-            /* 107 */ ClientOpcode::Login => self.on_login(tx, config).await,
+            /* 107 */ ClientOpcode::Login => self.on_login(tx, state, config).await,
             /* 121 */ ClientOpcode::Agreed => self.on_agreed(tx, state).await,
             /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
             other => {
@@ -220,7 +220,12 @@ impl Session {
         })
     }
 
-    async fn on_login(&mut self, tx: &Transaction, config: &ServerConfig) -> Vec<Transaction> {
+    async fn on_login(
+        &mut self,
+        tx: &Transaction,
+        state: &SharedState,
+        config: &ServerConfig,
+    ) -> Vec<Transaction> {
         // Both LOGIN and PASSWORD are XOR-0xFF obfuscated on the wire
         // (Hotline's `hl_code`).
         let login = tx.login();
@@ -232,12 +237,6 @@ impl Session {
             _ => config.default_access,
         };
 
-        // Some clients embed name/icon in Login, not just a follow-up
-        // SET_CLIENT_USER_INFO (304).
-        if let Some(name) = tx.name() {
-            self.name = name;
-        }
-
         let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 151)];
         if !config.server_name.is_empty() {
             fields.push(Field::string(
@@ -245,31 +244,52 @@ impl Session {
                 config.server_name.clone(),
             ));
         }
+        let mut replies = vec![tx.reply(fields)];
 
-        // The join broadcast and privilege grant wait for Agreed (121);
-        // see on_agreed. This push tells the client what to show first.
-        let agreement = if config.agreement.is_empty() {
-            Transaction::push(
-                ServerOpcode::Agreement,
-                vec![Field::bytes(ServerFieldId::Noagreement, vec![0, 1])],
-            )
-        } else {
-            Transaction::push(
+        // No HTLC_DATA_CLIENTVERSION (160) counts as pre-150.
+        let modern = tx.client_version().unwrap_or(0) >= 150;
+
+        if !config.agreement.is_empty() {
+            replies.push(Transaction::push(
                 ServerOpcode::Agreement,
                 vec![Field::string(ServerFieldId::Text, config.agreement.clone())],
-            )
-        };
+            ));
+        } else if modern {
+            replies.push(Transaction::push(
+                ServerOpcode::Agreement,
+                vec![Field::bytes(ServerFieldId::Noagreement, vec![0, 1])],
+            ));
+        }
 
-        vec![tx.reply(fields), agreement]
+        // A name in Login, or a pre-150 client, joins right away.
+        if tx.name().is_some() || !modern {
+            let icon = tx.icon().unwrap_or(0);
+            let selfinfo = self.complete_join(tx.name(), icon, state).await;
+            replies.push(selfinfo);
+        }
+
+        replies
     }
 
     /// Complete login after the client accepts the agreement (`HTLC_HDR_AGREED`, 121).
     async fn on_agreed(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        let icon = tx.icon().unwrap_or(0);
+        let selfinfo = self.complete_join(tx.name(), icon, state).await;
+        vec![tx.reply(vec![]), selfinfo]
+    }
+
+    /// Register name/icon, broadcast the join excluding self, mark this
+    /// session `Joined`, and build its own `UserSelfinfo` push.
+    async fn complete_join(
+        &mut self,
+        name: Option<String>,
+        icon: u16,
+        state: &SharedState,
+    ) -> Transaction {
         self.state = SessionState::Joined;
-        if let Some(name) = tx.name() {
+        if let Some(name) = name {
             self.name = name;
         }
-        let icon = tx.icon().unwrap_or(0);
         // Not echoed back to the joiner.
         self.announce_user_change(icon, state, true).await;
 
@@ -280,17 +300,13 @@ impl Session {
             name: self.name.clone(),
         };
 
-        vec![
-            tx.reply(vec![]),
-            // Privileges + own user-list entry, as a UserSelfinfo push.
-            Transaction::push(
-                ServerOpcode::UserSelfinfo,
-                vec![
-                    Field::u64(ServerFieldId::Access, self.access.bits()),
-                    Field::bytes(ServerFieldId::UserList, self_entry.encode()),
-                ],
-            ),
-        ]
+        Transaction::push(
+            ServerOpcode::UserSelfinfo,
+            vec![
+                Field::u64(ServerFieldId::Access, self.access.bits()),
+                Field::bytes(ServerFieldId::UserList, self_entry.encode()),
+            ],
+        )
     }
 
     async fn on_user_change(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
@@ -761,7 +777,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_registers_name_and_icon_and_broadcasts_join() {
+    async fn login_with_name_registers_and_broadcasts_join_immediately() {
         let mut session = test_session("guest1", AccessPrivileges::guest_default());
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -776,18 +792,7 @@ mod tests {
                 Field::u16(ClientFieldId::Icon, 42),
             ],
         );
-        session.on_login(&login, &config).await;
-
-        // The join broadcast waits for Agreed, carrying the same name/icon.
-        let agreed = Transaction::request(
-            ClientOpcode::Agreed,
-            2,
-            vec![
-                Field::string(ClientFieldId::Name, "Alice"),
-                Field::u16(ClientFieldId::Icon, 42),
-            ],
-        );
-        session.on_agreed(&agreed, &state).await;
+        session.on_login(&login, &state, &config).await;
 
         // The join announcement excludes the joiner itself.
         let notify = announce_rx
@@ -808,6 +813,106 @@ mod tests {
         assert_eq!(users[0].name, "Alice");
         assert_eq!(users[0].icon, 42);
         assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn login_without_name_defers_join_until_agreed() {
+        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        let mut announce_rx = state.subscribe_announcements();
+
+        session.state = SessionState::Agreement;
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![Field::u16(ClientFieldId::Version, 151)],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert!(announce_rx.try_recv().is_err());
+        assert!(matches!(session.state, SessionState::Agreement));
+
+        let agreed = Transaction::request(
+            ClientOpcode::Agreed,
+            2,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice"),
+                Field::u16(ClientFieldId::Icon, 42),
+            ],
+        );
+        session.on_agreed(&agreed, &state).await;
+
+        let notify = announce_rx
+            .try_recv()
+            .expect("agreed should announce a join");
+        assert_eq!(
+            notify.tx.field(ServerFieldId::Name).unwrap().as_string(),
+            "Alice"
+        );
+        assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn pre_150_client_joins_immediately_without_a_name() {
+        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        let mut announce_rx = state.subscribe_announcements();
+
+        session.state = SessionState::Agreement;
+        // No Version field: counts as pre-150.
+        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        session.on_login(&login, &state, &config).await;
+
+        assert!(
+            announce_rx.try_recv().is_ok(),
+            "pre-150 clients join immediately even without a name"
+        );
+        assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn modern_client_gets_no_agreement_push_without_configured_text() {
+        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let state = SharedState::default();
+        let config = ServerConfig {
+            agreement: String::new(),
+            ..ServerConfig::default()
+        };
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![Field::u16(ClientFieldId::Version, 151)],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        let agreement = replies
+            .iter()
+            .find(|tx| tx.opcode() == Opcode::Push(ServerOpcode::Agreement))
+            .expect("modern client should get a Noagreement marker");
+        assert!(agreement.field(ServerFieldId::Noagreement).is_some());
+    }
+
+    #[tokio::test]
+    async fn pre_150_client_gets_no_agreement_push_without_configured_text() {
+        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let state = SharedState::default();
+        let config = ServerConfig {
+            agreement: String::new(),
+            ..ServerConfig::default()
+        };
+
+        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert!(
+            !replies
+                .iter()
+                .any(|tx| tx.opcode() == Opcode::Push(ServerOpcode::Agreement)),
+            "pre-150 clients don't understand the agreement handshake at all"
+        );
     }
 
     #[tokio::test]
@@ -876,14 +981,7 @@ mod tests {
             1,
             vec![Field::string(ClientFieldId::Name, "Mod")],
         );
-        session.on_login(&login, &config).await;
-
-        let agreed = Transaction::request(
-            ClientOpcode::Agreed,
-            2,
-            vec![Field::string(ClientFieldId::Name, "Mod")],
-        );
-        session.on_agreed(&agreed, &state).await;
+        session.on_login(&login, &state, &config).await;
 
         let notify = announce_rx
             .try_recv()

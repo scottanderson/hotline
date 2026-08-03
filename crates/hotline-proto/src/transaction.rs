@@ -177,6 +177,11 @@ impl Transaction {
         self.field(ClientFieldId::Icon).and_then(Field::as_u16)
     }
 
+    /// The `HTLC_DATA_CLIENTVERSION` (160) field, if present.
+    pub fn client_version(&self) -> Option<u16> {
+        self.field(ClientFieldId::Version).and_then(Field::as_u16)
+    }
+
     /// Encode the full transaction: 20-byte fixed prefix, field count,
     /// then the field chunks themselves.
     ///
