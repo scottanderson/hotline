@@ -119,6 +119,8 @@ pub struct SharedState {
     /// matching how the original news system actually worked before
     /// per-article threading existed.
     news: Arc<RwLock<String>>,
+    /// Chat ID `0` is always present: the main room every connected
+    /// user is implicitly in. Other entries are private rooms.
     chat_rooms: Arc<RwLock<HashMap<u32, ChatRoom>>>,
     next_chat_id: Arc<AtomicU32>,
 }
@@ -150,7 +152,7 @@ impl Default for SharedState {
             announcements,
             files: Arc::new(RwLock::new(files)),
             news: Arc::new(RwLock::new(String::new())),
-            chat_rooms: Arc::new(RwLock::new(HashMap::new())),
+            chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
         }
     }
@@ -164,12 +166,15 @@ impl SharedState {
 
     /// Register a newly logged-in (or info-changed) user.
     pub async fn insert_user(&self, entry: UserEntry) {
-        self.users.write().await.insert(entry.user_id, entry);
+        let user_id = entry.user_id;
+        self.users.write().await.insert(user_id, entry);
+        self.join_chat_room(0, user_id).await;
     }
 
     /// Remove a user on disconnect.
     pub async fn remove_user(&self, user_id: u16) {
         self.users.write().await.remove(&user_id);
+        self.leave_chat_room(0, user_id).await;
     }
 
     /// Snapshot of all currently connected users, in connection order
@@ -302,12 +307,12 @@ impl SharedState {
     }
 
     /// Remove `user_id` from a chat room, deleting the room once its
-    /// last member leaves.
+    /// last member leaves. Chat ID `0` (the main room) is never deleted.
     pub async fn leave_chat_room(&self, chat_id: u32, user_id: u16) {
         let mut rooms = self.chat_rooms.write().await;
         if let Some(room) = rooms.get_mut(&chat_id) {
             room.members.retain(|&id| id != user_id);
-            if room.members.is_empty() {
+            if chat_id != 0 && room.members.is_empty() {
                 rooms.remove(&chat_id);
             }
         }
@@ -382,5 +387,32 @@ mod tests {
         assert!(left.contains(&(shared, vec![2])));
         assert!(state.chat_room(solo).await.is_none());
         assert_eq!(state.chat_room_members(shared).await, Some(vec![2]));
+    }
+
+    #[tokio::test]
+    async fn global_room_members_are_tracked_in_join_order() {
+        let state = SharedState::default();
+        for id in [3, 1, 2] {
+            state
+                .insert_user(UserEntry {
+                    user_id: id,
+                    name: format!("user{id}"),
+                    icon: 0,
+                    access: AccessPrivileges::empty(),
+                    last_active: Instant::now(),
+                })
+                .await;
+        }
+        assert_eq!(state.chat_room_members(0).await, Some(vec![3, 1, 2]));
+
+        state.remove_user(3).await;
+        assert_eq!(state.chat_room_members(0).await, Some(vec![1, 2]));
+    }
+
+    #[tokio::test]
+    async fn leaving_the_global_room_never_deletes_it() {
+        let state = SharedState::default();
+        state.leave_chat_room(0, 1).await;
+        assert!(state.chat_room(0).await.is_some());
     }
 }

@@ -674,6 +674,14 @@ impl Session {
         ) else {
             return vec![tx.reply_error("missing chat id or subject")];
         };
+
+        // Chat ID 0 (main room) gates on a privilege, not membership.
+        let is_global = chat_id == 0;
+        if is_global {
+            if let Err(reason) = self.require(AccessPrivileges::DISCONNECT_USERS) {
+                return vec![tx.reply_error(reason)];
+            }
+        }
         if !state.set_chat_subject(chat_id, subject.clone()).await {
             return vec![tx.reply_error("no such chat room")];
         }
@@ -685,7 +693,9 @@ impl Session {
                 Field::string(ServerFieldId::ChatSubject, subject),
             ],
         );
-        if let Some(members) = state.chat_room_members(chat_id).await {
+        if is_global {
+            state.publish(notify);
+        } else if let Some(members) = state.chat_room_members(chat_id).await {
             for member in members {
                 state.send_to(member, notify.clone());
             }
@@ -1020,6 +1030,55 @@ mod tests {
         assert!(
             !reply.is_error(),
             "a short-encoded chat id should still be found"
+        );
+    }
+
+    #[tokio::test]
+    async fn setting_the_global_room_subject_requires_disconnect_users() {
+        let guest = test_session("Guest", AccessPrivileges::empty());
+        let state = SharedState::default();
+
+        let request = Transaction::request(
+            ClientOpcode::ChatSubject,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, 0),
+                Field::string(ClientFieldId::ChatSubject, "Nope"),
+            ],
+        );
+        let replies = guest.on_chat_subject(&request, &state).await;
+        assert!(replies[0].is_error());
+        assert_eq!(state.chat_room(0).await.unwrap().subject, "");
+    }
+
+    #[tokio::test]
+    async fn setting_the_global_room_subject_broadcasts_to_everyone() {
+        let admin = test_session("Admin", AccessPrivileges::DISCONNECT_USERS);
+        let state = SharedState::default();
+        let mut broadcast_rx = state.subscribe();
+
+        let request = Transaction::request(
+            ClientOpcode::ChatSubject,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, 0),
+                Field::string(ClientFieldId::ChatSubject, "Welcome"),
+            ],
+        );
+        let replies = admin.on_chat_subject(&request, &state).await;
+        assert!(!replies[0].is_error());
+        assert_eq!(state.chat_room(0).await.unwrap().subject, "Welcome");
+
+        let notify = broadcast_rx.try_recv().unwrap();
+        assert_eq!(
+            notify.field(ServerFieldId::ChatId).unwrap().as_u32(),
+            Some(0)
+        );
+        assert_eq!(
+            notify
+                .field(ServerFieldId::ChatSubject)
+                .map(Field::as_string),
+            Some("Welcome".to_string())
         );
     }
 }
