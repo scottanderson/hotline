@@ -6,7 +6,7 @@ use hotline_client::HotlineClient;
 use hotline_proto::field_id::ServerFieldId;
 use hotline_proto::opcode::{Opcode, ServerOpcode};
 use hotline_proto::types::UserNameWithInfo;
-use hotline_proto::{Field, Transaction};
+use hotline_proto::{AccessPrivileges, Field, Transaction};
 
 /// One line in the scrollback: a chat message, a system notice (user
 /// joined/left, a permission-denied notice, ...), or an error.
@@ -28,6 +28,7 @@ pub struct App {
     pub lines: Vec<Line>,
     pub input: String,
     pub should_quit: bool,
+    pub access: AccessPrivileges,
 }
 
 impl App {
@@ -41,6 +42,7 @@ impl App {
             }],
             input: String::new(),
             should_quit: false,
+            access: AccessPrivileges::empty(),
         }
     }
 
@@ -179,11 +181,11 @@ impl App {
 
     // 354
     fn apply_user_selfinfo(&mut self, tx: &Transaction) {
-        let Some(access) = tx.field(ServerFieldId::Access).and_then(Field::as_u64) else {
-            dbg!(tx);
-            return;
-        };
-        todo!("0x{access:08X}");
+        self.access = tx
+            .field(ServerFieldId::Access)
+            .and_then(Field::as_u64)
+            .map(AccessPrivileges::from_bits_truncate)
+            .unwrap_or(self.access);
     }
 
     /// Handle one input character.
