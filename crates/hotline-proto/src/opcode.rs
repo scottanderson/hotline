@@ -52,6 +52,18 @@ pub enum ClientOpcode {
     /// Kick (and optionally ban) a user (110).
     /// Original: `HTLC_HDR_USER_KICK`.
     UserKick = 110,
+    /// Open/create a private chat room (112).
+    /// Original: `HTLC_HDR_CHAT_CREATE`.
+    ChatCreate = 112,
+    /// Invite a user to a private chat room (113).
+    /// Original: `HTLC_HDR_CHAT_INVITE`.
+    ChatInvite = 113,
+    /// Join a private chat room, accepting an invitation (115).
+    /// Original: `HTLC_HDR_CHAT_JOIN`.
+    ChatJoin = 115,
+    /// Leave a private chat room (116).
+    /// Original: `HTLC_HDR_CHAT_PART`.
+    ChatPart = 116,
     /// Set a chat room's subject (120).
     /// Original: `HTLC_HDR_CHAT_SUBJECT`.
     ChatSubject = 120,
@@ -133,18 +145,6 @@ pub enum ClientOpcode {
     /// Idle keep-alive ping (500).
     /// Original: `HTLC_HDR_PING`.
     Ping = 500,
-    /// Open/create a private chat room (112).
-    /// Original: `HTLC_HDR_CHAT_CREATE`.
-    ChatCreate = 112,
-    /// Invite a user to a private chat room (113).
-    /// Original: `HTLC_HDR_CHAT_INVITE`.
-    ChatInvite = 113,
-    /// Accept an invitation to a private chat room (114).
-    /// Original: `HTLC_HDR_CHAT_ACCEPT`.
-    ChatAccept = 114,
-    /// Leave a private chat room (115).
-    /// Original: `HTLC_HDR_CHAT_DECLINE`.
-    ChatPart = 115,
 }
 
 impl ClientOpcode {
@@ -162,8 +162,8 @@ impl ClientOpcode {
             110 => UserKick,
             112 => ChatCreate,
             113 => ChatInvite,
-            114 => ChatAccept,
-            115 => ChatPart,
+            115 => ChatJoin,
+            116 => ChatPart,
             120 => ChatSubject,
             200 => FileList,
             202 => FileGet,
@@ -215,8 +215,8 @@ impl std::fmt::Debug for ClientOpcode {
             Self::UserKick => "HTLC_HDR_USER_KICK",
             Self::ChatCreate => "HTLC_HDR_CHAT_CREATE",
             Self::ChatInvite => "HTLC_HDR_CHAT_INVITE",
-            Self::ChatAccept => "HTLC_HDR_CHAT_ACCEPT",
-            Self::ChatPart => "HTLC_HDR_CHAT_DECLINE",
+            Self::ChatJoin => "HTLC_HDR_CHAT_JOIN",
+            Self::ChatPart => "HTLC_HDR_CHAT_PART",
             Self::ChatSubject => "HTLC_HDR_CHAT_SUBJECT",
             Self::FileList => "HTLC_HDR_FILE_LIST",
             Self::FileGet => "HTLC_HDR_FILE_GET",

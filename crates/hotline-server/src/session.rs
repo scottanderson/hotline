@@ -156,7 +156,7 @@ impl Session {
             ClientOpcode::NewsfilePost => vec![self.on_newsfile_post(tx, state).await],
             ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
             ClientOpcode::ChatInvite => vec![self.on_chat_invite(tx, state).await],
-            ClientOpcode::ChatAccept => vec![self.on_chat_accept(tx, state).await],
+            ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
             ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
             ClientOpcode::ChatSubject => vec![self.on_chat_subject(tx, state).await],
             ClientOpcode::Ping => vec![tx.reply(vec![])],
@@ -553,8 +553,8 @@ impl Session {
         tx.reply(vec![])
     }
 
-    /// 114: accept an invitation (join a room).
-    async fn on_chat_accept(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    /// 115: join a room, accepting an invitation.
+    async fn on_chat_join(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
             return tx.reply_error("missing chat id");
         };
@@ -578,7 +578,7 @@ impl Session {
         tx.reply(vec![])
     }
 
-    /// 115: leave a chat room.
+    /// 116: leave a chat room.
     async fn on_chat_part(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
             return tx.reply_error("missing chat id");
