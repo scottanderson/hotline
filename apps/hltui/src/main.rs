@@ -102,7 +102,7 @@ async fn run(
                         KeyCode::Esc => app.quit(),
                         KeyCode::Enter => {
                             if let Some(line) = app.take_input() {
-                                app::send_chat(app, client, line).await;
+                                app.send_chat(client, line).await;
                             }
                         }
                         KeyCode::Backspace => app.on_backspace(),

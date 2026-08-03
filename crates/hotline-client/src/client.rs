@@ -126,7 +126,7 @@ impl HotlineClient {
         if reply.is_error() {
             let msg = reply
                 .field(ServerFieldId::ErrorText)
-                .map(|f| f.as_string())
+                .map(Field::as_string)
                 .unwrap_or_else(|| "unknown error".to_string());
             return Err(ClientError::Server(msg));
         }
@@ -161,13 +161,11 @@ impl HotlineClient {
         let result = LoginResult {
             version: reply
                 .field(ServerFieldId::Serverversion)
-                .and_then(|f| f.as_integer()),
+                .and_then(Field::as_integer),
             banner_id: reply
                 .field(ServerFieldId::Bannerid)
-                .and_then(|f| f.as_integer()),
-            server_name: reply
-                .field(ServerFieldId::Servername)
-                .map(|f| f.as_string()),
+                .and_then(Field::as_integer),
+            server_name: reply.field(ServerFieldId::Servername).map(Field::as_string),
         };
 
         // Announce nick/icon. Real clients also wait for Show Agreement

@@ -237,7 +237,7 @@ impl std::fmt::Debug for ClientOpcode {
             Self::NewsDeletethread => "HTLC_HDR_NEWS_DELETETHREAD",
             Self::Ping => "HTLC_HDR_PING",
         };
-        write!(f, "{name} ({value})")
+        write!(f, "{value} {name}")
     }
 }
 
@@ -318,21 +318,22 @@ impl std::fmt::Debug for ServerOpcode {
     /// Prints the variant name and the original `HTLS_HDR_*` constant
     /// name, e.g. `Chat (HTLS_HDR_CHAT)`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (variant, original) = match self {
-            Self::NewsfilePost => ("NewsfilePost", "HTLS_HDR_NEWSFILE_POST"),
-            Self::Msg => ("Msg", "HTLS_HDR_MSG"),
-            Self::Chat => ("Chat", "HTLS_HDR_CHAT"),
-            Self::Agreement => ("Agreement", "HTLS_HDR_AGREEMENT"),
-            Self::Politequit => ("Politequit", "HTLS_HDR_POLITEQUIT"),
-            Self::ChatInvite => ("ChatInvite", "HTLS_HDR_CHAT_INVITE"),
-            Self::ChatUserChange => ("ChatUserChange", "HTLS_HDR_CHAT_USER_CHANGE"),
-            Self::ChatUserPart => ("ChatUserPart", "HTLS_HDR_CHAT_USER_PART"),
-            Self::ChatSubject => ("ChatSubject", "HTLS_HDR_CHAT_SUBJECT"),
-            Self::UserChange => ("UserChange", "HTLS_HDR_USER_CHANGE"),
-            Self::UserPart => ("UserPart", "HTLS_HDR_USER_PART"),
-            Self::UserSelfinfo => ("UserSelfinfo", "HTLS_HDR_USER_SELFINFO"),
+        let value = self.as_u32();
+        let name = match self {
+            Self::NewsfilePost => "HTLS_HDR_NEWSFILE_POST",
+            Self::Msg => "HTLS_HDR_MSG",
+            Self::Chat => "HTLS_HDR_CHAT",
+            Self::Agreement => "HTLS_HDR_AGREEMENT",
+            Self::Politequit => "HTLS_HDR_POLITEQUIT",
+            Self::ChatInvite => "HTLS_HDR_CHAT_INVITE",
+            Self::ChatUserChange => "HTLS_HDR_CHAT_USER_CHANGE",
+            Self::ChatUserPart => "HTLS_HDR_CHAT_USER_PART",
+            Self::ChatSubject => "HTLS_HDR_CHAT_SUBJECT",
+            Self::UserChange => "HTLS_HDR_USER_CHANGE",
+            Self::UserPart => "HTLS_HDR_USER_PART",
+            Self::UserSelfinfo => "HTLS_HDR_USER_SELFINFO",
         };
-        write!(f, "{variant} ({original})")
+        write!(f, "{value} {name}")
     }
 }
 

@@ -377,7 +377,7 @@ impl Session {
                 }
                 UserNameWithInfo {
                     user_id: u.user_id,
-                    icon_id: u.icon,
+                    icon: u.icon,
                     flags: bits,
                     name: u.name,
                 }

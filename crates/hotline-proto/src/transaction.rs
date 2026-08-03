@@ -305,14 +305,20 @@ impl fmt::Debug for Transaction {
     /// be looked up in the *correct* one of [`crate::field_id::ClientFieldId`]
     /// / [`crate::field_id::ServerFieldId`], never both, never a guess.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let opcode = self.opcode();
         let mut out = f.debug_struct("Transaction");
-        out.field("type_", &self.opcode())
-            .field("trans", &self.trans)
-            .field("flag", &self.flag)
-            .field("len", &self.len)
-            .field("len2", &self.len2);
-
-        match self.opcode() {
+        out.field("type_", &opcode);
+        if self.trans != 0 {
+            out.field("trans", &self.trans);
+        }
+        if self.flag != 0 {
+            out.field("flag", &self.flag);
+        }
+        out.field("len", &self.len);
+        if self.len != self.len2 {
+            out.field("len2", &self.len2);
+        }
+        match opcode {
             Opcode::Request(_) => out.field(
                 "fields",
                 &self
@@ -341,9 +347,9 @@ impl fmt::Debug for Transaction {
                     })
                     .collect::<Vec<_>>(),
             ),
-            // Direction genuinely can't be determined - fall back to the
-            // plain, honest (unnamed) Field::Debug rather than guessing
-            // at one of the two tables.
+            // Direction genuinely can't be determined, so fall back to the
+            // plain, honest (unnamed) Field::Debug rather than guessing at
+            // one of the two tables.
             Opcode::Unknown(_) => out.field("fields", &self.fields),
         }
         .finish()
@@ -404,9 +410,9 @@ mod tests {
         assert_eq!(
             decoded
                 .field(ClientFieldId::Login)
-                .unwrap()
-                .as_deobfuscated_string(),
-            "guest"
+                .map(Field::as_deobfuscated_string)
+                .as_deref(),
+            Some("guest")
         );
     }
 

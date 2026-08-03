@@ -90,7 +90,7 @@ pub struct Field {
 
 impl Field {
     /// Build a field from an already-typed value.
-    pub fn new(id: impl Into<u16>, value: FieldValue) -> Self {
+    fn new(id: impl Into<u16>, value: FieldValue) -> Self {
         Self {
             id: id.into(),
             value,

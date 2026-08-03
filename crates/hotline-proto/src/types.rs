@@ -177,7 +177,7 @@ pub struct UserNameWithInfo {
     /// Socket / connection ID for this user.
     pub user_id: u16,
     /// Icon ID.
-    pub icon_id: u16,
+    pub icon: u16,
     /// See `USER_FLAGS` bit meanings (away, admin, refuses PM/chat).
     pub flags: u16,
     /// Display name.
@@ -189,7 +189,7 @@ impl UserNameWithInfo {
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(8 + self.name.len());
         buf.extend_from_slice(&self.user_id.to_be_bytes());
-        buf.extend_from_slice(&self.icon_id.to_be_bytes());
+        buf.extend_from_slice(&self.icon.to_be_bytes());
         buf.extend_from_slice(&self.flags.to_be_bytes());
         let name_bytes = self.name.as_bytes();
         buf.extend_from_slice(&(name_bytes.len() as u16).to_be_bytes());
@@ -206,7 +206,7 @@ impl UserNameWithInfo {
             });
         }
         let user_id = u16::from_be_bytes([buf[0], buf[1]]);
-        let icon_id = u16::from_be_bytes([buf[2], buf[3]]);
+        let icon = u16::from_be_bytes([buf[2], buf[3]]);
         let flags = u16::from_be_bytes([buf[4], buf[5]]);
         let name_len = u16::from_be_bytes([buf[6], buf[7]]) as usize;
         let end = 8 + name_len;
@@ -219,7 +219,7 @@ impl UserNameWithInfo {
         let name = String::from_utf8_lossy(&buf[8..end]).into_owned();
         Ok(Self {
             user_id,
-            icon_id,
+            icon,
             flags,
             name,
         })
@@ -274,7 +274,7 @@ mod tests {
     fn user_name_with_info_round_trips() {
         let user = UserNameWithInfo {
             user_id: 7,
-            icon_id: 128,
+            icon: 128,
             flags: UserFlags::AWAY.bits(),
             name: "Virtual1".to_string(),
         };
@@ -286,7 +286,7 @@ mod tests {
     fn user_name_with_info_decodes_multi_byte_utf8() {
         let user = UserNameWithInfo {
             user_id: 1,
-            icon_id: 0,
+            icon: 0,
             flags: 0,
             name: "日本語".to_string(),
         };

@@ -58,87 +58,107 @@ impl App {
             return;
         };
         match opcode {
-            ServerOpcode::Chat => {
-                if let Some(text) = tx.field(ServerFieldId::Text) {
-                    self.push(display_text(&text.as_string()), LineKind::Chat);
+            /* 104 */ ServerOpcode::Msg => self.apply_msg(tx),
+            /* 106 */ ServerOpcode::Chat => self.apply_chat(tx),
+            /* 111 */ ServerOpcode::Politequit => self.apply_politequit(tx),
+            /* 112 */ ServerOpcode::ChatInvite => self.apply_chat_invite(tx),
+            /* 301 */ ServerOpcode::UserChange => self.apply_user_change(tx),
+            /* 302 */ ServerOpcode::UserPart => self.apply_user_part(tx),
+            /* 354 */ ServerOpcode::UserSelfinfo => self.apply_user_selfinfo(tx),
+            _ => {
+                for line in format!("Unrecognized opcode for transaction: {tx:#?}").lines() {
+                    self.push(line, LineKind::Error);
                 }
             }
-            ServerOpcode::Msg => {
-                let text = tx.field(ServerFieldId::Text).map(|f| f.as_string());
-                let from = tx.field(ServerFieldId::Name).map(|f| f.as_string());
-                match (from, text) {
-                    // A private message carries the sender's name; a
-                    // permission-denied or admin broadcast notice
-                    // doesn't.
-                    (Some(from), Some(text)) => {
-                        self.push(
-                            format!("[PM] {from}: {}", display_text(&text)),
-                            LineKind::Chat,
-                        );
-                    }
-                    (None, Some(text)) => {
-                        self.push(display_text(&text), LineKind::Error);
-                    }
-                    _ => {}
-                }
-            }
-            ServerOpcode::Politequit => {
-                let reason = tx
-                    .field(ServerFieldId::Text)
-                    .map(|f| f.as_string())
-                    .unwrap_or_else(|| "disconnected by the server".to_string());
-                self.push(display_text(&reason), LineKind::Error);
-                self.quit();
-            }
-            ServerOpcode::ChatInvite => {
-                let from = tx
-                    .field(ServerFieldId::Name)
-                    .map(|f| f.as_string())
-                    .unwrap_or_else(|| "someone".to_string());
-                let chat_id = tx.field(ServerFieldId::ChatId).and_then(Field::as_u16);
+        }
+    }
+
+    // 104
+    fn apply_msg(&mut self, tx: &Transaction) {
+        let text = tx.field(ServerFieldId::Text).map(Field::as_string);
+        let from = tx.field(ServerFieldId::Name).map(Field::as_string);
+        match (from, text) {
+            // A private message carries the sender's name; a
+            // permission-denied or admin broadcast notice
+            // doesn't.
+            (Some(from), Some(text)) => {
                 self.push(
-                    format!(
-                        "{from} invited you to a private chat (id {})",
-                        chat_id.map(|id| id.to_string()).unwrap_or_default()
-                    ),
-                    LineKind::System,
+                    format!("[PM] {from}: {}", display_text(&text)),
+                    LineKind::Chat,
                 );
             }
-            ServerOpcode::UserChange => self.apply_user_change(tx),
-            ServerOpcode::UserPart => self.apply_user_delete(tx),
+            (None, Some(text)) => {
+                self.push(display_text(&text), LineKind::Error);
+            }
             _ => {}
         }
     }
 
+    // 106
+    fn apply_chat(&mut self, tx: &Transaction) {
+        if let Some(text) = tx.field(ServerFieldId::Text) {
+            self.push(display_text(&text.as_string()), LineKind::Chat);
+        }
+    }
+
+    // 111
+    fn apply_politequit(&mut self, tx: &Transaction) {
+        let reason = tx
+            .field(ServerFieldId::Text)
+            .map(Field::as_string)
+            .unwrap_or_else(|| "disconnected by the server".to_string());
+        self.push(display_text(&reason), LineKind::Error);
+        self.quit();
+    }
+
+    // 112
+    fn apply_chat_invite(&mut self, tx: &Transaction) {
+        let from = tx
+            .field(ServerFieldId::Name)
+            .map(Field::as_string)
+            .unwrap_or_else(|| "someone".to_string());
+        let chat_id = tx.field(ServerFieldId::ChatId).and_then(Field::as_u16);
+        self.push(
+            format!(
+                "{from} invited you to a private chat (id {})",
+                chat_id.map(|id| id.to_string()).unwrap_or_default()
+            ),
+            LineKind::System,
+        );
+    }
+
+    // 301
     fn apply_user_change(&mut self, tx: &Transaction) {
-        let Some(user_id) = tx.field(ServerFieldId::UserId).and_then(|f| f.as_integer()) else {
+        let Some(user_id) = tx.field(ServerFieldId::UserId).and_then(Field::as_u16) else {
             return;
         };
-        let user_id = user_id as u16;
         let name = tx
             .field(ServerFieldId::Name)
-            .map(|f| f.as_string())
+            .map(Field::as_string)
             .unwrap_or_default();
-        let icon_id = tx
+        let icon = tx
             .field(ServerFieldId::Icon)
-            .and_then(|f| f.as_integer())
-            .unwrap_or(0) as u16;
+            .and_then(Field::as_u16)
+            .unwrap_or_default();
         let flags = tx
             .field(ServerFieldId::Color)
-            .and_then(|f| f.as_integer())
-            .unwrap_or(0) as u16;
+            .and_then(Field::as_u16)
+            .unwrap_or_default();
 
         match self.users.iter_mut().find(|u| u.user_id == user_id) {
             Some(existing) => {
-                existing.name = name;
-                existing.icon_id = icon_id;
-                existing.flags = flags;
+                *existing = UserNameWithInfo {
+                    user_id,
+                    icon,
+                    flags,
+                    name,
+                };
             }
             None => {
                 self.push(format!("{name} joined"), LineKind::System);
                 self.users.push(UserNameWithInfo {
                     user_id,
-                    icon_id,
+                    icon,
                     flags,
                     name,
                 });
@@ -146,15 +166,24 @@ impl App {
         }
     }
 
-    fn apply_user_delete(&mut self, tx: &Transaction) {
-        let Some(user_id) = tx.field(ServerFieldId::UserId).and_then(|f| f.as_integer()) else {
+    // 302
+    fn apply_user_part(&mut self, tx: &Transaction) {
+        let Some(user_id) = tx.field(ServerFieldId::UserId).and_then(Field::as_u16) else {
             return;
         };
-        let user_id = user_id as u16;
         if let Some(pos) = self.users.iter().position(|u| u.user_id == user_id) {
             let user = self.users.remove(pos);
             self.push(format!("{} left", user.name), LineKind::System);
         }
+    }
+
+    // 354
+    fn apply_user_selfinfo(&mut self, tx: &Transaction) {
+        let Some(access) = tx.field(ServerFieldId::Access).and_then(Field::as_u64) else {
+            dbg!(tx);
+            return;
+        };
+        todo!("0x{access:08X}");
     }
 
     /// Handle one input character.
@@ -177,15 +206,16 @@ impl App {
     pub fn quit(&mut self) {
         self.should_quit = true;
     }
-}
 
-/// Send `line` as chat and report the outcome as a local (client-side)
-/// system/error line, since a failed send doesn't necessarily come back as a
-/// server push (a transport error, for instance), so this covers that
-/// case explicitly rather than relying solely on `apply_server_event`.
-pub async fn send_chat(app: &mut App, client: &HotlineClient, line: String) {
-    if let Err(e) = client.send_chat(&line).await {
-        app.push(format!("failed to send: {e}"), LineKind::Error);
+    /// Send `line` as chat and report the outcome as a local (client-side)
+    /// system/error line, since a failed send doesn't necessarily come back
+    /// as a server push (a transport error, for instance), so this covers
+    /// that case explicitly rather than relying solely on
+    /// `apply_server_event`.
+    pub async fn send_chat(&mut self, client: &HotlineClient, line: String) {
+        if let Err(e) = client.send_chat(&line).await {
+            self.push(format!("failed to send: {e}"), LineKind::Error);
+        }
     }
 }
 
