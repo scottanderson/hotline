@@ -182,22 +182,6 @@ impl AccessPrivileges {
         self.bits().to_be_bytes()
     }
 
-    /// Short human-readable labels for a subset of privileges relevant to
-    /// clients building UI around them (e.g. graying out an upload
-    /// button). Not exhaustive, covers the handful of flags a typical
-    /// client cares about deciding, not the full 39.
-    pub fn describe(self) -> Vec<&'static str> {
-        [
-            (Self::SEND_CHAT, "send chat"),
-            (Self::UPLOAD_FILES, "upload"),
-            (Self::DOWNLOAD_FILES, "download"),
-        ]
-        .into_iter()
-        .filter(|(flag, _)| self.contains(*flag))
-        .map(|(_, name)| name)
-        .collect()
-    }
-
     /// The original `HL_ACCESS_*` constant name for a single flag, or
     /// `None` if `self` isn't exactly one named flag (empty, a union of
     /// several flags, or an unnamed/reserved bit).
@@ -293,13 +277,6 @@ mod tests {
         let privs = AccessPrivileges::VOICE_CHAT | AccessPrivileges::READ_CHAT_HISTORY;
         let bytes = privs.to_be_bytes();
         assert_eq!(AccessPrivileges::from_be_bytes(bytes), Some(privs));
-    }
-
-    #[test]
-    fn describe_lists_only_held_privileges() {
-        let privs = AccessPrivileges::SEND_CHAT | AccessPrivileges::DOWNLOAD_FILES;
-        assert_eq!(privs.describe(), vec!["send chat", "download"]);
-        assert!(AccessPrivileges::empty().describe().is_empty());
     }
 
     #[test]

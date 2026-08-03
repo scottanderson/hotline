@@ -384,7 +384,8 @@ impl Session {
     }
 
     /// 303: another user's info text (name, icon, and a short
-    /// privilege summary via [`AccessPrivileges::describe`]).
+    /// privilege summary listing each held flag's
+    /// [`AccessPrivileges::flag_name`]).
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::GET_USER_INFO) {
             return vec![tx.reply_error(reason)];
@@ -396,7 +397,12 @@ impl Session {
             return vec![tx.reply_error("no such user")];
         };
 
-        let privileges = target.access.describe().join(", ");
+        let privileges = target
+            .access
+            .iter()
+            .flat_map(AccessPrivileges::flag_name)
+            .collect::<Vec<_>>()
+            .join(", ");
         let text = format!(
             "{}{}\rPrivileges: {}",
             target.name,
