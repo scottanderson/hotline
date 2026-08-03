@@ -15,6 +15,16 @@ pub enum Mode {
     Chat,
 }
 
+/// What the caller must do after applying one server event.
+#[must_use]
+pub enum EventOutcome {
+    /// State updated; nothing further needed.
+    Applied,
+    /// Nothing to show for the agreement; the caller should call
+    /// [`App::accept_agreement`] right away to complete login.
+    NeedsAgreementAccept,
+}
+
 /// One line in the scrollback: a chat message, a system notice (user
 /// joined/left, a permission-denied notice, ...), or an error.
 pub struct Line {
@@ -79,13 +89,10 @@ impl App {
     }
 
     /// Apply one server-initiated transaction (chat relay, user list
-    /// change, permission denial, ...) to the app state. Returns `true`
-    /// if the caller must now follow up with [`Self::accept_agreement`]
-    /// (the only update here that needs the connection, so it can't
-    /// happen inside this otherwise-pure method).
-    pub fn apply_server_event(&mut self, tx: &Transaction) -> bool {
+    /// change, permission denial, ...) to the app state.
+    pub fn apply_server_event(&mut self, tx: &Transaction) -> EventOutcome {
         let Opcode::Push(opcode) = tx.opcode() else {
-            return false;
+            return EventOutcome::Applied;
         };
         match opcode {
             /* 104 */ ServerOpcode::Msg => self.apply_msg(tx),
@@ -102,20 +109,20 @@ impl App {
                 }
             }
         }
-        false
+        EventOutcome::Applied
     }
 
     // 109
     //
     // Text means show it and wait for acceptance; no text means there's
     // nothing to accept, so the caller should accept right away.
-    fn apply_agreement(&mut self, tx: &Transaction) -> bool {
+    fn apply_agreement(&mut self, tx: &Transaction) -> EventOutcome {
         match tx.field(ServerFieldId::Text).map(Field::as_string) {
             Some(text) => {
                 self.show_agreement(text);
-                false
+                EventOutcome::Applied
             }
-            None => true,
+            None => EventOutcome::NeedsAgreementAccept,
         }
     }
 
@@ -298,7 +305,7 @@ mod tests {
                 Field::u32(ServerFieldId::ChatId, 7),
             ],
         );
-        app.apply_server_event(&invite);
+        let _ = app.apply_server_event(&invite);
         assert!(app.lines.iter().any(|line| line
             .text
             .contains("Alice invited you to a private chat (id 7)")));
@@ -322,7 +329,7 @@ mod tests {
         );
 
         // New user: flags should carry the admin bit from the start.
-        app.apply_server_event(&admin_change);
+        let _ = app.apply_server_event(&admin_change);
         let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
         assert!(UserFlags::from_bits_truncate(user.flags).contains(UserFlags::ADMIN));
 
@@ -336,7 +343,7 @@ mod tests {
                 Field::u16(ServerFieldId::Color, 0),
             ],
         );
-        app.apply_server_event(&demoted);
+        let _ = app.apply_server_event(&demoted);
         let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
         assert!(!UserFlags::from_bits_truncate(user.flags).contains(UserFlags::ADMIN));
     }

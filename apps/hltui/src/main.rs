@@ -11,7 +11,7 @@ use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use app::{App, Mode};
+use app::{App, EventOutcome, Mode};
 use hotline_client::HotlineClient;
 
 /// Terminal UI Hotline client.
@@ -86,7 +86,7 @@ async fn run(
             // Server-initiated traffic: chat, user list changes, ...
             tx = events.recv() => {
                 let Some(tx) = tx else { break }; // connection closed
-                if app.apply_server_event(&tx) {
+                if let EventOutcome::NeedsAgreementAccept = app.apply_server_event(&tx) {
                     app.accept_agreement(client).await;
                 }
             }
