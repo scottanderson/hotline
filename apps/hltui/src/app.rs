@@ -128,21 +128,21 @@ impl App {
             .and_then(|f| f.as_integer())
             .unwrap_or(0) as u16;
 
-        let is_new = !self.users.iter().any(|u| u.user_id == user_id);
-        if let Some(existing) = self.users.iter_mut().find(|u| u.user_id == user_id) {
-            existing.name = name.clone();
-            existing.icon_id = icon_id;
-            existing.flags = flags;
-        } else {
-            self.users.push(UserNameWithInfo {
-                user_id,
-                icon_id,
-                flags,
-                name: name.clone(),
-            });
-        }
-        if is_new {
-            self.push(format!("{name} joined"), LineKind::System);
+        match self.users.iter_mut().find(|u| u.user_id == user_id) {
+            Some(existing) => {
+                existing.name = name;
+                existing.icon_id = icon_id;
+                existing.flags = flags;
+            }
+            None => {
+                self.push(format!("{name} joined"), LineKind::System);
+                self.users.push(UserNameWithInfo {
+                    user_id,
+                    icon_id,
+                    flags,
+                    name,
+                });
+            }
         }
     }
 
