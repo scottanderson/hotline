@@ -522,7 +522,17 @@ impl Session {
         let Some(text) = tx.field(ClientFieldId::Text) else {
             return vec![tx.reply_error("missing post text")];
         };
-        state.post_news(&self.name, &text.as_string()).await;
+        let entry = state.post_news(&self.name, &text.as_string()).await;
+
+        let notify = Transaction::push(
+            ServerOpcode::NewsfilePost,
+            vec![Field::string(ServerFieldId::Text, entry)],
+        );
+        for user in state.users().await {
+            if user.access.contains(AccessPrivileges::READ_NEWS) {
+                state.send_to(user.user_id, notify.clone());
+            }
+        }
         vec![tx.reply(vec![])]
     }
 
@@ -813,6 +823,45 @@ mod tests {
         let news = reply.field(ServerFieldId::Text).unwrap().as_string();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
+    }
+
+    #[tokio::test]
+    async fn newsfile_post_notifies_only_users_with_read_news() {
+        let session = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                name: "Reader".to_string(),
+                icon: 0,
+                access: AccessPrivileges::READ_NEWS,
+                last_active: Instant::now(),
+            })
+            .await;
+        state
+            .insert_user(UserEntry {
+                user_id: 3,
+                name: "NoNews".to_string(),
+                icon: 0,
+                access: AccessPrivileges::empty(),
+                last_active: Instant::now(),
+            })
+            .await;
+
+        let mut targeted_rx = state.subscribe_targeted();
+        let post = Transaction::request(
+            ClientOpcode::NewsfilePost,
+            1,
+            vec![Field::string(ClientFieldId::Text, "hello news")],
+        );
+        session.on_newsfile_post(&post, &state).await;
+
+        let notify = targeted_rx.try_recv().unwrap();
+        assert_eq!(notify.target_user_id, 2);
+        assert!(
+            targeted_rx.try_recv().is_err(),
+            "NoNews shouldn't be notified"
+        );
     }
 
     #[tokio::test]

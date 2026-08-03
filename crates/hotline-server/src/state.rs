@@ -248,11 +248,14 @@ impl SharedState {
     }
 
     /// Prepend a new post to the classic news, matching the reference
-    /// server's default divider/attribution format.
-    pub async fn post_news(&self, poster: &str, text: &str) {
+    /// server's default divider/attribution format. Returns the
+    /// formatted entry so callers can push it to other clients without
+    /// reassembling it.
+    pub async fn post_news(&self, poster: &str, text: &str) -> String {
         const DIVIDER: &str = "_________________________________________________________";
         let entry = format!("{DIVIDER}\rFrom {poster}\r\r{text}\r\r");
         self.news.write().await.insert_str(0, &entry);
+        entry
     }
 
     /// Create a new private chat room with `creator` as its only member,
