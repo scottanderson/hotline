@@ -713,8 +713,10 @@ mod tests {
         // broadcast, not just after a later change.
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
-        let mut config = ServerConfig::default();
-        config.default_access = AccessPrivileges::DISCONNECT_USERS;
+        let config = ServerConfig {
+            default_access: AccessPrivileges::DISCONNECT_USERS,
+            ..ServerConfig::default()
+        };
         let mut announce_rx = state.subscribe_announcements();
 
         let login = Transaction::request(

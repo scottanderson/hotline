@@ -67,13 +67,8 @@ impl HotlineClient {
     pub async fn connect<A: ToSocketAddrs>(
         addr: A,
     ) -> Result<(Self, mpsc::UnboundedReceiver<Transaction>)> {
-        let stream = TcpStream::connect(addr).await?;
-        Self::handshake(stream).await
-    }
+        let mut stream = TcpStream::connect(addr).await?;
 
-    async fn handshake(
-        mut stream: TcpStream,
-    ) -> Result<(Self, mpsc::UnboundedReceiver<Transaction>)> {
         // The TRTP handshake (12 bytes out, 8 bytes back) predates - and
         // isn't shaped like - a Transaction, so it's done on the raw
         // stream before handing it to the codec.
