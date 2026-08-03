@@ -16,6 +16,14 @@ use crate::error::Result;
 use crate::server::ServerConfig;
 use crate::state::{SharedState, UserEntry};
 
+/// Which opcodes a session may currently send.
+enum SessionState {
+    /// Before `HTLC_HDR_LOGIN` (107) or `HTLC_HDR_AGREED` (121) complete login.
+    Agreement,
+    /// Login has completed.
+    Joined,
+}
+
 /// A single client connection: handshake state plus the transaction
 /// dispatch loop. Not `Clone`, one per socket.
 pub struct Session {
@@ -23,6 +31,7 @@ pub struct Session {
     name: String,
     /// Privileges granted at login.
     access: AccessPrivileges,
+    state: SessionState,
 }
 
 impl Session {
@@ -41,6 +50,7 @@ impl Session {
             name: format!("guest{user_id}"),
             // Empty until on_login succeeds.
             access: AccessPrivileges::empty(),
+            state: SessionState::Agreement,
         };
 
         let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::for_server()).split();
@@ -143,11 +153,43 @@ impl Session {
             return vec![tx.reply_error("not implemented")];
         };
 
+        match self.state {
+            SessionState::Agreement => self.handle_agreement(opcode, tx, state, config).await,
+            SessionState::Joined => self.handle_joined(opcode, tx, state).await,
+        }
+    }
+
+    /// Opcodes valid before login completes.
+    async fn handle_agreement(
+        &mut self,
+        opcode: ClientOpcode,
+        tx: &Transaction,
+        state: &SharedState,
+        config: &ServerConfig,
+    ) -> Vec<Transaction> {
+        match opcode {
+            /* 107 */ ClientOpcode::Login => self.on_login(tx, config).await,
+            /* 121 */ ClientOpcode::Agreed => self.on_agreed(tx, state).await,
+            /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
+            other => {
+                tracing::debug!(?other, "opcode not allowed before login completes");
+                vec![tx.reply_error("please finish logging in first")]
+            }
+        }
+    }
+
+    /// Opcodes valid once a session has joined.
+    async fn handle_joined(
+        &mut self,
+        opcode: ClientOpcode,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
         match opcode {
             /* 101 */ ClientOpcode::NewsfileGet => self.on_newsfile_get(tx, state).await,
             /* 103 */ ClientOpcode::NewsfilePost => self.on_newsfile_post(tx, state).await,
             /* 105 */ ClientOpcode::Chat => self.on_chat(tx, state).await,
-            /* 107 */ ClientOpcode::Login => self.on_login(tx, config).await,
+            /* 107 */ ClientOpcode::Login => vec![tx.reply_error("already logged in")],
             /* 108 */ ClientOpcode::Msg => self.on_private_msg(tx, state).await,
             /* 110 */ ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
             /* 112 */ ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
@@ -156,7 +198,7 @@ impl Session {
             /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
             /* 116 */ ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
             /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,
-            /* 121 */ ClientOpcode::Agreed => self.on_agreed(tx, state).await,
+            /* 121 */ ClientOpcode::Agreed => vec![tx.reply_error("already logged in")],
             /* 200 */ ClientOpcode::FileList => self.on_get_file_name_list(tx, state).await,
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
@@ -223,6 +265,7 @@ impl Session {
 
     /// Complete login after the client accepts the agreement (`HTLC_HDR_AGREED`, 121).
     async fn on_agreed(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        self.state = SessionState::Joined;
         if let Some(name) = tx.name() {
             self.name = name;
         }
@@ -695,6 +738,7 @@ mod tests {
             user_id: 1,
             name: name.to_string(),
             access,
+            state: SessionState::Joined,
         }
     }
 
@@ -763,6 +807,28 @@ mod tests {
         assert_eq!(users.len(), 1);
         assert_eq!(users[0].name, "Alice");
         assert_eq!(users[0].icon, 42);
+        assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn opcodes_other_than_login_agreed_ping_are_rejected_before_joining() {
+        let mut session = Session {
+            user_id: 1,
+            name: "guest1".to_string(),
+            access: AccessPrivileges::empty(),
+            state: SessionState::Agreement,
+        };
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+
+        let request = Transaction::request(
+            ClientOpcode::Chat,
+            1,
+            vec![Field::string(ClientFieldId::Text, "hi")],
+        );
+        let replies = session.handle(&request, &state, &config).await;
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].is_error());
     }
 
     #[tokio::test]
