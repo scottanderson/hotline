@@ -75,40 +75,42 @@ pub struct TrackedServer {
     pub description: String,
 }
 
+/// Read a Pascal-style (1-byte length prefix) string starting at `offset`,
+/// returning it along with the offset just past it.
+fn read_pstring(buf: &[u8], offset: usize) -> Result<(String, usize)> {
+    let len = *buf
+        .get(offset)
+        .ok_or(TrackerError::UnexpectedEof {
+            needed: offset + 1,
+            available: buf.len(),
+        })? as usize;
+    let start = offset + 1;
+    let end = start + len;
+    if buf.len() < end {
+        return Err(TrackerError::UnexpectedEof {
+            needed: end,
+            available: buf.len(),
+        });
+    }
+    Ok((String::from_utf8_lossy(&buf[start..end]).into_owned(), end))
+}
+
 impl TrackedServer {
     /// Decode one entry from a tracker server-list reply, returning the
     /// entry and bytes consumed.
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
         // ip(4) port(2) users(2) reserved(2) name_len(1) name desc_len(1) desc
-        if buf.len() < 12 {
+        if buf.len() < 10 {
             return Err(TrackerError::UnexpectedEof {
-                needed: 12,
+                needed: 10,
                 available: buf.len(),
             });
         }
         let ip = [buf[0], buf[1], buf[2], buf[3]];
         let port = u16::from_be_bytes([buf[4], buf[5]]);
         let user_count = u16::from_be_bytes([buf[6], buf[7]]);
-        let name_len = buf[10] as usize;
-        let mut offset = 11;
-        if buf.len() < offset + name_len + 1 {
-            return Err(TrackerError::UnexpectedEof {
-                needed: offset + name_len + 1,
-                available: buf.len(),
-            });
-        }
-        let name = String::from_utf8_lossy(&buf[offset..offset + name_len]).into_owned();
-        offset += name_len;
-        let desc_len = buf[offset] as usize;
-        offset += 1;
-        if buf.len() < offset + desc_len {
-            return Err(TrackerError::UnexpectedEof {
-                needed: offset + desc_len,
-                available: buf.len(),
-            });
-        }
-        let description = String::from_utf8_lossy(&buf[offset..offset + desc_len]).into_owned();
-        offset += desc_len;
+        let (name, offset) = read_pstring(buf, 10)?;
+        let (description, offset) = read_pstring(buf, offset)?;
 
         Ok((
             Self {
