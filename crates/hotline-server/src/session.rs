@@ -230,12 +230,22 @@ impl Session {
         // Not echoed back to the joiner.
         self.announce_user_change(icon, state, true).await;
 
+        let self_entry = UserNameWithInfo {
+            user_id: self.user_id,
+            icon,
+            flags: self.user_flags(),
+            name: self.name.clone(),
+        };
+
         vec![
             tx.reply(vec![]),
-            // Privileges go out as a separate UserSelfinfo push.
+            // Privileges + own user-list entry, as a UserSelfinfo push.
             Transaction::push(
                 ServerOpcode::UserSelfinfo,
-                vec![Field::u64(ServerFieldId::Access, self.access.bits())],
+                vec![
+                    Field::u64(ServerFieldId::Access, self.access.bits()),
+                    Field::bytes(ServerFieldId::UserList, self_entry.encode()),
+                ],
             ),
         ]
     }
@@ -753,6 +763,34 @@ mod tests {
         assert_eq!(users.len(), 1);
         assert_eq!(users[0].name, "Alice");
         assert_eq!(users[0].icon, 42);
+    }
+
+    #[tokio::test]
+    async fn agreed_selfinfo_carries_the_joiners_own_user_list_entry() {
+        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let state = SharedState::default();
+
+        let agreed = Transaction::request(
+            ClientOpcode::Agreed,
+            1,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice"),
+                Field::u16(ClientFieldId::Icon, 42),
+            ],
+        );
+        let replies = session.on_agreed(&agreed, &state).await;
+
+        let selfinfo = replies
+            .iter()
+            .find(|tx| tx.opcode() == Opcode::Push(ServerOpcode::UserSelfinfo))
+            .expect("on_agreed should push UserSelfinfo");
+        let entry = selfinfo
+            .field(ServerFieldId::UserList)
+            .and_then(|f| UserNameWithInfo::decode(&f.as_bytes()).ok())
+            .expect("UserSelfinfo should carry the joiner's own UserList entry");
+        assert_eq!(entry.user_id, 1); // test_session()'s fixed user_id
+        assert_eq!(entry.name, "Alice");
+        assert_eq!(entry.icon, 42);
     }
 
     #[tokio::test]

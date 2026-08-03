@@ -237,6 +237,17 @@ impl App {
             .and_then(Field::as_u64)
             .map(AccessPrivileges::from_bits_truncate)
             .unwrap_or(self.access);
+
+        // This session's own uid/icon/name.
+        if let Some(entry) = tx
+            .field(ServerFieldId::UserList)
+            .and_then(|f| UserNameWithInfo::decode(&f.as_bytes()).ok())
+        {
+            match self.users.iter_mut().find(|u| u.user_id == entry.user_id) {
+                Some(existing) => *existing = entry,
+                None => self.users.push(entry),
+            }
+        }
     }
 
     /// Handle one input character.
