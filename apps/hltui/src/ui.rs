@@ -7,9 +7,14 @@ use ratatui::text::{Line as UiLine, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, LineKind};
+use crate::app::{App, LineKind, Mode};
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    if let Mode::Agreement(text) = &app.mode {
+        draw_agreement(frame, text);
+        return;
+    }
+
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(20), Constraint::Length(24)])
@@ -23,6 +28,22 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_messages(frame, rows[0], app);
     draw_input(frame, rows[1], app);
     draw_users(frame, columns[1], app);
+}
+
+fn draw_agreement(frame: &mut Frame, text: &str) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .split(frame.size());
+
+    let paragraph = Paragraph::new(text)
+        .block(Block::default().borders(Borders::ALL).title("agreement"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, rows[0]);
+
+    let hint = Paragraph::new("press Enter to accept, Esc to quit")
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(hint, rows[1]);
 }
 
 fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {

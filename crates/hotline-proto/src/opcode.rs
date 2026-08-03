@@ -59,6 +59,9 @@ pub enum ClientOpcode {
     /// Set a chat room's subject (120).
     /// Original: `HTLC_HDR_CHAT_SUBJECT`.
     ChatSubject = 120,
+    /// Accept the server's usage agreement, completing login (121).
+    /// Original: `HTLC_HDR_AGREED`.
+    Agreed = 121,
     /// List files in a folder (200).
     /// Original: `HTLC_HDR_FILE_LIST`.
     FileList = 200,
@@ -158,6 +161,7 @@ impl ClientOpcode {
             115 => ChatJoin,
             116 => ChatPart,
             120 => ChatSubject,
+            121 => Agreed,
             200 => FileList,
             202 => FileGet,
             203 => FilePut,
@@ -212,6 +216,7 @@ impl std::fmt::Debug for ClientOpcode {
             Self::ChatJoin => "HTLC_HDR_CHAT_JOIN",
             Self::ChatPart => "HTLC_HDR_CHAT_PART",
             Self::ChatSubject => "HTLC_HDR_CHAT_SUBJECT",
+            Self::Agreed => "HTLC_HDR_AGREED",
             Self::FileList => "HTLC_HDR_FILE_LIST",
             Self::FileGet => "HTLC_HDR_FILE_GET",
             Self::FilePut => "HTLC_HDR_FILE_PUT",

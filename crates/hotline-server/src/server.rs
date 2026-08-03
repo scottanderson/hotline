@@ -23,7 +23,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             bind_addr: "0.0.0.0:5500".to_string(),
-            agreement: String::new(),
+            agreement: "hotline-rs".to_string(),
             server_name: "hotline-rs".to_string(),
             default_access: AccessPrivileges::guest_default(),
         }

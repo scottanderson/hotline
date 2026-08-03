@@ -16,6 +16,10 @@ struct Args {
     /// Server name reported to clients on login.
     #[arg(long, default_value = "hotline-rs")]
     name: String,
+
+    /// Agreement text shown to clients on login (empty disables it).
+    #[arg(long, default_value = "hotline-rs")]
+    agreement: String,
 }
 
 #[tokio::main]
@@ -25,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = ServerConfig {
         bind_addr: format!("{}:{}", args.bind, args.port),
-        agreement: String::new(),
+        agreement: args.agreement,
         server_name: args.name,
         ..ServerConfig::default()
     };

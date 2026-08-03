@@ -147,7 +147,7 @@ impl Session {
             /* 101 */ ClientOpcode::NewsfileGet => self.on_newsfile_get(tx, state).await,
             /* 103 */ ClientOpcode::NewsfilePost => self.on_newsfile_post(tx, state).await,
             /* 105 */ ClientOpcode::Chat => self.on_chat(tx, state).await,
-            /* 107 */ ClientOpcode::Login => self.on_login(tx, state, config).await,
+            /* 107 */ ClientOpcode::Login => self.on_login(tx, config).await,
             /* 108 */ ClientOpcode::Msg => self.on_private_msg(tx, state).await,
             /* 110 */ ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
             /* 112 */ ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
@@ -156,6 +156,7 @@ impl Session {
             /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
             /* 116 */ ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
             /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,
+            /* 121 */ ClientOpcode::Agreed => self.on_agreed(tx, state).await,
             /* 200 */ ClientOpcode::FileList => self.on_get_file_name_list(tx, state).await,
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
@@ -177,12 +178,7 @@ impl Session {
         })
     }
 
-    async fn on_login(
-        &mut self,
-        tx: &Transaction,
-        state: &SharedState,
-        config: &ServerConfig,
-    ) -> Vec<Transaction> {
+    async fn on_login(&mut self, tx: &Transaction, config: &ServerConfig) -> Vec<Transaction> {
         // Both LOGIN and PASSWORD are XOR-0xFF obfuscated on the wire
         // (Hotline's `hl_code`).
         let login = tx.login();
@@ -199,9 +195,6 @@ impl Session {
         if let Some(name) = tx.name() {
             self.name = name;
         }
-        let icon = tx.icon().unwrap_or(0);
-        // Not echoed back to the joiner.
-        self.announce_user_change(icon, state, true).await;
 
         let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 151)];
         if !config.server_name.is_empty() {
@@ -211,8 +204,34 @@ impl Session {
             ));
         }
 
+        // The join broadcast and privilege grant wait for Agreed (121);
+        // see on_agreed. This push tells the client what to show first.
+        let agreement = if config.agreement.is_empty() {
+            Transaction::push(
+                ServerOpcode::Agreement,
+                vec![Field::bytes(ServerFieldId::Noagreement, vec![0, 1])],
+            )
+        } else {
+            Transaction::push(
+                ServerOpcode::Agreement,
+                vec![Field::string(ServerFieldId::Text, config.agreement.clone())],
+            )
+        };
+
+        vec![tx.reply(fields), agreement]
+    }
+
+    /// Complete login after the client accepts the agreement (`HTLC_HDR_AGREED`, 121).
+    async fn on_agreed(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Some(name) = tx.name() {
+            self.name = name;
+        }
+        let icon = tx.icon().unwrap_or(0);
+        // Not echoed back to the joiner.
+        self.announce_user_change(icon, state, true).await;
+
         vec![
-            tx.reply(fields),
+            tx.reply(vec![]),
             // Privileges go out as a separate UserSelfinfo push.
             Transaction::push(
                 ServerOpcode::UserSelfinfo,
@@ -703,7 +722,18 @@ mod tests {
                 Field::u16(ClientFieldId::Icon, 42),
             ],
         );
-        session.on_login(&login, &state, &config).await;
+        session.on_login(&login, &config).await;
+
+        // The join broadcast waits for Agreed, carrying the same name/icon.
+        let agreed = Transaction::request(
+            ClientOpcode::Agreed,
+            2,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice"),
+                Field::u16(ClientFieldId::Icon, 42),
+            ],
+        );
+        session.on_agreed(&agreed, &state).await;
 
         // The join announcement excludes the joiner itself.
         let notify = announce_rx
@@ -742,7 +772,14 @@ mod tests {
             1,
             vec![Field::string(ClientFieldId::Name, "Mod")],
         );
-        session.on_login(&login, &state, &config).await;
+        session.on_login(&login, &config).await;
+
+        let agreed = Transaction::request(
+            ClientOpcode::Agreed,
+            2,
+            vec![Field::string(ClientFieldId::Name, "Mod")],
+        );
+        session.on_agreed(&agreed, &state).await;
 
         let notify = announce_rx
             .try_recv()

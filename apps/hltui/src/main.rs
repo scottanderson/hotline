@@ -11,7 +11,7 @@ use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use app::App;
+use app::{App, Mode};
 use hotline_client::HotlineClient;
 
 /// Terminal UI Hotline client.
@@ -49,12 +49,9 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = format!("{}:{}", args.host, args.port);
     let (client, mut events) = HotlineClient::connect(&addr).await?;
-    client
-        .login(&args.login, &args.password, &args.nick, args.icon)
-        .await?;
-    let users = client.get_user_name_list().await.unwrap_or_default();
+    client.login(&args.login, &args.password).await?;
 
-    let mut app = App::new(args.nick, users);
+    let mut app = App::new(args.nick, args.icon);
 
     let mut terminal = setup_terminal()?;
     let result = run(&mut terminal, &mut app, &client, &mut events).await;
@@ -89,13 +86,23 @@ async fn run(
             // Server-initiated traffic: chat, user list changes, ...
             tx = events.recv() => {
                 let Some(tx) = tx else { break }; // connection closed
-                app.apply_server_event(&tx);
+                if app.apply_server_event(&tx) {
+                    app.accept_agreement(client).await;
+                }
             }
             // Terminal input.
             ev = term_events.next() => {
                 let Some(Ok(ev)) = ev else { break };
                 if let Event::Key(key) = ev {
                     if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    if matches!(app.mode, Mode::Agreement(_)) {
+                        match key.code {
+                            KeyCode::Esc => app.quit(),
+                            KeyCode::Enter => app.accept_agreement(client).await,
+                            _ => {}
+                        }
                         continue;
                     }
                     match key.code {

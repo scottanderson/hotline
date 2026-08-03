@@ -123,13 +123,12 @@ impl HotlineClient {
     /// Log in with the given credentials (`HTLC_HDR_LOGIN`, 107). `login`
     /// and `password` are obfuscated with Hotline's XOR-0xFF transform
     /// before going on the wire.
-    pub async fn login(
-        &self,
-        login: &str,
-        password: &str,
-        nick: &str,
-        icon: u16,
-    ) -> Result<LoginResult> {
+    ///
+    /// The server follows the reply with an `HTLS_HDR_AGREEMENT` (109)
+    /// push on the event stream returned by [`Self::connect`], carrying
+    /// either agreement text or a no-agreement marker. Call [`Self::agree`]
+    /// with the caller's name/icon after handling it to complete login.
+    pub async fn login(&self, login: &str, password: &str) -> Result<LoginResult> {
         let reply = self
             .request(
                 ClientOpcode::Login,
@@ -141,19 +140,26 @@ impl HotlineClient {
             )
             .await?;
 
-        let result = LoginResult {
+        Ok(LoginResult {
             version: reply
                 .field(ServerFieldId::Serverversion)
                 .and_then(Field::as_u16),
             banner_id: reply.field(ServerFieldId::Bannerid).and_then(Field::as_u16),
             server_name: reply.field(ServerFieldId::Servername).map(Field::as_string),
-        };
+        })
+    }
 
-        // Announce nick/icon. Real clients also wait for Show Agreement
-        // (109) and send Agreed (121) here; see hlc's session flow for the
-        // fuller happy path.
-        self.set_client_user_info(nick, icon).await?;
-        Ok(result)
+    /// Accept the server's agreement, completing login (`HTLC_HDR_AGREED`, 121).
+    pub async fn agree(&self, nick: &str, icon: u16) -> Result<()> {
+        self.request(
+            ClientOpcode::Agreed,
+            vec![
+                Field::string(ClientFieldId::Name, nick),
+                Field::u16(ClientFieldId::Icon, icon),
+            ],
+        )
+        .await?;
+        Ok(())
     }
 
     /// Send `HTLC_HDR_USER_CHANGE` (304) to announce nick/icon.

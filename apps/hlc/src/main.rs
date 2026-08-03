@@ -3,6 +3,26 @@ use hotline_client::HotlineClient;
 use hotline_proto::ServerFieldId;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+/// Print the agreement text (if any) and wait for the caller to accept it.
+async fn show_agreement(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<hotline_proto::Transaction>,
+    lines: &mut tokio::io::Lines<BufReader<tokio::io::Stdin>>,
+) -> anyhow::Result<()> {
+    // The server always follows a successful login with an Agreement
+    // (109) push before anything else: either the agreement text, or a
+    // marker that there's nothing to show.
+    if let Some(tx) = events.recv().await {
+        if let Some(text) = tx.field(ServerFieldId::Text) {
+            println!("--- server agreement ---");
+            println!("{}", text.as_string());
+            println!("------------------------");
+            println!("type anything and press enter to accept:");
+            lines.next_line().await?;
+        }
+    }
+    Ok(())
+}
+
 /// A minimal Hotline CLI client: logs in, prints incoming chat, and lets
 /// you type lines to send as public chat.
 #[derive(Parser, Debug)]
@@ -42,15 +62,17 @@ async fn main() -> anyhow::Result<()> {
     println!("connecting to {addr}...");
     let (client, mut events) = HotlineClient::connect(&addr).await?;
 
-    let login_result = client
-        .login(&args.login, &args.password, &args.nick, args.icon)
-        .await?;
+    let login_result = client.login(&args.login, &args.password).await?;
     println!(
         "logged in. server: {}",
         login_result
             .server_name
             .unwrap_or_else(|| "(unnamed)".into())
     );
+
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    show_agreement(&mut events, &mut lines).await?;
+    client.agree(&args.nick, args.icon).await?;
 
     // Print server-initiated transactions (chat, user changes, ...) as
     // they arrive.
@@ -72,7 +94,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     println!("type a message and press enter to chat, ctrl-d to quit");
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         if !line.is_empty() {
             client.send_chat(&line).await?;

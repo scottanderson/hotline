@@ -8,6 +8,13 @@ use hotline_proto::opcode::{Opcode, ServerOpcode};
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::{AccessPrivileges, Field, Transaction};
 
+/// Where the UI is: still showing the server's agreement, or fully
+/// logged in and chatting.
+pub enum Mode {
+    Agreement(String),
+    Chat,
+}
+
 /// One line in the scrollback: a chat message, a system notice (user
 /// joined/left, a permission-denied notice, ...), or an error.
 pub struct Line {
@@ -24,6 +31,8 @@ pub enum LineKind {
 
 pub struct App {
     pub nick: String,
+    pub icon: u16,
+    pub mode: Mode,
     pub users: Vec<UserNameWithInfo>,
     pub lines: Vec<Line>,
     pub input: String,
@@ -32,10 +41,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(nick: String, users: Vec<UserNameWithInfo>) -> Self {
+    pub fn new(nick: String, icon: u16) -> Self {
         Self {
             nick,
-            users,
+            icon,
+            mode: Mode::Chat,
+            users: Vec::new(),
             lines: vec![Line {
                 text: "connected - type a message and press Enter, Esc to quit".to_string(),
                 kind: LineKind::System,
@@ -46,6 +57,20 @@ impl App {
         }
     }
 
+    /// Show the server's agreement text and wait for the user to accept it.
+    pub fn show_agreement(&mut self, text: String) {
+        self.mode = Mode::Agreement(text);
+    }
+
+    /// Accept the agreement (`HTLC_HDR_AGREED`, 121) and switch to chat.
+    pub async fn accept_agreement(&mut self, client: &HotlineClient) {
+        if let Err(e) = client.agree(&self.nick, self.icon).await {
+            self.push(format!("failed to complete login: {e}"), LineKind::Error);
+        }
+        self.users = client.get_user_name_list().await.unwrap_or_default();
+        self.mode = Mode::Chat;
+    }
+
     fn push(&mut self, text: impl Into<String>, kind: LineKind) {
         self.lines.push(Line {
             text: text.into(),
@@ -54,14 +79,18 @@ impl App {
     }
 
     /// Apply one server-initiated transaction (chat relay, user list
-    /// change, permission denial, ...) to the app state.
-    pub fn apply_server_event(&mut self, tx: &Transaction) {
+    /// change, permission denial, ...) to the app state. Returns `true`
+    /// if the caller must now follow up with [`Self::accept_agreement`]
+    /// (the only update here that needs the connection, so it can't
+    /// happen inside this otherwise-pure method).
+    pub fn apply_server_event(&mut self, tx: &Transaction) -> bool {
         let Opcode::Push(opcode) = tx.opcode() else {
-            return;
+            return false;
         };
         match opcode {
             /* 104 */ ServerOpcode::Msg => self.apply_msg(tx),
             /* 106 */ ServerOpcode::Chat => self.apply_chat(tx),
+            /* 109 */ ServerOpcode::Agreement => return self.apply_agreement(tx),
             /* 111 */ ServerOpcode::Politequit => self.apply_politequit(tx),
             /* 113 */ ServerOpcode::ChatInvite => self.apply_chat_invite(tx),
             /* 301 */ ServerOpcode::UserChange => self.apply_user_change(tx),
@@ -72,6 +101,21 @@ impl App {
                     self.push(line, LineKind::Error);
                 }
             }
+        }
+        false
+    }
+
+    // 109
+    //
+    // Text means show it and wait for acceptance; no text means there's
+    // nothing to accept, so the caller should accept right away.
+    fn apply_agreement(&mut self, tx: &Transaction) -> bool {
+        match tx.field(ServerFieldId::Text).map(Field::as_string) {
+            Some(text) => {
+                self.show_agreement(text);
+                false
+            }
+            None => true,
         }
     }
 
@@ -246,7 +290,7 @@ mod tests {
         use hotline_proto::field_id::ServerFieldId;
         use hotline_proto::opcode::ServerOpcode;
 
-        let mut app = App::new("me".to_string(), Vec::new());
+        let mut app = App::new("me".to_string(), 0);
         let invite = Transaction::push(
             ServerOpcode::ChatInvite,
             vec![
@@ -266,7 +310,7 @@ mod tests {
         use hotline_proto::opcode::ServerOpcode;
         use hotline_proto::types::UserFlags;
 
-        let mut app = App::new("me".to_string(), Vec::new());
+        let mut app = App::new("me".to_string(), 0);
         let admin_change = Transaction::push(
             ServerOpcode::UserChange,
             vec![
