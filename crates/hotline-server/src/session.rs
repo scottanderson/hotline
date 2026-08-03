@@ -161,6 +161,7 @@ impl Session {
             /* 110 */ ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
             /* 112 */ ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
             /* 113 */ ClientOpcode::ChatInvite => vec![self.on_chat_invite(tx, state).await],
+            /* 114 */ ClientOpcode::ChatDecline => vec![tx.reply(vec![])],
             /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
             /* 116 */ ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
             /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,

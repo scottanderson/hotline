@@ -58,6 +58,9 @@ pub enum ClientOpcode {
     /// Invite a user to a private chat room (113).
     /// Original: `HTLC_HDR_CHAT_INVITE`.
     ChatInvite = 113,
+    /// Decline an invitation to a private chat room (114).
+    /// Original: `HTLC_HDR_CHAT_DECLINE`.
+    ChatDecline = 114,
     /// Join a private chat room, accepting an invitation (115).
     /// Original: `HTLC_HDR_CHAT_JOIN`.
     ChatJoin = 115,
@@ -162,6 +165,7 @@ impl ClientOpcode {
             110 => UserKick,
             112 => ChatCreate,
             113 => ChatInvite,
+            114 => ChatDecline,
             115 => ChatJoin,
             116 => ChatPart,
             120 => ChatSubject,
@@ -215,6 +219,7 @@ impl std::fmt::Debug for ClientOpcode {
             Self::UserKick => "HTLC_HDR_USER_KICK",
             Self::ChatCreate => "HTLC_HDR_CHAT_CREATE",
             Self::ChatInvite => "HTLC_HDR_CHAT_INVITE",
+            Self::ChatDecline => "HTLC_HDR_CHAT_DECLINE",
             Self::ChatJoin => "HTLC_HDR_CHAT_JOIN",
             Self::ChatPart => "HTLC_HDR_CHAT_PART",
             Self::ChatSubject => "HTLC_HDR_CHAT_SUBJECT",
