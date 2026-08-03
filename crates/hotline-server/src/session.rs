@@ -113,7 +113,7 @@ impl Session {
             let notify = Transaction::push(
                 ServerOpcode::ChatUserPart,
                 vec![
-                    Field::u16(ServerFieldId::ChatId, chat_id),
+                    Field::u32(ServerFieldId::ChatId, chat_id),
                     Field::u16(ServerFieldId::UserId, session.user_id),
                 ],
             );
@@ -339,7 +339,7 @@ impl Session {
         let Some(message) = tx.field(ClientFieldId::Text) else {
             return Vec::new();
         };
-        let chat_id = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16);
+        let chat_id = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32);
 
         // mhxd's default chat_format is "\r%13.13s:  %s": the leading
         // \r starts the line fresh in a client that appends chat into
@@ -349,7 +349,7 @@ impl Session {
             format!("\r{:>13}:  {}", self.name, message.as_string()),
         )];
         if let Some(chat_id) = chat_id {
-            fields.push(Field::u16(ServerFieldId::ChatId, chat_id));
+            fields.push(Field::u32(ServerFieldId::ChatId, chat_id));
         }
         let relay = Transaction::push(ServerOpcode::Chat, fields);
 
@@ -546,7 +546,7 @@ impl Session {
                 Transaction::push(
                     ServerOpcode::ChatInvite,
                     vec![
-                        Field::u16(ServerFieldId::ChatId, chat_id),
+                        Field::u32(ServerFieldId::ChatId, chat_id),
                         Field::u16(ServerFieldId::UserId, self.user_id),
                         Field::string(ServerFieldId::Name, self.name.clone()),
                     ],
@@ -554,7 +554,7 @@ impl Session {
             );
         }
         tx.reply(vec![
-            Field::u16(ServerFieldId::ChatId, chat_id),
+            Field::u32(ServerFieldId::ChatId, chat_id),
             Field::u16(ServerFieldId::UserId, self.user_id),
             Field::u16(ServerFieldId::Icon, icon),
             Field::u16(ServerFieldId::Color, self.user_flags()),
@@ -565,7 +565,7 @@ impl Session {
     /// 113: invite another user to a room this session belongs to.
     async fn on_chat_invite(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let (Some(chat_id), Some(target_id)) = (
-            tx.field(ClientFieldId::ChatId).and_then(Field::as_u16),
+            tx.field(ClientFieldId::ChatId).and_then(Field::as_u32),
             tx.field(ClientFieldId::Uid).and_then(Field::as_u16),
         ) else {
             return tx.reply_error("missing chat id or user id");
@@ -582,7 +582,7 @@ impl Session {
             Transaction::push(
                 ServerOpcode::ChatInvite,
                 vec![
-                    Field::u16(ServerFieldId::ChatId, chat_id),
+                    Field::u32(ServerFieldId::ChatId, chat_id),
                     Field::u16(ServerFieldId::UserId, self.user_id),
                     Field::string(ServerFieldId::Name, self.name.clone()),
                 ],
@@ -593,7 +593,7 @@ impl Session {
 
     /// 115: join a room, accepting an invitation.
     async fn on_chat_join(&self, tx: &Transaction, state: &SharedState) -> Transaction {
-        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
+        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
         if !state.join_chat_room(chat_id, self.user_id).await {
@@ -604,7 +604,7 @@ impl Session {
         let notify = Transaction::push(
             ServerOpcode::ChatUserChange,
             vec![
-                Field::u16(ServerFieldId::ChatId, chat_id),
+                Field::u32(ServerFieldId::ChatId, chat_id),
                 Field::u16(ServerFieldId::UserId, self.user_id),
                 Field::u16(ServerFieldId::Icon, icon),
                 Field::u16(ServerFieldId::Color, self.user_flags()),
@@ -637,7 +637,7 @@ impl Session {
 
     /// 116: leave a chat room.
     async fn on_chat_part(&self, tx: &Transaction, state: &SharedState) -> Transaction {
-        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u16) else {
+        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
         let remaining = state.chat_room_members(chat_id).await.unwrap_or_default();
@@ -646,7 +646,7 @@ impl Session {
         let notify = Transaction::push(
             ServerOpcode::ChatUserPart,
             vec![
-                Field::u16(ServerFieldId::ChatId, chat_id),
+                Field::u32(ServerFieldId::ChatId, chat_id),
                 Field::u16(ServerFieldId::UserId, self.user_id),
             ],
         );
@@ -659,7 +659,7 @@ impl Session {
     /// 120: set a chat room's subject.
     async fn on_chat_subject(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let (Some(chat_id), Some(subject)) = (
-            tx.field(ClientFieldId::ChatId).and_then(Field::as_u16),
+            tx.field(ClientFieldId::ChatId).and_then(Field::as_u32),
             tx.field(ClientFieldId::ChatSubject).map(Field::as_string),
         ) else {
             return vec![tx.reply_error("missing chat id or subject")];
@@ -671,7 +671,7 @@ impl Session {
         let notify = Transaction::push(
             ServerOpcode::ChatSubject,
             vec![
-                Field::u16(ServerFieldId::ChatId, chat_id),
+                Field::u32(ServerFieldId::ChatId, chat_id),
                 Field::string(ServerFieldId::ChatSubject, subject),
             ],
         );
@@ -887,13 +887,13 @@ mod tests {
         let chat_id = reply
             .field(ServerFieldId::ChatId)
             .unwrap()
-            .as_u16()
+            .as_u32()
             .unwrap();
 
         let invite = targeted_rx.try_recv().unwrap();
         assert_eq!(invite.target_user_id, 2);
         assert_eq!(
-            invite.tx.field(ServerFieldId::ChatId).unwrap().as_u16(),
+            invite.tx.field(ServerFieldId::ChatId).unwrap().as_u32(),
             Some(chat_id)
         );
 
@@ -902,7 +902,7 @@ mod tests {
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u16(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
         );
         let join_reply = bob.on_chat_join(&join, &state).await;
         let user_list_ids: Vec<u16> = join_reply
@@ -936,7 +936,7 @@ mod tests {
             2,
             vec![
                 Field::string(ClientFieldId::Text, "room only"),
-                Field::u16(ClientFieldId::ChatId, chat_id),
+                Field::u32(ClientFieldId::ChatId, chat_id),
             ],
         );
         creator.on_chat(&room_chat, &state).await;
@@ -949,6 +949,28 @@ mod tests {
         assert_eq!(
             delivered.tx.field(ServerFieldId::Text).unwrap().as_string(),
             "\r        Alice:  room only"
+        );
+    }
+
+    /// Real clients encode small integer fields (including a chat room
+    /// ID) in as few bytes as fit, so a request carrying a 2-byte
+    /// `ChatId` must decode just as well as one using the full 4 bytes.
+    #[tokio::test]
+    async fn chat_join_accepts_a_short_encoded_chat_id() {
+        let bob = test_session("Bob", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+
+        let join = Transaction::request(
+            ClientOpcode::ChatJoin,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        let reply = bob.on_chat_join(&join, &state).await;
+
+        assert!(
+            !reply.is_error(),
+            "a short-encoded chat id should still be found"
         );
     }
 }

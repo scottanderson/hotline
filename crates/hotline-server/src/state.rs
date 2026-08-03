@@ -3,7 +3,7 @@
 //! reach each other (broadcast to everyone, targeted to one user).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -119,8 +119,8 @@ pub struct SharedState {
     /// matching how the original news system actually worked before
     /// per-article threading existed.
     news: Arc<RwLock<String>>,
-    chat_rooms: Arc<RwLock<HashMap<u16, ChatRoom>>>,
-    next_chat_id: Arc<AtomicU16>,
+    chat_rooms: Arc<RwLock<HashMap<u32, ChatRoom>>>,
+    next_chat_id: Arc<AtomicU32>,
 }
 
 impl Default for SharedState {
@@ -151,7 +151,7 @@ impl Default for SharedState {
             files: Arc::new(RwLock::new(files)),
             news: Arc::new(RwLock::new(String::new())),
             chat_rooms: Arc::new(RwLock::new(HashMap::new())),
-            next_chat_id: Arc::new(AtomicU16::new(1)),
+            next_chat_id: Arc::new(AtomicU32::new(1)),
         }
     }
 }
@@ -257,7 +257,7 @@ impl SharedState {
 
     /// Create a new private chat room with `creator` as its only member,
     /// returning the new room's ID.
-    pub async fn create_chat_room(&self, creator: u16) -> u16 {
+    pub async fn create_chat_room(&self, creator: u16) -> u32 {
         let id = self.next_chat_id.fetch_add(1, Ordering::Relaxed);
         self.chat_rooms.write().await.insert(
             id,
@@ -270,7 +270,7 @@ impl SharedState {
     }
 
     /// Current members of a chat room, in join order, if it exists.
-    pub async fn chat_room_members(&self, chat_id: u16) -> Option<Vec<u16>> {
+    pub async fn chat_room_members(&self, chat_id: u32) -> Option<Vec<u16>> {
         self.chat_rooms
             .read()
             .await
@@ -279,13 +279,13 @@ impl SharedState {
     }
 
     /// Snapshot of a chat room (members and subject), if it exists.
-    pub async fn chat_room(&self, chat_id: u16) -> Option<ChatRoom> {
+    pub async fn chat_room(&self, chat_id: u32) -> Option<ChatRoom> {
         self.chat_rooms.read().await.get(&chat_id).cloned()
     }
 
     /// Add `user_id` to a chat room, at the end of the join order.
     /// `false` if the room doesn't exist.
-    pub async fn join_chat_room(&self, chat_id: u16, user_id: u16) -> bool {
+    pub async fn join_chat_room(&self, chat_id: u32, user_id: u16) -> bool {
         self.chat_rooms
             .write()
             .await
@@ -300,7 +300,7 @@ impl SharedState {
 
     /// Remove `user_id` from a chat room, deleting the room once its
     /// last member leaves.
-    pub async fn leave_chat_room(&self, chat_id: u16, user_id: u16) {
+    pub async fn leave_chat_room(&self, chat_id: u32, user_id: u16) {
         let mut rooms = self.chat_rooms.write().await;
         if let Some(room) = rooms.get_mut(&chat_id) {
             room.members.retain(|&id| id != user_id);
@@ -314,7 +314,7 @@ impl SharedState {
     /// any room that becomes empty. Returns, for each room they were
     /// still in, its ID and the members who remain (to notify of the
     /// departure).
-    pub async fn leave_all_chat_rooms(&self, user_id: u16) -> Vec<(u16, Vec<u16>)> {
+    pub async fn leave_all_chat_rooms(&self, user_id: u16) -> Vec<(u32, Vec<u16>)> {
         let mut rooms = self.chat_rooms.write().await;
         let mut left = Vec::new();
         rooms.retain(|&chat_id, room| {
@@ -329,7 +329,7 @@ impl SharedState {
     }
 
     /// Set a chat room's subject. `false` if the room doesn't exist.
-    pub async fn set_chat_subject(&self, chat_id: u16, subject: String) -> bool {
+    pub async fn set_chat_subject(&self, chat_id: u32, subject: String) -> bool {
         self.chat_rooms
             .write()
             .await

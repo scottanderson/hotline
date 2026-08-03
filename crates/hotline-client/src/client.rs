@@ -36,9 +36,9 @@ type PendingMap = Arc<Mutex<PendingState>>;
 #[derive(Debug, Clone, Default)]
 pub struct LoginResult {
     /// Server's protocol version, echoed back.
-    pub version: Option<i32>,
+    pub version: Option<u16>,
     /// Banner ID, used to fetch the banner over HTTP (version >= 151 only).
-    pub banner_id: Option<i32>,
+    pub banner_id: Option<u16>,
     /// Human-readable server name (version >= 151 only).
     pub server_name: Option<String>,
 }
@@ -161,10 +161,8 @@ impl HotlineClient {
         let result = LoginResult {
             version: reply
                 .field(ServerFieldId::Serverversion)
-                .and_then(Field::as_integer),
-            banner_id: reply
-                .field(ServerFieldId::Bannerid)
-                .and_then(Field::as_integer),
+                .and_then(Field::as_u16),
+            banner_id: reply.field(ServerFieldId::Bannerid).and_then(Field::as_u16),
             server_name: reply.field(ServerFieldId::Servername).map(Field::as_string),
         };
 

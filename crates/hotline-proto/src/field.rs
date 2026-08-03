@@ -39,9 +39,6 @@ pub enum FieldValue {
     /// The 64-bit `USER_ACCESS` bitmask, the only genuinely 64-bit
     /// field on the wire.
     U64(u64),
-    /// A generic signed integer, encoded as the smaller of 2 or 4 bytes
-    /// (see [`crate::numbers`]).
-    Integer(i32),
     /// Anything else: a packed record, an image, or, for a field just
     /// decoded off the wire, uninterpreted bytes.
     Bytes(Vec<u8>),
@@ -54,9 +51,8 @@ impl FieldValue {
             Self::Text(s) => s.as_bytes().to_vec(),
             Self::ObfuscatedText(s) => xor_ff(s.as_bytes()),
             Self::U16(v) => v.to_be_bytes().to_vec(),
-            Self::U32(v) => v.to_be_bytes().to_vec(),
+            Self::U32(v) => encode(*v).to_vec(),
             Self::U64(v) => v.to_be_bytes().to_vec(),
-            Self::Integer(v) => encode(*v).to_vec(),
             Self::Bytes(b) => b.clone(),
         }
     }
@@ -67,9 +63,8 @@ impl FieldValue {
             Self::Text(s) => s.len(),
             Self::ObfuscatedText(s) => s.len(),
             Self::U16(_) => 2,
-            Self::U32(_) => 4,
+            Self::U32(v) => encode(*v).len(),
             Self::U64(_) => 8,
-            Self::Integer(v) => encode(*v).len(),
             Self::Bytes(b) => b.len(),
         }
     }
@@ -110,26 +105,21 @@ impl Field {
         Self::new(id, FieldValue::U16(value))
     }
 
-    /// Build a 32-bit integer field (file/transfer sizes, chat/thread
-    /// IDs). Used where the exact wire width is confirmed fixed.
-    pub fn u32(id: impl Into<u16>, value: u32) -> Self {
-        Self::new(id, FieldValue::U32(value))
-    }
-
     /// Build the 64-bit `USER_ACCESS` bitmask field. Not a "number" in
-    /// the [`Field::integer`] sense (it's a bitmap, not a magnitude), so
-    /// it doesn't go through [`crate::numbers`].
+    /// the [`Field::u32`] sense (it's a bitmap, not a magnitude), so it
+    /// doesn't go through [`crate::numbers`].
     pub fn u64(id: impl Into<u16>, value: u64) -> Self {
         Self::new(id, FieldValue::U64(value))
     }
 
-    /// Build a generic signed integer field, letting
-    /// [`crate::numbers::encode`] pick the smaller of a 2-byte or 4-byte
-    /// two's-complement representation. Use this for fields whose exact
-    /// wire width isn't independently confirmed; use
-    /// [`Field::u16`]/[`Field::u32`] instead when it is.
-    pub fn integer(id: impl Into<u16>, value: i32) -> Self {
-        Self::new(id, FieldValue::Integer(value))
+    /// Build a generic unsigned integer field, letting
+    /// [`crate::numbers::encode`] pick the smaller of a 2-byte or
+    /// 4-byte representation. Use this for any field wider than 16
+    /// bits (a chat/thread ID, a file size, ...), since every such
+    /// field in the reference protocol is unsigned; use [`Field::u16`]
+    /// instead for a field confirmed fixed at exactly 2 bytes.
+    pub fn u32(id: impl Into<u16>, value: u32) -> Self {
+        Self::new(id, FieldValue::U32(value))
     }
 
     /// Build a string field, encoded as UTF-8 (see [`Field::as_string`]
@@ -158,19 +148,6 @@ impl Field {
         }
     }
 
-    /// Interpret this field's data as an integer. Accepts a 2 or 4 byte
-    /// payload (see [`crate::numbers`] for why encoding picks the
-    /// smaller width but decoding stays tolerant of either).
-    pub fn as_integer(&self) -> Option<i32> {
-        match &self.value {
-            FieldValue::Integer(v) => Some(*v),
-            FieldValue::U16(v) => Some(*v as i32),
-            FieldValue::U32(v) => decode_number(&v.to_be_bytes()).or(Some(*v as i32)),
-            FieldValue::Bytes(b) => decode_number(b),
-            _ => None,
-        }
-    }
-
     /// Interpret this field's data as `u16`. `None` unless the payload
     /// is exactly 2 bytes.
     pub fn as_u16(&self) -> Option<u16> {
@@ -184,15 +161,14 @@ impl Field {
         }
     }
 
-    /// Interpret this field's data as `u32`. `None` unless the payload
-    /// is exactly 4 bytes.
+    /// Interpret this field's data as `u32`. Accepts a 2 or 4 byte
+    /// payload, since a value that happens to be small is free to
+    /// arrive encoded in the shorter width.
     pub fn as_u32(&self) -> Option<u32> {
         match &self.value {
             FieldValue::U32(v) => Some(*v),
-            FieldValue::Bytes(b) => {
-                let bytes: [u8; 4] = b.clone().try_into().ok()?;
-                Some(u32::from_be_bytes(bytes))
-            }
+            FieldValue::U16(v) => Some(*v as u32),
+            FieldValue::Bytes(b) => decode_number(b),
             _ => None,
         }
     }
@@ -326,7 +302,7 @@ mod tests {
     fn u16_field_round_trips() {
         let f = Field::u16(ClientFieldId::Uid, 42);
         assert_eq!(f.value, FieldValue::U16(42));
-        assert_eq!(f.as_integer(), Some(42));
+        assert_eq!(f.as_u16(), Some(42));
     }
 
     #[test]
@@ -336,14 +312,25 @@ mod tests {
     }
 
     #[test]
-    fn integer_field_picks_smallest_signed_width() {
-        let small = Field::integer(ClientFieldId::Version, 151);
+    fn u32_field_picks_smallest_unsigned_width() {
+        let small = Field::u32(ServerFieldId::ChatId, 7);
         assert_eq!(small.encode().unwrap().len(), 4 + 2);
-        assert_eq!(small.as_integer(), Some(151));
+        assert_eq!(small.as_u32(), Some(7));
 
-        let large = Field::integer(ServerFieldId::FileSize, i32::MAX);
+        let large = Field::u32(ServerFieldId::FileSize, u32::MAX);
         assert_eq!(large.encode().unwrap().len(), 4 + 4);
-        assert_eq!(large.as_integer(), Some(i32::MAX));
+        assert_eq!(large.as_u32(), Some(u32::MAX));
+    }
+
+    #[test]
+    fn as_u32_accepts_either_a_2_or_4_byte_payload() {
+        let short = Field::u32(ServerFieldId::ChatId, 7);
+        assert_eq!(short.as_u32(), Some(7));
+
+        // A field just decoded off the wire is raw bytes regardless of
+        // which width the sender picked.
+        let long = Field::bytes(ServerFieldId::ChatId, vec![0, 0, 0, 7]);
+        assert_eq!(long.as_u32(), Some(7));
     }
 
     #[test]

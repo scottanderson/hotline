@@ -119,7 +119,7 @@ impl App {
             .field(ServerFieldId::Name)
             .map(Field::as_string)
             .unwrap_or_else(|| "someone".to_string());
-        let chat_id = tx.field(ServerFieldId::ChatId).and_then(Field::as_u16);
+        let chat_id = tx.field(ServerFieldId::ChatId).and_then(Field::as_u32);
         self.push(
             format!(
                 "{from} invited you to a private chat (id {})",
@@ -258,7 +258,7 @@ mod tests {
             ServerOpcode::ChatInvite,
             vec![
                 Field::string(ServerFieldId::Name, "Alice"),
-                Field::u16(ServerFieldId::ChatId, 7),
+                Field::u32(ServerFieldId::ChatId, 7),
             ],
         );
         app.apply_server_event(&invite);
