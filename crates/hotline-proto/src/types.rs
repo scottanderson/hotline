@@ -107,7 +107,7 @@ impl HlPath {
     }
 }
 
-/// The packed `FILE_NAME_WITH_INFO` (200) record from `GET_FILE_NAME_LIST`
+/// The packed `FILE_NAME_WITH_INFO` (200) record from `HTLC_HDR_FILE_LIST`
 /// replies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileNameWithInfo {

@@ -25,11 +25,8 @@ pub struct UserEntry {
     pub name: String,
     /// Icon ID.
     pub icon: u16,
-    /// Privileges granted at login. Kept here too (in addition to
-    /// [`crate::session::Session`], which is what handlers actually
-    /// check against) since other code (an admin tool, `GET_USER_INFO`)
-    /// may want to look a user's privileges up by ID without going
-    /// through their live connection.
+    /// Privileges granted at login. Also kept in
+    /// [`crate::session::Session`], which is what handlers check against.
     pub access: AccessPrivileges,
     /// Last time this user sent any request. Compared against
     /// [`IDLE_THRESHOLD`] by [`UserEntry::is_idle`].
@@ -81,14 +78,9 @@ pub struct Targeted {
     pub tx: Transaction,
 }
 
-/// A transaction broadcast to everyone *except* one user, currently
-/// only the login join notification, which isn't echoed back to the
-/// user who just joined; the joiner already knows its own name/icon and
-/// gets its own entry from the `GetUserNameList` reply it sends right
-/// after logging in. Contrast with [`Targeted`] (deliver to exactly one
-/// user) and plain [`SharedState::publish`] (deliver to everyone,
-/// including the sender, what later nick/icon changes use, since those
-/// are self-inclusive).
+/// A transaction broadcast to everyone *except* one user, currently only
+/// the login join notification. Contrast [`Targeted`] (exactly one user)
+/// and [`SharedState::publish`] (everyone, including the sender).
 #[derive(Debug, Clone)]
 pub struct Announcement {
     /// User ID to skip when fanning this out.
@@ -112,14 +104,10 @@ pub struct SharedState {
     /// Transactions meant for everyone except one user. See
     /// [`Announcement`].
     announcements: broadcast::Sender<Announcement>,
-    /// Root-folder file listing. In-memory placeholder for now (see
-    /// `SharedState::root_files`), swap for a real filesystem-backed
-    /// implementation (with path traversal checks!) when wiring up
-    /// download/upload.
+    /// Root-folder file listing. In-memory placeholder for a real
+    /// filesystem-backed implementation.
     files: Arc<RwLock<Vec<FileNameWithInfo>>>,
-    /// Classic (pre-threaded) news: one flat, newest-first text blob,
-    /// matching how the original news system actually worked before
-    /// per-article threading existed.
+    /// Classic (pre-threaded) news: one flat, newest-first text blob.
     news: Arc<RwLock<String>>,
     /// Chat ID `0` is always present: the main room every connected
     /// user is implicitly in. Other entries are private rooms.
@@ -254,10 +242,7 @@ impl SharedState {
         self.news.read().await.clone()
     }
 
-    /// Prepend a new post to the classic news, matching the reference
-    /// server's default divider/attribution format. Returns the
-    /// formatted entry so callers can push it to other clients without
-    /// reassembling it.
+    /// Prepend a new post to the classic news. Returns the formatted entry.
     pub async fn post_news(&self, poster: &str, text: &str) -> String {
         const DIVIDER: &str = "_________________________________________________________";
         let entry = format!("{DIVIDER}\rFrom {poster}\r\r{text}\r\r");
@@ -351,10 +336,8 @@ impl SharedState {
         }
     }
 
-    /// Remove `user_id` from every chat room they belong to, deleting
-    /// any room that becomes empty. Returns, for each room they were
-    /// still in, its ID and the members who remain (to notify of the
-    /// departure).
+    /// Remove `user_id` from every chat room, deleting any that
+    /// becomes empty. Returns each room's ID and remaining members.
     pub async fn leave_all_chat_rooms(&self, user_id: u16) -> Vec<(u32, Vec<u16>)> {
         let mut rooms = self.chat_rooms.write().await;
         let mut left = Vec::new();

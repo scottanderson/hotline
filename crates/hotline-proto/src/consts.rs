@@ -1,20 +1,12 @@
 //! Access privilege bits carried in the 64-bit `USER_ACCESS` field.
 //!
-//! The bitmap is two big-endian `u32` words concatenated (high word
-//! first), so as a single 64-bit integer the first-declared flag
-//! occupies the most significant bit (63), counting down, not bit 0.
-//! There are five reserved gaps (2+2+7+8+8 = 27 bits) with no assigned
-//! meaning; those bits should always be zero on the wire.
-//!
-//! Each flag's doc comment cites its original name for cross-referencing
-//! against other implementations. Bitflags' derived `Debug` prints the
-//! Rust constant names directly (e.g. `AccessPrivileges(DELETE_FILES |
-//! SEND_CHAT)`).
+//! Two big-endian `u32` words concatenated (high word first): the
+//! first-declared flag is bit 63, counting down. Reserved bits should
+//! always be zero on the wire.
 //!
 //! [`AccessPrivileges::VOICE_CHAT`] and [`AccessPrivileges::READ_CHAT_HISTORY`]
-//! are community extensions implemented by a subset of servers under a
-//! capability-negotiation scheme, not part of the base privilege set.
-//! See each flag's doc comment for the distinction.
+//! are community extensions under capability negotiation, not part of
+//! the base privilege set.
 
 bitflags::bitflags! {
     /// The 64-bit `USER_ACCESS` privilege bitmap (plus two community
@@ -140,16 +132,13 @@ bitflags::bitflags! {
         const SEND_MSGS              = 1 << 23;
         // bits 22..=9 reserved.
 
-        /// Join voice chat. Not part of the base protocol, a community
-        /// extension (`HL_ACCESS_VOICE_CHAT`) gating `HTLC_HDR_VOICE_JOIN`
-        /// (600) under capability negotiation. Servers that don't echo
-        /// the voice capability should be treated as not supporting
-        /// this at all, regardless of this bit's value.
+        /// Join voice chat. Community extension gating `HTLC_HDR_VOICE_JOIN`
+        /// (600) under capability negotiation.
+        /// Wire field: `HL_ACCESS_VOICE_CHAT`.
         const VOICE_CHAT              = 1 << 8;
-        /// Query chat history. Not part of the base protocol, a
-        /// community extension (`HL_ACCESS_READ_CHAT_HISTORY`) gating
-        /// `HTLC_HDR_GET_CHAT_HISTORY`. Servers without this capability
-        /// should be queried via [`AccessPrivileges::READ_CHAT`] instead.
+        /// Query chat history. Community extension gating
+        /// `HTLC_HDR_GET_CHAT_HISTORY`.
+        /// Wire field: `HL_ACCESS_READ_CHAT_HISTORY`.
         const READ_CHAT_HISTORY       = 1 << 7;
         // bits 6..=0 reserved.
     }
@@ -183,14 +172,7 @@ impl AccessPrivileges {
     }
 
     /// The original `HL_ACCESS_*` constant name for a single flag, or
-    /// `None` if `self` isn't exactly one named flag (empty, a union of
-    /// several flags, or an unnamed/reserved bit).
-    ///
-    /// `bitflags` has no built-in per-flag metadata attribute that
-    /// becomes queryable at runtime. Attributes on a flag are passed
-    /// through as plain Rust attributes on the generated const (doc
-    /// comments, `#[cfg(...)]`), not interpreted by the macro. This is a
-    /// hand-written lookup instead.
+    /// `None` if `self` isn't exactly one named flag.
     pub const fn flag_name(self) -> Option<&'static str> {
         match self {
             Self::DELETE_FILES => Some("HL_ACCESS_DELETE_FILES"),
@@ -248,10 +230,8 @@ mod tests {
         assert_eq!(AccessPrivileges::from_be_bytes(bytes), Some(privs));
     }
 
-    /// A known "everything enabled" wire value (`hi = 0xfff3cfef, lo =
-    /// 0xff800000`) should decode to exactly the named base flags, with
-    /// every reserved bit at zero. Predates the voice-chat/chat-history
-    /// extensions, so both are excluded from the expected set.
+    /// A known "everything enabled" wire value decodes to exactly the
+    /// named base flags (excludes the voice-chat/chat-history extensions).
     #[test]
     fn everything_enabled_constant_decodes_correctly() {
         let mut bytes = [0u8; 8];

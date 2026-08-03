@@ -1,28 +1,17 @@
 //! Transaction opcodes.
 //!
-//! A reply to a specific request carries the sentinel [`TASK_REPLY`]
-//! (`0x0001_0000`) in the header's type field rather than `0`. Matching
-//! is done by masking the high 16 bits rather than exact equality, since
-//! some servers OR the original request's opcode into the low 16 bits
-//! (e.g. `0x0001006b` for a `Login` reply). The specific request a reply
-//! answers is identified by the transaction ID alone.
+//! A reply carries the sentinel [`TASK_REPLY`] (`0x0001_0000`) in the
+//! type field, matched by masking the high 16 bits (some servers OR the
+//! request's opcode into the low bits, e.g. `0x0001006b`). The specific
+//! request a reply answers is identified by transaction ID alone.
 //!
-//! Client and server opcodes are separate enums ([`ClientOpcode`],
-//! [`ServerOpcode`]) since the same numeric value can mean different
-//! things depending on direction (`105` is a client's outgoing chat
-//! send; `106` is the server's chat relay), and for at least one value
-//! the two tables actually collide: `113` is both
-//! [`ClientOpcode::ChatInvite`] (a client asking to invite someone to a
-//! private chat) and [`ServerOpcode::ChatInvite`] (the server telling
-//! the invitee). That means [`Opcode::from_client_wire`]/
-//! [`Opcode::from_server_wire`] can't be merged into one "just figure it
-//! out" classifier; whichever table applies has to come from the caller
-//! already knowing who sent the value, not from the value itself. Both
-//! opcode enums are `#[non_exhaustive]` so new variants aren't a
-//! breaking change.
+//! [`ClientOpcode`]/[`ServerOpcode`] are separate enums: the same
+//! numeric value can appear in both tables (`113` is both
+//! `HTLC_HDR_CHAT_INVITE` and `HTLS_HDR_CHAT_INVITE`), so
+//! [`Opcode::from_client_wire`]/[`Opcode::from_server_wire`] can't be
+//! merged; the caller must already know who sent the value.
 //!
-//! Variant names track the tail of the original wire constant, matching
-//! [`crate::field_id`]'s convention.
+//! Variant names track the tail of the original wire constant.
 
 /// Sentinel opcode value every reply to a specific request carries in the
 /// header's type field, instead of echoing `0` or the original request's
@@ -369,15 +358,8 @@ pub enum Opcode {
 
 impl Opcode {
     /// Classify a raw wire `type` value known to have been sent **by a
-    /// client**: a recognized request, or `Unknown` if this build
-    /// doesn't recognize it. Never consults [`ServerOpcode`]'s table:
-    /// the two tables overlap numerically (`113` is both
-    /// [`ClientOpcode::ChatInvite`] and [`ServerOpcode::ChatInvite`]), so
-    /// which one applies has to come from the caller already knowing who
-    /// sent this value, not from the number itself. Call this only from
-    /// code that already knows that (a server reading its own incoming
-    /// traffic, or code inspecting a transaction it built via
-    /// [`crate::Transaction::request`]).
+    /// client**. Never consults [`ServerOpcode`]'s table; see the
+    /// [module docs](self) for why direction can't be guessed.
     pub const fn from_client_wire(v: u32) -> Self {
         match ClientOpcode::from_u32(v) {
             Some(c) => Opcode::Request(c),
@@ -386,11 +368,8 @@ impl Opcode {
     }
 
     /// Classify a raw wire `type` value known to have been sent **by a
-    /// server**: checks the reply sentinel first (masking the high 16
-    /// bits, tolerant of servers that OR the request opcode into the low
-    /// bits), then a recognized push, else `Unknown`. Never consults
-    /// [`ClientOpcode`]'s table; see [`Opcode::from_client_wire`] for why
-    /// direction has to come from the caller.
+    /// server**: the reply sentinel first, then a recognized push, else
+    /// `Unknown`. Never consults [`ClientOpcode`]'s table.
     pub const fn from_server_wire(v: u32) -> Self {
         if v & 0xFFFF_0000 == TASK_REPLY {
             return Opcode::Reply;
@@ -445,10 +424,8 @@ mod tests {
         assert_eq!(Opcode::from_server_wire(0xDEAD), Opcode::Unknown(0xDEAD));
     }
 
-    /// `113` is both `ClientOpcode::ChatInvite` (a client asking to
-    /// invite someone) and `ServerOpcode::ChatInvite` (the server
-    /// telling the invitee); only knowing who sent it, not the number
-    /// itself, can tell those apart.
+    /// `113` (`HTLC_HDR_CHAT_INVITE`/`HTLS_HDR_CHAT_INVITE`) exists in
+    /// both tables; only the caller knows which one applies.
     #[test]
     fn the_same_wire_value_means_different_things_depending_on_direction() {
         assert_eq!(

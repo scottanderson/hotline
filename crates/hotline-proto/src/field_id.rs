@@ -13,12 +13,9 @@
 //! idiomatic multi-word Rust names, so a variant is always one grep away
 //! from its source.
 
-/// Field tags as they appear in a **client**-directed message.
-///
-/// A distinct type from [`ServerFieldId`], even where the same numeric
-/// tag is used in both directions (e.g. `Name` is `102` on both sides),
-/// the two directions get separate variants so a `{:?}`-printed value is
-/// never ambiguous about which original constant it came from.
+/// Field tags as they appear in a **client**-directed message. A
+/// distinct type from [`ServerFieldId`], even where the same numeric tag
+/// is used in both directions (e.g. `Name` is `102` on both sides).
 #[repr(u16)]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

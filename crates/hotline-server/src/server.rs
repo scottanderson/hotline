@@ -15,10 +15,7 @@ pub struct ServerConfig {
     pub agreement: String,
     /// Name reported in the `Login` reply (protocol version >= 151).
     pub server_name: String,
-    /// Privileges every user gets on login. This server has no account
-    /// database (see `Session::on_login`), so it's one flat grant rather
-    /// than per-account privileges. Swap this out for a real lookup
-    /// when accounts exist.
+    /// Privileges every user gets on login (no account database yet).
     pub default_access: AccessPrivileges,
 }
 

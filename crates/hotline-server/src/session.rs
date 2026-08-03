@@ -21,10 +21,7 @@ use crate::state::{SharedState, UserEntry};
 pub struct Session {
     user_id: u16,
     name: String,
-    /// Privileges granted at login. Checked directly here (rather than
-    /// re-reading `SharedState`'s copy on every request) since this is
-    /// the one place in the process that's guaranteed not to change
-    /// concurrently out from under a single connection's handler calls.
+    /// Privileges granted at login.
     access: AccessPrivileges,
 }
 
@@ -42,11 +39,7 @@ impl Session {
         let mut session = Session {
             user_id,
             name: format!("guest{user_id}"),
-            // Nothing is granted until `on_login` succeeds - a session
-            // that tries to, say, send chat before logging in gets
-            // correctly denied by the same privilege check a logged-in
-            // user without SEND_CHAT would hit, rather than needing a
-            // separate "have they logged in yet" gate.
+            // Empty until on_login succeeds.
             access: AccessPrivileges::empty(),
         };
 
@@ -137,10 +130,8 @@ impl Session {
         Ok(())
     }
 
-    /// Handle one request transaction, returning zero or more
-    /// transactions to send back (a plain reply, an unsolicited push
-    /// like the post-login `USER_ACCESS` grant, a permission-denied
-    /// notice, or nothing at all for fire-and-forget transactions).
+    /// Handle one request, returning zero or more transactions to send
+    /// back.
     async fn handle(
         &mut self,
         tx: &Transaction,
@@ -177,16 +168,8 @@ impl Session {
         }
     }
 
-    /// `Err` names the missing privilege (via [`AccessPrivileges::flag_name`]
-    /// where the bit has one) if `self.access` doesn't hold `required`.
-    /// Returns a reason string rather than a ready `Transaction`, since
-    /// callers need different delivery shapes: a reply-expecting
-    /// transaction must get a proper [`Transaction::reply_error`] (the
-    /// client's `request()` is awaiting exactly that trans ID), while a
-    /// fire-and-forget one (chat) has nothing to award a reply to and
-    /// needs an unsolicited push instead. Handing back a ready
-    /// `Transaction` here would force one shape on every caller and
-    /// silently hang whichever kind it guessed wrong for.
+    /// `Err` names the missing privilege if `self.access` doesn't hold
+    /// `required`.
     fn require(&self, required: AccessPrivileges) -> std::result::Result<(), String> {
         self.access.contains(required).then_some(()).ok_or_else(|| {
             let name = required.flag_name().unwrap_or("this privilege");
@@ -205,31 +188,19 @@ impl Session {
         let login = tx.login();
         let password = tx.password();
 
-        // No real account database yet - "admin"/"admin" is a hardcoded
-        // stand-in for one, granting every privilege; everyone else gets
-        // the server's configured flat guest grant.
+        // No account database yet: "admin"/"admin" grants every privilege.
         self.access = match (login.as_deref(), password.as_deref()) {
             (Some("admin"), Some("admin")) => AccessPrivileges::all(),
             _ => config.default_access,
         };
 
-        // Real clients commonly embed the display name and icon directly
-        // in the Login transaction rather than (or in addition to)
-        // following up with a separate `SET_CLIENT_USER_INFO` (304) - so
-        // read them here the same way `on_user_change` does. Registering
-        // the user and broadcasting the join now (instead of waiting on
-        // a 304 that may never come) is what lets already-connected
-        // clients see this user appear, and lets this client's own entry
-        // show its real name/icon from the start rather than the
-        // `guestN`/icon-0 placeholder.
+        // Some clients embed name/icon in Login, not just a follow-up
+        // SET_CLIENT_USER_INFO (304).
         if let Some(name) = tx.name() {
             self.name = name;
         }
         let icon = tx.icon().unwrap_or(0);
-        // The join notification isn't echoed back to the joiner itself -
-        // unlike later nick/icon changes, which are self-inclusive. This
-        // client already learns its own name/icon/color from the
-        // `GetUserNameList` reply it sends right after login.
+        // Not echoed back to the joiner.
         self.announce_user_change(icon, state, true).await;
 
         let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 151)];
@@ -242,11 +213,7 @@ impl Session {
 
         vec![
             tx.reply(fields),
-            // Granted privileges go out as a separate push
-            // (`ServerOpcode::UserSelfinfo`) rather than folding
-            // `USER_ACCESS` into the login reply itself - real clients
-            // gray out UI (upload buttons, admin menus, ...) based on
-            // this transaction.
+            // Privileges go out as a separate UserSelfinfo push.
             Transaction::push(
                 ServerOpcode::UserSelfinfo,
                 vec![Field::u64(ServerFieldId::Access, self.access.bits())],
@@ -259,20 +226,13 @@ impl Session {
             self.name = name;
         }
         let icon = tx.icon().unwrap_or(0);
-        // Later changes are self-inclusive, unlike the join-only
-        // exclusion in `announce_user_change`'s `exclude_self` path.
+        // Later changes are self-inclusive, unlike the join announcement.
         self.announce_user_change(icon, state, false).await;
         Vec::new()
     }
 
-    /// Register this session's current name/icon in the shared user
-    /// table and broadcast a `UserChange` push.
-    ///
-    /// Shared by [`Session::on_login`] (first announcement,
-    /// `exclude_self: true` since the joiner doesn't need an echo of its
-    /// own join) and [`Session::on_user_change`] (later nick/icon
-    /// changes, `exclude_self: false` since those are genuine updates
-    /// every client including the sender should see reflected).
+    /// Register this session's current name/icon and broadcast a
+    /// `UserChange` push. `exclude_self` skips echoing it to the sender.
     async fn announce_user_change(&self, icon: u16, state: &SharedState, exclude_self: bool) {
         state
             .insert_user(UserEntry {
@@ -300,18 +260,8 @@ impl Session {
         }
     }
 
-    /// This session's current [`UserNameWithInfo::flags`] value: admin
-    /// (derived from the `DISCONNECT_USERS` privilege, same as mhxd's
-    /// `disconnect_users`-driven color assignment, not a separately
-    /// tracked identity) OR'd with idle (recomputed from the wall clock
-    /// every time this is called, since idleness isn't an event, just a
-    /// property of "how long since the last request").
+    /// This session's own admin flag; idle is tracked per `UserEntry`.
     fn user_flags(&self) -> u16 {
-        // Idle state can't be read from `self` alone (it needs the
-        // shared last-active timestamp), so callers building a full
-        // user-list snapshot compute it from `UserEntry::is_idle`
-        // instead; this is only the admin half, used where a single
-        // session pushes its own flags.
         if self.access.contains(AccessPrivileges::DISCONNECT_USERS) {
             UserFlags::ADMIN.bits()
         } else {
@@ -322,14 +272,7 @@ impl Session {
     /// 105: public or (if `ChatId` is present) private-room chat.
     async fn on_chat(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::SEND_CHAT) {
-            // Per the older protocol guide: "Server transaction #104
-            // 'Error' is used for when client sends a non-request that
-            // fails, such as trying to send public chat when they don't
-            // have chat privs." Sent straight back to the denied client
-            // only - never broadcast. CHAT_SEND has no reply mechanism
-            // at all, so this can't be a `Transaction::reply_error`
-            // either - there's no pending request on the client side to
-            // resolve.
+            // Sent only to the denied client; CHAT_SEND has no reply mechanism.
             return vec![Transaction::push(
                 ServerOpcode::Msg,
                 vec![Field::string(ServerFieldId::Text, reason)],
@@ -341,9 +284,7 @@ impl Session {
         };
         let chat_id = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32);
 
-        // mhxd's default chat_format is "\r%13.13s:  %s": the leading
-        // \r starts the line fresh in a client that appends chat into
-        // one continuous scrollback rather than rendering discrete rows.
+        // Default chat_format: "\r%13.13s:  %s".
         let mut fields = vec![Field::string(
             ServerFieldId::Text,
             format!("\r{:>13}:  {}", self.name, message.as_string()),
@@ -753,9 +694,7 @@ mod tests {
         let config = ServerConfig::default();
         let mut announce_rx = state.subscribe_announcements();
 
-        // Real clients commonly send Name/Icon right in the Login
-        // transaction rather than waiting to follow up with a separate
-        // SET_CLIENT_USER_INFO.
+        // Name/Icon can arrive directly in Login, not just SET_CLIENT_USER_INFO.
         let login = Transaction::request(
             ClientOpcode::Login,
             1,
@@ -766,10 +705,7 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        // Already-connected clients should see the join immediately - as
-        // an announcement excluding the joiner itself; `Session::run`'s
-        // announce-stream arm is what actually applies that exclusion
-        // at delivery time.
+        // The join announcement excludes the joiner itself.
         let notify = announce_rx
             .try_recv()
             .expect("login should announce a join");
@@ -791,13 +727,8 @@ mod tests {
 
     #[tokio::test]
     async fn login_colors_by_privilege_not_by_admin_login_identity() {
-        // mhxd derives color purely from the `disconnect_users` privilege
-        // bit (`rcv_login`'s `htlc->color = htlc->access.disconnect_users
-        // ? 2 : 0`) - there's no separate "is admin" identity. A regular
-        // (non-"admin"/"admin") login whose granted access happens to
-        // include `DISCONNECT_USERS` should still show up admin-colored,
-        // and the color should already be correct in the *join*
-        // broadcast, not just after a later change.
+        // Color derives from DISCONNECT_USERS alone, even for a non-admin
+        // login, and must be correct in the join broadcast itself.
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
         let config = ServerConfig {

@@ -95,10 +95,7 @@ impl<S: Storage> PacketBuilder<S> {
     }
 
     /// Write a Pascal-style string: a 1-byte length prefix followed by
-    /// `s`'s UTF-8 bytes. Fails if `s` is longer than 255 bytes, since
-    /// the length prefix can't represent it. Silently truncating the
-    /// stated length while still writing the full string would desync
-    /// every field after it for whoever decodes this.
+    /// `s`'s UTF-8 bytes. Fails if `s` is longer than 255 bytes.
     pub fn pstring(mut self, s: &str) -> Result<Self, PStringTooLong> {
         let len = u8::try_from(s.len()).map_err(|_| PStringTooLong { len: s.len() })?;
         self.storage.append(&[len]);
@@ -233,13 +230,9 @@ impl<const N: usize> PacketReader<N> {
 }
 
 /// A type that always encodes to the same fixed number of wire bytes.
-///
-/// Implemented directly (not via an associated `const SIZE: usize` used
-/// as an array length) because using an associated const as an array
-/// length in a trait method's return type (`fn encode(&self) -> [u8;
-/// Self::SIZE]`) needs the unstable `generic_const_exprs` feature; it
-/// doesn't compile on stable Rust as of this writing. Each implementor
-/// just names its own size directly in the impl instead.
+/// `N` is a type parameter, not an associated const, since using one as
+/// an array length in a trait method's return type needs the unstable
+/// `generic_const_exprs` feature.
 pub trait FixedEncode<const N: usize> {
     /// Encode to exactly `N` bytes.
     fn encode(&self) -> [u8; N];
@@ -339,8 +332,6 @@ mod tests {
 
     #[test]
     fn fixed_and_growable_share_the_same_builder_methods() {
-        // Same chain, same output, different Storage backing - the point
-        // of unifying them behind one generic PacketBuilder.
         let fixed = PacketWriter::<4>::new().u16(1).u16(2).finish().to_vec();
         let grown = VecWriter::new().u16(1).u16(2).finish();
         assert_eq!(fixed, grown);

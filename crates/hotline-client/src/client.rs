@@ -19,12 +19,9 @@ use crate::error::{ClientError, Result};
 
 type Conn = Framed<TcpStream, TransactionCodec>;
 
-/// What a pending-request table looks like: still accepting new
-/// requests, or permanently closed because the connection ended. See
-/// [`read_loop`]'s shutdown handling for why this needs to be a single
-/// state behind one lock rather than a plain map that just gets cleared
-/// once, since a request racing the connection's death must never be able to
-/// insert *after* that one-time clear and wait forever unanswered.
+/// A pending-request table: still accepting new requests, or
+/// permanently closed because the connection ended. See [`read_loop`]'s
+/// shutdown handling.
 enum PendingState {
     Open(HashMap<u32, oneshot::Sender<Transaction>>),
     Closed,
@@ -32,7 +29,7 @@ enum PendingState {
 
 type PendingMap = Arc<Mutex<PendingState>>;
 
-/// Fields returned by a successful login, per the `Login` (107) reply.
+/// Fields returned by a successful login, per the `HTLC_HDR_LOGIN` (107) reply.
 #[derive(Debug, Clone, Default)]
 pub struct LoginResult {
     /// Server's protocol version, echoed back.
@@ -43,15 +40,10 @@ pub struct LoginResult {
     pub server_name: Option<String>,
 }
 
-/// A connected, logged-in-or-not Hotline client session.
-///
-/// Cloning is cheap: it shares the same underlying connection and pending
-/// request table, so multiple call sites can issue requests concurrently.
-///
-/// Framing is [`hotline_codec::TransactionCodec`] over
-/// [`tokio_util::codec::Framed`]. This struct only touches the write half
-/// ([`futures::stream::SplitSink`]); the read half runs on its own
-/// spawned task ([`read_loop`]) as a `Stream::next()` pipeline.
+/// A connected, logged-in-or-not Hotline client session. Cloning is
+/// cheap: it shares the same connection and pending-request table. The
+/// read half runs on its own spawned task ([`read_loop`]); this struct
+/// only touches the write half.
 #[derive(Clone)]
 pub struct HotlineClient {
     writer: Arc<Mutex<SplitSink<Conn, Transaction>>>,
@@ -69,9 +61,8 @@ impl HotlineClient {
     ) -> Result<(Self, mpsc::UnboundedReceiver<Transaction>)> {
         let mut stream = TcpStream::connect(addr).await?;
 
-        // The TRTP handshake (12 bytes out, 8 bytes back) predates - and
-        // isn't shaped like - a Transaction, so it's done on the raw
-        // stream before handing it to the codec.
+        // The TRTP handshake isn't shaped like a Transaction, so it's
+        // done on the raw stream before handing it to the codec.
         stream.write_all(&ClientHello::default().encode()).await?;
 
         let mut hello_buf = [0u8; 8];
@@ -107,10 +98,6 @@ impl HotlineClient {
                 PendingState::Open(map) => {
                     map.insert(id, reply_tx);
                 }
-                // Checked and inserted under the same lock read_loop's
-                // shutdown uses to transition to `Closed` - there's no
-                // window where this could insert just after a one-time
-                // cleanup already ran and be left waiting forever.
                 PendingState::Closed => return Err(ClientError::ConnectionClosed),
             }
         }
@@ -133,13 +120,9 @@ impl HotlineClient {
         Ok(reply)
     }
 
-    /// Log in with the given credentials, per the `Login` (107) sequence
-    /// described in the protocol reference. Icon defaults to `0` if not
-    /// meaningful for your client.
-    ///
-    /// Both `login` and `password` are obfuscated with Hotline's
-    /// symmetric XOR-0xFF transform before going on the wire. Real
-    /// servers expect *both* fields encoded this way.
+    /// Log in with the given credentials (`HTLC_HDR_LOGIN`, 107). `login`
+    /// and `password` are obfuscated with Hotline's XOR-0xFF transform
+    /// before going on the wire.
     pub async fn login(
         &self,
         login: &str,
@@ -173,7 +156,7 @@ impl HotlineClient {
         Ok(result)
     }
 
-    /// Send `SET_CLIENT_USER_INFO` (304) to announce nick/icon.
+    /// Send `HTLC_HDR_USER_CHANGE` (304) to announce nick/icon.
     pub async fn set_client_user_info(&self, nick: &str, icon: u16) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(
@@ -190,7 +173,7 @@ impl HotlineClient {
         Ok(())
     }
 
-    /// Send a public chat message (`CHAT_SEND`, 105).
+    /// Send a public chat message (`HTLC_HDR_CHAT`, 105).
     pub async fn send_chat(&self, message: &str) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(
@@ -202,7 +185,7 @@ impl HotlineClient {
         Ok(())
     }
 
-    /// Fetch the connected-user list (`GET_USER_NAME_LIST`, 300).
+    /// Fetch the connected-user list (`HTLC_HDR_USER_GETLIST`, 300).
     pub async fn get_user_name_list(&self) -> Result<Vec<UserNameWithInfo>> {
         let reply = self.request(ClientOpcode::UserGetlist, vec![]).await?;
         Ok(reply
@@ -213,7 +196,7 @@ impl HotlineClient {
             .collect())
     }
 
-    /// Fetch the root folder's file listing (`GET_FILE_NAME_LIST`, 200).
+    /// Fetch the root folder's file listing (`HTLC_HDR_FILE_LIST`, 200).
     pub async fn get_file_name_list(&self) -> Result<Vec<FileNameWithInfo>> {
         let reply = self.request(ClientOpcode::FileList, vec![]).await?;
         Ok(reply
@@ -225,10 +208,7 @@ impl HotlineClient {
     }
 }
 
-/// Forwards every transaction the server sends until the connection ends
-/// (clean close, a framing error, or the transport failing outright) -
-/// see the note at the end of this function on why that end condition
-/// must be handled explicitly rather than just letting the loop exit.
+/// Forwards every transaction the server sends until the connection ends.
 async fn read_loop(
     mut reader: SplitStream<Conn>,
     pending: PendingMap,
@@ -248,15 +228,8 @@ async fn read_loop(
         let _ = events.send(tx);
     }
 
-    // The loop above ends on a clean EOF, a framing error, or any other
-    // transport failure - in every case, nothing is ever going to answer
-    // whatever's still sitting in `pending`, or anything inserted after
-    // this point. Swapping in `Closed` here, under the same lock
-    // `request()` checks before inserting, is what makes this race-free:
-    // a request either wins the race and gets included in `old` below
-    // (so its sender gets dropped, resolving its `reply_rx.await` with an
-    // error), or loses the race and sees `Closed` immediately, failing
-    // fast instead of ever waiting on an answer that will never come.
+    // Swapping in Closed under the same lock request() checks is what
+    // makes this race-free.
     let old = std::mem::replace(&mut *pending.lock().await, PendingState::Closed);
     drop(old); // dropping each sender fails its matching reply_rx.await
 }

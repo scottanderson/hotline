@@ -41,10 +41,8 @@ pub enum ProtoError {
 
     /// A field's data, or a transaction's field count, exceeded what a
     /// `u16` length prefix can represent (65535). Reachable with
-    /// attacker-controlled input: a server relaying/combining two
-    /// oversized decoded fields (e.g. a long nickname plus a long chat
-    /// message) can produce a field that no longer fits its own length
-    /// prefix when re-encoded.
+    /// attacker-controlled input (e.g. relaying two oversized fields
+    /// combined into one).
     #[error("{what} is {len}, too long for a u16 length prefix (max 65535)")]
     TooLong {
         /// What was too long (e.g. `"field data"`, `"field count"`).

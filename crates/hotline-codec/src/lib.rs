@@ -37,16 +37,8 @@ enum DecodeState {
 }
 
 /// A [`tokio_util::codec::Decoder`]/[`Encoder`] for [`Transaction`].
-/// Stateful across `decode` calls (see [`DecodeState`]) since a
-/// transaction's total size isn't known until its prefix has been read,
-/// and `Framed` may call `decode` again before a full transaction has
-/// arrived.
-///
-/// Carries whichever of [`Transaction::decode_prefix_from_client`]/
-/// [`Transaction::decode_prefix_from_server`] matches which peer this
-/// codec's connection actually receives bytes from - set once at
-/// construction via [`TransactionCodec::for_client`]/
-/// [`TransactionCodec::for_server`], never re-guessed per frame.
+/// `decode_prefix` is set once at construction; see
+/// [`TransactionCodec::for_client`]/[`for_server`].
 #[derive(Debug)]
 pub struct TransactionCodec {
     state: DecodeState,
@@ -90,9 +82,7 @@ impl Decoder for TransactionCodec {
                         .expect("slice length checked above");
                     src.advance(PREFIX_LEN);
                     self.state = DecodeState::Body((self.decode_prefix)(&prefix));
-                    // A small transaction can arrive in the same segment
-                    // as its prefix, so loop instead of waiting for
-                    // another decode() call.
+                    // loop: the body may already be in this segment too
                 }
                 DecodeState::Body(partial) => {
                     let need = partial.remaining_len() as usize;
@@ -141,9 +131,7 @@ mod tests {
         codec.encode(tx.clone(), &mut buf).unwrap();
 
         let decoded = codec.decode(&mut buf).unwrap().unwrap();
-        // Decode always produces `FieldValue::Bytes` (no schema to
-        // interpret against), so compare interpreted values rather than
-        // raw struct equality against the locally-built, typed original.
+        // decode produces FieldValue::Bytes, so compare interpreted values
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
             decoded.field(ClientFieldId::Text).unwrap().as_string(),

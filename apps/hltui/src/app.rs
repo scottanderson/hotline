@@ -209,11 +209,8 @@ impl App {
         self.should_quit = true;
     }
 
-    /// Send `line` as chat and report the outcome as a local (client-side)
-    /// system/error line, since a failed send doesn't necessarily come back
-    /// as a server push (a transport error, for instance), so this covers
-    /// that case explicitly rather than relying solely on
-    /// `apply_server_event`.
+    /// Send `line` as chat, reporting a failed send as a local error line
+    /// (a transport error may never come back as a server push).
     pub async fn send_chat(&mut self, client: &HotlineClient, line: String) {
         if let Err(e) = client.send_chat(&line).await {
             self.push(format!("failed to send: {e}"), LineKind::Error);
@@ -221,11 +218,8 @@ impl App {
     }
 }
 
-/// Some servers prepend `\r` (or `\n`) to chat/status text so it starts
-/// a fresh line in a client that appends everything into one continuous
-/// scrollback. Each `Line` here is already its own row, so that control
-/// character would just show up as a stray glyph instead of doing
-/// anything.
+/// Strip a leading `\r`/`\n` some servers prepend to chat/status text;
+/// each `Line` here is already its own row.
 fn display_text(s: &str) -> String {
     s.trim_start_matches(['\r', '\n']).to_string()
 }
@@ -244,10 +238,9 @@ mod tests {
         assert_eq!(display_text("Alice: hi"), "Alice: hi");
     }
 
-    /// `113` is both `ClientOpcode::ChatInvite` and
-    /// `ServerOpcode::ChatInvite`; a value-based (rather than
-    /// direction-aware) opcode classification would misread this push as
-    /// the client-side variant and silently drop it here.
+    /// `113` (`HTLC_HDR_CHAT_INVITE`/`HTLS_HDR_CHAT_INVITE`) exists in
+    /// both opcode tables; a value-based classification would misread
+    /// this push and silently drop it here.
     #[test]
     fn chat_invite_push_is_recognized_despite_sharing_its_wire_value_with_a_client_opcode() {
         use hotline_proto::field_id::ServerFieldId;

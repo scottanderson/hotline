@@ -1,10 +1,7 @@
 //! The `HTRK` tracker protocol: how a client asks a tracker for a server
-//! list, and how a server periodically beacons itself to a tracker over
-//! UDP. Kept separate from `hotline-proto`'s transaction framing since
-//! it's a different wire shape entirely (no transaction headers), but
-//! reuses `hotline-proto::wire`'s `PacketWriter`/`PacketReader`/`VecWriter`
-//! for the same reason every chunk in this crate benefits from them: no
-//! hand-tracked byte offsets to get wrong.
+//! list, and how a server periodically beacons itself over UDP. Kept
+//! separate from `hotline-proto`'s transaction framing, a different wire
+//! shape entirely, but reuses its `PacketWriter`/`PacketReader`/`VecWriter`.
 
 use hotline_proto::wire::{PStringTooLong, PacketReader, PacketWriter, VecWriter};
 use thiserror::Error;
@@ -39,10 +36,8 @@ pub fn encode_client_request_v1() -> [u8; 6] {
     PacketWriter::<6>::new().bytes(MAGIC).u16(1).finish()
 }
 
-/// Decode the fixed 8-byte header a tracker reply always starts with:
-/// magic + version + message_type + message_size follow, but callers
-/// typically only need magic/version checked before reading the rest
-/// with a length-aware parser; this returns `(version)`.
+/// Decode the fixed 8-byte header a tracker reply starts with, checking
+/// the magic and returning the version.
 pub fn decode_reply_header(buf: &[u8]) -> Result<u16> {
     let prefix: [u8; 6] =
         buf.get(..6)
@@ -131,8 +126,7 @@ pub struct ServerBeacon {
     pub udp_port: u16,
     /// Number of connected users.
     pub user_count: u16,
-    /// Random per-server "pass ID" the guide mentions, used by the
-    /// tracker to correlate updates.
+    /// Random per-server ID the tracker uses to correlate updates.
     pub pass_id: u32,
     /// Server name.
     pub name: String,
@@ -146,9 +140,7 @@ pub struct ServerBeacon {
 
 impl ServerBeacon {
     /// Encode the UDP payload sent to the tracker. Fails if any of
-    /// `name`/`description`/`login`/`password` is longer than 255 bytes,
-    /// since each is written as a Pascal-style (1-byte length prefix)
-    /// string.
+    /// `name`/`description`/`login`/`password` is longer than 255 bytes.
     pub fn encode(&self) -> Result<Vec<u8>> {
         Ok(VecWriter::new()
             .u16(1)

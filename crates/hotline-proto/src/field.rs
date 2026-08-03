@@ -1,23 +1,14 @@
 //! `Field`: the `(id, size, data)` records that make up a transaction's
 //! parameter list.
 //!
-//! Field *tags* live in [`crate::field_id`], split into
-//! [`crate::field_id::ClientFieldId`]/[`crate::field_id::ServerFieldId`];
-//! see that module's docs for why. `Field` itself still stores a raw
-//! `u16` id: once bytes come off the wire, direction is a property of
-//! the *transaction* they arrived in, not of an individual field, so
-//! `Field` can't know which of the two naming tables applies to itself
-//! in isolation.
+//! Field tags live in [`crate::field_id`] as [`crate::field_id::ClientFieldId`]/
+//! [`crate::field_id::ServerFieldId`]; `Field` itself stores a raw `u16`
+//! id, since direction is a property of the transaction, not the field.
 //!
-//! The payload is [`FieldValue`], not a bare `Vec<u8>`: every
-//! constructor takes (or builds) a specific variant, so there's no way
-//! to end up with, say, a 3-byte buffer masquerading as a `U16`, and
-//! `Debug` shows the actual typed value instead of guessing from length
-//! and ASCII-ness at print time. A field just decoded off the wire is
+//! The payload is [`FieldValue`], not a bare `Vec<u8>`, so `Debug` shows
+//! the actual typed value. A field just decoded off the wire is
 //! [`FieldValue::Bytes`] until something interprets it (`as_string()`,
-//! `as_u16()`, ...). There's no schema table telling decode what a raw
-//! id "should" mean, so it stays honestly untyped until a caller who
-//! knows the field says otherwise.
+//! `as_u16()`, ...); there's no schema table to guess a raw id's type.
 
 use crate::error::{ProtoError, Result};
 use crate::numbers::{decode as decode_number, encode};
@@ -114,10 +105,9 @@ impl Field {
 
     /// Build a generic unsigned integer field, letting
     /// [`crate::numbers::encode`] pick the smaller of a 2-byte or
-    /// 4-byte representation. Use this for any field wider than 16
-    /// bits (a chat/thread ID, a file size, ...), since every such
-    /// field in the reference protocol is unsigned; use [`Field::u16`]
-    /// instead for a field confirmed fixed at exactly 2 bytes.
+    /// 4-byte representation. Use for anything wider than 16 bits (a
+    /// chat/thread ID, a file size, ...); use [`Field::u16`] instead for
+    /// a field confirmed fixed at exactly 2 bytes.
     pub fn u32(id: impl Into<u16>, value: u32) -> Self {
         Self::new(id, FieldValue::U32(value))
     }
@@ -136,10 +126,7 @@ impl Field {
     }
 
     /// Interpret this field as deobfuscated text, regardless of how it
-    /// was actually constructed/decoded (an obfuscated field decoded off
-    /// the wire is [`FieldValue::Bytes`], not
-    /// [`FieldValue::ObfuscatedText`], since decode doesn't know a
-    /// field's semantics, see the [module docs](self)).
+    /// was actually constructed or decoded.
     pub fn as_deobfuscated_string(&self) -> String {
         match &self.value {
             FieldValue::ObfuscatedText(s) => s.clone(),
@@ -186,12 +173,9 @@ impl Field {
         }
     }
 
-    /// Interpret this field's data as text, decoded as UTF-8 (lossily,
-    /// substituting U+FFFD for any invalid sequence). The protocol has
-    /// no mandated text encoding: field bytes are opaque on the wire,
-    /// and servers may convert between encodings. UTF-8 works when both
-    /// ends speak it; bytes from a legacy client using another encoding
-    /// (historically Mac OS Roman) won't round-trip correctly here.
+    /// Interpret this field's data as UTF-8 text (lossy). The wire has
+    /// no mandated text encoding; a legacy client's own encoding won't
+    /// round-trip correctly here.
     pub fn as_string(&self) -> String {
         match &self.value {
             FieldValue::Text(s) | FieldValue::ObfuscatedText(s) => s.clone(),
@@ -210,10 +194,8 @@ impl Field {
 
     /// `field_id (2) | field_size (2) | data`.
     ///
-    /// Fails if the encoded value is longer than 65535 bytes, the
-    /// length prefix is a `u16`. This is reachable with
-    /// attacker-controlled input (see [`ProtoError::TooLong`]), not just
-    /// a theoretical limit: don't silently truncate it.
+    /// Fails if the encoded value is longer than 65535 bytes (the length
+    /// prefix is a `u16`), reachable with attacker-controlled input.
     pub fn encode(&self) -> crate::error::Result<Vec<u8>> {
         let data_len = self.value.encoded_len();
         let len = u16::try_from(data_len).map_err(|_| ProtoError::TooLong {
@@ -228,9 +210,7 @@ impl Field {
     }
 
     /// Decode one field from the front of `buf`, returning the field and
-    /// the number of bytes consumed. Always produces
-    /// [`FieldValue::Bytes`]. See the [module docs](self) for why
-    /// decode can't know a field's semantic type.
+    /// the number of bytes consumed. Always produces [`FieldValue::Bytes`].
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
         if buf.len() < 4 {
             return Err(ProtoError::UnexpectedEof {
@@ -257,10 +237,8 @@ impl Field {
     }
 }
 
-/// Hotline's `hl_code`: XOR every byte with `0xFF`. Symmetric, so the
-/// same function encodes and decodes. A free function rather than a
-/// `Field`/`FieldValue` method since it's a pure byte-transform several
-/// call sites here happen to need, not something tied to either type.
+/// XOR every byte with `0xFF`. Symmetric, so the same function encodes
+/// and decodes.
 fn xor_ff(bytes: &[u8]) -> Vec<u8> {
     bytes.iter().map(|&b| !b).collect()
 }

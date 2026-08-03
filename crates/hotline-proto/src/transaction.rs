@@ -15,22 +15,13 @@
 //!
 //! `Transaction` holds every field above directly (`trans`, `flag`,
 //! `len`, `len2`, `fields`) rather than wrapping a separate header type.
-//! `hc` isn't stored either; it's always `fields.len()`. The prefix/body
-//! split only shows up in streaming decode
+//! `hc` isn't stored; it's always `fields.len()`. Streaming decode
 //! ([`Transaction::decode_prefix_from_client`]/
-//! [`Transaction::decode_prefix_from_server`] + [`Transaction::finish_decode`]),
-//! since reading a variable-length frame off a socket requires knowing
-//! `len2` before you know how many more bytes to read.
+//! [`Transaction::decode_prefix_from_server`] + [`Transaction::finish_decode`])
+//! splits prefix from body since `len2` must be known before reading more.
 //!
 //! There's no raw `type_: u32` field: the wire's `type` value is
-//! resolved into an [`Opcode`] once, by whoever already knows which
-//! table it belongs to (a client building a request, a server building
-//! a reply/push, or a decode call told which side sent the bytes), and
-//! stored as that. Direction lives in *which [`Opcode`] variant* a
-//! transaction holds ([`Opcode::Request`] only a client sends,
-//! [`Opcode::Reply`]/[`Opcode::Push`] only a server does), not in a
-//! separate tag next to a still-raw number - so [`Transaction::opcode`]
-//! is a plain field read, never a re-guess.
+//! resolved into an [`Opcode`] once and stored as that.
 
 use std::fmt;
 
@@ -108,21 +99,11 @@ impl Transaction {
     }
 
     /// Shared constructor: every wire representation (request/reply/push)
-    /// differs only in `opcode`, `trans`, and `flag`. `len`/`len2` are
-    /// always derived the same way from `fields`.
+    /// differs only in `opcode`, `trans`, and `flag`.
     ///
-    /// `len2` here is a size *estimate* computed with saturating (not
-    /// checked) arithmetic, so it can't panic or silently wrap, but it also
-    /// isn't the actual enforcement point for the "does this fit on the
-    /// wire" question. That happens in [`Transaction::encode`], which
-    /// every practical caller already treats as fallible (it's called
-    /// from [`hotline_codec`]'s `Encoder::encode`, itself on the already
-    /// `Result`-returning `Sink::send` path), so the real check
-    /// happens exactly once, at the point the bytes are about to be
-    /// written, rather than needing every `Transaction::request`/`reply`/
-    /// `push` call site to handle a Result for a condition that, in
-    /// practice, is only reachable by handing it deliberately-oversized
-    /// data.
+    /// `len2` is a saturating-arithmetic estimate; it can't panic or wrap,
+    /// but the real "does this fit on the wire" check happens once, in
+    /// [`Transaction::encode`].
     fn assemble(opcode: Opcode, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
         let len2 = fields
             .iter()
@@ -196,16 +177,11 @@ impl Transaction {
         self.field(ClientFieldId::Icon).and_then(Field::as_u16)
     }
 
-    /// Encode the full transaction: 20-byte fixed prefix, field count
-    /// (derived from `fields.len()`, never stored), then the field
-    /// chunks themselves.
+    /// Encode the full transaction: 20-byte fixed prefix, field count,
+    /// then the field chunks themselves.
     ///
-    /// Fails if `fields.len()` or any individual field's data exceeds
-    /// what a `u16` can represent (65535). Both are reachable with
-    /// attacker-controlled input (see [`ProtoError::TooLong`]), so
-    /// this can't silently truncate a length prefix; it has to return
-    /// an error that propagates all the way out to whoever's trying to
-    /// send this.
+    /// Fails if `fields.len()` or any field's data exceeds a `u16`
+    /// (65535), reachable with attacker-controlled input.
     pub fn encode(&self) -> crate::error::Result<Vec<u8>> {
         let hc = u16::try_from(self.fields.len()).map_err(|_| ProtoError::TooLong {
             what: "field count",
@@ -231,17 +207,10 @@ impl Transaction {
             .collect())
     }
 
-    /// Decode the fixed-size prefix only (everything through `len2`),
-    /// with an empty field list, resolving the wire `type` value under
-    /// the assumption that these bytes were sent **by a client** - call
-    /// this only when the surrounding code already knows that (a server
-    /// reading its own incoming traffic). [`Transaction::remaining_len`]
-    /// says how many more bytes to read, then
-    /// [`Transaction::finish_decode`] parses them.
-    ///
-    /// Exists for streaming transports that read off a socket in two
-    /// passes; [`Transaction::decode_from_client`] is the one-shot
-    /// equivalent for tests and other non-streaming contexts.
+    /// Decode the fixed-size prefix only (through `len2`), with an empty
+    /// field list, assuming these bytes were sent **by a client**.
+    /// [`Transaction::remaining_len`] says how many more bytes to read,
+    /// then [`Transaction::finish_decode`] parses them.
     pub const fn decode_prefix_from_client(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
         let (r, type_) = r.u32();
@@ -301,11 +270,6 @@ impl Transaction {
         }
         let hc = u16::from_be_bytes([body[0], body[1]]);
 
-        // Each field's start offset depends on how long the *previous*
-        // field turned out to be - a genuinely sequential, dependent
-        // parse rather than an independent-per-item transform, so a
-        // plain loop reads more clearly here than threading `(fields,
-        // offset)` through a fold's accumulator would.
         let mut offset = 2;
         let mut fields = Vec::with_capacity(hc as usize);
         for _ in 0..hc {
@@ -318,11 +282,7 @@ impl Transaction {
     }
 
     /// Decode a complete, single-part transaction (prefix + body) from
-    /// one contiguous buffer, resolving its opcode under the assumption
-    /// that it was sent **by a client**. Convenience wrapper around
-    /// [`Transaction::decode_prefix_from_client`] +
-    /// [`Transaction::finish_decode`], mainly useful for tests and other
-    /// non-streaming contexts.
+    /// one contiguous buffer, assuming it was sent **by a client**.
     pub fn decode_from_client(buf: &[u8]) -> Result<Self> {
         Self::decode_with(buf, Self::decode_prefix_from_client)
     }
@@ -333,11 +293,8 @@ impl Transaction {
         Self::decode_with(buf, Self::decode_prefix_from_server)
     }
 
-    /// Shared one-shot decoder: only the prefix step needs to know
-    /// direction, so this takes whichever of
-    /// [`Transaction::decode_prefix_from_client`]/
-    /// [`Transaction::decode_prefix_from_server`] the caller already
-    /// picked and drives it through [`Transaction::finish_decode`].
+    /// Shared one-shot decoder driving a caller-picked prefix decoder
+    /// through [`Transaction::finish_decode`].
     fn decode_with(
         buf: &[u8],
         decode_prefix: impl FnOnce(&[u8; PREFIX_LEN]) -> Self,
@@ -362,12 +319,9 @@ impl Transaction {
 }
 
 impl fmt::Debug for Transaction {
-    /// [`Transaction::opcode`] already knows whether this is a client
-    /// request or a server reply/push (see the [module docs](self)), so
-    /// each field's name is looked up in the *correct* one of
+    /// Looks each field's name up in the correct one of
     /// [`crate::field_id::ClientFieldId`]/[`crate::field_id::ServerFieldId`],
-    /// never both, never a guess, and never wrong the way re-deriving
-    /// direction from a raw number could be.
+    /// per [`Transaction::opcode`]'s direction.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let opcode = self.opcode();
         let mut out = f.debug_struct("Transaction");
@@ -465,10 +419,7 @@ mod tests {
         );
 
         let decoded = Transaction::decode_from_client(&bytes).unwrap();
-        // Decode always produces `FieldValue::Bytes` (see the field.rs
-        // module docs), so a decoded transaction is never struct-equal
-        // to the locally-built one that produced its bytes - compare
-        // interpreted values instead.
+        // decode produces FieldValue::Bytes, so compare interpreted values
         assert_eq!(decoded.trans, tx.trans);
         assert_eq!(decoded.fields.len(), tx.fields.len());
         assert_eq!(
@@ -518,12 +469,8 @@ mod tests {
         );
     }
 
-    /// The scenario this whole `Result`-propagation exists for: a server
-    /// combining two attacker-controlled decoded fields (e.g. a long
-    /// nickname and a long chat message) into one relayed field. Each
-    /// half is individually within the wire's own u16 limit, but the
-    /// combination isn't. `encode()` must fail here, not truncate the
-    /// length prefix and desync every other client's read state.
+    /// Two fields individually within the u16 limit, combined into one
+    /// relayed field that isn't; `encode()` must fail, not truncate.
     #[test]
     fn oversized_relay_field_fails_to_encode_instead_of_corrupting_the_wire() {
         let long_nick = "n".repeat(60_000);
