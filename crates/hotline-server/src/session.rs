@@ -263,9 +263,6 @@ impl Session {
                 account.access
             }
             Some(_) => return self.reject_login(tx, state, "incorrect password").await,
-            // No "guest" account provided: fall back to the configured
-            // guest default so a zero-config server still accepts guests.
-            None if login == "guest" => config.default_access,
             None => return self.reject_login(tx, state, "no such account").await,
         };
 
@@ -861,7 +858,7 @@ impl Session {
         if let Err(reason) = self.require(AccessPrivileges::READ_USERS) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(login) = tx.login() else {
+        let Some(login) = tx.field(ClientFieldId::Login).map(Field::as_string) else {
             return vec![tx.reply_error("missing login")];
         };
         let Some(account) = state.account(&login).await else {
@@ -1109,19 +1106,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_without_a_guest_account_falls_back_to_default_access() {
+    async fn login_without_a_guest_account_is_rejected() {
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
         state.delete_account("guest").await.unwrap();
-        let config = ServerConfig {
-            default_access: AccessPrivileges::READ_NEWS,
-            ..ServerConfig::default()
-        };
+        let config = ServerConfig::default();
+        let mut targeted_rx = state.subscribe_targeted();
 
         let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
-        session.on_login(&login, &state, &config).await;
+        let replies = session.on_login(&login, &state, &config).await;
 
-        assert_eq!(session.access, AccessPrivileges::READ_NEWS);
+        assert!(replies[0].is_error());
+        assert!(targeted_rx.try_recv().is_ok());
     }
 
     #[tokio::test]
@@ -1280,11 +1276,18 @@ mod tests {
         // login, and must be correct in the join broadcast itself.
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
-        state.delete_account("guest").await.unwrap();
-        let config = ServerConfig {
-            default_access: AccessPrivileges::DISCONNECT_USERS,
-            ..ServerConfig::default()
-        };
+        state
+            .put_account(
+                "guest".to_string(),
+                Account {
+                    password: String::new(),
+                    name: String::new(),
+                    access: AccessPrivileges::DISCONNECT_USERS,
+                },
+            )
+            .await
+            .unwrap();
+        let config = ServerConfig::default();
         let mut announce_rx = state.subscribe_announcements();
 
         let login = Transaction::request(

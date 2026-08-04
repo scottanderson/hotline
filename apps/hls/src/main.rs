@@ -33,7 +33,6 @@ async fn main() -> anyhow::Result<()> {
         bind_addr: format!("{}:{}", args.bind, args.port),
         agreement: args.agreement,
         server_name: args.name,
-        ..ServerConfig::default()
     };
 
     // TODO: swap for a persistent AccountProvider once one exists.

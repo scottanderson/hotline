@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
-use hotline_proto::consts::AccessPrivileges;
-
 use crate::accounts::AccountProvider;
 use crate::error::Result;
 use crate::session::Session;
@@ -18,8 +16,6 @@ pub struct ServerConfig {
     pub agreement: String,
     /// Name reported in the `Login` reply (protocol version >= 151).
     pub server_name: String,
-    /// Privileges every user gets on login (no account database yet).
-    pub default_access: AccessPrivileges,
 }
 
 impl Default for ServerConfig {
@@ -28,7 +24,6 @@ impl Default for ServerConfig {
             bind_addr: "0.0.0.0:5500".to_string(),
             agreement: "hotline-rs".to_string(),
             server_name: "hotline-rs".to_string(),
-            default_access: AccessPrivileges::guest_default(),
         }
     }
 }
