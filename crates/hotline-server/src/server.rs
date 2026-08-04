@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use tokio::net::TcpListener;
 
 use hotline_proto::consts::AccessPrivileges;
 
+use crate::accounts::AccountProvider;
 use crate::error::Result;
 use crate::session::Session;
 use crate::state::SharedState;
@@ -37,12 +40,11 @@ pub struct Server {
 }
 
 impl Server {
-    /// Create a server with the given configuration and fresh shared state.
-    pub fn new(config: ServerConfig) -> Self {
-        Self {
-            config,
-            state: SharedState::default(),
-        }
+    /// Create a server with the given configuration, backed by `accounts`
+    /// (see [`AccountProvider`]; the embedding application supplies it).
+    pub fn new(config: ServerConfig, accounts: Arc<dyn AccountProvider>) -> Self {
+        let state = SharedState::new(accounts);
+        Self { config, state }
     }
 
     /// Bind and accept connections forever, spawning one task per client.

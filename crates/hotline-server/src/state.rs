@@ -13,6 +13,8 @@ use hotline_proto::consts::AccessPrivileges;
 use hotline_proto::types::{FileNameWithInfo, UserFlags};
 use hotline_proto::Transaction;
 
+use crate::accounts::{Account, AccountProvider, InMemoryAccountProvider};
+
 /// How long without any request before a user is considered idle.
 pub const IDLE_THRESHOLD: Duration = Duration::from_secs(10 * 60);
 
@@ -113,10 +115,19 @@ pub struct SharedState {
     /// user is implicitly in. Other entries are private rooms.
     chat_rooms: Arc<RwLock<HashMap<u32, ChatRoom>>>,
     next_chat_id: Arc<AtomicU32>,
+    /// Account storage; see [`crate::AccountProvider`].
+    accounts: Arc<dyn AccountProvider>,
 }
 
 impl Default for SharedState {
     fn default() -> Self {
+        Self::new(Arc::new(InMemoryAccountProvider::default()))
+    }
+}
+
+impl SharedState {
+    /// Build fresh shared state backed by `accounts`.
+    pub fn new(accounts: Arc<dyn AccountProvider>) -> Self {
         let (broadcast, _rx) = broadcast::channel(256);
         let (targeted, _rx) = broadcast::channel(256);
         let (announcements, _rx) = broadcast::channel(256);
@@ -144,6 +155,7 @@ impl Default for SharedState {
             news: Arc::new(RwLock::new(String::new())),
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
+            accounts,
         }
     }
 }
@@ -362,6 +374,21 @@ impl SharedState {
                 room.subject = subject;
             })
             .is_some()
+    }
+
+    /// Look up an account by login.
+    pub async fn account(&self, login: &str) -> Option<Account> {
+        self.accounts.get(login).await
+    }
+
+    /// Create or overwrite an account.
+    pub async fn put_account(&self, login: String, account: Account) -> Result<(), String> {
+        self.accounts.put(login, account).await
+    }
+
+    /// Delete an account. `false` if it didn't exist.
+    pub async fn delete_account(&self, login: &str) -> Result<bool, String> {
+        self.accounts.delete(login).await
     }
 }
 

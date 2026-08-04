@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use clap::Parser;
-use hotline_server::{Server, ServerConfig};
+use hotline_server::{InMemoryAccountProvider, Server, ServerConfig};
 
 /// A minimal Hotline server.
 #[derive(Parser, Debug)]
@@ -34,6 +36,8 @@ async fn main() -> anyhow::Result<()> {
         ..ServerConfig::default()
     };
 
-    Server::new(config).run().await?;
+    // TODO: swap for a persistent AccountProvider once one exists.
+    let accounts = Arc::new(InMemoryAccountProvider::default());
+    Server::new(config, accounts).run().await?;
     Ok(())
 }
