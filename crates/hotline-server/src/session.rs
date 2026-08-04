@@ -15,7 +15,7 @@ use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
 use crate::accounts::Account;
 use crate::error::Result;
 use crate::server::ServerConfig;
-use crate::state::{SharedState, UserEntry, IDLE_THRESHOLD};
+use crate::state::{AccessUpdate, SharedState, UserEntry, IDLE_THRESHOLD};
 
 /// Which opcodes a session may currently send.
 enum SessionState {
@@ -30,6 +30,10 @@ enum SessionState {
 pub struct Session {
     user_id: u16,
     name: String,
+    /// Account login this session authenticated as, empty until
+    /// `on_login` succeeds. Matched against [`crate::state::AccessUpdate`]
+    /// to apply live account-modify changes.
+    login: String,
     /// Privileges granted at login.
     access: AccessPrivileges,
     state: SessionState,
@@ -52,6 +56,7 @@ impl Session {
             user_id,
             name: format!("guest{user_id}"),
             // Empty until on_login succeeds.
+            login: String::new(),
             access: AccessPrivileges::empty(),
             state: SessionState::Agreement,
             is_away: false,
@@ -61,6 +66,7 @@ impl Session {
         let mut broadcast_rx = state.subscribe();
         let mut targeted_rx = state.subscribe_targeted();
         let mut announce_rx = state.subscribe_announcements();
+        let mut access_update_rx = state.subscribe_access_updates();
         let idle_sleep = tokio::time::sleep(IDLE_THRESHOLD);
         tokio::pin!(idle_sleep);
 
@@ -118,6 +124,15 @@ impl Session {
                             writer.send(a.tx).await?;
                         }
                         Ok(_) => continue, // this is the join announcement about myself
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                // A live account-modify change for this session's login -
+                // see `SharedState::push_access_update`.
+                msg = access_update_rx.recv() => {
+                    match msg {
+                        Ok(update) => session.apply_access_update(update, &state).await,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
@@ -255,6 +270,7 @@ impl Session {
         let password = password.as_deref().unwrap_or_default();
 
         let account = state.account(login).await;
+        self.login = login.to_string();
         self.access = match account {
             Some(account) if account.password == password => {
                 if !account.name.is_empty() {
@@ -394,6 +410,21 @@ impl Session {
         } else {
             state.publish(notify);
         }
+    }
+
+    /// Applies a live account-modify change, if it's for this session's
+    /// login, without waiting for reconnect. A no-op before login
+    /// completes (`self.login` is empty) or for any other login.
+    async fn apply_access_update(&mut self, update: AccessUpdate, state: &SharedState) {
+        if self.login.is_empty() || update.login != self.login {
+            return;
+        }
+        self.access = update.access;
+        if let Some(name) = update.name {
+            self.name = name;
+        }
+        let icon = state.user(self.user_id).await.map(|e| e.icon).unwrap_or(0);
+        self.announce_user_change(icon, state, false).await;
     }
 
     /// Broadcast this session's away status changing. Reads name/icon back
@@ -908,13 +939,17 @@ impl Session {
 
         let account = Account {
             password,
-            name,
+            name: name.clone(),
             access,
         };
 
-        let result = state.put_account(login, account).await;
+        let result = state.put_account(login.clone(), account).await;
         let reply = match result {
-            Ok(()) => tx.reply(vec![]),
+            Ok(()) => {
+                let name = (!name.is_empty()).then_some(name);
+                state.push_access_update(login, access, name);
+                tx.reply(vec![])
+            }
             Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
         };
         vec![reply]
@@ -929,6 +964,7 @@ mod tests {
         Session {
             user_id: 1,
             name: name.to_string(),
+            login: String::new(),
             access,
             state: SessionState::Joined,
             is_away: false,
@@ -1225,6 +1261,7 @@ mod tests {
         let mut session = Session {
             user_id: 1,
             name: "guest1".to_string(),
+            login: String::new(),
             access: AccessPrivileges::empty(),
             state: SessionState::Agreement,
             is_away: false,
@@ -1549,6 +1586,57 @@ mod tests {
         assert_eq!(account.name, "Bobby");
         assert_eq!(account.password, "secret");
         assert_eq!(account.access, AccessPrivileges::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn account_modify_propagates_to_a_live_session_without_reconnect() {
+        let admin = test_session("Admin", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    password: String::new(),
+                    name: "Bob".to_string(),
+                    access: AccessPrivileges::empty(),
+                },
+            )
+            .await
+            .unwrap();
+
+        // Bob is already connected, logged in under the "bob" account.
+        let mut bob = test_session("Bob", AccessPrivileges::empty());
+        bob.login = "bob".to_string();
+        let mut broadcast_rx = state.subscribe();
+        // Subscribed before the modify, mirroring how Session::run
+        // subscribes once at connect time, well before any admin action.
+        let mut access_rx = state.subscribe_access_updates();
+
+        let modify = Transaction::request(
+            ClientOpcode::AccountModify,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "bob"),
+                Field::u64(
+                    ClientFieldId::Access,
+                    AccessPrivileges::CAN_BROADCAST.bits(),
+                ),
+            ],
+        );
+        admin.on_account_modify(&modify, &state).await;
+
+        // Simulate bob's session loop applying the broadcast update.
+        let received = access_rx.try_recv().expect("access update broadcast");
+        bob.apply_access_update(received, &state).await;
+
+        assert_eq!(bob.access, AccessPrivileges::CAN_BROADCAST);
+        let notify = broadcast_rx
+            .try_recv()
+            .expect("the live update should also broadcast UserChange");
+        assert_eq!(
+            notify.field(ServerFieldId::UserId).and_then(Field::as_u16),
+            Some(bob.user_id)
+        );
     }
 
     #[tokio::test]

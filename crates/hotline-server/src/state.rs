@@ -91,6 +91,21 @@ pub struct Announcement {
     pub tx: Transaction,
 }
 
+/// A live privilege change for every session logged in under `login`,
+/// pushed by an account-modify handler rather than an outbound
+/// transaction. Every session subscribes and applies it if it matches
+/// its own login, so it reaches every connection sharing that login,
+/// not just one `user_id`.
+#[derive(Debug, Clone)]
+pub struct AccessUpdate {
+    /// Login the modified account is stored under.
+    pub login: String,
+    /// The account's new privileges.
+    pub access: AccessPrivileges,
+    /// The account's new display name, if non-empty.
+    pub name: Option<String>,
+}
+
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
 #[derive(Clone)]
 pub struct SharedState {
@@ -106,6 +121,9 @@ pub struct SharedState {
     /// Transactions meant for everyone except one user. See
     /// [`Announcement`].
     announcements: broadcast::Sender<Announcement>,
+    /// Live privilege changes for sessions logged in under a modified
+    /// account. See [`AccessUpdate`].
+    access_updates: broadcast::Sender<AccessUpdate>,
     /// Root-folder file listing. In-memory placeholder for a real
     /// filesystem-backed implementation.
     files: Arc<RwLock<Vec<FileNameWithInfo>>>,
@@ -131,6 +149,7 @@ impl SharedState {
         let (broadcast, _rx) = broadcast::channel(256);
         let (targeted, _rx) = broadcast::channel(256);
         let (announcements, _rx) = broadcast::channel(256);
+        let (access_updates, _rx) = broadcast::channel(256);
         let files = vec![
             FileNameWithInfo {
                 file_type: *b"fldr",
@@ -151,6 +170,7 @@ impl SharedState {
             broadcast,
             targeted,
             announcements,
+            access_updates,
             files: Arc::new(RwLock::new(files)),
             news: Arc::new(RwLock::new(String::new())),
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
@@ -240,6 +260,29 @@ impl SharedState {
     /// each session skips announcements that exclude its own `user_id`.
     pub fn subscribe_announcements(&self) -> broadcast::Receiver<Announcement> {
         self.announcements.subscribe()
+    }
+
+    /// Push a live privilege change for every session logged in under
+    /// `login`, e.g. after an account-modify handler saves a new
+    /// [`Account`]. A no-op if no session matches, same best-effort
+    /// delivery as [`Self::publish`].
+    pub fn push_access_update(
+        &self,
+        login: String,
+        access: AccessPrivileges,
+        name: Option<String>,
+    ) {
+        let _ = self.access_updates.send(AccessUpdate {
+            login,
+            access,
+            name,
+        });
+    }
+
+    /// Subscribe to the access-update stream. Called once per session;
+    /// each session filters for its own `login`.
+    pub fn subscribe_access_updates(&self) -> broadcast::Receiver<AccessUpdate> {
+        self.access_updates.subscribe()
     }
 
     /// Snapshot of the (currently root-only) file listing. `path` is
