@@ -14,7 +14,7 @@ use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
 
 use crate::error::Result;
 use crate::server::ServerConfig;
-use crate::state::{SharedState, UserEntry};
+use crate::state::{SharedState, UserEntry, IDLE_THRESHOLD};
 
 /// Which opcodes a session may currently send.
 enum SessionState {
@@ -32,6 +32,8 @@ pub struct Session {
     /// Privileges granted at login.
     access: AccessPrivileges,
     state: SessionState,
+    /// Whether the last broadcast `UserChange` marked this session away.
+    is_away: bool,
 }
 
 impl Session {
@@ -51,12 +53,15 @@ impl Session {
             // Empty until on_login succeeds.
             access: AccessPrivileges::empty(),
             state: SessionState::Agreement,
+            is_away: false,
         };
 
         let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::for_server()).split();
         let mut broadcast_rx = state.subscribe();
         let mut targeted_rx = state.subscribe_targeted();
         let mut announce_rx = state.subscribe_announcements();
+        let idle_sleep = tokio::time::sleep(IDLE_THRESHOLD);
+        tokio::pin!(idle_sleep);
 
         loop {
             tokio::select! {
@@ -64,9 +69,17 @@ impl Session {
                 frame = reader.next() => {
                     let Some(tx) = frame.transpose()? else { break }; // clean EOF
                     state.touch_user(session.user_id).await;
+                    idle_sleep.as_mut().reset(tokio::time::Instant::now() + IDLE_THRESHOLD);
+                    if session.is_away {
+                        session.set_away(false, &state).await;
+                    }
                     for reply in session.handle(&tx, &state, &config).await {
                         writer.send(reply).await?;
                     }
+                }
+                // Fires after IDLE_THRESHOLD with no request from this client.
+                () = &mut idle_sleep, if !session.is_away && matches!(session.state, SessionState::Joined) => {
+                    session.set_away(true, &state).await;
                 }
                 // Broadcast traffic (public chat, user list changes)
                 // fanned out from every session.
@@ -140,8 +153,7 @@ impl Session {
         Ok(())
     }
 
-    /// Handle one request, returning zero or more transactions to send
-    /// back.
+    /// Handle one request, returning zero or more transactions in reply.
     async fn handle(
         &mut self,
         tx: &Transaction,
@@ -298,7 +310,7 @@ impl Session {
         let self_entry = UserNameWithInfo {
             user_id: self.user_id,
             icon,
-            flags: self.user_flags(),
+            flags: self.user_flags().bits(),
             name: self.name.clone(),
         };
 
@@ -340,7 +352,7 @@ impl Session {
                 Field::u16(ServerFieldId::UserId, self.user_id),
                 Field::u16(ServerFieldId::Icon, icon),
                 Field::string(ServerFieldId::Name, self.name.clone()),
-                Field::u16(ServerFieldId::Color, self.user_flags()),
+                Field::u16(ServerFieldId::Color, self.user_flags().bits()),
             ],
         );
         if exclude_self {
@@ -350,13 +362,31 @@ impl Session {
         }
     }
 
-    /// This session's own admin flag; idle is tracked per `UserEntry`.
-    fn user_flags(&self) -> u16 {
-        if self.access.contains(AccessPrivileges::DISCONNECT_USERS) {
-            UserFlags::ADMIN.bits()
-        } else {
-            0
-        }
+    /// Broadcast this session's away status changing. Reads name/icon back
+    /// from `SharedState` rather than caching them on `Session` too.
+    async fn set_away(&mut self, away: bool, state: &SharedState) {
+        self.is_away = away;
+        let Some(entry) = state.user(self.user_id).await else {
+            return;
+        };
+        state.publish(Transaction::push(
+            ServerOpcode::UserChange,
+            vec![
+                Field::u16(ServerFieldId::UserId, self.user_id),
+                Field::u16(ServerFieldId::Icon, entry.icon),
+                Field::string(ServerFieldId::Name, entry.name),
+                Field::u16(ServerFieldId::Color, self.user_flags().bits()),
+            ],
+        ));
+    }
+
+    /// This session's own admin + away flags, for `UserChange`/`UserSelfinfo`.
+    fn user_flags(&self) -> UserFlags {
+        let is_admin = self.access.contains(AccessPrivileges::DISCONNECT_USERS);
+        let mut flags = UserFlags::empty();
+        flags.set(UserFlags::ADMIN, is_admin);
+        flags.set(UserFlags::AWAY, self.is_away);
+        flags
     }
 
     /// 105: public or (if `ChatId` is present) private-room chat.
@@ -622,7 +652,7 @@ impl Session {
             Field::u32(ServerFieldId::ChatId, chat_id),
             Field::u16(ServerFieldId::UserId, self.user_id),
             Field::u16(ServerFieldId::Icon, icon),
-            Field::u16(ServerFieldId::Color, self.user_flags()),
+            Field::u16(ServerFieldId::Color, self.user_flags().bits()),
             Field::string(ServerFieldId::Name, self.name.clone()),
         ])
     }
@@ -676,7 +706,7 @@ impl Session {
                 Field::u32(ServerFieldId::ChatId, chat_id),
                 Field::u16(ServerFieldId::UserId, self.user_id),
                 Field::u16(ServerFieldId::Icon, icon),
-                Field::u16(ServerFieldId::Color, self.user_flags()),
+                Field::u16(ServerFieldId::Color, self.user_flags().bits()),
                 Field::string(ServerFieldId::Name, self.name.clone()),
             ],
         );
@@ -781,6 +811,7 @@ mod tests {
             name: name.to_string(),
             access,
             state: SessionState::Joined,
+            is_away: false,
         }
     }
 
@@ -948,6 +979,7 @@ mod tests {
             name: "guest1".to_string(),
             access: AccessPrivileges::empty(),
             state: SessionState::Agreement,
+            is_away: false,
         };
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -1021,6 +1053,42 @@ mod tests {
             UserFlags::from_bits_truncate(color).contains(UserFlags::ADMIN),
             "join broadcast should already carry the admin color for a privileged non-admin-login user"
         );
+    }
+
+    #[tokio::test]
+    async fn set_away_broadcasts_the_away_bit_and_clears_it() {
+        let mut session = test_session("Alice", AccessPrivileges::empty());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: session.user_id,
+                name: session.name.clone(),
+                icon: 0,
+                access: session.access,
+                last_active: Instant::now(),
+            })
+            .await;
+        let mut broadcast_rx = state.subscribe();
+
+        session.set_away(true, &state).await;
+        let color = broadcast_rx
+            .try_recv()
+            .unwrap()
+            .field(ServerFieldId::Color)
+            .and_then(Field::as_u16)
+            .map(UserFlags::from_bits_truncate)
+            .unwrap_or_else(UserFlags::empty);
+        assert!(color.contains(UserFlags::AWAY));
+
+        session.set_away(false, &state).await;
+        let color = broadcast_rx
+            .try_recv()
+            .unwrap()
+            .field(ServerFieldId::Color)
+            .and_then(Field::as_u16)
+            .map(UserFlags::from_bits_truncate)
+            .unwrap_or_else(UserFlags::empty);
+        assert!(!color.contains(UserFlags::AWAY));
     }
 
     #[tokio::test]
