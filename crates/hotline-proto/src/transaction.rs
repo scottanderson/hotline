@@ -23,7 +23,7 @@
 //! There's no raw `type_: u32` field: the wire's `type` value is
 //! resolved into an [`Opcode`] once and stored as that.
 
-use std::fmt;
+use std::{debug_assert_matches, fmt};
 
 use crate::error::{ProtoError, Result};
 use crate::field::Field;
@@ -43,20 +43,17 @@ pub struct Transaction {
     /// it. See the [module docs](self) for why this replaces a raw
     /// `type_: u32`.
     opcode: Opcode,
-    /// Transaction ID. Client-assigned and nonzero on a request; echoed
-    /// back on the matching reply. Always `0` on a server-initiated push.
-    /// Private so a reply can only be built through [`Transaction::reply`]/
-    /// [`Transaction::reply_error`], which copy it from the request they're
-    /// answering rather than letting a caller pass the wrong id by hand.
+    /// Transaction ID: client-assigned on a request, echoed on the reply,
+    /// `0` on a push until [`Transaction::with_push_trans`] assigns it.
     trans: u32,
     /// Bit 0 is the error flag; the rest is reserved on the wire.
-    pub flag: u32,
+    flag: u32,
     /// Total size of the data section across every part of a (possibly
     /// split) transaction.
-    pub len: u32,
+    len: u32,
     /// Byte count of everything after `len2` itself: the 2-byte field
     /// count plus every field's bytes, this frame only.
-    pub len2: u32,
+    len2: u32,
     /// The fields themselves.
     pub fields: Vec<Field>,
 }
@@ -72,17 +69,24 @@ impl Transaction {
         Self::assemble(Opcode::Request(opcode), trans, 0, fields)
     }
 
-    /// Build a reply to this (request) transaction, carrying `fields`.
+    /// Build a reply to this request transaction, carrying `fields`.
     pub fn reply(&self, fields: Vec<Field>) -> Self {
+        debug_assert_matches!(self.opcode, Opcode::Request(_));
         Self::assemble(Opcode::Reply, self.trans, 0, fields)
     }
 
-    /// Build a server-initiated push transaction (chat relay, user list
-    /// change, news post, ...). It's not a reply to anything, so it carries
-    /// `trans = 0` and the push's own opcode rather than the
-    /// [`crate::opcode::TASK_REPLY`] sentinel.
+    /// Build a server-initiated transaction.
     pub fn push(opcode: ServerOpcode, fields: Vec<Field>) -> Self {
         Self::assemble(Opcode::Push(opcode), 0, 0, fields)
+    }
+
+    /// Assign this push's per-connection `trans` sequence number.
+    pub const fn with_push_trans(mut self, next: Option<&mut u32>) -> Self {
+        if let (Opcode::Push(_), Some(next)) = (self.opcode, next) {
+            self.trans = *next;
+            *next += 1;
+        }
+        self
     }
 
     /// Build an error reply to this (request) transaction: the error flag
@@ -107,7 +111,13 @@ impl Transaction {
     fn assemble(opcode: Opcode, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
         let len2 = fields
             .iter()
-            .map(|f| 4u32.saturating_add(u32::try_from(f.as_bytes().len()).unwrap_or(u32::MAX)))
+            .map(|f| {
+                let f = f.as_bytes();
+                let f = f.len();
+                let f = u32::try_from(f);
+                let f = f.unwrap_or(u32::MAX);
+                f.saturating_add(4)
+            })
             .fold(2u32, u32::saturating_add);
         Self {
             opcode,
@@ -143,8 +153,7 @@ impl Transaction {
     }
 
     /// The transaction ID: client-assigned and nonzero on a request,
-    /// echoed back on the matching reply, always `0` on a push. Used to
-    /// match a reply to the request that's still awaiting it.
+    /// echoed back on the matching reply.
     pub const fn trans(&self) -> u32 {
         self.trans
     }

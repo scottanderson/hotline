@@ -34,47 +34,30 @@ the official Hotline 1.2.3 client is still open and is the active focus.
 - Added an AGENTS.md rule: don't touch/expand an existing comment as a side
   effect of an unrelated code change.
 
-## Active bug: hl123 desync (not yet root-caused)
+## Closed bug: hl123 desync
 
-Reported against the real Hotline 1.2.3 client, reproducible:
+Symptoms against the real 1.2.3 client: news posts showed chat text instead
+of (or alongside) the real post; a solo `GetInfo` right after login had no
+effect until a second `GetInfo` completed both.
 
-1. Connect, send chat "a".
-2. Post a news article — the news window shows the chat text instead of
-   the real post.
-3. Post a second article — the news window now shows the chat text
-   *below* the real post.
-4. Reconnect: the news is correct (just the two real posts). So the
-   server's actual stored news state is fine; this is a **client-side
-   reply/push misrouting** problem, not server-side data corruption.
-5. Separately: log in, then immediately request `GetInfo` on yourself —
-   that request hangs forever, but sending a *second* `GetInfo` completes
-   both. Smells like a client-side reply-matching bug triggered by
-   something we're sending it.
+Two compounding causes, both fixed:
 
-Leading hypothesis (unconfirmed): the client may be sensitive to
-unsolicited pushes (chat broadcast, news-post broadcast, join
-announcements, ...) arriving interleaved with the reply to its own
-in-flight request, if it does simplistic ordering-based reply matching
-rather than strict transaction-ID matching. `Session::run`'s
-`tokio::select!` reads a client's own next request concurrently with
-broadcast/targeted/announce channel messages, so a self-broadcast (e.g.
-this session's own chat echo, or a news-post notification) could in
-principle be written to the socket before or after a reply in a different
-order than the reference server would produce, if fairness between
-`tokio::select!` branches doesn't match the reference's fully-synchronous
-per-transaction processing model.
+- `TCP_NODELAY` was never set on accepted sockets, so Nagle could hold a
+  small reply unflushed until later traffic forced it out, coalesced with
+  whatever was queued behind it into a single client read. Fixed by
+  `stream.set_nodelay(true)` after `accept()` in `Server::run`
+  (`crates/hotline-server/src/server.rs`).
+- Every push always carried `trans = 0` (the reference assigns each push
+  its own incrementing per-connection `trans`). Even with `NODELAY`, TCP
+  gives no 1:1 guarantee between writes and the client's reads, so two
+  same-`trans` pushes landing in one read could still be misrouted. Fixed
+  in `TransactionCodec::encode` (`crates/hotline-codec/src/lib.rs`), the
+  single per-connection write chokepoint (mirrors the reference, where the
+  same counter lives on the connection and increments inside its one write
+  function): a server codec now stamps each outgoing push with its own
+  increasing `trans` via `Transaction::with_push_trans`.
 
-Ruled out so far: the `TASK_REPLY` sentinel value (`0x0001_0000`) matches
-the reference's `HTLS_HDR_TASK` exactly, so it's not a reply-vs-push
-opcode encoding mismatch.
-
-Next steps: trace exactly how the reference server orders a reply to the
-sender against a broadcast triggered by that same request (does it always
-flush the direct reply before touching any other socket, including its
-own?), then check whether our `tokio::select!` loop can produce a
-different order for this session's own socket specifically. Ask before
-changing `Session::run`'s concurrency model — this is architecturally
-sensitive.
+Verified fixed against the real client.
 
 ## Known deliberate divergences from the reference server (flagged, not fixed)
 

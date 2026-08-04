@@ -43,6 +43,8 @@ enum DecodeState {
 pub struct TransactionCodec {
     state: DecodeState,
     decode_prefix: fn(&[u8; PREFIX_LEN]) -> Transaction,
+    /// Next `trans` to stamp on an outgoing push; `None` on a client codec.
+    next_push_trans: Option<u32>,
 }
 
 impl TransactionCodec {
@@ -53,6 +55,7 @@ impl TransactionCodec {
         Self {
             state: DecodeState::default(),
             decode_prefix: Transaction::decode_prefix_from_server,
+            next_push_trans: None,
         }
     }
 
@@ -62,6 +65,7 @@ impl TransactionCodec {
         Self {
             state: DecodeState::default(),
             decode_prefix: Transaction::decode_prefix_from_client,
+            next_push_trans: Some(1),
         }
     }
 }
@@ -105,6 +109,9 @@ impl Encoder<Transaction> for TransactionCodec {
     type Error = CodecError;
 
     fn encode(&mut self, item: Transaction, dst: &mut BytesMut) -> Result<(), CodecError> {
+        let next = self.next_push_trans.as_mut();
+        // No-op for a request or reply; stamps a push's trans.
+        let item = item.with_push_trans(next);
         let bytes = item.encode()?;
         dst.extend_from_slice(&bytes);
         Ok(())
@@ -115,8 +122,24 @@ impl Encoder<Transaction> for TransactionCodec {
 mod tests {
     use super::*;
     use hotline_proto::field_id::ClientFieldId;
-    use hotline_proto::opcode::ClientOpcode;
+    use hotline_proto::opcode::{ClientOpcode, ServerOpcode};
     use hotline_proto::Field;
+
+    #[test]
+    fn server_codec_stamps_each_push_with_an_increasing_trans() {
+        let push = Transaction::push(ServerOpcode::Chat, vec![]);
+
+        let mut buf = BytesMut::new();
+        let mut server = TransactionCodec::for_server();
+        server.encode(push.clone(), &mut buf).unwrap();
+        server.encode(push, &mut buf).unwrap();
+
+        let mut client = TransactionCodec::for_client();
+        let first = client.decode(&mut buf).unwrap().unwrap();
+        let second = client.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(first.trans(), 1);
+        assert_eq!(second.trans(), 2);
+    }
 
     #[test]
     fn round_trips_a_whole_transaction_in_one_go() {

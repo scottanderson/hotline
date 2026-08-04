@@ -53,6 +53,10 @@ impl Server {
 
         loop {
             let (stream, peer) = listener.accept().await?;
+            // Avoids Nagle delaying small replies behind the peer's ACKs.
+            if let Err(e) = stream.set_nodelay(true) {
+                tracing::warn!(%peer, error = %e, "failed to set TCP_NODELAY");
+            }
             let state = self.state.clone();
             let config = self.config.clone();
             tokio::spawn(async move {
