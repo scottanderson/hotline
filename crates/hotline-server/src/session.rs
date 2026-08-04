@@ -12,6 +12,7 @@ use hotline_proto::opcode::{ClientOpcode, Opcode, ServerOpcode};
 use hotline_proto::types::{UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
 
+use crate::accounts::Account;
 use crate::error::Result;
 use crate::server::ServerConfig;
 use crate::state::{SharedState, UserEntry, IDLE_THRESHOLD};
@@ -215,6 +216,10 @@ impl Session {
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
             /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
+            /* 350 */ ClientOpcode::AccountCreate => self.on_account_create(tx, state).await,
+            /* 351 */ ClientOpcode::AccountDelete => self.on_account_delete(tx, state).await,
+            /* 352 */ ClientOpcode::AccountRead => self.on_account_read(tx, state).await,
+            /* 353 */ ClientOpcode::AccountModify => self.on_account_modify(tx, state).await,
             /* 355 */ ClientOpcode::MsgBroadcast => self.on_msg_broadcast(tx, state).await,
             /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
             other => {
@@ -239,15 +244,29 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
-        // Both LOGIN and PASSWORD are XOR-0xFF obfuscated on the wire
-        // (Hotline's `hl_code`).
         let login = tx.login();
         let password = tx.password();
 
-        // No account database yet: "admin"/"admin" grants every privilege.
-        self.access = match (login.as_deref(), password.as_deref()) {
-            (Some("admin"), Some("admin")) => AccessPrivileges::all(),
-            _ => config.default_access,
+        // An empty login field means "guest", same as the client omitting it.
+        let login = login
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("guest");
+        let password = password.as_deref().unwrap_or_default();
+
+        let account = state.account(login).await;
+        self.access = match account {
+            Some(account) if account.password == password => {
+                if !account.name.is_empty() {
+                    self.name = account.name;
+                }
+                account.access
+            }
+            Some(_) => return self.reject_login(tx, state, "incorrect password").await,
+            // No "guest" account provided: fall back to the configured
+            // guest default so a zero-config server still accepts guests.
+            None if login == "guest" => config.default_access,
+            None => return self.reject_login(tx, state, "no such account").await,
         };
 
         let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 151)];
@@ -282,6 +301,25 @@ impl Session {
         }
 
         replies
+    }
+
+    /// Reply with `reason`, then disconnect: an unknown login or wrong
+    /// password drops the connection rather than leaving it stuck
+    /// unauthenticated.
+    async fn reject_login(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+        reason: &str,
+    ) -> Vec<Transaction> {
+        state.send_to(
+            self.user_id,
+            Transaction::push(
+                ServerOpcode::Politequit,
+                vec![Field::string(ServerFieldId::Text, reason)],
+            ),
+        );
+        vec![tx.reply_error(reason)]
     }
 
     /// Complete login after the client accepts the agreement (`HTLC_HDR_AGREED`, 121).
@@ -794,6 +832,96 @@ impl Session {
         }
         vec![tx.reply(vec![])]
     }
+
+    /// `HTLC_HDR_ACCOUNT_CREATE` (350)
+    async fn on_account_create(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::CREATE_USERS) {
+            return vec![tx.reply_error(reason)];
+        }
+        self.on_account_create_or_modify(tx, state).await
+    }
+
+    /// `HTLC_HDR_ACCOUNT_DELETE` (351)
+    async fn on_account_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::DELETE_USERS) {
+            return vec![tx.reply_error(reason)];
+        }
+        let Some(login) = tx.login() else {
+            return vec![tx.reply_error("missing login")];
+        };
+        match state.delete_account(&login).await {
+            Ok(true) => vec![tx.reply(vec![])],
+            Ok(false) => vec![tx.reply_error("no such account")],
+            Err(_) => vec![tx.reply_error("could not delete account")],
+        }
+    }
+
+    /// `HTLC_HDR_ACCOUNT_READ` (352)
+    async fn on_account_read(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::READ_USERS) {
+            return vec![tx.reply_error(reason)];
+        }
+        let Some(login) = tx.login() else {
+            return vec![tx.reply_error("missing login")];
+        };
+        let Some(account) = state.account(&login).await else {
+            return vec![tx.reply_error("no such account")];
+        };
+        vec![tx.reply(vec![
+            Field::string(ServerFieldId::Name, account.name),
+            Field::obfuscated_string(ServerFieldId::Login, login),
+            // Never echoes the real password back.
+            Field::obfuscated_string(ServerFieldId::Password, ""),
+            Field::u64(ServerFieldId::Access, account.access.bits()),
+        ])]
+    }
+
+    /// `HTLC_HDR_ACCOUNT_MODIFY` (353)
+    async fn on_account_modify(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::MODIFY_USERS) {
+            return vec![tx.reply_error(reason)];
+        }
+        self.on_account_create_or_modify(tx, state).await
+    }
+
+    /// Implementation for
+    /// `HTLC_HDR_ACCOUNT_CREATE` (350) and
+    /// `HTLC_HDR_ACCOUNT_MODIFY` (353).
+    async fn on_account_create_or_modify(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
+        let Some(login) = tx.login() else {
+            return vec![tx.reply_error("missing login")];
+        };
+        let existing = state.account(&login).await;
+        let password = tx
+            .password()
+            .or_else(|| existing.as_ref().map(|x| x.password.clone()))
+            .unwrap_or_default();
+        let name = tx
+            .name()
+            .or_else(|| existing.as_ref().map(|a| a.name.clone()))
+            .unwrap_or_default();
+        let access = tx
+            .access()
+            .or_else(|| existing.map(|a| a.access))
+            .unwrap_or_else(AccessPrivileges::empty);
+
+        let account = Account {
+            password,
+            name,
+            access,
+        };
+
+        let result = state.put_account(login, account).await;
+        let reply = match result {
+            Ok(()) => tx.reply(vec![]),
+            Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
+        };
+        vec![reply]
+    }
 }
 
 #[cfg(test)]
@@ -865,6 +993,134 @@ mod tests {
         assert_eq!(users[0].name, "Alice");
         assert_eq!(users[0].icon, 42);
         assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn login_grants_the_matching_account_privileges() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        state
+            .put_account(
+                "alice".to_string(),
+                Account {
+                    password: "hunter2".to_string(),
+                    name: "Alice".to_string(),
+                    access: AccessPrivileges::CAN_BROADCAST,
+                },
+            )
+            .await
+            .unwrap();
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "alice"),
+                Field::obfuscated_string(ClientFieldId::Password, "hunter2"),
+            ],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert_eq!(session.access, AccessPrivileges::CAN_BROADCAST);
+        assert_eq!(session.name, "Alice");
+    }
+
+    #[tokio::test]
+    async fn login_with_wrong_password_is_rejected_and_disconnected() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        state
+            .put_account(
+                "alice".to_string(),
+                Account {
+                    password: "hunter2".to_string(),
+                    name: "Alice".to_string(),
+                    access: AccessPrivileges::CAN_BROADCAST,
+                },
+            )
+            .await
+            .unwrap();
+        let mut targeted_rx = state.subscribe_targeted();
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "alice"),
+                Field::obfuscated_string(ClientFieldId::Password, "wrong"),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert!(replies[0].is_error());
+        let kick = targeted_rx.try_recv().unwrap();
+        assert_eq!(kick.target_user_id, session.user_id);
+        assert_eq!(kick.tx.opcode(), Opcode::Push(ServerOpcode::Politequit));
+    }
+
+    #[tokio::test]
+    async fn login_with_a_nonempty_password_against_a_blank_stored_one_is_rejected() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        state
+            .put_account(
+                "alice".to_string(),
+                Account {
+                    password: String::new(),
+                    name: "Alice".to_string(),
+                    access: AccessPrivileges::CAN_BROADCAST,
+                },
+            )
+            .await
+            .unwrap();
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "alice"),
+                Field::obfuscated_string(ClientFieldId::Password, "anything"),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert!(replies[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn login_with_unknown_account_is_rejected_and_disconnected() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        let mut targeted_rx = state.subscribe_targeted();
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![Field::obfuscated_string(ClientFieldId::Login, "nobody")],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert!(replies[0].is_error());
+        assert!(targeted_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn login_without_a_guest_account_falls_back_to_default_access() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let config = ServerConfig {
+            default_access: AccessPrivileges::READ_NEWS,
+            ..ServerConfig::default()
+        };
+
+        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        session.on_login(&login, &state, &config).await;
+
+        assert_eq!(session.access, AccessPrivileges::READ_NEWS);
     }
 
     #[tokio::test]
@@ -1218,6 +1474,123 @@ mod tests {
         );
         let replies = session.on_msg_broadcast(&request, &state).await;
         assert!(replies[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn account_create_then_read_round_trips() {
+        let session = test_session("Admin", AccessPrivileges::all());
+        let state = SharedState::default();
+
+        let create = Transaction::request(
+            ClientOpcode::AccountCreate,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "bob"),
+                Field::obfuscated_string(ClientFieldId::Password, "secret"),
+                Field::string(ClientFieldId::Name, "Bob"),
+                Field::u64(ClientFieldId::Access, AccessPrivileges::SEND_CHAT.bits()),
+            ],
+        );
+        let replies = session.on_account_create(&create, &state).await;
+        assert!(!replies[0].is_error());
+
+        let read = Transaction::request(
+            ClientOpcode::AccountRead,
+            2,
+            vec![Field::obfuscated_string(ClientFieldId::Login, "bob")],
+        );
+        let replies = session.on_account_read(&read, &state).await;
+        assert!(!replies[0].is_error());
+        assert_eq!(
+            replies[0].field(ServerFieldId::Name).unwrap().as_string(),
+            "Bob"
+        );
+        assert_eq!(
+            replies[0]
+                .field(ServerFieldId::Access)
+                .and_then(Field::as_u64),
+            Some(AccessPrivileges::SEND_CHAT.bits())
+        );
+    }
+
+    #[tokio::test]
+    async fn account_modify_only_overwrites_fields_present() {
+        let session = test_session("Admin", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    password: "secret".to_string(),
+                    name: "Bob".to_string(),
+                    access: AccessPrivileges::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Only the name changes; password/access should be untouched.
+        let modify = Transaction::request(
+            ClientOpcode::AccountModify,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "bob"),
+                Field::string(ClientFieldId::Name, "Bobby"),
+            ],
+        );
+        session.on_account_modify(&modify, &state).await;
+
+        let account = state.account("bob").await.unwrap();
+        assert_eq!(account.name, "Bobby");
+        assert_eq!(account.password, "secret");
+        assert_eq!(account.access, AccessPrivileges::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn account_delete_removes_it() {
+        let session = test_session("Admin", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    password: String::new(),
+                    name: "Bob".to_string(),
+                    access: AccessPrivileges::empty(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let delete = Transaction::request(
+            ClientOpcode::AccountDelete,
+            1,
+            vec![Field::obfuscated_string(ClientFieldId::Login, "bob")],
+        );
+        let replies = session.on_account_delete(&delete, &state).await;
+        assert!(!replies[0].is_error());
+        assert!(state.account("bob").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn account_crud_denied_without_matching_privilege() {
+        let session = test_session("Alice", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let login_field = Field::obfuscated_string(ClientFieldId::Login, "bob");
+
+        let create =
+            Transaction::request(ClientOpcode::AccountCreate, 1, vec![login_field.clone()]);
+        assert!(session.on_account_create(&create, &state).await[0].is_error());
+
+        let read = Transaction::request(ClientOpcode::AccountRead, 2, vec![login_field.clone()]);
+        assert!(session.on_account_read(&read, &state).await[0].is_error());
+
+        let modify =
+            Transaction::request(ClientOpcode::AccountModify, 3, vec![login_field.clone()]);
+        assert!(session.on_account_modify(&modify, &state).await[0].is_error());
+
+        let delete = Transaction::request(ClientOpcode::AccountDelete, 4, vec![login_field]);
+        assert!(session.on_account_delete(&delete, &state).await[0].is_error());
     }
 
     #[tokio::test]
