@@ -1,7 +1,11 @@
+mod accounts;
+
 use std::sync::Arc;
 
 use clap::Parser;
-use hotline_server::{InMemoryAccountProvider, Server, ServerConfig};
+use hotline_server::{Server, ServerConfig};
+
+use accounts::FileAccountProvider;
 
 /// A minimal Hotline server.
 #[derive(Parser, Debug)]
@@ -22,6 +26,10 @@ struct Args {
     /// Agreement text shown to clients on login (empty disables it).
     #[arg(long, default_value = "hotline-rs")]
     agreement: String,
+
+    /// Directory to store account files in (created if missing).
+    #[arg(long, default_value = "accounts")]
+    accounts_dir: String,
 }
 
 #[tokio::main]
@@ -35,8 +43,7 @@ async fn main() -> anyhow::Result<()> {
         server_name: args.name,
     };
 
-    // TODO: swap for a persistent AccountProvider once one exists.
-    let accounts = Arc::new(InMemoryAccountProvider::default());
+    let accounts = Arc::new(FileAccountProvider::open(args.accounts_dir).await?);
     Server::new(config, accounts).run().await?;
     Ok(())
 }

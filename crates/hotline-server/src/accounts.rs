@@ -130,10 +130,34 @@ pub trait AccountProvider: Send + Sync {
     async fn delete(&self, login: &str) -> Result<bool, String>;
 }
 
+/// The `admin`/`admin` (full access) and passwordless `guest` (default
+/// access) accounts every fresh [`AccountProvider`] backend seeds itself
+/// with, so there's always a way to log in and create further accounts.
+pub fn default_accounts() -> [(String, Account); 2] {
+    [
+        (
+            "admin".to_string(),
+            Account {
+                password: "admin".to_string(),
+                name: "Admin".to_string(),
+                access: AccessPrivileges::all(),
+                access_extra: AccessExtra::default(),
+            },
+        ),
+        (
+            "guest".to_string(),
+            Account {
+                password: "".to_string(),
+                name: "Guest".to_string(),
+                access: AccessPrivileges::default(),
+                access_extra: AccessExtra::default(),
+            },
+        ),
+    ]
+}
+
 /// An [`AccountProvider`] that keeps accounts in memory only; nothing
-/// created at runtime survives a restart. Starts with `admin`/`admin`
-/// (full access) and a passwordless `guest` (default access),
-/// so there's always a way to log in and create further accounts.
+/// created at runtime survives a restart. Seeded with [`default_accounts`].
 #[derive(Debug)]
 pub struct InMemoryAccountProvider {
     accounts: RwLock<HashMap<String, Account>>,
@@ -142,26 +166,7 @@ pub struct InMemoryAccountProvider {
 impl Default for InMemoryAccountProvider {
     fn default() -> Self {
         Self {
-            accounts: RwLock::new(HashMap::from([
-                (
-                    "admin".to_string(),
-                    Account {
-                        password: "admin".to_string(),
-                        name: "Admin".to_string(),
-                        access: AccessPrivileges::all(),
-                        access_extra: AccessExtra::default(),
-                    },
-                ),
-                (
-                    "guest".to_string(),
-                    Account {
-                        password: "".to_string(),
-                        name: "Guest".to_string(),
-                        access: AccessPrivileges::default(),
-                        access_extra: AccessExtra::default(),
-                    },
-                ),
-            ])),
+            accounts: RwLock::new(HashMap::from(default_accounts())),
         }
     }
 }

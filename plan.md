@@ -49,36 +49,32 @@ priority order (backlog below).
    `Session::run`'s `select!` loop, which the user has pushed back on in
    the past for the issuance-only case, so confirm the approach before
    implementing.
-2. **Persistent `AccountProvider` implementation.** Only
-   `InMemoryAccountProvider` exists; `apps/hls/src/main.rs` has a `TODO`
-   marking where a real (file/DB-backed) implementation would plug in.
-   Nothing created at runtime survives a restart until this lands.
-3. **File transfer (`HTXF`).** Second-port transfer handshake, not
+2. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,
    not real storage.
-4. **Threaded news.** Current news support is flat/classic only.
-5. **Chat room passwords.** Extend `ChatRoom` with an optional password;
+3. **Threaded news.** Current news support is flat/classic only.
+4. **Chat room passwords.** Extend `ChatRoom` with an optional password;
    `HTLC_HDR_CHAT_CREATE`/`HTLC_HDR_CHAT_JOIN` should accept/check it,
    matching how the invite bit already bypasses the check. Verify against
    the reference's exact join/create field names and error text before
    implementing.
-6. **Remaining unhandled opcodes.** All map to an item above rather than
-   being new independent work: `FileGet`/`FilePut` (202/203, item 3);
+5. **Remaining unhandled opcodes.** All map to an item above rather than
+   being new independent work: `FileGet`/`FilePut` (202/203, item 2);
    `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetnfo`/`FileMove`/
-   `FileSymlink` (204–209, blocked on real file storage, item 3);
+   `FileSymlink` (204–209, blocked on real file storage, item 2);
    `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
-   (370–411, item 4).
+   (370–411, item 3).
 
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
 the real Hotline 1.2.3 client), the accounts subsystem (named-account
-login, account CRUD opcodes, `InMemoryAccountProvider`'s seeded
-`admin`/`admin` and passwordless `guest`) and the idle-to-away status
-broadcast have only been unit-tested plus one manual `hlc` smoke test
-(login accepted with the seeded admin account, rejected on wrong
+login, account CRUD opcodes, the seeded `admin`/`admin` and passwordless
+`guest` both providers start with) and the idle-to-away status broadcast
+have only been unit-tested plus one manual `hlc` smoke test (login
+accepted with the seeded admin account, rejected on wrong
 password/unknown login) — not yet exercised against a real client.
 
 See AGENTS.md for durable working conventions (verification loop, commit
