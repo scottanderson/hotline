@@ -24,11 +24,20 @@ priority order (backlog below).
   known client before touching this everywhere.
 - **Join broadcast reaches every session unconditionally.** The reference
   filters recipients by `access_extra.user_getlist`, a per-account bit
-  outside the wire `USER_ACCESS` bitmap. Ties into backlog item 2 below.
+  outside the wire `USER_ACCESS` bitmap. Ties into backlog item 3 below.
 
 ## Backlog, in priority order
 
-1. **Live account changes don't propagate to connected sessions.** The
+1. **No way to bootstrap the first account.** Regression from removing the
+   hardcoded `admin`/`admin` login: `InMemoryAccountProvider` starts
+   empty, `AccountCreate` requires `CREATE_USERS`, and
+   `ServerConfig::default_access` (`guest_default()`) doesn't grant it —
+   so on a fresh, default-config server nobody can ever create an
+   account. The old hardcoded login was a crude but working bootstrap
+   mechanism; nothing replaced it. Needs a real fix (e.g. a way to seed
+   an initial privileged account, or a config option) before this is
+   usable outside tests.
+2. **Live account changes don't propagate to connected sessions.** The
    reference's account-modify handler immediately walks every connected
    session and overwrites the in-memory privilege bitmap (and name/color,
    broadcasting `UserChange`) for any live session logged in under the
@@ -46,57 +55,42 @@ priority order (backlog below).
    live sessions when their account is deleted; we don't have an
    equivalent, but this already matches the reference's *default*
    (flag off) behavior, so it's lower priority than the modify case.
-2. **`access_extra`-equivalent modeling.** The reference gates some
+3. **`access_extra`-equivalent modeling.** The reference gates some
    behaviors (global-subject-setting, `user_getlist` broadcast filtering,
    ...) on per-account config bits outside the wire `USER_ACCESS` bitmap.
    `hotline-rs` currently reuses `AccessPrivileges::DISCONNECT_USERS` as a
    stand-in for the subject case. `user_getlist` (gates both issuing
    `HTLC_HDR_USER_GETLIST` and receiving other users' join/change
    broadcasts) is the next concrete, testable piece worth porting.
-3. **File transfer (`HTXF`).** Second-port transfer handshake, not
+4. **Persistent `AccountProvider` implementation.** Only
+   `InMemoryAccountProvider` exists; `apps/hls/src/main.rs` has a `TODO`
+   marking where a real (file/DB-backed) implementation would plug in.
+   Nothing created at runtime survives a restart until this lands.
+5. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,
    not real storage.
-4. **Threaded news.** Current news support is flat/classic only.
-5. **Chat room passwords.** Extend `ChatRoom` with an optional password;
+6. **Threaded news.** Current news support is flat/classic only.
+7. **Chat room passwords.** Extend `ChatRoom` with an optional password;
    `HTLC_HDR_CHAT_CREATE`/`HTLC_HDR_CHAT_JOIN` should accept/check it,
    matching how the invite bit already bypasses the check. Verify against
    the reference's exact join/create field names and error text before
    implementing.
-6. **Remaining unhandled opcodes.** All map to an item above rather than
-   being new independent work: `FileGet`/`FilePut` (202/203, item 3);
+8. **Remaining unhandled opcodes.** All map to an item above rather than
+   being new independent work: `FileGet`/`FilePut` (202/203, item 5);
    `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetnfo`/`FileMove`/
-   `FileSymlink` (204–209, blocked on real file storage, item 3);
+   `FileSymlink` (204–209, blocked on real file storage, item 5);
    `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
-   (370–411, item 4).
+   (370–411, item 6).
 
-## Architecture notes worth keeping in mind
+## Needs manual verification against the real client
 
-- **Accounts are pluggable, not owned by `hotline-server`.**
-  `crates/hotline-server/src/accounts.rs` defines `Account` and an
-  `AccountProvider` trait (`async-trait`); the embedding application
-  supplies the backend to `Server::new(config, accounts)`. `hls` currently
-  passes `InMemoryAccountProvider` (also `hotline-server`'s default for
-  `SharedState::default()`/tests), with a `TODO` marking where a
-  persistent implementation would plug in. No file I/O or storage-format
-  decisions belong in `hotline-server` itself.
+Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
+the real Hotline 1.2.3 client), the accounts subsystem (named-account
+login, account CRUD opcodes) and the idle-to-away status broadcast were
+only unit-tested this session — not yet exercised against a real client.
 
-## Working conventions to remember
-
-- Never mention the reference implementation by name anywhere in code,
-  comments, commit messages, or PR text — describe *what* the behavior is
-  and *why*.
-- Ask rather than guess when a behavior isn't obvious from existing code.
-- Verification loop before calling anything done: `cargo build --workspace`,
-  `cargo test --workspace`, `cargo clippy --workspace`, `cargo fmt --all`.
-- Rustdoc comments: terse, a line or less, no rationale chains or trailing
-  justification clauses. Cite wire constants as `HTLC_HDR_*`/`HTLS_HDR_*`/
-  `HTLC_DATA_*`/`HTLS_DATA_*` with their decimal value, not the Rust enum
-  variant name. Don't touch/expand an existing comment as a side effect of
-  an unrelated change.
-- When a change is large, split it into separate logical commits and
-  confirm each one with the user before running `git commit` — don't batch
-  everything into one commit and don't commit without explicit go-ahead.
-- Only start the next roadmap item on explicit user direction — don't
-  assume "continue" means the next item on this list without confirming.
+See AGENTS.md for durable working conventions (verification loop, commit
+hygiene, rustdoc style, reference-naming rules); this file only tracks
+current status and open work.
