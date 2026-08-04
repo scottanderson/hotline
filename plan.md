@@ -102,9 +102,21 @@ Verified fixed against the real client.
 4. **Accounts subsystem.** Needed for real per-account privilege bits and
    for anything login-related beyond guest.
 5. **Threaded news.** Current news support is flat/classic only.
-6. **Remaining small independent opcodes.** Not yet enumerated in detail;
-   worth a fresh pass over `ClientOpcode`/`ServerOpcode` to find what's
-   still unhandled in `session.rs`'s dispatch.
+6. **Remaining small independent opcodes.** Swept `ClientOpcode` against
+   `handle_joined`'s dispatch; `MessageBroadcast` (355, admin broadcast to
+   everyone, gated on `CAN_BROADCAST`) was genuinely standalone and is now
+   implemented (`on_message_broadcast`). Everything else still unhandled
+   falls under an already-tracked backlog item, not new work:
+   - `FileGet`/`FilePut` (202/203) — item 3 (`HTXF`).
+   - `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetnfo`/`FileMove`/
+     `FileSymlink` (204–209) — control-plane ops on a file listing that's
+     currently a hardcoded placeholder (`SharedState::root_files`); not
+     worth stubbing until real file storage exists.
+   - `AccountCreate`/`AccountDelete`/`AccountRead`/`AccountModify`
+     (350–353) — item 4 (accounts subsystem).
+   - `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
+     `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
+     (370–411) — item 5 (threaded news).
 
 ## Working conventions to remember
 

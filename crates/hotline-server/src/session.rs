@@ -203,6 +203,8 @@ impl Session {
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
             /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
+            /* 355 */
+            ClientOpcode::MessageBroadcast => self.on_message_broadcast(tx, state).await,
             /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "unhandled opcode");
@@ -509,6 +511,30 @@ impl Session {
                 ],
             ),
         );
+        vec![tx.reply(vec![])]
+    }
+
+    /// 355: a message broadcast to every connected user.
+    async fn on_message_broadcast(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::CAN_BROADCAST) {
+            return vec![tx.reply_error(reason)];
+        }
+        let Some(message) = tx.field(ClientFieldId::Text) else {
+            return vec![tx.reply_error("missing message")];
+        };
+
+        state.publish(Transaction::push(
+            ServerOpcode::MessageBroadcast,
+            vec![
+                Field::u16(ServerFieldId::UserId, self.user_id),
+                Field::string(ServerFieldId::Text, message.as_string()),
+                Field::string(ServerFieldId::Name, self.name.clone()),
+            ],
+        ));
         vec![tx.reply(vec![])]
     }
 
@@ -1093,6 +1119,42 @@ mod tests {
             delivered.tx.field(ServerFieldId::Text).unwrap().as_string(),
             "hi there"
         );
+    }
+
+    #[tokio::test]
+    async fn message_broadcast_reaches_everyone() {
+        let session = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        let mut broadcast_rx = state.subscribe();
+
+        let request = Transaction::request(
+            ClientOpcode::MessageBroadcast,
+            1,
+            vec![Field::string(ClientFieldId::Text, "server going down")],
+        );
+        let replies = session.on_message_broadcast(&request, &state).await;
+        assert!(!replies[0].is_error());
+
+        let sent = broadcast_rx.try_recv().unwrap();
+        assert_eq!(sent.opcode(), Opcode::Push(ServerOpcode::MessageBroadcast));
+        assert_eq!(
+            sent.field(ServerFieldId::Text).unwrap().as_string(),
+            "server going down"
+        );
+    }
+
+    #[tokio::test]
+    async fn message_broadcast_denied_without_privilege() {
+        let session = test_session("Alice", AccessPrivileges::guest_default());
+        let state = SharedState::default();
+
+        let request = Transaction::request(
+            ClientOpcode::MessageBroadcast,
+            1,
+            vec![Field::string(ClientFieldId::Text, "hi")],
+        );
+        let replies = session.on_message_broadcast(&request, &state).await;
+        assert!(replies[0].is_error());
     }
 
     #[tokio::test]

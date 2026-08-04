@@ -292,6 +292,9 @@ pub enum ServerOpcode {
     /// This client's access privileges were (re)set (354).
     /// Original: `HTLS_HDR_USER_SELFINFO`.
     UserSelfinfo = 354,
+    /// A message broadcast to every connected user (355).
+    /// Original: `HTLS_HDR_MSG_BROADCAST`.
+    MessageBroadcast = 355,
 }
 
 impl ServerOpcode {
@@ -311,6 +314,7 @@ impl ServerOpcode {
             301 => UserChange,
             302 => UserPart,
             354 => UserSelfinfo,
+            355 => MessageBroadcast,
             _ => return None,
         })
     }
@@ -339,6 +343,7 @@ impl std::fmt::Debug for ServerOpcode {
             Self::UserChange => "HTLS_HDR_USER_CHANGE",
             Self::UserPart => "HTLS_HDR_USER_PART",
             Self::UserSelfinfo => "HTLS_HDR_USER_SELFINFO",
+            Self::MessageBroadcast => "HTLS_HDR_MSG_BROADCAST",
         };
         write!(f, "{value} {name}")
     }
