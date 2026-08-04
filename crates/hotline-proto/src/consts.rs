@@ -145,14 +145,16 @@ bitflags::bitflags! {
 }
 
 impl AccessPrivileges {
-    /// A reasonable "guest" default: read/send public chat, browse +
-    /// download files, read news, and send/receive private messages. No
-    /// admin, upload, or destructive privileges.
+    /// A reasonable "guest" default: read/send public chat, browse,
+    /// upload, and download files, read and post news, and send/receive
+    /// private messages. No admin or destructive privileges.
     pub const fn guest_default() -> Self {
         Self::READ_CHAT
             .union(Self::SEND_CHAT)
             .union(Self::DOWNLOAD_FILES)
+            .union(Self::UPLOAD_FILES)
             .union(Self::READ_NEWS)
+            .union(Self::POST_NEWS)
             .union(Self::USE_ANY_NAME)
             .union(Self::SEND_MSGS)
     }
