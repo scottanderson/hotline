@@ -91,11 +91,7 @@ pub struct Announcement {
     pub tx: Transaction,
 }
 
-/// A live privilege change for every session logged in under `login`,
-/// pushed by an account-modify handler rather than an outbound
-/// transaction. Every session subscribes and applies it if it matches
-/// its own login, so it reaches every connection sharing that login,
-/// not just one `user_id`.
+/// A live privilege change for every session logged in under `login`.
 #[derive(Debug, Clone)]
 pub struct AccessUpdate {
     /// Login the modified account is stored under.
@@ -262,10 +258,7 @@ impl SharedState {
         self.announcements.subscribe()
     }
 
-    /// Push a live privilege change for every session logged in under
-    /// `login`, e.g. after an account-modify handler saves a new
-    /// [`Account`]. A no-op if no session matches, same best-effort
-    /// delivery as [`Self::publish`].
+    /// Push a live privilege change for every session logged in under `login`.
     pub fn push_access_update(
         &self,
         login: String,
@@ -279,8 +272,7 @@ impl SharedState {
         });
     }
 
-    /// Subscribe to the access-update stream. Called once per session;
-    /// each session filters for its own `login`.
+    /// Subscribe to the access-update stream.
     pub fn subscribe_access_updates(&self) -> broadcast::Receiver<AccessUpdate> {
         self.access_updates.subscribe()
     }

@@ -30,9 +30,7 @@ enum SessionState {
 pub struct Session {
     user_id: u16,
     name: String,
-    /// Account login this session authenticated as, empty until
-    /// `on_login` succeeds. Matched against [`crate::state::AccessUpdate`]
-    /// to apply live account-modify changes.
+    /// Account login this session authenticated as, empty until login.
     login: String,
     /// Privileges granted at login.
     access: AccessPrivileges,
@@ -128,8 +126,7 @@ impl Session {
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                // A live account-modify change for this session's login -
-                // see `SharedState::push_access_update`.
+                // A live account-modify change for this session's login.
                 msg = access_update_rx.recv() => {
                     match msg {
                         Ok(update) => session.apply_access_update(update, &state).await,
@@ -412,16 +409,21 @@ impl Session {
         }
     }
 
-    /// Applies a live account-modify change, if it's for this session's
-    /// login, without waiting for reconnect. A no-op before login
-    /// completes (`self.login` is empty) or for any other login.
+    /// Applies a live account-modify change for this session's login.
     async fn apply_access_update(&mut self, update: AccessUpdate, state: &SharedState) {
         if self.login.is_empty() || update.login != self.login {
             return;
         }
+        // Only force the account's name when this modify revokes USE_ANY_NAME.
+        let losing_use_any_name = self.access.contains(AccessPrivileges::USE_ANY_NAME)
+            && !update.access.contains(AccessPrivileges::USE_ANY_NAME);
         self.access = update.access;
-        if let Some(name) = update.name {
-            self.name = name;
+        if losing_use_any_name {
+            if let Some(name) = update.name {
+                if name != self.name {
+                    self.name = name;
+                }
+            }
         }
         let icon = state.user(self.user_id).await.map(|e| e.icon).unwrap_or(0);
         self.announce_user_change(icon, state, false).await;
@@ -1608,8 +1610,6 @@ mod tests {
         let mut bob = test_session("Bob", AccessPrivileges::empty());
         bob.login = "bob".to_string();
         let mut broadcast_rx = state.subscribe();
-        // Subscribed before the modify, mirroring how Session::run
-        // subscribes once at connect time, well before any admin action.
         let mut access_rx = state.subscribe_access_updates();
 
         let modify = Transaction::request(
@@ -1637,6 +1637,60 @@ mod tests {
             notify.field(ServerFieldId::UserId).and_then(Field::as_u16),
             Some(bob.user_id)
         );
+    }
+
+    #[tokio::test]
+    async fn account_modify_renames_only_when_use_any_name_is_revoked() {
+        let admin = test_session("Admin", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    password: String::new(),
+                    name: "Bob".to_string(),
+                    access: AccessPrivileges::USE_ANY_NAME,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Bob is connected with USE_ANY_NAME and has picked a custom name.
+        let mut bob = test_session("Bobby the Great", AccessPrivileges::USE_ANY_NAME);
+        bob.login = "bob".to_string();
+        let mut access_rx = state.subscribe_access_updates();
+
+        let revoke = Transaction::request(
+            ClientOpcode::AccountModify,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "bob"),
+                Field::u64(ClientFieldId::Access, AccessPrivileges::empty().bits()),
+            ],
+        );
+        admin.on_account_modify(&revoke, &state).await;
+        let update = access_rx.try_recv().unwrap();
+        bob.apply_access_update(update, &state).await;
+        assert_eq!(bob.name, "Bob");
+
+        // Still holds USE_ANY_NAME, so this modify must not touch the name.
+        bob.name = "Bobby Returns".to_string();
+        bob.access = AccessPrivileges::USE_ANY_NAME;
+        let regrant = Transaction::request(
+            ClientOpcode::AccountModify,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "bob"),
+                Field::u64(
+                    ClientFieldId::Access,
+                    (AccessPrivileges::USE_ANY_NAME | AccessPrivileges::SEND_CHAT).bits(),
+                ),
+            ],
+        );
+        admin.on_account_modify(&regrant, &state).await;
+        let update = access_rx.try_recv().unwrap();
+        bob.apply_access_update(update, &state).await;
+        assert_eq!(bob.name, "Bobby Returns");
     }
 
     #[tokio::test]
