@@ -12,7 +12,7 @@ use hotline_proto::opcode::{ClientOpcode, Opcode, ServerOpcode};
 use hotline_proto::types::{UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
 
-use crate::accounts::Account;
+use crate::accounts::{AccessExtra, Account};
 use crate::error::Result;
 use crate::server::ServerConfig;
 use crate::state::{AccessUpdate, SharedState, UserEntry, IDLE_THRESHOLD};
@@ -34,6 +34,8 @@ pub struct Session {
     login: String,
     /// Privileges granted at login.
     access: AccessPrivileges,
+    /// Server-side-only account settings; no client opcode reads or sets them.
+    access_extra: AccessExtra,
     state: SessionState,
     /// Whether the last broadcast `UserChange` marked this session away.
     is_away: bool,
@@ -56,6 +58,7 @@ impl Session {
             // Empty until on_login succeeds.
             login: String::new(),
             access: AccessPrivileges::empty(),
+            access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
         };
@@ -273,6 +276,7 @@ impl Session {
                 if !account.name.is_empty() {
                     self.name = account.name;
                 }
+                self.access_extra = account.access_extra;
                 account.access
             }
             Some(_) => return self.reject_login(tx, state, "incorrect password").await,
@@ -498,6 +502,9 @@ impl Session {
 
     /// 300
     async fn on_user_get_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if !self.access_extra.contains(AccessExtra::USER_GETLIST) {
+            return vec![tx.reply_error("You are not allowed to do that.")];
+        }
         let fields = state
             .users()
             .await
@@ -934,6 +941,11 @@ impl Session {
             .name()
             .or_else(|| existing.as_ref().map(|a| a.name.clone()))
             .unwrap_or_default();
+        // No wire field for this; unset on create means the default.
+        let access_extra = existing
+            .as_ref()
+            .map(|a| a.access_extra)
+            .unwrap_or_else(AccessExtra::default);
         let access = tx
             .access()
             .or_else(|| existing.map(|a| a.access))
@@ -943,6 +955,7 @@ impl Session {
             password,
             name: name.clone(),
             access,
+            access_extra,
         };
 
         let result = state.put_account(login.clone(), account).await;
@@ -968,9 +981,20 @@ mod tests {
             name: name.to_string(),
             login: String::new(),
             access,
+            access_extra: AccessExtra::default(),
             state: SessionState::Joined,
             is_away: false,
         }
+    }
+
+    #[tokio::test]
+    async fn user_get_list_denied_without_user_getlist() {
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access_extra.remove(AccessExtra::USER_GETLIST);
+        let state = SharedState::default();
+        let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
+
+        assert!(session.on_user_get_list(&request, &state).await[0].is_error());
     }
 
     #[tokio::test]
@@ -1039,6 +1063,7 @@ mod tests {
             .put_account(
                 "alice".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: "hunter2".to_string(),
                     name: "Alice".to_string(),
                     access: AccessPrivileges::CAN_BROADCAST,
@@ -1062,6 +1087,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn login_grants_the_account_user_getlist_setting() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        state
+            .put_account(
+                "alice".to_string(),
+                Account {
+                    access_extra: AccessExtra::empty(),
+                    password: String::new(),
+                    name: "Alice".to_string(),
+                    access: AccessPrivileges::empty(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![Field::obfuscated_string(ClientFieldId::Login, "alice")],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert!(!session.access_extra.contains(AccessExtra::USER_GETLIST));
+    }
+
+    #[tokio::test]
     async fn login_with_wrong_password_is_rejected_and_disconnected() {
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
@@ -1070,6 +1123,7 @@ mod tests {
             .put_account(
                 "alice".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: "hunter2".to_string(),
                     name: "Alice".to_string(),
                     access: AccessPrivileges::CAN_BROADCAST,
@@ -1104,6 +1158,7 @@ mod tests {
             .put_account(
                 "alice".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Alice".to_string(),
                     access: AccessPrivileges::CAN_BROADCAST,
@@ -1265,6 +1320,7 @@ mod tests {
             name: "guest1".to_string(),
             login: String::new(),
             access: AccessPrivileges::empty(),
+            access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
         };
@@ -1319,6 +1375,7 @@ mod tests {
             .put_account(
                 "guest".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: String::new(),
                     access: AccessPrivileges::DISCONNECT_USERS,
@@ -1565,6 +1622,7 @@ mod tests {
             .put_account(
                 "bob".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: "secret".to_string(),
                     name: "Bob".to_string(),
                     access: AccessPrivileges::SEND_CHAT,
@@ -1598,6 +1656,7 @@ mod tests {
             .put_account(
                 "bob".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Bob".to_string(),
                     access: AccessPrivileges::empty(),
@@ -1647,6 +1706,7 @@ mod tests {
             .put_account(
                 "bob".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Bob".to_string(),
                     access: AccessPrivileges::USE_ANY_NAME,
@@ -1701,6 +1761,7 @@ mod tests {
             .put_account(
                 "bob".to_string(),
                 Account {
+                    access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Bob".to_string(),
                     access: AccessPrivileges::empty(),

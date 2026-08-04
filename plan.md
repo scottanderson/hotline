@@ -23,8 +23,13 @@ priority order (backlog below).
   yet — decide with the user whether exact-string parity matters for any
   known client before touching this everywhere.
 - **Join broadcast reaches every session unconditionally.** The reference
-  filters recipients by `access_extra.user_getlist`, a per-account bit
-  outside the wire `USER_ACCESS` bitmap. Ties into backlog item 1 below.
+  filters *recipients* of join/part/change traffic by their own
+  `access_extra.user_getlist`. `hotline-rs` now gates *issuing*
+  `HTLC_HDR_USER_GETLIST` on `AccessExtra::USER_GETLIST`
+  (`accounts.rs`/`session.rs`), but does not yet filter who *receives*
+  `UserChange`/`UserPart` pushes — every connected session still gets
+  them regardless of its own `access_extra`. Ties into backlog item 1
+  below.
 
 ## Backlog, in priority order
 
@@ -32,9 +37,14 @@ priority order (backlog below).
    behaviors (global-subject-setting, `user_getlist` broadcast filtering,
    ...) on per-account config bits outside the wire `USER_ACCESS` bitmap.
    `hotline-rs` currently reuses `AccessPrivileges::DISCONNECT_USERS` as a
-   stand-in for the subject case. `user_getlist` (gates both issuing
-   `HTLC_HDR_USER_GETLIST` and receiving other users' join/change
-   broadcasts) is the next concrete, testable piece worth porting.
+   stand-in for the subject case. `AccessExtra` (`accounts.rs`) now models
+   this as its own bitflags type, extensible one bit at a time, with
+   `USER_GETLIST` as the first ported flag (gates issuing
+   `HTLC_HDR_USER_GETLIST`; set at login from `Account::access_extra`).
+   Still open: filtering *recipients* of join/part/change broadcasts by
+   their own `USER_GETLIST` (see the divergence above), and porting
+   `set_subject` onto `AccessExtra` to retire the `DISCONNECT_USERS`
+   stand-in.
 2. **Persistent `AccountProvider` implementation.** Only
    `InMemoryAccountProvider` exists; `apps/hls/src/main.rs` has a `TODO`
    marking where a real (file/DB-backed) implementation would plug in.
