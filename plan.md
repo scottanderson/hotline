@@ -36,15 +36,19 @@ priority order (backlog below).
 1. **`access_extra`-equivalent modeling.** The reference gates some
    behaviors (global-subject-setting, `user_getlist` broadcast filtering,
    ...) on per-account config bits outside the wire `USER_ACCESS` bitmap.
-   `hotline-rs` currently reuses `AccessPrivileges::DISCONNECT_USERS` as a
-   stand-in for the subject case. `AccessExtra` (`accounts.rs`) now models
-   this as its own bitflags type, extensible one bit at a time, with
-   `USER_GETLIST` as the first ported flag (gates issuing
-   `HTLC_HDR_USER_GETLIST`; set at login from `Account::access_extra`).
-   Still open: filtering *recipients* of join/part/change broadcasts by
-   their own `USER_GETLIST` (see the divergence above), and porting
-   `set_subject` onto `AccessExtra` to retire the `DISCONNECT_USERS`
-   stand-in.
+   `AccessExtra` (`accounts.rs`) models this as its own bitflags type,
+   extensible one bit at a time; every bit from the reference's
+   `extra_access_bits` struct is named there, though only two have
+   behavior wired up so far: `USER_GETLIST` (gates issuing
+   `HTLC_HDR_USER_GETLIST`) and `SET_SUBJECT` (gates setting the global
+   chat room's subject, `HTLC_HDR_CHAT_SUBJECT` with chat ID 0 —
+   replaces the old `DISCONNECT_USERS` stand-in). Both are set at login
+   from `Account::access_extra`. Still open: filtering *recipients* of
+   join/part/change broadcasts by their own `USER_GETLIST` (see the
+   divergence above) — this needs a recipient-side check in
+   `Session::run`'s `select!` loop, which the user has pushed back on in
+   the past for the issuance-only case, so confirm the approach before
+   implementing.
 2. **Persistent `AccountProvider` implementation.** Only
    `InMemoryAccountProvider` exists; `apps/hls/src/main.rs` has a `TODO`
    marking where a real (file/DB-backed) implementation would plug in.

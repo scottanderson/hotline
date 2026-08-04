@@ -844,10 +844,8 @@ impl Session {
 
         // Chat ID 0 (main room) gates on a privilege, not membership.
         let is_global = chat_id == 0;
-        if is_global {
-            if let Err(reason) = self.require(AccessPrivileges::DISCONNECT_USERS) {
-                return vec![tx.reply_error(reason)];
-            }
+        if is_global && !self.access_extra.contains(AccessExtra::SET_SUBJECT) {
+            return vec![tx.reply_error("You are not allowed to do that.")];
         }
         if !state.set_chat_subject(chat_id, subject.clone()).await {
             return vec![tx.reply_error("no such chat room")];
@@ -1922,7 +1920,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setting_the_global_room_subject_requires_disconnect_users() {
+    async fn setting_the_global_room_subject_requires_set_subject() {
         let guest = test_session("Guest", AccessPrivileges::empty());
         let state = SharedState::default();
 
@@ -1941,7 +1939,8 @@ mod tests {
 
     #[tokio::test]
     async fn setting_the_global_room_subject_broadcasts_to_everyone() {
-        let admin = test_session("Admin", AccessPrivileges::DISCONNECT_USERS);
+        let mut admin = test_session("Admin", AccessPrivileges::empty());
+        admin.access_extra.insert(AccessExtra::SET_SUBJECT);
         let state = SharedState::default();
         let mut broadcast_rx = state.subscribe();
 
