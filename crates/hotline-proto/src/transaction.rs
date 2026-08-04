@@ -13,12 +13,15 @@
 //!  22    …    fields   `hc` back-to-back `Field` chunks: tag(2) len(2) data(len)
 //! ```
 //!
-//! `Transaction` holds every field above directly (`trans`, `flag`,
-//! `len`, `len2`, `fields`) rather than wrapping a separate header type.
-//! `hc` isn't stored; it's always `fields.len()`. Streaming decode
-//! ([`Transaction::decode_prefix_from_client`]/
-//! [`Transaction::decode_prefix_from_server`] + [`Transaction::finish_decode`])
-//! splits prefix from body since `len2` must be known before reading more.
+//! `Transaction` holds `opcode`, `trans`, `flag`, and `fields`; `len`/`len2`
+//! aren't kept since [`Transaction::encode`] recomputes them from `fields`
+//! every time. `hc` isn't stored either; it's always `fields.len()`.
+//!
+//! Streaming decode needs `len2` *before* the fields are readable, so
+//! [`TransactionHeader`] holds just the raw prefix. Reading proceeds
+//! [`TransactionHeader::decode_from_client`]/[`decode_from_server`], then
+//! [`TransactionHeader::finish_decode`] once `remaining_len()` more bytes
+//! are in hand, producing the real `Transaction`.
 //!
 //! There's no raw `type_: u32` field: the wire's `type` value is
 //! resolved into an [`Opcode`] once and stored as that.
@@ -33,10 +36,8 @@ use crate::wire::{PacketReader, PacketWriter};
 
 /// A complete transaction: fixed fields plus its field list. `fields.len()`
 /// *is* the wire's `hc`; there is no separate count to keep in sync.
-///
-/// Assumes a single-part transaction (`len == len2`). Reassembling
-/// multi-part (split) transactions is the transport layer's job, since it
-/// requires buffering across reads.
+/// Assumes a single-part transaction (`len == len2` on the wire); see the
+/// [module docs](self) for `len`/`len2` and [`TransactionHeader`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct Transaction {
     /// The wire `type` value, already resolved to which direction sent
@@ -48,24 +49,29 @@ pub struct Transaction {
     trans: u32,
     /// Bit 0 is the error flag; the rest is reserved on the wire.
     flag: u32,
-    /// Total size of the data section across every part of a (possibly
-    /// split) transaction.
-    len: u32,
-    /// Byte count of everything after `len2` itself: the 2-byte field
-    /// count plus every field's bytes, this frame only.
-    len2: u32,
     /// The fields themselves.
     pub fields: Vec<Field>,
 }
 
 /// Bytes needed before `len2` (and therefore the total frame size) is
 /// known. Streaming transports read this many bytes first, then
-/// [`Transaction::remaining_len`] more.
+/// [`TransactionHeader::remaining_len`] more.
 pub const PREFIX_LEN: usize = 20;
+
+/// A transaction's raw 20-byte wire prefix, decoded before its fields are
+/// readable. See the [module docs](self) for why this is a separate type
+/// from [`Transaction`].
+#[derive(Debug)]
+pub struct TransactionHeader {
+    opcode: Opcode,
+    trans: u32,
+    flag: u32,
+    len2: u32,
+}
 
 impl Transaction {
     /// Build a request transaction from a set of fields.
-    pub fn request(opcode: ClientOpcode, trans: u32, fields: Vec<Field>) -> Self {
+    pub const fn request(opcode: ClientOpcode, trans: u32, fields: Vec<Field>) -> Self {
         Self::assemble(Opcode::Request(opcode), trans, 0, fields)
     }
 
@@ -76,7 +82,7 @@ impl Transaction {
     }
 
     /// Build a server-initiated transaction.
-    pub fn push(opcode: ServerOpcode, fields: Vec<Field>) -> Self {
+    pub const fn push(opcode: ServerOpcode, fields: Vec<Field>) -> Self {
         Self::assemble(Opcode::Push(opcode), 0, 0, fields)
     }
 
@@ -104,27 +110,11 @@ impl Transaction {
 
     /// Shared constructor: every wire representation (request/reply/push)
     /// differs only in `opcode`, `trans`, and `flag`.
-    ///
-    /// `len2` is a saturating-arithmetic estimate; it can't panic or wrap,
-    /// but the real "does this fit on the wire" check happens once, in
-    /// [`Transaction::encode`].
-    fn assemble(opcode: Opcode, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
-        let len2 = fields
-            .iter()
-            .map(|f| {
-                let f = f.as_bytes();
-                let f = f.len();
-                let f = u32::try_from(f);
-                let f = f.unwrap_or(u32::MAX);
-                f.saturating_add(4)
-            })
-            .fold(2u32, u32::saturating_add);
+    const fn assemble(opcode: Opcode, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
         Self {
             opcode,
             trans,
             flag,
-            len: len2,
-            len2,
             fields,
         }
     }
@@ -197,85 +187,127 @@ impl Transaction {
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
     pub fn encode(&self) -> crate::error::Result<Vec<u8>> {
-        let hc = u16::try_from(self.fields.len()).map_err(|_| ProtoError::TooLong {
+        let hc = self.fields.len();
+        let hc = u16::try_from(hc).map_err(|_| ProtoError::TooLong {
             what: "field count",
-            len: self.fields.len(),
+            len: hc,
         })?;
 
-        let mut field_bytes = Vec::new();
-        for field in &self.fields {
-            let encoded = field.encode()?;
-            field_bytes.extend(encoded);
-        }
+        let fields: Vec<u8> = self
+            .fields
+            .iter()
+            .map(Field::encode)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let len = fields.len() + 2;
+        let len = u32::try_from(len).map_err(|_| ProtoError::TooLong {
+            what: "fields len",
+            len,
+        })?;
 
         Ok(PacketWriter::<PREFIX_LEN>::new()
             .u32(self.opcode.as_u32())
             .u32(self.trans)
             .u32(self.flag)
-            .u32(self.len)
-            .u32(self.len2)
+            .u32(len)
+            .u32(len)
             .finish()
             .into_iter()
             .chain(hc.to_be_bytes())
-            .chain(field_bytes)
+            .chain(fields)
             .collect())
     }
 
-    /// Decode the fixed-size prefix only (through `len2`), with an empty
-    /// field list, assuming these bytes were sent **by a client**.
-    /// [`Transaction::remaining_len`] says how many more bytes to read,
-    /// then [`Transaction::finish_decode`] parses them.
-    pub const fn decode_prefix_from_client(buf: &[u8; PREFIX_LEN]) -> Self {
+    /// Decode a complete, single-part transaction (prefix + body) from
+    /// one contiguous buffer, assuming it was sent **by a client**.
+    pub fn decode_from_client(buf: &[u8]) -> Result<Self> {
+        Self::decode_with(buf, TransactionHeader::decode_from_client)
+    }
+
+    /// Like [`Transaction::decode_from_client`], but for bytes known to
+    /// have been sent **by a server**.
+    pub fn decode_from_server(buf: &[u8]) -> Result<Self> {
+        Self::decode_with(buf, TransactionHeader::decode_from_server)
+    }
+
+    /// Shared one-shot decoder driving a caller-picked prefix decoder
+    /// through [`TransactionHeader::finish_decode`].
+    fn decode_with(
+        buf: &[u8],
+        decode_prefix: impl FnOnce(&[u8; PREFIX_LEN]) -> TransactionHeader,
+    ) -> Result<Self> {
+        let prefix: &[u8; PREFIX_LEN] = buf
+            .get(..PREFIX_LEN)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(ProtoError::UnexpectedEof {
+                needed: PREFIX_LEN,
+                available: buf.len(),
+            })?;
+        let header = decode_prefix(prefix);
+        let body_end = PREFIX_LEN + header.remaining_len() as usize;
+        let body = buf
+            .get(PREFIX_LEN..body_end)
+            .ok_or(ProtoError::UnexpectedEof {
+                needed: body_end,
+                available: buf.len(),
+            })?;
+        header.finish_decode(body)
+    }
+}
+
+impl TransactionHeader {
+    /// Decode the fixed-size prefix only (through `len2`), assuming these
+    /// bytes were sent **by a client**. [`TransactionHeader::remaining_len`]
+    /// says how many more bytes to read, then
+    /// [`TransactionHeader::finish_decode`] parses them.
+    pub const fn decode_from_client(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
         let (r, type_) = r.u32();
         let (r, trans) = r.u32();
         let (r, flag) = r.u32();
-        let (r, len) = r.u32();
+        let (r, _len) = r.u32();
         let (_, len2) = r.u32();
         Self {
             opcode: Opcode::from_client_wire(type_),
             trans,
             flag,
-            len,
             len2,
-            fields: Vec::new(),
         }
     }
 
-    /// Like [`Transaction::decode_prefix_from_client`], but for bytes
-    /// known to have been sent **by a server** (a client reading its own
+    /// Like [`TransactionHeader::decode_from_client`], but for bytes known
+    /// to have been sent **by a server** (a client reading its own
     /// incoming traffic).
-    pub const fn decode_prefix_from_server(buf: &[u8; PREFIX_LEN]) -> Self {
+    pub const fn decode_from_server(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
         let (r, type_) = r.u32();
         let (r, trans) = r.u32();
         let (r, flag) = r.u32();
-        let (r, len) = r.u32();
+        let (r, _len) = r.u32();
         let (_, len2) = r.u32();
         Self {
             opcode: Opcode::from_server_wire(type_),
             trans,
             flag,
-            len,
             len2,
-            fields: Vec::new(),
         }
     }
 
-    /// Bytes to read after [`Transaction::decode_prefix_from_client`]/
-    /// [`Transaction::decode_prefix_from_server`], before
-    /// [`Transaction::finish_decode`] can run: `len2`, i.e. the 2-byte
-    /// field count plus every field's bytes.
+    /// Bytes to read after [`TransactionHeader::decode_from_client`]/
+    /// [`TransactionHeader::decode_from_server`], before
+    /// [`TransactionHeader::finish_decode`] can run: `len2`, i.e. the
+    /// 2-byte field count plus every field's bytes.
     pub const fn remaining_len(&self) -> u32 {
         self.len2
     }
 
-    /// Finish decoding a transaction whose prefix was already read via
-    /// [`Transaction::decode_prefix_from_client`]/
-    /// [`Transaction::decode_prefix_from_server`]: `body` is exactly
-    /// [`Transaction::remaining_len`] bytes, the field count followed by
-    /// the fields.
-    pub fn finish_decode(self, body: &[u8]) -> Result<Self> {
+    /// Finish decoding into a [`Transaction`]: `body` is exactly
+    /// [`TransactionHeader::remaining_len`] bytes, the field count
+    /// followed by the fields.
+    pub fn finish_decode(self, body: &[u8]) -> Result<Transaction> {
         if body.len() < 2 {
             return Err(ProtoError::UnexpectedEof {
                 needed: 2,
@@ -292,43 +324,12 @@ impl Transaction {
             fields.push(field);
         }
 
-        Ok(Self { fields, ..self })
-    }
-
-    /// Decode a complete, single-part transaction (prefix + body) from
-    /// one contiguous buffer, assuming it was sent **by a client**.
-    pub fn decode_from_client(buf: &[u8]) -> Result<Self> {
-        Self::decode_with(buf, Self::decode_prefix_from_client)
-    }
-
-    /// Like [`Transaction::decode_from_client`], but for bytes known to
-    /// have been sent **by a server**.
-    pub fn decode_from_server(buf: &[u8]) -> Result<Self> {
-        Self::decode_with(buf, Self::decode_prefix_from_server)
-    }
-
-    /// Shared one-shot decoder driving a caller-picked prefix decoder
-    /// through [`Transaction::finish_decode`].
-    fn decode_with(
-        buf: &[u8],
-        decode_prefix: impl FnOnce(&[u8; PREFIX_LEN]) -> Self,
-    ) -> Result<Self> {
-        let prefix: &[u8; PREFIX_LEN] = buf
-            .get(..PREFIX_LEN)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(ProtoError::UnexpectedEof {
-                needed: PREFIX_LEN,
-                available: buf.len(),
-            })?;
-        let partial = decode_prefix(prefix);
-        let body_end = PREFIX_LEN + partial.remaining_len() as usize;
-        let body = buf
-            .get(PREFIX_LEN..body_end)
-            .ok_or(ProtoError::UnexpectedEof {
-                needed: body_end,
-                available: buf.len(),
-            })?;
-        partial.finish_decode(body)
+        Ok(Transaction {
+            opcode: self.opcode,
+            trans: self.trans,
+            flag: self.flag,
+            fields,
+        })
     }
 }
 
@@ -345,10 +346,6 @@ impl fmt::Debug for Transaction {
         }
         if self.flag != 0 {
             out.field("flag", &self.flag);
-        }
-        out.field("len", &self.len);
-        if self.len != self.len2 {
-            out.field("len2", &self.len2);
         }
         match opcode {
             Opcode::Request(_) => out.field(
@@ -426,9 +423,11 @@ mod tests {
             ],
         );
         let bytes = tx.encode().unwrap();
+        let prefix: [u8; PREFIX_LEN] = bytes[..PREFIX_LEN].try_into().unwrap();
+        let header = TransactionHeader::decode_from_client(&prefix);
         assert_eq!(
             bytes.len(),
-            PREFIX_LEN + tx.remaining_len() as usize,
+            PREFIX_LEN + header.remaining_len() as usize,
             "remaining_len() (== len2) must equal hc(2) + all field bytes"
         );
 
@@ -455,9 +454,9 @@ mod tests {
         let bytes = tx.encode().unwrap();
 
         let prefix: [u8; PREFIX_LEN] = bytes[..PREFIX_LEN].try_into().unwrap();
-        let partial = Transaction::decode_prefix_from_client(&prefix);
-        let body = &bytes[PREFIX_LEN..PREFIX_LEN + partial.remaining_len() as usize];
-        let streamed = partial.finish_decode(body).unwrap();
+        let header = TransactionHeader::decode_from_client(&prefix);
+        let body = &bytes[PREFIX_LEN..PREFIX_LEN + header.remaining_len() as usize];
+        let streamed = header.finish_decode(body).unwrap();
 
         assert_eq!(streamed, Transaction::decode_from_client(&bytes).unwrap());
     }
@@ -512,8 +511,11 @@ mod tests {
             1,
             vec![Field::string(ClientFieldId::Text, "hi")],
         );
+        let bytes = tx.encode().unwrap();
+        let prefix: [u8; PREFIX_LEN] = bytes[..PREFIX_LEN].try_into().unwrap();
+        let header = TransactionHeader::decode_from_client(&prefix);
         let field_bytes = 4 + 2; // one field header + "hi"
-        assert_eq!(tx.len2, field_bytes + 2);
+        assert_eq!(header.remaining_len(), field_bytes + 2);
     }
 
     #[test]

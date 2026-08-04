@@ -9,7 +9,7 @@
 //! `Sink<Transaction>`, used as `.next().await` / `.send(tx).await`.
 
 use bytes::{Buf, BytesMut};
-use hotline_proto::{ProtoError, Transaction, PREFIX_LEN};
+use hotline_proto::{ProtoError, Transaction, TransactionHeader, PREFIX_LEN};
 use tokio_util::codec::{Decoder, Encoder};
 
 /// Framing errors: either the transport failed (`io::Error`, required by
@@ -31,9 +31,9 @@ enum DecodeState {
     /// Waiting for the 20-byte fixed prefix.
     #[default]
     Prefix,
-    /// Prefix decoded (fields still empty); waiting for
-    /// `partial.remaining_len()` more bytes to finish it.
-    Body(Transaction),
+    /// Prefix decoded; waiting for `header.remaining_len()` more bytes to
+    /// finish it.
+    Body(TransactionHeader),
 }
 
 /// A [`tokio_util::codec::Decoder`]/[`Encoder`] for [`Transaction`].
@@ -42,7 +42,7 @@ enum DecodeState {
 #[derive(Debug)]
 pub struct TransactionCodec {
     state: DecodeState,
-    decode_prefix: fn(&[u8; PREFIX_LEN]) -> Transaction,
+    decode_prefix: fn(&[u8; PREFIX_LEN]) -> TransactionHeader,
     /// Next `trans` to stamp on an outgoing push; `None` on a client codec.
     next_push_trans: Option<u32>,
 }
@@ -54,7 +54,7 @@ impl TransactionCodec {
     pub fn for_client() -> Self {
         Self {
             state: DecodeState::default(),
-            decode_prefix: Transaction::decode_prefix_from_server,
+            decode_prefix: TransactionHeader::decode_from_server,
             next_push_trans: None,
         }
     }
@@ -64,7 +64,7 @@ impl TransactionCodec {
     pub fn for_server() -> Self {
         Self {
             state: DecodeState::default(),
-            decode_prefix: Transaction::decode_prefix_from_client,
+            decode_prefix: TransactionHeader::decode_from_client,
             next_push_trans: Some(1),
         }
     }
