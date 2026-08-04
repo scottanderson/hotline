@@ -112,7 +112,7 @@ pub enum ClientOpcode {
     AccountModify = 353,
     /// Broadcast a message to every connected user (355).
     /// Original: `HTLC_HDR_MSG_BROADCAST`.
-    MessageBroadcast = 355,
+    MsgBroadcast = 355,
     /// List news categories at a path (370).
     /// Original: `HTLC_HDR_NEWS_LISTDIR`.
     NewsListdir = 370,
@@ -178,7 +178,7 @@ impl ClientOpcode {
             351 => AccountDelete,
             352 => AccountRead,
             353 => AccountModify,
-            355 => MessageBroadcast,
+            355 => MsgBroadcast,
             370 => NewsListdir,
             371 => NewsListcategory,
             380 => NewsDelete,
@@ -233,7 +233,7 @@ impl std::fmt::Debug for ClientOpcode {
             Self::AccountDelete => "HTLC_HDR_ACCOUNT_DELETE",
             Self::AccountRead => "HTLC_HDR_ACCOUNT_READ",
             Self::AccountModify => "HTLC_HDR_ACCOUNT_MODIFY",
-            Self::MessageBroadcast => "HTLC_HDR_MSG_BROADCAST",
+            Self::MsgBroadcast => "HTLC_HDR_MSG_BROADCAST",
             Self::NewsListdir => "HTLC_HDR_NEWS_LISTDIR",
             Self::NewsListcategory => "HTLC_HDR_NEWS_LISTCATEGORY",
             Self::NewsDelete => "HTLC_HDR_NEWS_DELETE",
@@ -294,7 +294,7 @@ pub enum ServerOpcode {
     UserSelfinfo = 354,
     /// A message broadcast to every connected user (355).
     /// Original: `HTLS_HDR_MSG_BROADCAST`.
-    MessageBroadcast = 355,
+    MsgBroadcast = 355,
 }
 
 impl ServerOpcode {
@@ -314,7 +314,7 @@ impl ServerOpcode {
             301 => UserChange,
             302 => UserPart,
             354 => UserSelfinfo,
-            355 => MessageBroadcast,
+            355 => MsgBroadcast,
             _ => return None,
         })
     }
@@ -343,7 +343,7 @@ impl std::fmt::Debug for ServerOpcode {
             Self::UserChange => "HTLS_HDR_USER_CHANGE",
             Self::UserPart => "HTLS_HDR_USER_PART",
             Self::UserSelfinfo => "HTLS_HDR_USER_SELFINFO",
-            Self::MessageBroadcast => "HTLS_HDR_MSG_BROADCAST",
+            Self::MsgBroadcast => "HTLS_HDR_MSG_BROADCAST",
         };
         write!(f, "{value} {name}")
     }

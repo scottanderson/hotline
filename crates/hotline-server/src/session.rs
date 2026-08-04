@@ -215,8 +215,7 @@ impl Session {
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
             /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
-            /* 355 */
-            ClientOpcode::MessageBroadcast => self.on_message_broadcast(tx, state).await,
+            /* 355 */ ClientOpcode::MsgBroadcast => self.on_msg_broadcast(tx, state).await,
             /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "unhandled opcode");
@@ -545,11 +544,7 @@ impl Session {
     }
 
     /// 355: a message broadcast to every connected user.
-    async fn on_message_broadcast(
-        &self,
-        tx: &Transaction,
-        state: &SharedState,
-    ) -> Vec<Transaction> {
+    async fn on_msg_broadcast(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::CAN_BROADCAST) {
             return vec![tx.reply_error(reason)];
         }
@@ -558,7 +553,7 @@ impl Session {
         };
 
         state.publish(Transaction::push(
-            ServerOpcode::MessageBroadcast,
+            ServerOpcode::MsgBroadcast,
             vec![
                 Field::u16(ServerFieldId::UserId, self.user_id),
                 Field::string(ServerFieldId::Text, message.as_string()),
@@ -1196,15 +1191,15 @@ mod tests {
         let mut broadcast_rx = state.subscribe();
 
         let request = Transaction::request(
-            ClientOpcode::MessageBroadcast,
+            ClientOpcode::MsgBroadcast,
             1,
             vec![Field::string(ClientFieldId::Text, "server going down")],
         );
-        let replies = session.on_message_broadcast(&request, &state).await;
+        let replies = session.on_msg_broadcast(&request, &state).await;
         assert!(!replies[0].is_error());
 
         let sent = broadcast_rx.try_recv().unwrap();
-        assert_eq!(sent.opcode(), Opcode::Push(ServerOpcode::MessageBroadcast));
+        assert_eq!(sent.opcode(), Opcode::Push(ServerOpcode::MsgBroadcast));
         assert_eq!(
             sent.field(ServerFieldId::Text).unwrap().as_string(),
             "server going down"
@@ -1217,11 +1212,11 @@ mod tests {
         let state = SharedState::default();
 
         let request = Transaction::request(
-            ClientOpcode::MessageBroadcast,
+            ClientOpcode::MsgBroadcast,
             1,
             vec![Field::string(ClientFieldId::Text, "hi")],
         );
-        let replies = session.on_message_broadcast(&request, &state).await;
+        let replies = session.on_msg_broadcast(&request, &state).await;
         assert!(replies[0].is_error());
     }
 
