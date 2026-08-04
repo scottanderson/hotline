@@ -233,11 +233,7 @@ impl App {
 
     // 354
     fn apply_user_selfinfo(&mut self, tx: &Transaction) {
-        self.access = tx
-            .field(ServerFieldId::Access)
-            .and_then(Field::as_u64)
-            .map(AccessPrivileges::from_bits_truncate)
-            .unwrap_or(self.access);
+        self.access = tx.access().unwrap_or(self.access);
 
         // This session's own uid/icon/name.
         if let Some(entry) = tx

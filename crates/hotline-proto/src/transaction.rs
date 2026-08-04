@@ -33,6 +33,7 @@ use crate::field::Field;
 use crate::field_id::{ClientFieldId, ServerFieldId};
 use crate::opcode::{ClientOpcode, Opcode, ServerOpcode};
 use crate::wire::{PacketReader, PacketWriter};
+use crate::AccessPrivileges;
 
 /// A complete transaction: fixed fields plus its field list. `fields.len()`
 /// *is* the wire's `hc`; there is no separate count to keep in sync.
@@ -174,6 +175,13 @@ impl Transaction {
     /// The `ICON` field, if present.
     pub fn icon(&self) -> Option<u16> {
         self.field(ClientFieldId::Icon).and_then(Field::as_u16)
+    }
+
+    /// The `HTLC_DATA_ACCESS` field, if present.
+    pub fn access(&self) -> Option<AccessPrivileges> {
+        self.field(ClientFieldId::Access)
+            .and_then(Field::as_u64)
+            .map(AccessPrivileges::from_bits_truncate)
     }
 
     /// The `HTLC_DATA_CLIENTVERSION` (160) field, if present.
