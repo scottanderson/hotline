@@ -975,7 +975,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_relay_starts_with_cr_for_scrollback_clients() {
-        let session = test_session("Alice", AccessPrivileges::guest_default());
+        let session = test_session("Alice", AccessPrivileges::default());
         let state = SharedState::default();
         let request = Transaction::request(
             ClientOpcode::Chat,
@@ -993,7 +993,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_with_name_registers_and_broadcasts_join_immediately() {
-        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
         let mut announce_rx = state.subscribe_announcements();
@@ -1160,7 +1160,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_without_name_defers_join_until_agreed() {
-        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
         let mut announce_rx = state.subscribe_announcements();
@@ -1198,7 +1198,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_150_client_joins_immediately_without_a_name() {
-        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
         let mut announce_rx = state.subscribe_announcements();
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[tokio::test]
     async fn modern_client_gets_no_agreement_push_without_configured_text() {
-        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig {
             agreement: String::new(),
@@ -1240,7 +1240,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_150_client_gets_no_agreement_push_without_configured_text() {
-        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig {
             agreement: String::new(),
@@ -1283,7 +1283,7 @@ mod tests {
 
     #[tokio::test]
     async fn agreed_selfinfo_carries_the_joiners_own_user_list_entry() {
-        let mut session = test_session("guest1", AccessPrivileges::guest_default());
+        let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
 
         let agreed = Transaction::request(
@@ -1508,7 +1508,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_broadcast_denied_without_privilege() {
-        let session = test_session("Alice", AccessPrivileges::guest_default());
+        let session = test_session("Alice", AccessPrivileges::default());
         let state = SharedState::default();
 
         let request = Transaction::request(

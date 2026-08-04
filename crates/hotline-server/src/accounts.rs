@@ -35,7 +35,7 @@ pub trait AccountProvider: Send + Sync {
 
 /// An [`AccountProvider`] that keeps accounts in memory only; nothing
 /// created at runtime survives a restart. Starts with `admin`/`admin`
-/// (full access) and a passwordless `guest` (`guest_default()` access),
+/// (full access) and a passwordless `guest` (default access),
 /// so there's always a way to log in and create further accounts.
 #[derive(Debug)]
 pub struct InMemoryAccountProvider {
@@ -59,7 +59,7 @@ impl Default for InMemoryAccountProvider {
                     Account {
                         password: "".to_string(),
                         name: "Guest".to_string(),
-                        access: AccessPrivileges::guest_default(),
+                        access: AccessPrivileges::default(),
                     },
                 ),
             ])),
@@ -135,6 +135,6 @@ mod tests {
         let provider = InMemoryAccountProvider::default();
         let guest = provider.get("guest").await.expect("guest account exists");
         assert_eq!(guest.password, "");
-        assert_eq!(guest.access, AccessPrivileges::guest_default());
+        assert_eq!(guest.access, AccessPrivileges::default());
     }
 }

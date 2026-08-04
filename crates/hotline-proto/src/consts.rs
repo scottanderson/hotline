@@ -144,21 +144,23 @@ bitflags::bitflags! {
     }
 }
 
-impl AccessPrivileges {
+impl Default for AccessPrivileges {
     /// A reasonable "guest" default: read/send public chat, browse,
     /// upload, and download files, read and post news, and send/receive
     /// private messages. No admin or destructive privileges.
-    pub const fn guest_default() -> Self {
+    fn default() -> Self {
         Self::READ_CHAT
-            .union(Self::SEND_CHAT)
-            .union(Self::DOWNLOAD_FILES)
-            .union(Self::UPLOAD_FILES)
-            .union(Self::READ_NEWS)
-            .union(Self::POST_NEWS)
-            .union(Self::USE_ANY_NAME)
-            .union(Self::SEND_MSGS)
+            | Self::SEND_CHAT
+            | Self::DOWNLOAD_FILES
+            | Self::UPLOAD_FILES
+            | Self::READ_NEWS
+            | Self::POST_NEWS
+            | Self::USE_ANY_NAME
+            | Self::SEND_MSGS
     }
+}
 
+impl AccessPrivileges {
     /// Decode the big-endian 8-byte wire representation of the
     /// `USER_ACCESS` field. Returns `None` if any bit outside the named
     /// flags is set, rather than silently discarding it. Use
@@ -227,7 +229,7 @@ mod tests {
 
     #[test]
     fn access_privileges_round_trip_bytes() {
-        let privs = AccessPrivileges::guest_default();
+        let privs = AccessPrivileges::default();
         let bytes = privs.to_be_bytes();
         assert_eq!(AccessPrivileges::from_be_bytes(bytes), Some(privs));
     }
