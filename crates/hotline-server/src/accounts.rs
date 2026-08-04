@@ -34,10 +34,37 @@ pub trait AccountProvider: Send + Sync {
 }
 
 /// An [`AccountProvider`] that keeps accounts in memory only; nothing
-/// created at runtime survives a restart.
-#[derive(Debug, Default)]
+/// created at runtime survives a restart. Starts with `admin`/`admin`
+/// (full access) and a passwordless `guest` (`guest_default()` access),
+/// so there's always a way to log in and create further accounts.
+#[derive(Debug)]
 pub struct InMemoryAccountProvider {
     accounts: RwLock<HashMap<String, Account>>,
+}
+
+impl Default for InMemoryAccountProvider {
+    fn default() -> Self {
+        Self {
+            accounts: RwLock::new(HashMap::from([
+                (
+                    "admin".to_string(),
+                    Account {
+                        password: "admin".to_string(),
+                        name: "Admin".to_string(),
+                        access: AccessPrivileges::all(),
+                    },
+                ),
+                (
+                    "guest".to_string(),
+                    Account {
+                        password: "".to_string(),
+                        name: "Guest".to_string(),
+                        access: AccessPrivileges::guest_default(),
+                    },
+                ),
+            ])),
+        }
+    }
 }
 
 #[async_trait]
@@ -93,5 +120,21 @@ mod tests {
         assert_eq!(provider.delete(USER_ALICE).await, Ok(true));
         assert_eq!(provider.delete(USER_ALICE).await, Ok(false));
         assert_eq!(provider.get(USER_ALICE).await, None);
+    }
+
+    #[tokio::test]
+    async fn default_seeds_an_admin_account() {
+        let provider = InMemoryAccountProvider::default();
+        let admin = provider.get("admin").await.expect("admin account exists");
+        assert_eq!(admin.password, "admin");
+        assert_eq!(admin.access, AccessPrivileges::all());
+    }
+
+    #[tokio::test]
+    async fn default_seeds_a_guest_account() {
+        let provider = InMemoryAccountProvider::default();
+        let guest = provider.get("guest").await.expect("guest account exists");
+        assert_eq!(guest.password, "");
+        assert_eq!(guest.access, AccessPrivileges::guest_default());
     }
 }

@@ -1112,6 +1112,7 @@ mod tests {
     async fn login_without_a_guest_account_falls_back_to_default_access() {
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
+        state.delete_account("guest").await.unwrap();
         let config = ServerConfig {
             default_access: AccessPrivileges::READ_NEWS,
             ..ServerConfig::default()
@@ -1279,6 +1280,7 @@ mod tests {
         // login, and must be correct in the join broadcast itself.
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
+        state.delete_account("guest").await.unwrap();
         let config = ServerConfig {
             default_access: AccessPrivileges::DISCONNECT_USERS,
             ..ServerConfig::default()

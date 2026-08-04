@@ -24,20 +24,11 @@ priority order (backlog below).
   known client before touching this everywhere.
 - **Join broadcast reaches every session unconditionally.** The reference
   filters recipients by `access_extra.user_getlist`, a per-account bit
-  outside the wire `USER_ACCESS` bitmap. Ties into backlog item 3 below.
+  outside the wire `USER_ACCESS` bitmap. Ties into backlog item 2 below.
 
 ## Backlog, in priority order
 
-1. **No way to bootstrap the first account.** Regression from removing the
-   hardcoded `admin`/`admin` login: `InMemoryAccountProvider` starts
-   empty, `AccountCreate` requires `CREATE_USERS`, and
-   `ServerConfig::default_access` (`guest_default()`) doesn't grant it —
-   so on a fresh, default-config server nobody can ever create an
-   account. The old hardcoded login was a crude but working bootstrap
-   mechanism; nothing replaced it. Needs a real fix (e.g. a way to seed
-   an initial privileged account, or a config option) before this is
-   usable outside tests.
-2. **Live account changes don't propagate to connected sessions.** The
+1. **Live account changes don't propagate to connected sessions.** The
    reference's account-modify handler immediately walks every connected
    session and overwrites the in-memory privilege bitmap (and name/color,
    broadcasting `UserChange`) for any live session logged in under the
@@ -55,41 +46,44 @@ priority order (backlog below).
    live sessions when their account is deleted; we don't have an
    equivalent, but this already matches the reference's *default*
    (flag off) behavior, so it's lower priority than the modify case.
-3. **`access_extra`-equivalent modeling.** The reference gates some
+2. **`access_extra`-equivalent modeling.** The reference gates some
    behaviors (global-subject-setting, `user_getlist` broadcast filtering,
    ...) on per-account config bits outside the wire `USER_ACCESS` bitmap.
    `hotline-rs` currently reuses `AccessPrivileges::DISCONNECT_USERS` as a
    stand-in for the subject case. `user_getlist` (gates both issuing
    `HTLC_HDR_USER_GETLIST` and receiving other users' join/change
    broadcasts) is the next concrete, testable piece worth porting.
-4. **Persistent `AccountProvider` implementation.** Only
+3. **Persistent `AccountProvider` implementation.** Only
    `InMemoryAccountProvider` exists; `apps/hls/src/main.rs` has a `TODO`
    marking where a real (file/DB-backed) implementation would plug in.
    Nothing created at runtime survives a restart until this lands.
-5. **File transfer (`HTXF`).** Second-port transfer handshake, not
+4. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,
    not real storage.
-6. **Threaded news.** Current news support is flat/classic only.
-7. **Chat room passwords.** Extend `ChatRoom` with an optional password;
+5. **Threaded news.** Current news support is flat/classic only.
+6. **Chat room passwords.** Extend `ChatRoom` with an optional password;
    `HTLC_HDR_CHAT_CREATE`/`HTLC_HDR_CHAT_JOIN` should accept/check it,
    matching how the invite bit already bypasses the check. Verify against
    the reference's exact join/create field names and error text before
    implementing.
-8. **Remaining unhandled opcodes.** All map to an item above rather than
-   being new independent work: `FileGet`/`FilePut` (202/203, item 5);
+7. **Remaining unhandled opcodes.** All map to an item above rather than
+   being new independent work: `FileGet`/`FilePut` (202/203, item 4);
    `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetnfo`/`FileMove`/
-   `FileSymlink` (204–209, blocked on real file storage, item 5);
+   `FileSymlink` (204–209, blocked on real file storage, item 4);
    `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
-   (370–411, item 6).
+   (370–411, item 5).
 
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
 the real Hotline 1.2.3 client), the accounts subsystem (named-account
-login, account CRUD opcodes) and the idle-to-away status broadcast were
-only unit-tested this session — not yet exercised against a real client.
+login, account CRUD opcodes, `InMemoryAccountProvider`'s seeded
+`admin`/`admin` and passwordless `guest`) and the idle-to-away status
+broadcast have only been unit-tested plus one manual `hlc` smoke test
+(login accepted with the seeded admin account, rejected on wrong
+password/unknown login) — not yet exercised against a real client.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
