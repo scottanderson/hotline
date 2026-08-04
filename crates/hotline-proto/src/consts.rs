@@ -153,8 +153,8 @@ impl AccessPrivileges {
             .union(Self::SEND_CHAT)
             .union(Self::DOWNLOAD_FILES)
             .union(Self::READ_NEWS)
+            .union(Self::USE_ANY_NAME)
             .union(Self::SEND_MSGS)
-            .union(Self::GET_USER_INFO)
     }
 
     /// Decode the big-endian 8-byte wire representation of the
