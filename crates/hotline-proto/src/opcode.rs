@@ -8,8 +8,8 @@
 //! [`ClientOpcode`]/[`ServerOpcode`] are separate enums: the same
 //! numeric value can appear in both tables (`113` is both
 //! `HTLC_HDR_CHAT_INVITE` and `HTLS_HDR_CHAT_INVITE`), so
-//! [`Opcode::from_client_wire`]/[`Opcode::from_server_wire`] can't be
-//! merged; the caller must already know who sent the value.
+//! [`TransactionType::from_client_wire`]/[`TransactionType::from_server_wire`]
+//! can't be merged; the caller must already know who sent the value.
 //!
 //! Variant names track the tail of the original wire constant; each
 //! enum's `opcode_names!` invocation pairs a variant with that original
@@ -222,7 +222,7 @@ impl std::fmt::Debug for ClientOpcode {
 /// Server -> client transaction opcodes: unsolicited pushes (chat relay,
 /// user list changes, news posts, ...). Replies to a specific client
 /// request are *not* represented here; see [`TASK_REPLY`] and
-/// [`Opcode::Reply`].
+/// [`TransactionType::Reply`].
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
 #[repr(u32)]
@@ -302,7 +302,7 @@ impl std::fmt::Debug for ServerOpcode {
 /// values still resolve to a direction via
 /// [`ClientOpcode::Unknown`]/[`ServerOpcode::Unknown`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Opcode {
+pub enum TransactionType {
     /// This transaction is a reply to an earlier request (see
     /// [`TASK_REPLY`]); match it back to the request by transaction ID.
     Reply,
@@ -312,12 +312,12 @@ pub enum Opcode {
     Push(ServerOpcode),
 }
 
-impl Opcode {
+impl TransactionType {
     /// Classify a raw wire `type` value known to have been sent **by a
     /// client**. Never consults [`ServerOpcode`]'s table; see the
     /// [module docs](self) for why direction can't be guessed.
     pub fn from_client_wire(v: u32) -> Self {
-        Opcode::Request(ClientOpcode::from(v))
+        TransactionType::Request(ClientOpcode::from(v))
     }
 
     /// Classify a raw wire `type` value known to have been sent **by a
@@ -325,17 +325,17 @@ impl Opcode {
     /// [`ClientOpcode`]'s table.
     pub fn from_server_wire(v: u32) -> Self {
         if v & 0xFFFF_0000 == TASK_REPLY {
-            return Opcode::Reply;
+            return TransactionType::Reply;
         }
-        Opcode::Push(ServerOpcode::from(v))
+        TransactionType::Push(ServerOpcode::from(v))
     }
 
     /// The wire `type` value this opcode encodes to.
     pub fn as_u32(self) -> u32 {
         match self {
-            Opcode::Reply => TASK_REPLY,
-            Opcode::Request(c) => u32::from(c),
-            Opcode::Push(s) => u32::from(s),
+            TransactionType::Reply => TASK_REPLY,
+            TransactionType::Request(c) => u32::from(c),
+            TransactionType::Push(s) => u32::from(s),
         }
     }
 }
@@ -346,36 +346,42 @@ mod tests {
 
     #[test]
     fn task_reply_sentinel_is_recognized_exactly() {
-        assert_eq!(Opcode::from_server_wire(TASK_REPLY), Opcode::Reply);
+        assert_eq!(
+            TransactionType::from_server_wire(TASK_REPLY),
+            TransactionType::Reply
+        );
     }
 
     #[test]
     fn buggy_server_task_reply_with_opcode_in_low_bits_still_matches() {
         let buggy = TASK_REPLY | u32::from(ClientOpcode::Login);
-        assert_eq!(Opcode::from_server_wire(buggy), Opcode::Reply);
+        assert_eq!(
+            TransactionType::from_server_wire(buggy),
+            TransactionType::Reply
+        );
     }
 
     #[test]
     fn known_client_and_server_opcodes_round_trip() {
         assert_eq!(
-            Opcode::from_client_wire(u32::from(ClientOpcode::Login)),
-            Opcode::Request(ClientOpcode::Login)
+            TransactionType::from_client_wire(u32::from(ClientOpcode::Login)),
+            TransactionType::Request(ClientOpcode::Login)
         );
         assert_eq!(
-            Opcode::from_server_wire(u32::from(ServerOpcode::Chat)),
-            Opcode::Push(ServerOpcode::Chat)
+            TransactionType::from_server_wire(u32::from(ServerOpcode::Chat)),
+            TransactionType::Push(ServerOpcode::Chat)
         );
     }
 
     #[test]
     fn unrecognized_opcode_is_preserved_not_dropped() {
         assert_eq!(
-            Opcode::from_client_wire(0xDEAD),
-            Opcode::Request(ClientOpcode::Unknown(0xDEAD))
+            TransactionType::from_client_wire(0xDEAD),
+            TransactionType::Request(ClientOpcode::Unknown(0xDEAD))
         );
         assert_eq!(
-            Opcode::from_server_wire(0xDEAD),
-            Opcode::Push(ServerOpcode::Unknown(0xDEAD))
+            TransactionType::from_server_wire(0xDEAD),
+            TransactionType::Push(ServerOpcode::Unknown(0xDEAD))
         );
     }
 
@@ -384,12 +390,12 @@ mod tests {
     #[test]
     fn the_same_wire_value_means_different_things_depending_on_direction() {
         assert_eq!(
-            Opcode::from_client_wire(113),
-            Opcode::Request(ClientOpcode::ChatInvite)
+            TransactionType::from_client_wire(113),
+            TransactionType::Request(ClientOpcode::ChatInvite)
         );
         assert_eq!(
-            Opcode::from_server_wire(113),
-            Opcode::Push(ServerOpcode::ChatInvite)
+            TransactionType::from_server_wire(113),
+            TransactionType::Push(ServerOpcode::ChatInvite)
         );
     }
 

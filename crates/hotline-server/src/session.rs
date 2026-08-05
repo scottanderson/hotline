@@ -9,7 +9,7 @@ use tokio_util::codec::Framed;
 use hotline_codec::TransactionCodec;
 use hotline_proto::consts::AccessPrivileges;
 use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
-use hotline_proto::opcode::{ClientOpcode, Opcode, ServerOpcode};
+use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use hotline_proto::types::{UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
 
@@ -102,8 +102,8 @@ impl Session {
                 msg = rx.recv() => {
                     match msg {
                         Some(RecipientMessage::Push(tx)) => {
-                            let opcode = tx.opcode();
-                            let is_kick = opcode == Opcode::Push(ServerOpcode::Politequit);
+                            let opcode = tx.r#type();
+                            let is_kick = opcode == TransactionType::Push(ServerOpcode::Politequit);
                             if session.may_receive(opcode) {
                                 writer.send(tx).await?;
                             }
@@ -152,13 +152,16 @@ impl Session {
 
     /// Whether this session should receive a broadcast/announce push, based
     /// on its own privileges. Pushes not listed here are unfiltered.
-    fn may_receive(&self, opcode: Opcode) -> bool {
+    fn may_receive(&self, opcode: TransactionType) -> bool {
         match opcode {
-            Opcode::Push(ServerOpcode::UserChange) | Opcode::Push(ServerOpcode::UserPart) => {
+            TransactionType::Push(ServerOpcode::UserChange)
+            | TransactionType::Push(ServerOpcode::UserPart) => {
                 self.access_extra.contains(AccessExtra::USER_GETLIST)
             }
-            Opcode::Push(ServerOpcode::Chat) => self.access.contains(AccessPrivileges::READ_CHAT),
-            Opcode::Push(ServerOpcode::NewsfilePost) => {
+            TransactionType::Push(ServerOpcode::Chat) => {
+                self.access.contains(AccessPrivileges::READ_CHAT)
+            }
+            TransactionType::Push(ServerOpcode::NewsfilePost) => {
                 self.access.contains(AccessPrivileges::READ_NEWS)
             }
             _ => true,
@@ -172,8 +175,8 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
-        let Opcode::Request(opcode) = tx.opcode() else {
-            tracing::debug!(type_ = tx.type_(), "not a recognized client request");
+        let TransactionType::Request(opcode) = tx.r#type() else {
+            tracing::debug!(opcode = ?tx.r#type(), "not a recognized client request");
             return vec![tx.reply_error("not implemented")];
         };
 
@@ -1023,33 +1026,33 @@ mod tests {
         let mut session = test_session("Alice", AccessPrivileges::all());
         session.access_extra.remove(AccessExtra::USER_GETLIST);
 
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::UserChange)));
+        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::UserPart)));
+        assert!(session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
 
         session.access_extra.insert(AccessExtra::USER_GETLIST);
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
+        assert!(session.may_receive(TransactionType::Push(ServerOpcode::UserChange)));
+        assert!(session.may_receive(TransactionType::Push(ServerOpcode::UserPart)));
     }
 
     #[test]
     fn may_receive_gates_chat_on_read_chat() {
         let mut session = test_session("Alice", AccessPrivileges::all());
         session.access.remove(AccessPrivileges::READ_CHAT);
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
 
         session.access.insert(AccessPrivileges::READ_CHAT);
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+        assert!(session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
     }
 
     #[test]
     fn may_receive_gates_newsfile_post_on_read_news() {
         let mut session = test_session("Alice", AccessPrivileges::all());
         session.access.remove(AccessPrivileges::READ_NEWS);
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
+        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
 
         session.access.insert(AccessPrivileges::READ_NEWS);
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
+        assert!(session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
     }
 
     /// Drains `rx` until an `AccessUpdate` arrives, skipping the
@@ -1059,7 +1062,7 @@ mod tests {
             match rx.try_recv().expect("expected an access update") {
                 RecipientMessage::AccessUpdate(update) => return update,
                 RecipientMessage::Push(tx) => {
-                    assert_eq!(tx.opcode(), Opcode::Push(ServerOpcode::UserChange));
+                    assert_eq!(tx.r#type(), TransactionType::Push(ServerOpcode::UserChange));
                 }
             }
         }
@@ -1301,7 +1304,10 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Politequit push");
-        assert_eq!(kick.opcode(), Opcode::Push(ServerOpcode::Politequit));
+        assert_eq!(
+            kick.r#type(),
+            TransactionType::Push(ServerOpcode::Politequit)
+        );
     }
 
     #[tokio::test]
@@ -1445,7 +1451,7 @@ mod tests {
 
         let agreement = replies
             .iter()
-            .find(|tx| tx.opcode() == Opcode::Push(ServerOpcode::Agreement))
+            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement))
             .expect("modern client should get a Noagreement marker");
         assert!(agreement.field(ServerFieldId::Noagreement).is_some());
     }
@@ -1465,7 +1471,7 @@ mod tests {
         assert!(
             !replies
                 .iter()
-                .any(|tx| tx.opcode() == Opcode::Push(ServerOpcode::Agreement)),
+                .any(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement)),
             "pre-150 clients don't understand the agreement handshake at all"
         );
     }
@@ -1514,7 +1520,7 @@ mod tests {
 
         let selfinfo = replies
             .iter()
-            .find(|tx| tx.opcode() == Opcode::Push(ServerOpcode::UserSelfinfo))
+            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::UserSelfinfo))
             .expect("on_agreed should push UserSelfinfo");
         let entry = selfinfo
             .field(ServerFieldId::UserList)
@@ -1650,7 +1656,10 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a NewsfilePost push");
-        assert_eq!(notify.opcode(), Opcode::Push(ServerOpcode::NewsfilePost));
+        assert_eq!(
+            notify.r#type(),
+            TransactionType::Push(ServerOpcode::NewsfilePost)
+        );
         assert!(rx.try_recv().is_err(), "published only once");
     }
 
@@ -1720,7 +1729,10 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a MsgBroadcast push");
-        assert_eq!(sent.opcode(), Opcode::Push(ServerOpcode::MsgBroadcast));
+        assert_eq!(
+            sent.r#type(),
+            TransactionType::Push(ServerOpcode::MsgBroadcast)
+        );
         assert_eq!(
             sent.field(ServerFieldId::Text).unwrap().as_string(),
             "server going down"

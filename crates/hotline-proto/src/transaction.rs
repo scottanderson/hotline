@@ -23,15 +23,17 @@
 //! [`TransactionHeader::finish_decode`] once `remaining_len()` more bytes
 //! are in hand, producing the real `Transaction`.
 //!
-//! There's no raw `type_: u32` field: the wire's `type` value is
-//! resolved into an [`Opcode`] once and stored as that.
+//! The wire's `type` value is resolved into a [`TransactionType`] once,
+//! at decode time, and stored under `r#type` (the reference's own field
+//! name, as a raw identifier since `type` is a Rust keyword) rather than
+//! kept as a raw `u32`.
 
 use std::{debug_assert_matches, fmt};
 
 use crate::error::{ProtoError, Result};
 use crate::field::Field;
 use crate::field_id::{ClientFieldId, ServerFieldId};
-use crate::opcode::{ClientOpcode, Opcode, ServerOpcode};
+use crate::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use crate::wire::{PacketReader, PacketWriter};
 use crate::AccessPrivileges;
 
@@ -42,9 +44,8 @@ use crate::AccessPrivileges;
 #[derive(Clone, PartialEq, Eq)]
 pub struct Transaction {
     /// The wire `type` value, already resolved to which direction sent
-    /// it. See the [module docs](self) for why this replaces a raw
-    /// `type_: u32`.
-    opcode: Opcode,
+    /// it. See the [module docs](self) for details.
+    r#type: TransactionType,
     /// Transaction ID: client-assigned on a request, echoed on the reply,
     /// `0` on a push until [`Transaction::with_push_trans`] assigns it.
     trans: u32,
@@ -64,7 +65,7 @@ pub const PREFIX_LEN: usize = 20;
 /// from [`Transaction`].
 #[derive(Debug)]
 pub struct TransactionHeader {
-    opcode: Opcode,
+    r#type: TransactionType,
     trans: u32,
     flag: u32,
     len2: u32,
@@ -73,23 +74,23 @@ pub struct TransactionHeader {
 impl Transaction {
     /// Build a request transaction from a set of fields.
     pub const fn request(opcode: ClientOpcode, trans: u32, fields: Vec<Field>) -> Self {
-        Self::assemble(Opcode::Request(opcode), trans, 0, fields)
+        Self::assemble(TransactionType::Request(opcode), trans, 0, fields)
     }
 
     /// Build a reply to this request transaction, carrying `fields`.
     pub fn reply(&self, fields: Vec<Field>) -> Self {
-        debug_assert_matches!(self.opcode, Opcode::Request(_));
-        Self::assemble(Opcode::Reply, self.trans, 0, fields)
+        debug_assert_matches!(self.r#type, TransactionType::Request(_));
+        Self::assemble(TransactionType::Reply, self.trans, 0, fields)
     }
 
     /// Build a server-initiated transaction.
     pub const fn push(opcode: ServerOpcode, fields: Vec<Field>) -> Self {
-        Self::assemble(Opcode::Push(opcode), 0, 0, fields)
+        Self::assemble(TransactionType::Push(opcode), 0, 0, fields)
     }
 
     /// Assign this push's per-connection `trans` sequence number.
     pub const fn with_push_trans(mut self, next: Option<&mut u32>) -> Self {
-        if let (Opcode::Push(_), Some(next)) = (self.opcode, next) {
+        if let (TransactionType::Push(_), Some(next)) = (self.r#type, next) {
             self.trans = *next;
             *next += 1;
         }
@@ -102,7 +103,7 @@ impl Transaction {
     /// one of these.
     pub fn reply_error(&self, message: impl Into<String>) -> Self {
         Self::assemble(
-            Opcode::Reply,
+            TransactionType::Reply,
             self.trans,
             1,
             vec![Field::string(ServerFieldId::ErrorText, message)],
@@ -110,32 +111,26 @@ impl Transaction {
     }
 
     /// Shared constructor: every wire representation (request/reply/push)
-    /// differs only in `opcode`, `trans`, and `flag`.
-    const fn assemble(opcode: Opcode, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
+    /// differs only in `r#type`, `trans`, and `flag`.
+    const fn assemble(r#type: TransactionType, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
         Self {
-            opcode,
+            r#type,
             trans,
             flag,
             fields,
         }
     }
 
-    /// This transaction's opcode, already resolved to the correct
+    /// This transaction's type, already resolved to the correct
     /// direction (see the [module docs](self)) - a plain field read, not
     /// a guess from a raw number.
-    pub const fn opcode(&self) -> Opcode {
-        self.opcode
+    pub const fn r#type(&self) -> TransactionType {
+        self.r#type
     }
 
     /// `true` if this transaction is a reply.
     pub const fn is_reply(&self) -> bool {
-        matches!(self.opcode, Opcode::Reply)
-    }
-
-    /// The raw wire `type` value, mainly for logging. Prefer
-    /// [`Transaction::opcode`] for anything that branches on it.
-    pub fn type_(&self) -> u32 {
-        self.opcode.as_u32()
+        matches!(self.r#type, TransactionType::Reply)
     }
 
     /// `true` if bit 0 of `flag` is set.
@@ -217,7 +212,7 @@ impl Transaction {
         })?;
 
         Ok(PacketWriter::<PREFIX_LEN>::new()
-            .u32(self.opcode.as_u32())
+            .u32(self.r#type.as_u32())
             .u32(self.trans)
             .u32(self.flag)
             .u32(len)
@@ -273,13 +268,13 @@ impl TransactionHeader {
     /// [`TransactionHeader::finish_decode`] parses them.
     pub fn decode_from_client(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
-        let (r, type_) = r.u32();
+        let (r, wire_type) = r.u32();
         let (r, trans) = r.u32();
         let (r, flag) = r.u32();
         let (r, _len) = r.u32();
         let (_, len2) = r.u32();
         Self {
-            opcode: Opcode::from_client_wire(type_),
+            r#type: TransactionType::from_client_wire(wire_type),
             trans,
             flag,
             len2,
@@ -291,13 +286,13 @@ impl TransactionHeader {
     /// incoming traffic).
     pub fn decode_from_server(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
-        let (r, type_) = r.u32();
+        let (r, wire_type) = r.u32();
         let (r, trans) = r.u32();
         let (r, flag) = r.u32();
         let (r, _len) = r.u32();
         let (_, len2) = r.u32();
         Self {
-            opcode: Opcode::from_server_wire(type_),
+            r#type: TransactionType::from_server_wire(wire_type),
             trans,
             flag,
             len2,
@@ -333,7 +328,7 @@ impl TransactionHeader {
         }
 
         Ok(Transaction {
-            opcode: self.opcode,
+            r#type: self.r#type,
             trans: self.trans,
             flag: self.flag,
             fields,
@@ -344,19 +339,19 @@ impl TransactionHeader {
 impl fmt::Debug for Transaction {
     /// Looks each field's name up in the correct one of
     /// [`crate::field_id::ClientFieldId`]/[`crate::field_id::ServerFieldId`],
-    /// per [`Transaction::opcode`]'s direction.
+    /// per [`Transaction::r#type`]'s direction.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let opcode = self.opcode();
+        let r#type = self.r#type();
         let mut out = f.debug_struct("Transaction");
-        out.field("type_", &opcode);
+        out.field("type", &r#type);
         if self.trans != 0 {
             out.field("trans", &self.trans);
         }
         if self.flag != 0 {
             out.field("flag", &self.flag);
         }
-        match opcode {
-            Opcode::Request(_) => out.field(
+        match r#type {
+            TransactionType::Request(_) => out.field(
                 "fields",
                 &self
                     .fields
@@ -370,7 +365,7 @@ impl fmt::Debug for Transaction {
                     })
                     .collect::<Vec<_>>(),
             ),
-            Opcode::Reply | Opcode::Push(_) => out.field(
+            TransactionType::Reply | TransactionType::Push(_) => out.field(
                 "fields",
                 &self
                     .fields
@@ -469,7 +464,7 @@ mod tests {
     fn reply_carries_task_reply_sentinel_not_zero() {
         let request = Transaction::request(ClientOpcode::Ping, 42, vec![]);
         let tx = request.reply(vec![]);
-        assert_eq!(tx.opcode(), Opcode::Reply);
+        assert_eq!(tx.r#type(), TransactionType::Reply);
         assert!(tx.is_reply());
     }
 

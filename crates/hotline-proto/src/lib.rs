@@ -21,6 +21,6 @@ pub use error::{ProtoError, Result};
 pub use field::{Field, FieldValue};
 pub use field_id::{ClientFieldId, ServerFieldId};
 pub use handshake::{ClientHello, ServerHello, SUB_PROTOCOL_HOTLINE};
-pub use opcode::{ClientOpcode, Opcode, ServerOpcode};
+pub use opcode::{ClientOpcode, ServerOpcode, TransactionType};
 pub use transaction::{Transaction, TransactionHeader, PREFIX_LEN};
 pub use wire::{PStringTooLong, PacketWriter, VecWriter};

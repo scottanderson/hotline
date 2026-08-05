@@ -4,7 +4,7 @@
 
 use hotline_client::HotlineClient;
 use hotline_proto::field_id::ServerFieldId;
-use hotline_proto::opcode::{Opcode, ServerOpcode};
+use hotline_proto::opcode::{ServerOpcode, TransactionType};
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::{AccessPrivileges, Field, Transaction};
 
@@ -92,7 +92,7 @@ impl App {
     /// Apply one server-initiated transaction (chat relay, user list
     /// change, permission denial, ...) to the app state.
     pub fn apply_server_event(&mut self, tx: &Transaction) -> EventOutcome {
-        let Opcode::Push(opcode) = tx.opcode() else {
+        let TransactionType::Push(opcode) = tx.r#type() else {
             return EventOutcome::Applied;
         };
         match opcode {

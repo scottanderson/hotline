@@ -20,7 +20,7 @@ crates/
 │   ├── numbers.rs             # signed int encoding (EncodedInt, no heap allocation)
 │   ├── field.rs               # Field { id, data } + fixed/generic constructors
 │   ├── field_id.rs            # ClientFieldId / ServerFieldId - see below
-│   ├── opcode.rs              # ClientOpcode / ServerOpcode / Opcode
+│   ├── opcode.rs              # ClientOpcode / ServerOpcode / TransactionType
 │   ├── transaction.rs         # Transaction: fixed fields + fields, one type
 │   ├── types.rs               # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo
 │   ├── consts.rs              # AccessPrivileges (64-bit USER_ACCESS bitmap)
