@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 
 use hotline_proto::consts::AccessPrivileges;
-use hotline_proto::opcode::{Opcode, ServerOpcode};
 use hotline_proto::types::{FileNameWithInfo, UserFlags};
 use hotline_proto::Transaction;
 
@@ -83,9 +82,11 @@ pub struct ChatRoom {
     pub invited: HashSet<u16>,
 }
 
-/// A live privilege change, see [`SharedState::push_access_update`].
+/// A live privilege change for every session logged in under `login`.
 #[derive(Debug, Clone)]
 pub struct AccessUpdate {
+    /// Login the modified account is stored under.
+    pub login: String,
     /// The account's new privileges.
     pub access: AccessPrivileges,
     /// The account's new display name, if non-empty.
@@ -229,33 +230,15 @@ impl SharedState {
         self.recipients.write().await.remove(&user_id);
     }
 
-    /// Whether `user_id` may receive `opcode`, based on its connected
-    /// user entry's privileges. Pushes not listed here are unfiltered.
-    async fn recipient_may_receive(&self, user_id: u16, opcode: Opcode) -> bool {
-        let (access, access_extra) = match self.user(user_id).await {
-            Some(entry) => (entry.access, entry.access_extra),
-            None => (AccessPrivileges::empty(), AccessExtra::empty()),
-        };
-        match opcode {
-            Opcode::Push(ServerOpcode::UserChange) | Opcode::Push(ServerOpcode::UserPart) => {
-                access_extra.contains(AccessExtra::USER_GETLIST)
-            }
-            Opcode::Push(ServerOpcode::Chat) => access.contains(AccessPrivileges::READ_CHAT),
-            Opcode::Push(ServerOpcode::NewsfilePost) => {
-                access.contains(AccessPrivileges::READ_NEWS)
-            }
-            _ => true,
-        }
-    }
-
-    /// Publish a transaction to every privileged session. Sessions that
-    /// are slow/gone, or not privileged to see it, just miss it.
+    /// Publish a transaction to every session (e.g. a chat message or a
+    /// user list change notification). Sessions that are slow/gone just
+    /// miss it; delivery is best-effort like the real protocol's chat.
+    /// Not privilege-gated here - see [`crate::session::Session::may_receive`],
+    /// checked by each recipient using privileges it already holds in
+    /// memory rather than a shared-state lookup on this hot path.
     pub async fn publish(&self, tx: Transaction) {
-        let opcode = tx.opcode();
-        for (&user_id, sender) in self.recipients.read().await.iter() {
-            if self.recipient_may_receive(user_id, opcode).await {
-                let _ = sender.try_send(RecipientMessage::Push(tx.clone()));
-            }
+        for sender in self.recipients.read().await.values() {
+            let _ = sender.try_send(RecipientMessage::Push(tx.clone()));
         }
     }
 
@@ -269,26 +252,27 @@ impl SharedState {
 
     /// Like [`Self::publish`], except `exclude_user_id` never receives it.
     pub async fn announce(&self, exclude_user_id: u16, tx: Transaction) {
-        let opcode = tx.opcode();
         for (&user_id, sender) in self.recipients.read().await.iter() {
-            if user_id != exclude_user_id && self.recipient_may_receive(user_id, opcode).await {
+            if user_id != exclude_user_id {
                 let _ = sender.try_send(RecipientMessage::Push(tx.clone()));
             }
         }
     }
 
-    /// Push a live privilege change to every recipient logged in under `login`.
+    /// Push a live privilege change for every session logged in under `login`.
     pub async fn push_access_update(
         &self,
-        login: &str,
+        login: String,
         access: AccessPrivileges,
         name: Option<String>,
     ) {
-        let update = AccessUpdate { access, name };
-        for (&user_id, sender) in self.recipients.read().await.iter() {
-            if self.user(user_id).await.is_some_and(|u| u.login == login) {
-                let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
-            }
+        let update = AccessUpdate {
+            login,
+            access,
+            name,
+        };
+        for sender in self.recipients.read().await.values() {
+            let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
         }
     }
 

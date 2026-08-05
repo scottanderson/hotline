@@ -33,20 +33,8 @@ priority order (backlog below).
   scoped chat is untouched (delivered via `targeted_rx`/room membership,
   never `READ_CHAT`), matching the reference's own split between its
   public-chat and room-chat send paths.
-- **Cross-channel delivery ordering isn't guaranteed for a single
-  recipient.** The reference is single-threaded and appends every
-  outgoing message for a connection (whatever produced it) to that
-  connection's one FIFO output buffer, so delivery always matches the
-  order the server decided to send things in. This server instead spreads
-  delivery across four independent `tokio::broadcast` channels
-  (`broadcast`/`targeted`/`announcements`/`access_updates` in
-  `state.rs`), and `Session::run`'s `select!` picks pseudo-randomly among
-  whichever channels are ready on a given poll — so two messages to the
-  same recipient via *different* channels have no guaranteed relative
-  order, even though within any single channel delivery is FIFO. Verified
-  against the reference directly. Scoped as backlog item 2 below; not
-  urgent (no known concrete user-facing bug from it today), but a real
-  parity gap worth closing given this project's stated goal.
+- ~~Cross-channel delivery ordering isn't guaranteed for a single
+  recipient.~~ Fixed: see backlog item 2.
 
 ## Backlog, in priority order
 
@@ -57,28 +45,29 @@ priority order (backlog below).
    `UserChange`/`UserPart` pushes, and `SET_SUBJECT` gates setting the
    global chat room's subject. Both are set at login from
    `Account::access_extra`.
-2. **Unify per-recipient delivery into one ordered channel.** Fixes the
-   cross-channel ordering gap flagged above. Design confirmed with the
-   user.
-   Summary: replace `SharedState`'s four broadcast channels
-   (`broadcast`/`targeted`/`announcements`/`access_updates`) with one
+2. ~~Unify per-recipient delivery into one ordered channel.~~ Done.
+   `SharedState`'s four broadcast channels
+   (`broadcast`/`targeted`/`announcements`/`access_updates`) are now one
    `HashMap<u16, mpsc::Sender<RecipientMessage>>`, `RecipientMessage`
    being `Push(Transaction) | AccessUpdate(AccessUpdate)`; `publish`/
    `send_to`/`announce`/`push_access_update` all fan out through it, so
    `Session::run` collapses to a single inbound `select!` arm per
-   connection. Moves `Session::may_receive`'s privilege-gating logic into
-   a new `SharedState::recipient_may_receive`, run at fan-out time, which
-   requires adding `access_extra: AccessExtra` to `UserEntry` (currently
-   only carries `access`). Deliberately out of scope: ordering between two
-   genuinely independent concurrent clients' actions arriving at a third
-   client — only per-recipient ordering of a single server-side send
-   sequence is guaranteed, matching what the reference actually relies on.
-   **Blocked on**: discarding the current uncommitted, non-compiling WIP
-   in `state.rs`/`session.rs`/`server.rs` (a partial, superseded attempt
-   at wrapping the old `broadcast` channel in `Arc<Transaction>`); the
-   `Server::new(impl AccountProvider)` ergonomics tweak in that same WIP
-   is fine to keep as a separate, later follow-up.
-   Not urgent — no known concrete bug, safe to defer behind items 3+.
+   connection — every recipient now sees everything in true send order.
+   Privilege/login filtering deliberately stayed on the session side
+   (`Session::may_receive`, the login check in `apply_access_update`)
+   rather than moving into `SharedState`: an earlier version centralized
+   it there (`SharedState::recipient_may_receive`, looking up each
+   recipient's privileges from the shared `users` table at fan-out time),
+   but that traded an O(1) lock-free broadcast for an O(N) sequential
+   locked lookup per recipient, borne synchronously by whichever session
+   was sending — a real latency/contention regression under load, for no
+   benefit the channel unification actually required. Reverted in favor
+   of keeping filtering free (a plain bitflag check against fields the
+   receiving session already holds in memory). Deliberately out of scope:
+   ordering between two genuinely independent concurrent clients' actions
+   arriving at a third client — only per-recipient ordering of a single
+   server-side send sequence is guaranteed, matching what the reference
+   actually relies on.
 3. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,

@@ -102,6 +102,9 @@ impl Session {
                 msg = rx.recv() => {
                     match msg {
                         Some(RecipientMessage::Push(tx)) => {
+                            if !session.may_receive(tx.opcode()) {
+                                continue;
+                            }
                             let is_kick = tx.opcode() == Opcode::Push(ServerOpcode::Politequit);
                             writer.send(tx).await?;
                             if is_kick {
@@ -145,6 +148,21 @@ impl Session {
         ClientHello::decode(&buf)?;
         stream.write_all(&ServerHello::OK.encode()).await?;
         Ok(())
+    }
+
+    /// Whether this session should receive a broadcast/announce push, based
+    /// on its own privileges. Pushes not listed here are unfiltered.
+    fn may_receive(&self, opcode: Opcode) -> bool {
+        match opcode {
+            Opcode::Push(ServerOpcode::UserChange) | Opcode::Push(ServerOpcode::UserPart) => {
+                self.access_extra.contains(AccessExtra::USER_GETLIST)
+            }
+            Opcode::Push(ServerOpcode::Chat) => self.access.contains(AccessPrivileges::READ_CHAT),
+            Opcode::Push(ServerOpcode::NewsfilePost) => {
+                self.access.contains(AccessPrivileges::READ_NEWS)
+            }
+            _ => true,
+        }
     }
 
     /// Handle one request, returning zero or more transactions in reply.
@@ -400,9 +418,10 @@ impl Session {
     }
 
     /// Applies a live account-modify change for this session's login.
-    /// `SharedState::push_access_update` only delivers this to matching
-    /// recipients, so there's no login check to make here.
     async fn apply_access_update(&mut self, update: AccessUpdate, state: &SharedState) {
+        if self.login.is_empty() || update.login != self.login {
+            return;
+        }
         // Only force the account's name when this modify revokes USE_ANY_NAME.
         let losing_use_any_name = self.access.contains(AccessPrivileges::USE_ANY_NAME)
             && !update.access.contains(AccessPrivileges::USE_ANY_NAME);
@@ -970,7 +989,7 @@ impl Session {
         let reply = match result {
             Ok(()) => {
                 let name = (!name.is_empty()).then_some(name);
-                state.push_access_update(&login, access, name).await;
+                state.push_access_update(login, access, name).await;
                 tx.reply(vec![])
             }
             Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
@@ -999,29 +1018,38 @@ mod tests {
         }
     }
 
-    /// Registers `user_id` as a connected recipient with the given
-    /// privileges, returning its inbound channel.
-    async fn recipient(
-        state: &SharedState,
-        user_id: u16,
-        access: AccessPrivileges,
-        access_extra: AccessExtra,
-    ) -> mpsc::Receiver<RecipientMessage> {
-        state
-            .insert_user(UserEntry {
-                user_id,
-                login: String::new(),
-                name: format!("user{user_id}"),
-                icon: 0,
-                access,
-                access_extra,
-                account_name: String::new(),
-                remote_addr: "127.0.0.1:0".parse().unwrap(),
-                connected_at: Instant::now(),
-                last_active: Instant::now(),
-            })
-            .await;
-        state.register_recipient(user_id).await
+    #[test]
+    fn may_receive_gates_presence_pushes_on_user_getlist_not_other_traffic() {
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access_extra.remove(AccessExtra::USER_GETLIST);
+
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+
+        session.access_extra.insert(AccessExtra::USER_GETLIST);
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
+    }
+
+    #[test]
+    fn may_receive_gates_chat_on_read_chat() {
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access.remove(AccessPrivileges::READ_CHAT);
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+
+        session.access.insert(AccessPrivileges::READ_CHAT);
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+    }
+
+    #[test]
+    fn may_receive_gates_newsfile_post_on_read_news() {
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access.remove(AccessPrivileges::READ_NEWS);
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
+
+        session.access.insert(AccessPrivileges::READ_NEWS);
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
     }
 
     /// Drains `rx` until an `AccessUpdate` arrives, skipping the
@@ -1121,13 +1149,7 @@ mod tests {
             vec![Field::string(ClientFieldId::Text, "hi")],
         );
 
-        let mut rx = recipient(
-            &state,
-            1,
-            AccessPrivileges::default(),
-            AccessExtra::default(),
-        )
-        .await;
+        let mut rx = state.register_recipient(1).await;
         assert!(session.on_chat(&request, &state).await.is_empty());
 
         let text = rx
@@ -1146,13 +1168,7 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut observer = recipient(
-            &state,
-            2,
-            AccessPrivileges::empty(),
-            AccessExtra::USER_GETLIST,
-        )
-        .await;
+        let mut observer = state.register_recipient(2).await;
         let mut joiner_rx = state.register_recipient(1).await;
 
         // Name/Icon can arrive directly in Login, not just SET_CLIENT_USER_INFO.
@@ -1357,13 +1373,7 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut bystander = recipient(
-            &state,
-            2,
-            AccessPrivileges::empty(),
-            AccessExtra::USER_GETLIST,
-        )
-        .await;
+        let mut bystander = state.register_recipient(2).await;
 
         session.state = SessionState::Agreement;
         let login = Transaction::request(
@@ -1403,13 +1413,7 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut bystander = recipient(
-            &state,
-            2,
-            AccessPrivileges::empty(),
-            AccessExtra::USER_GETLIST,
-        )
-        .await;
+        let mut bystander = state.register_recipient(2).await;
 
         session.state = SessionState::Agreement;
         // No Version field: counts as pre-150.
@@ -1540,13 +1544,7 @@ mod tests {
             .await
             .unwrap();
         let config = ServerConfig::default();
-        let mut bystander = recipient(
-            &state,
-            2,
-            AccessPrivileges::empty(),
-            AccessExtra::USER_GETLIST,
-        )
-        .await;
+        let mut bystander = state.register_recipient(2).await;
 
         let login = Transaction::request(
             ClientOpcode::Login,
@@ -1636,16 +1634,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newsfile_post_publishes_once_for_recipient_may_receive_to_filter() {
+    async fn newsfile_post_publishes_once() {
         let session = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
-        let mut rx = recipient(
-            &state,
-            1,
-            AccessPrivileges::READ_NEWS,
-            AccessExtra::default(),
-        )
-        .await;
+        let mut rx = state.register_recipient(1).await;
         let post = Transaction::request(
             ClientOpcode::NewsfilePost,
             1,
