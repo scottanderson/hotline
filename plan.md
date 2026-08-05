@@ -22,33 +22,27 @@ priority order (backlog below).
   `"Uh, no."`, ...); this server uses friendlier custom text. Not changed
   yet — decide with the user whether exact-string parity matters for any
   known client before touching this everywhere.
-- **Join broadcast reaches every session unconditionally.** The reference
-  filters *recipients* of join/part/change traffic by their own
-  `access_extra.user_getlist`. This server now gates *issuing*
-  `HTLC_HDR_USER_GETLIST` on `AccessExtra::USER_GETLIST`
-  (`accounts.rs`/`session.rs`), but does not yet filter who *receives*
-  `UserChange`/`UserPart` pushes — every connected session still gets
-  them regardless of its own `access_extra`. Ties into backlog item 1
-  below.
+- ~~Join broadcast reaches every session unconditionally.~~ Fixed, and
+  generalized: `Session::may_receive` is now a small opcode-to-required-
+  privilege table checked in both the `broadcast_rx` and `announce_rx`
+  arms of `Session::run`'s `select!` loop, covering `UserChange`/
+  `UserPart` (`AccessExtra::USER_GETLIST`), public `Chat`
+  (`AccessPrivileges::READ_CHAT`), and `NewsfilePost`
+  (`AccessPrivileges::READ_NEWS` — `on_newsfile_post` now does a single
+  `state.publish` instead of a manual per-user `send_to` loop). Room-
+  scoped chat is untouched (delivered via `targeted_rx`/room membership,
+  never `READ_CHAT`), matching the reference's own split between its
+  public-chat and room-chat send paths.
 
 ## Backlog, in priority order
 
-1. **`access_extra`-equivalent modeling.** The reference gates some
-   behaviors (global-subject-setting, `user_getlist` broadcast filtering,
-   ...) on per-account config bits outside the wire `USER_ACCESS` bitmap.
-   `AccessExtra` (`accounts.rs`) models this as its own bitflags type,
-   extensible one bit at a time; every bit from the reference's
-   `extra_access_bits` struct is named there, though only two have
-   behavior wired up so far: `USER_GETLIST` (gates issuing
-   `HTLC_HDR_USER_GETLIST`) and `SET_SUBJECT` (gates setting the global
-   chat room's subject, `HTLC_HDR_CHAT_SUBJECT` with chat ID 0 —
-   replaces the old `DISCONNECT_USERS` stand-in). Both are set at login
-   from `Account::access_extra`. Still open: filtering *recipients* of
-   join/part/change broadcasts by their own `USER_GETLIST` (see the
-   divergence above) — this needs a recipient-side check in
-   `Session::run`'s `select!` loop, which the user has pushed back on in
-   the past for the issuance-only case, so confirm the approach before
-   implementing.
+1. ~~`access_extra`-equivalent modeling.~~ Done. `AccessExtra`
+   (`accounts.rs`) models the reference's `extra_access_bits` struct as
+   its own bitflags type; `USER_GETLIST` gates both issuing
+   `HTLC_HDR_USER_GETLIST` and, as of `Session::may_receive`, receiving
+   `UserChange`/`UserPart` pushes, and `SET_SUBJECT` gates setting the
+   global chat room's subject. Both are set at login from
+   `Account::access_extra`.
 2. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,

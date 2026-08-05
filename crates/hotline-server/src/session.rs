@@ -94,6 +94,9 @@ impl Session {
                 msg = broadcast_rx.recv() => {
                     match msg {
                         Ok(tx) => {
+                            if !session.may_receive(tx.opcode()) {
+                                continue;
+                            }
                             writer.send(tx).await?;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -121,10 +124,9 @@ impl Session {
                 // join notification - see `SharedState::announce`).
                 msg = announce_rx.recv() => {
                     match msg {
-                        Ok(a) if a.exclude_user_id != session.user_id => {
-                            writer.send(a.tx).await?;
-                        }
-                        Ok(_) => continue, // this is the join announcement about myself
+                        Ok(a) if a.exclude_user_id == session.user_id => continue,
+                        Ok(a) if !session.may_receive(a.tx.opcode()) => continue,
+                        Ok(a) => writer.send(a.tx).await?,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
@@ -167,6 +169,21 @@ impl Session {
         ClientHello::decode(&buf)?;
         stream.write_all(&ServerHello::OK.encode()).await?;
         Ok(())
+    }
+
+    /// Whether this session should receive a broadcast/announce push, based
+    /// on its own privileges. Pushes not listed here are unfiltered.
+    fn may_receive(&self, opcode: Opcode) -> bool {
+        match opcode {
+            Opcode::Push(ServerOpcode::UserChange) | Opcode::Push(ServerOpcode::UserPart) => {
+                self.access_extra.contains(AccessExtra::USER_GETLIST)
+            }
+            Opcode::Push(ServerOpcode::Chat) => self.access.contains(AccessPrivileges::READ_CHAT),
+            Opcode::Push(ServerOpcode::NewsfilePost) => {
+                self.access.contains(AccessPrivileges::READ_NEWS)
+            }
+            _ => true,
+        }
     }
 
     /// Handle one request, returning zero or more transactions in reply.
@@ -679,15 +696,10 @@ impl Session {
         };
         let entry = state.post_news(&self.name, &text.as_string()).await;
 
-        let notify = Transaction::push(
+        state.publish(Transaction::push(
             ServerOpcode::NewsfilePost,
             vec![Field::string(ServerFieldId::Text, entry)],
-        );
-        for user in state.users().await {
-            if user.access.contains(AccessPrivileges::READ_NEWS) {
-                state.send_to(user.user_id, notify.clone());
-            }
-        }
+        ));
         vec![tx.reply(vec![])]
     }
 
@@ -993,6 +1005,40 @@ mod tests {
         let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
 
         assert!(session.on_user_get_list(&request, &state).await[0].is_error());
+    }
+
+    #[test]
+    fn may_receive_gates_presence_pushes_on_user_getlist_not_other_traffic() {
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access_extra.remove(AccessExtra::USER_GETLIST);
+
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+
+        session.access_extra.insert(AccessExtra::USER_GETLIST);
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
+    }
+
+    #[test]
+    fn may_receive_gates_chat_on_read_chat() {
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access.remove(AccessPrivileges::READ_CHAT);
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+
+        session.access.insert(AccessPrivileges::READ_CHAT);
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
+    }
+
+    #[test]
+    fn may_receive_gates_newsfile_post_on_read_news() {
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access.remove(AccessPrivileges::READ_NEWS);
+        assert!(!session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
+
+        session.access.insert(AccessPrivileges::READ_NEWS);
+        assert!(session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
     }
 
     #[tokio::test]
@@ -1462,29 +1508,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newsfile_post_notifies_only_users_with_read_news() {
+    async fn newsfile_post_publishes_once_for_may_receive_to_filter() {
         let session = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
-        state
-            .insert_user(UserEntry {
-                user_id: 2,
-                name: "Reader".to_string(),
-                icon: 0,
-                access: AccessPrivileges::READ_NEWS,
-                last_active: Instant::now(),
-            })
-            .await;
-        state
-            .insert_user(UserEntry {
-                user_id: 3,
-                name: "NoNews".to_string(),
-                icon: 0,
-                access: AccessPrivileges::empty(),
-                last_active: Instant::now(),
-            })
-            .await;
-
-        let mut targeted_rx = state.subscribe_targeted();
+        let mut broadcast_rx = state.subscribe();
         let post = Transaction::request(
             ClientOpcode::NewsfilePost,
             1,
@@ -1492,12 +1519,9 @@ mod tests {
         );
         session.on_newsfile_post(&post, &state).await;
 
-        let notify = targeted_rx.try_recv().unwrap();
-        assert_eq!(notify.target_user_id, 2);
-        assert!(
-            targeted_rx.try_recv().is_err(),
-            "NoNews shouldn't be notified"
-        );
+        let notify = broadcast_rx.try_recv().unwrap();
+        assert_eq!(notify.opcode(), Opcode::Push(ServerOpcode::NewsfilePost));
+        assert!(broadcast_rx.try_recv().is_err(), "published only once");
     }
 
     #[tokio::test]
