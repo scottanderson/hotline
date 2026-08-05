@@ -1,13 +1,13 @@
 [package]
-name = "hltui"
-description = "Terminal UI Hotline client, built on hotline-client."
+name = "hotline-cli"
+description = "Terminal Hotline client, built on hotline-client."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "hltui"
+name = "hlc"
 path = "src/main.rs"
 
 [dependencies]

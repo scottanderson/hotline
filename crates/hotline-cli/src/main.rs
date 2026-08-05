@@ -16,7 +16,7 @@ use hotline_client::HotlineClient;
 
 /// Terminal UI Hotline client.
 #[derive(Parser, Debug)]
-#[command(name = "hltui", version, about)]
+#[command(name = "hlc", version, about)]
 struct Args {
     /// Server host.
     #[arg(long, default_value = "127.0.0.1")]

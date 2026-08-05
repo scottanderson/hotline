@@ -1,6 +1,6 @@
 [package]
-name = "hls"
-description = "hotline-rs server binary"
+name = "hotline-daemon"
+description = "Hotline server daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

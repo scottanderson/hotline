@@ -22,8 +22,8 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             bind_addr: "0.0.0.0:5500".to_string(),
-            agreement: "hotline-rs".to_string(),
-            server_name: "hotline-rs".to_string(),
+            agreement: "Hotline".to_string(),
+            server_name: "Hotline".to_string(),
         }
     }
 }

@@ -20,11 +20,11 @@ struct Args {
     bind: String,
 
     /// Server name reported to clients on login.
-    #[arg(long, default_value = "hotline-rs")]
+    #[arg(long, default_value = "Hotline")]
     name: String,
 
     /// Agreement text shown to clients on login (empty disables it).
-    #[arg(long, default_value = "hotline-rs")]
+    #[arg(long, default_value = "Hotline")]
     agreement: String,
 
     /// Directory to store account files in (created if missing).

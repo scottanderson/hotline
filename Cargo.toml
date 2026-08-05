@@ -6,9 +6,8 @@ members = [
     "crates/hotline-client",
     "crates/hotline-server",
     "crates/hotline-tracker",
-    "apps/hlc",
-    "apps/hls",
-    "apps/hltui",
+    "crates/hotline-cli",
+    "crates/hotline-daemon",
 ]
 
 [workspace.package]

@@ -65,7 +65,7 @@ fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let start = lines.len().saturating_sub(visible);
 
     let paragraph = Paragraph::new(lines[start..].to_vec())
-        .block(Block::default().borders(Borders::ALL).title("hotline-rs"))
+        .block(Block::default().borders(Borders::ALL).title("Hotline"))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }

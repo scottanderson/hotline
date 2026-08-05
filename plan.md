@@ -1,6 +1,6 @@
 # Near-term goals
 
-Working on `hotline-rs`, a Rust reimplementation of the Hotline client/server
+Working on this Rust reimplementation of the Hotline client/server
 wire protocol, cross-checked against a reference implementation for behavior
 parity (see AGENTS.md: never name it in code/commits/docs, only describe
 *what*/*why*). Current focus: closing feature gaps versus the reference, in
@@ -24,7 +24,7 @@ priority order (backlog below).
   known client before touching this everywhere.
 - **Join broadcast reaches every session unconditionally.** The reference
   filters *recipients* of join/part/change traffic by their own
-  `access_extra.user_getlist`. `hotline-rs` now gates *issuing*
+  `access_extra.user_getlist`. This server now gates *issuing*
   `HTLC_HDR_USER_GETLIST` on `AccessExtra::USER_GETLIST`
   (`accounts.rs`/`session.rs`), but does not yet filter who *receives*
   `UserChange`/`UserPart` pushes — every connected session still gets

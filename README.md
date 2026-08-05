@@ -1,4 +1,4 @@
-# hotline-rs
+# Hotline
 
 A Rust workspace implementing the [Hotline](https://en.wikipedia.org/wiki/Hotline_Communications)
 client/server wire protocol (`TRTP`).
@@ -13,36 +13,35 @@ it. Framing a `Transaction` over a socket is itself shared behavior, so
 it lives in its own crate rather than being duplicated in both.
 
 ```
-hotline-rs/
-├── Cargo.toml                   # workspace manifest
-├── crates/
-│   ├── hotline-proto/           # wire format only, no I/O, no async
-│   │   ├── wire.rs              # PacketWriter/PacketReader: builder-style fixed-buffer cursors
-│   │   ├── numbers.rs           # signed int encoding (EncodedInt, no heap allocation)
-│   │   ├── field.rs             # Field { id, data } + fixed/generic constructors
-│   │   ├── field_id.rs          # ClientFieldId / ServerFieldId - see below
-│   │   ├── opcode.rs            # ClientOpcode / ServerOpcode / Opcode + TASK_REPLY sentinel
-│   │   ├── transaction.rs       # Transaction: fixed fields + fields, one type
-│   │   ├── types.rs             # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo
-│   │   ├── consts.rs            # AccessPrivileges (64-bit USER_ACCESS bitmap)
-│   │   ├── handshake.rs         # ClientHello / ServerHello (the TRTP handshake)
-│   │   └── error.rs             # ProtoError
-│   │
-│   ├── hotline-codec/           # tokio_util Decoder/Encoder for Transaction
-│   │
-│   ├── hotline-client/          # async client session (Tokio)
-│   │   └── client.rs            # connect, handshake, login, request/reply matching,
-│   │                            # broadcast stream for server-initiated transactions
-│   │
-│   ├── hotline-server/          # async server framework (Tokio)
-│   │   ├── server.rs            # listener, shared state, spawns one Session per connection
-│   │   └── session.rs           # per-connection handshake + transaction dispatch
-│   │
-│   └── hotline-tracker/         # HTRK tracker protocol (client query + server beacon)
+Cargo.toml                     # workspace manifest
+crates/
+├── hotline-proto/             # wire format only, no I/O, no async
+│   ├── wire.rs                # PacketWriter/PacketReader: builder-style fixed-buffer cursors
+│   ├── numbers.rs             # signed int encoding (EncodedInt, no heap allocation)
+│   ├── field.rs               # Field { id, data } + fixed/generic constructors
+│   ├── field_id.rs            # ClientFieldId / ServerFieldId - see below
+│   ├── opcode.rs              # ClientOpcode / ServerOpcode / Opcode + TASK_REPLY sentinel
+│   ├── transaction.rs         # Transaction: fixed fields + fields, one type
+│   ├── types.rs               # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo
+│   ├── consts.rs              # AccessPrivileges (64-bit USER_ACCESS bitmap)
+│   ├── handshake.rs           # ClientHello / ServerHello (the TRTP handshake)
+│   └── error.rs               # ProtoError
 │
-└── apps/
-    ├── hlc/                     # `hlc` - minimal CLI client binary using hotline-client
-    └── hls/                     # `hls` - minimal server binary using hotline-server
+├── hotline-codec/             # tokio_util Decoder/Encoder for Transaction
+│
+├── hotline-client/            # async client session (Tokio)
+│   └── client.rs              # connect, handshake, login, request/reply matching,
+│                              # broadcast stream for server-initiated transactions
+│
+├── hotline-server/            # async server framework (Tokio)
+│   ├── server.rs              # listener, shared state, spawns one Session per connection
+│   └── session.rs             # per-connection handshake + transaction dispatch
+│
+├── hotline-tracker/           # HTRK tracker protocol (client query + server beacon)
+│
+├── hotline-cli/               # `hlc` - terminal client binary using hotline-client
+│
+└── hotline-daemon/            # `hls` - server binary using hotline-server
 ```
 
 `hotline-proto` has no `tokio` dependency: it only turns bytes into
@@ -97,8 +96,8 @@ cargo clippy --workspace
 cargo fmt --all
 
 # terminal 1
-cargo run -p hls -- --port 5500
+cargo run -p hotline-daemon -- --port 5500
 
 # terminal 2
-cargo run -p hlc -- --host 127.0.0.1 --port 5500 --login guest --nick RustHL
+cargo run -p hotline-cli -- --host 127.0.0.1 --port 5500 --login guest --nick RustHL
 ```
