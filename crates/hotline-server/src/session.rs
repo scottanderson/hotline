@@ -102,13 +102,13 @@ impl Session {
                 msg = rx.recv() => {
                     match msg {
                         Some(RecipientMessage::Push(tx)) => {
-                            if !session.may_receive(tx.opcode()) {
-                                continue;
+                            let opcode = tx.opcode();
+                            let is_kick = opcode == Opcode::Push(ServerOpcode::Politequit);
+                            if session.may_receive(opcode) {
+                                writer.send(tx).await?;
                             }
-                            let is_kick = tx.opcode() == Opcode::Push(ServerOpcode::Politequit);
-                            writer.send(tx).await?;
                             if is_kick {
-                                break; // the whole point of Politequit is disconnection
+                                break; // Politequit disconnects the user
                             }
                         }
                         Some(RecipientMessage::AccessUpdate(update)) => {
