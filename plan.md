@@ -52,7 +52,25 @@ priority order (backlog below).
 2. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,
-   not real storage.
+   not real storage. Protocol researched; scoped first slice proposed to
+   and not yet confirmed by the user:
+   - **In scope**: a second `TcpListener` on `port + 1`; `HTLC_HDR_FILE_GET`/
+     `_PUT` (202/203) on the main connection allocate an opaque `u32` ref
+     and record a pending transfer (path, direction, size for PUT) keyed by
+     that ref + the client's IP; the second-connection handshake is a fixed
+     16-byte header (`"HTXF"` magic = `0x48545846`, `ref: u32`, `len: u32`,
+     `type: u16`, 2 reserved bytes), matched against the pending entry; data
+     is framed in the reference's "FILP" container — `"INFO"` fork (zeroed
+     type/creator, no real HFS metadata) then `"DATA"` fork with raw bytes,
+     skipping the resource fork entirely. Real file storage backing
+     `SharedState::root_files` via a `--files-dir` flag, mirroring the
+     `--accounts-dir` pattern `FileAccountProvider` already uses.
+   - **Explicitly deferred** (own follow-up items, not silently dropped):
+     resume support (client-sent `RFLT` blob with `data_pos`/`rsrc_pos`
+     offsets), the transfer queue (`HTLS_DATA_QUEUE_POSITION`,
+     `HTLS_HDR_QUEUE_UPDATE`), folder transfers (`HTLC_HDR_FILE_GETFOLDER`/
+     `_PUTFOLDER`, a separate `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` command
+     loop on the transfer connection), and resource-fork (`"MACR"`) data.
 3. **Threaded news.** Current news support is flat/classic only.
 4. **Chat room passwords.** Extend `ChatRoom` with an optional password;
    `HTLC_HDR_CHAT_CREATE`/`HTLC_HDR_CHAT_JOIN` should accept/check it,
