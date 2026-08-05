@@ -346,19 +346,13 @@ mod tests {
 
     #[test]
     fn task_reply_sentinel_is_recognized_exactly() {
-        assert_eq!(
-            Opcode::from_server_wire(TASK_REPLY),
-            Opcode::Reply
-        );
+        assert_eq!(Opcode::from_server_wire(TASK_REPLY), Opcode::Reply);
     }
 
     #[test]
     fn buggy_server_task_reply_with_opcode_in_low_bits_still_matches() {
         let buggy = TASK_REPLY | u32::from(ClientOpcode::Login);
-        assert_eq!(
-            Opcode::from_server_wire(buggy),
-            Opcode::Reply
-        );
+        assert_eq!(Opcode::from_server_wire(buggy), Opcode::Reply);
     }
 
     #[test]
@@ -403,36 +397,30 @@ mod tests {
     /// original wire constant, not just look plausible.
     #[test]
     fn debug_reconstructs_every_client_opcodes_original_name() {
+        use ClientOpcode::*;
         let cases = [
-            (ClientOpcode::NewsfileGet, "101 HTLC_HDR_NEWSFILE_GET"),
-            (ClientOpcode::FileSetinfo, "207 HTLC_HDR_FILE_SETINFO"),
-            (ClientOpcode::UserGetlist, "300 HTLC_HDR_USER_GETLIST"),
-            (
-                ClientOpcode::NewsListcategory,
-                "371 HTLC_HDR_NEWS_LISTCATEGORY",
-            ),
-            (ClientOpcode::Ping, "500 HTLC_HDR_PING"),
+            ("101 HTLC_HDR_NEWSFILE_GET", NewsfileGet),
+            ("207 HTLC_HDR_FILE_SETINFO", FileSetinfo),
+            ("300 HTLC_HDR_USER_GETLIST", UserGetlist),
+            ("371 HTLC_HDR_NEWS_LISTCATEGORY", NewsListcategory),
+            ("500 HTLC_HDR_PING", Ping),
+            ("57005 (unrecognized)", Unknown(0xDEAD)),
         ];
-        for (opcode, expected) in cases {
+        for (expected, opcode) in cases {
             assert_eq!(format!("{opcode:?}"), expected);
         }
-        assert_eq!(
-            format!("{:?}", ClientOpcode::Unknown(0xDEAD)),
-            "57005 (unrecognized)"
-        );
     }
 
     #[test]
     fn debug_reconstructs_every_server_opcodes_original_name() {
+        use ServerOpcode::*;
         let cases = [
-            (
-                ServerOpcode::ChatUserChange,
-                "117 HTLS_HDR_CHAT_USER_CHANGE",
-            ),
-            (ServerOpcode::UserSelfinfo, "354 HTLS_HDR_USER_SELFINFO"),
-            (ServerOpcode::MsgBroadcast, "355 HTLS_HDR_MSG_BROADCAST"),
+            ("117 HTLS_HDR_CHAT_USER_CHANGE", ChatUserChange),
+            ("354 HTLS_HDR_USER_SELFINFO", UserSelfinfo),
+            ("355 HTLS_HDR_MSG_BROADCAST", MsgBroadcast),
+            ("57005 (unrecognized)", Unknown(0xDEAD)),
         ];
-        for (opcode, expected) in cases {
+        for (expected, opcode) in cases {
             assert_eq!(format!("{opcode:?}"), expected);
         }
     }
