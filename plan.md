@@ -33,6 +33,20 @@ priority order (backlog below).
   scoped chat is untouched (delivered via `targeted_rx`/room membership,
   never `READ_CHAT`), matching the reference's own split between its
   public-chat and room-chat send paths.
+- **Cross-channel delivery ordering isn't guaranteed for a single
+  recipient.** The reference is single-threaded and appends every
+  outgoing message for a connection (whatever produced it) to that
+  connection's one FIFO output buffer, so delivery always matches the
+  order the server decided to send things in. This server instead spreads
+  delivery across four independent `tokio::broadcast` channels
+  (`broadcast`/`targeted`/`announcements`/`access_updates` in
+  `state.rs`), and `Session::run`'s `select!` picks pseudo-randomly among
+  whichever channels are ready on a given poll — so two messages to the
+  same recipient via *different* channels have no guaranteed relative
+  order, even though within any single channel delivery is FIFO. Verified
+  against the reference directly. Scoped as backlog item 2 below; not
+  urgent (no known concrete user-facing bug from it today), but a real
+  parity gap worth closing given this project's stated goal.
 
 ## Backlog, in priority order
 
@@ -43,7 +57,29 @@ priority order (backlog below).
    `UserChange`/`UserPart` pushes, and `SET_SUBJECT` gates setting the
    global chat room's subject. Both are set at login from
    `Account::access_extra`.
-2. **File transfer (`HTXF`).** Second-port transfer handshake, not
+2. **Unify per-recipient delivery into one ordered channel.** Fixes the
+   cross-channel ordering gap flagged above. Design confirmed with the
+   user.
+   Summary: replace `SharedState`'s four broadcast channels
+   (`broadcast`/`targeted`/`announcements`/`access_updates`) with one
+   `HashMap<u16, mpsc::Sender<RecipientMessage>>`, `RecipientMessage`
+   being `Push(Transaction) | AccessUpdate(AccessUpdate)`; `publish`/
+   `send_to`/`announce`/`push_access_update` all fan out through it, so
+   `Session::run` collapses to a single inbound `select!` arm per
+   connection. Moves `Session::may_receive`'s privilege-gating logic into
+   a new `SharedState::recipient_may_receive`, run at fan-out time, which
+   requires adding `access_extra: AccessExtra` to `UserEntry` (currently
+   only carries `access`). Deliberately out of scope: ordering between two
+   genuinely independent concurrent clients' actions arriving at a third
+   client — only per-recipient ordering of a single server-side send
+   sequence is guaranteed, matching what the reference actually relies on.
+   **Blocked on**: discarding the current uncommitted, non-compiling WIP
+   in `state.rs`/`session.rs`/`server.rs` (a partial, superseded attempt
+   at wrapping the old `broadcast` channel in `Arc<Transaction>`); the
+   `Server::new(impl AccountProvider)` ergonomics tweak in that same WIP
+   is fine to keep as a separate, later follow-up.
+   Not urgent — no known concrete bug, safe to defer behind items 3+.
+3. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,
    not real storage. Protocol researched; scoped first slice proposed to
@@ -65,19 +101,19 @@ priority order (backlog below).
      `HTLS_HDR_QUEUE_UPDATE`), folder transfers (`HTLC_HDR_FILE_GETFOLDER`/
      `_PUTFOLDER`, a separate `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` command
      loop on the transfer connection), and resource-fork (`"MACR"`) data.
-3. **Threaded news.** Current news support is flat/classic only.
-4. **Chat room passwords.** Extend `ChatRoom` with an optional password;
+4. **Threaded news.** Current news support is flat/classic only.
+5. **Chat room passwords.** Extend `ChatRoom` with an optional password;
    `HTLC_HDR_CHAT_CREATE`/`HTLC_HDR_CHAT_JOIN` should accept/check it,
    matching how the invite bit already bypasses the check. Verify against
    the reference's exact join/create field names and error text before
    implementing.
-5. **Remaining unhandled opcodes.** All map to an item above rather than
-   being new independent work: `FileGet`/`FilePut` (202/203, item 2);
+6. **Remaining unhandled opcodes.** All map to an item above rather than
+   being new independent work: `FileGet`/`FilePut` (202/203, item 3);
    `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetnfo`/`FileMove`/
-   `FileSymlink` (204–209, blocked on real file storage, item 2);
+   `FileSymlink` (204–209, blocked on real file storage, item 3);
    `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
-   (370–411, item 3).
+   (370–411, item 4).
 
 ## Needs manual verification against the real client
 
