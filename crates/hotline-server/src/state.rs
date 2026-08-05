@@ -24,6 +24,9 @@ pub const IDLE_THRESHOLD: Duration = Duration::from_secs(10 * 60);
 pub struct UserEntry {
     /// Socket/user ID assigned at connect time.
     pub user_id: u16,
+    /// Account login this session authenticated as. Also kept in
+    /// [`crate::session::Session`].
+    pub login: String,
     /// Display name (post `SET_CLIENT_USER_INFO`).
     pub name: String,
     /// Icon ID.
@@ -72,11 +75,9 @@ pub struct ChatRoom {
     pub invited: HashSet<u16>,
 }
 
-/// A live privilege change for every session logged in under `login`.
+/// A live privilege change, see [`SharedState::push_access_update`].
 #[derive(Debug, Clone)]
 pub struct AccessUpdate {
-    /// Login the modified account is stored under.
-    pub login: String,
     /// The account's new privileges.
     pub access: AccessPrivileges,
     /// The account's new display name, if non-empty.
@@ -268,21 +269,18 @@ impl SharedState {
         }
     }
 
-    /// Push a live privilege change to every connected recipient; each
-    /// session applies it only if it matches its own login.
+    /// Push a live privilege change to every recipient logged in under `login`.
     pub async fn push_access_update(
         &self,
-        login: String,
+        login: &str,
         access: AccessPrivileges,
         name: Option<String>,
     ) {
-        let update = AccessUpdate {
-            login,
-            access,
-            name,
-        };
-        for sender in self.recipients.read().await.values() {
-            let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
+        let update = AccessUpdate { access, name };
+        for (&user_id, sender) in self.recipients.read().await.iter() {
+            if self.user(user_id).await.is_some_and(|u| u.login == login) {
+                let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
+            }
         }
     }
 
@@ -449,6 +447,7 @@ mod tests {
             state
                 .insert_user(UserEntry {
                     user_id: id,
+                    login: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
                     access: AccessPrivileges::empty(),
@@ -484,6 +483,7 @@ mod tests {
             state
                 .insert_user(UserEntry {
                     user_id: id,
+                    login: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
                     access: AccessPrivileges::empty(),

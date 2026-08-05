@@ -358,6 +358,7 @@ impl Session {
         state
             .insert_user(UserEntry {
                 user_id: self.user_id,
+                login: self.login.clone(),
                 name: self.name.clone(),
                 icon,
                 access: self.access,
@@ -383,10 +384,9 @@ impl Session {
     }
 
     /// Applies a live account-modify change for this session's login.
+    /// `SharedState::push_access_update` only delivers this to matching
+    /// recipients, so there's no login check to make here.
     async fn apply_access_update(&mut self, update: AccessUpdate, state: &SharedState) {
-        if self.login.is_empty() || update.login != self.login {
-            return;
-        }
         // Only force the account's name when this modify revokes USE_ANY_NAME.
         let losing_use_any_name = self.access.contains(AccessPrivileges::USE_ANY_NAME)
             && !update.access.contains(AccessPrivileges::USE_ANY_NAME);
@@ -938,7 +938,7 @@ impl Session {
         let reply = match result {
             Ok(()) => {
                 let name = (!name.is_empty()).then_some(name);
-                state.push_access_update(login, access, name).await;
+                state.push_access_update(&login, access, name).await;
                 tx.reply(vec![])
             }
             Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
@@ -975,6 +975,7 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id,
+                login: String::new(),
                 name: format!("user{user_id}"),
                 icon: 0,
                 access,
@@ -1471,6 +1472,7 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: session.user_id,
+                login: String::new(),
                 name: session.name.clone(),
                 icon: 0,
                 access: session.access,
@@ -1730,6 +1732,17 @@ mod tests {
         // Bob is already connected, logged in under the "bob" account.
         let mut bob = test_session("Bob", AccessPrivileges::empty());
         bob.login = "bob".to_string();
+        state
+            .insert_user(UserEntry {
+                user_id: bob.user_id,
+                login: bob.login.clone(),
+                name: bob.name.clone(),
+                icon: 0,
+                access: bob.access,
+                access_extra: bob.access_extra,
+                last_active: Instant::now(),
+            })
+            .await;
         let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let modify = Transaction::request(
@@ -1785,6 +1798,17 @@ mod tests {
         // Bob is connected with USE_ANY_NAME and has picked a custom name.
         let mut bob = test_session("Bobby the Great", AccessPrivileges::USE_ANY_NAME);
         bob.login = "bob".to_string();
+        state
+            .insert_user(UserEntry {
+                user_id: bob.user_id,
+                login: bob.login.clone(),
+                name: bob.name.clone(),
+                icon: 0,
+                access: bob.access,
+                access_extra: bob.access_extra,
+                last_active: Instant::now(),
+            })
+            .await;
         let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let revoke = Transaction::request(
@@ -1875,6 +1899,7 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 1,
+                login: String::new(),
                 name: "Alice".to_string(),
                 icon: 0,
                 access: AccessPrivileges::all(),
@@ -1885,6 +1910,7 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 2,
+                login: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
                 access: AccessPrivileges::all(),
