@@ -199,9 +199,16 @@ impl App {
             .and_then(Field::as_u16)
             .unwrap_or_default();
 
-        match self.users.iter_mut().find(|u| u.user_id == user_id) {
-            Some(existing) => {
-                *existing = UserNameWithInfo {
+        match self.users.iter().position(|u| u.user_id == user_id) {
+            Some(pos) => {
+                let old_name = self.users[pos].name.clone();
+                if !old_name.is_empty() && !name.is_empty() && old_name != name {
+                    self.push(
+                        format!(" <<< {old_name} is now known as {name} >>>"),
+                        LineKind::System,
+                    );
+                }
+                self.users[pos] = UserNameWithInfo {
                     user_id,
                     icon,
                     flags,
@@ -354,5 +361,41 @@ mod tests {
         let _ = app.apply_server_event(&demoted);
         let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
         assert!(!UserFlags::from_bits_truncate(user.flags).contains(UserFlags::ADMIN));
+    }
+
+    #[test]
+    fn apply_user_change_notes_a_rename() {
+        use hotline_proto::field_id::ServerFieldId;
+        use hotline_proto::opcode::ServerOpcode;
+
+        let mut app = App::new("me".to_string(), 0);
+        let joined = Transaction::push(
+            ServerOpcode::UserChange,
+            vec![
+                Field::u16(ServerFieldId::UserId, 2),
+                Field::u16(ServerFieldId::Icon, 0),
+                Field::string(ServerFieldId::Name, "Alice"),
+                Field::u16(ServerFieldId::Color, 0),
+            ],
+        );
+        let _ = app.apply_server_event(&joined);
+
+        let renamed = Transaction::push(
+            ServerOpcode::UserChange,
+            vec![
+                Field::u16(ServerFieldId::UserId, 2),
+                Field::u16(ServerFieldId::Icon, 0),
+                Field::string(ServerFieldId::Name, "Alicia"),
+                Field::u16(ServerFieldId::Color, 0),
+            ],
+        );
+        let _ = app.apply_server_event(&renamed);
+
+        assert_eq!(
+            app.lines.last().unwrap().text,
+            " <<< Alice is now known as Alicia >>>"
+        );
+        let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
+        assert_eq!(user.name, "Alicia");
     }
 }
