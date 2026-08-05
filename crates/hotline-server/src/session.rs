@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use futures::{SinkExt, StreamExt};
@@ -32,6 +33,9 @@ pub struct Session {
     name: String,
     /// Account login this session authenticated as, empty until login.
     login: String,
+    /// The account's own registered display name, empty until login. See
+    /// [`crate::state::UserEntry::account_name`].
+    account_name: String,
     /// Privileges granted at login.
     access: AccessPrivileges,
     /// Server-side-only account settings; no client opcode reads or sets them.
@@ -39,6 +43,10 @@ pub struct Session {
     state: SessionState,
     /// Whether the last broadcast `UserChange` marked this session away.
     is_away: bool,
+    /// Remote socket address this connection was accepted from.
+    remote_addr: SocketAddr,
+    /// When this connection was accepted.
+    connected_at: Instant,
 }
 
 impl Session {
@@ -49,6 +57,7 @@ impl Session {
         state: SharedState,
         config: ServerConfig,
     ) -> Result<()> {
+        let remote_addr = stream.peer_addr()?;
         Self::handshake(&mut stream).await?;
 
         let user_id = state.next_user_id();
@@ -57,10 +66,13 @@ impl Session {
             name: format!("guest{user_id}"),
             // Empty until on_login succeeds.
             login: String::new(),
+            account_name: String::new(),
             access: AccessPrivileges::empty(),
             access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
+            remote_addr,
+            connected_at: Instant::now(),
         };
 
         let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::for_server()).split();
@@ -239,6 +251,7 @@ impl Session {
         self.login = login.to_string();
         self.access = match account {
             Some(account) if account.password == password => {
+                self.account_name = account.name.clone();
                 if !account.name.is_empty() {
                     self.name = account.name;
                 }
@@ -359,10 +372,13 @@ impl Session {
             .insert_user(UserEntry {
                 user_id: self.user_id,
                 login: self.login.clone(),
+                account_name: self.account_name.clone(),
                 name: self.name.clone(),
                 icon,
                 access: self.access,
                 access_extra: self.access_extra,
+                remote_addr: self.remote_addr,
+                connected_at: self.connected_at,
                 last_active: Instant::now(),
             })
             .await;
@@ -491,9 +507,8 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// 303: another user's info text (name, icon, and a short
-    /// privilege summary listing each held flag's
-    /// [`AccessPrivileges::flag_name`]).
+    /// 303: another user's info text (name, login, account name, icon,
+    /// remote address, connected duration, and a privilege summary).
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.require(AccessPrivileges::GET_USER_INFO) {
             return vec![tx.reply_error(reason)];
@@ -505,25 +520,42 @@ impl Session {
             return vec![tx.reply_error("no such user")];
         };
 
-        let privileges = target
-            .access
-            .iter()
-            .flat_map(AccessPrivileges::flag_name)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let privileges = if target.access == AccessPrivileges::all() {
+            "all".to_string()
+        } else if target.access.is_empty() {
+            "none".to_string()
+        } else {
+            target
+                .access
+                .iter()
+                .flat_map(AccessPrivileges::flag_name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let online = target.connected_at.elapsed();
         let text = format!(
-            "{}{}\rPrivileges: {}",
-            target.name,
-            if target.access.contains(AccessPrivileges::DISCONNECT_USERS) {
+            "{name}{admin}\rLogin: {login}\rAccount name: {account_name}\rIcon: {icon}\r\
+             Address: {addr}\rConnected: {mins}m {secs}s\rPrivileges: {privileges}",
+            name = target.name,
+            admin = if target.access.contains(AccessPrivileges::DISCONNECT_USERS) {
                 " (admin)"
             } else {
                 ""
             },
-            if privileges.is_empty() {
-                "none"
+            login = if target.login.is_empty() {
+                "(guest)"
             } else {
-                &privileges
-            }
+                &target.login
+            },
+            account_name = if target.account_name.is_empty() {
+                "(none)"
+            } else {
+                &target.account_name
+            },
+            icon = target.icon,
+            addr = target.remote_addr,
+            mins = online.as_secs() / 60,
+            secs = online.as_secs() % 60,
         );
 
         vec![tx.reply(vec![
@@ -957,10 +989,13 @@ mod tests {
             user_id: 1,
             name: name.to_string(),
             login: String::new(),
+            account_name: String::new(),
             access,
             access_extra: AccessExtra::default(),
             state: SessionState::Joined,
             is_away: false,
+            remote_addr: "127.0.0.1:0".parse().unwrap(),
+            connected_at: Instant::now(),
         }
     }
 
@@ -980,6 +1015,9 @@ mod tests {
                 icon: 0,
                 access,
                 access_extra,
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
                 last_active: Instant::now(),
             })
             .await;
@@ -1007,6 +1045,70 @@ mod tests {
         let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
 
         assert!(session.on_user_get_list(&request, &state).await[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn user_get_info_summarizes_all_privileges_as_all() {
+        let session = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: "bob".to_string(),
+                account_name: "Bobby".to_string(),
+                name: "Bob".to_string(),
+                icon: 42,
+                access: AccessPrivileges::all(),
+                access_extra: AccessExtra::default(),
+                remote_addr: "192.0.2.1:5500".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+            })
+            .await;
+        let request = Transaction::request(
+            ClientOpcode::UserGetinfo,
+            1,
+            vec![Field::u16(ClientFieldId::Uid, 2)],
+        );
+
+        let reply = &session.on_user_get_info(&request, &state).await[0];
+        let text = reply.field(ServerFieldId::Text).unwrap().as_string();
+        assert!(text.contains("Login: bob"));
+        assert!(text.contains("Account name: Bobby"));
+        assert!(text.contains("Icon: 42"));
+        assert!(text.contains("Address: 192.0.2.1:5500"));
+        assert!(text.contains("Privileges: all"));
+    }
+
+    #[tokio::test]
+    async fn user_get_info_summarizes_no_privileges_as_none() {
+        let session = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: String::new(),
+                account_name: String::new(),
+                name: "Bob".to_string(),
+                icon: 0,
+                access: AccessPrivileges::empty(),
+                access_extra: AccessExtra::default(),
+                remote_addr: "192.0.2.1:5500".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+            })
+            .await;
+        let request = Transaction::request(
+            ClientOpcode::UserGetinfo,
+            1,
+            vec![Field::u16(ClientFieldId::Uid, 2)],
+        );
+
+        let reply = &session.on_user_get_info(&request, &state).await[0];
+        let text = reply.field(ServerFieldId::Text).unwrap().as_string();
+        assert!(text.contains("Login: (guest)"));
+        assert!(text.contains("Account name: (none)"));
+        assert!(text.contains("Privileges: none"));
     }
 
     #[tokio::test]
@@ -1370,10 +1472,13 @@ mod tests {
             user_id: 1,
             name: "guest1".to_string(),
             login: String::new(),
+            account_name: String::new(),
             access: AccessPrivileges::empty(),
             access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
+            remote_addr: "127.0.0.1:0".parse().unwrap(),
+            connected_at: Instant::now(),
         };
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -1477,6 +1582,9 @@ mod tests {
                 icon: 0,
                 access: session.access,
                 access_extra: AccessExtra::USER_GETLIST,
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
                 last_active: Instant::now(),
             })
             .await;
@@ -1740,6 +1848,9 @@ mod tests {
                 icon: 0,
                 access: bob.access,
                 access_extra: bob.access_extra,
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
                 last_active: Instant::now(),
             })
             .await;
@@ -1806,6 +1917,9 @@ mod tests {
                 icon: 0,
                 access: bob.access,
                 access_extra: bob.access_extra,
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
                 last_active: Instant::now(),
             })
             .await;
@@ -1904,6 +2018,9 @@ mod tests {
                 icon: 0,
                 access: AccessPrivileges::all(),
                 access_extra: AccessExtra::default(),
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
                 last_active: Instant::now(),
             })
             .await;
@@ -1915,6 +2032,9 @@ mod tests {
                 icon: 0,
                 access: AccessPrivileges::all(),
                 access_extra: AccessExtra::default(),
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
                 last_active: Instant::now(),
             })
             .await;

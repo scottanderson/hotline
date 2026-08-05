@@ -3,6 +3,7 @@
 //! reach each other.
 
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,10 +28,17 @@ pub struct UserEntry {
     /// Account login this session authenticated as. Also kept in
     /// [`crate::session::Session`].
     pub login: String,
+    /// The account's own registered display name, which can differ from
+    /// `name` if `USE_ANY_NAME` lets this session pick its own.
+    pub account_name: String,
     /// Display name (post `SET_CLIENT_USER_INFO`).
     pub name: String,
     /// Icon ID.
     pub icon: u16,
+    /// Remote socket address this connection was accepted from.
+    pub remote_addr: SocketAddr,
+    /// When this connection was accepted.
+    pub connected_at: Instant,
     /// Privileges granted at login. Also kept in
     /// [`crate::session::Session`], which is what handlers check against.
     pub access: AccessPrivileges,
@@ -448,10 +456,13 @@ mod tests {
                 .insert_user(UserEntry {
                     user_id: id,
                     login: String::new(),
+                    account_name: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
                     access: AccessPrivileges::empty(),
                     access_extra: AccessExtra::default(),
+                    remote_addr: "127.0.0.1:0".parse().unwrap(),
+                    connected_at: Instant::now(),
                     last_active: Instant::now(),
                 })
                 .await;
@@ -484,10 +495,13 @@ mod tests {
                 .insert_user(UserEntry {
                     user_id: id,
                     login: String::new(),
+                    account_name: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
                     access: AccessPrivileges::empty(),
                     access_extra: AccessExtra::default(),
+                    remote_addr: "127.0.0.1:0".parse().unwrap(),
+                    connected_at: Instant::now(),
                     last_active: Instant::now(),
                 })
                 .await;
