@@ -74,7 +74,7 @@ impl Decoder for TransactionCodec {
     type Item = Transaction;
     type Error = CodecError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Transaction>, CodecError> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         loop {
             match &self.state {
                 DecodeState::Prefix => {
@@ -108,7 +108,7 @@ impl Decoder for TransactionCodec {
 impl Encoder<Transaction> for TransactionCodec {
     type Error = CodecError;
 
-    fn encode(&mut self, item: Transaction, dst: &mut BytesMut) -> Result<(), CodecError> {
+    fn encode(&mut self, item: Transaction, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let next = self.next_push_trans.as_mut();
         // No-op for a request or reply; stamps a push's trans.
         let item = item.with_push_trans(next);

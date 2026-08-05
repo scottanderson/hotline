@@ -28,7 +28,7 @@ pub struct EncodedInt {
 impl Deref for EncodedInt {
     type Target = [u8];
 
-    fn deref(&self) -> &[u8] {
+    fn deref(&self) -> &Self::Target {
         &self.bytes[..self.len as usize]
     }
 }
