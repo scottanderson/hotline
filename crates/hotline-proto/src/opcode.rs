@@ -11,17 +11,39 @@
 //! [`Opcode::from_client_wire`]/[`Opcode::from_server_wire`] can't be
 //! merged; the caller must already know who sent the value.
 //!
-//! Variant names track the tail of the original wire constant.
+//! Variant names track the tail of the original wire constant; each
+//! enum's `opcode_names!` invocation pairs a variant with that original
+//! name once, and `Debug` reads it back via [`ClientOpcode::original_name`]/
+//! [`ServerOpcode::original_name`] rather than storing the string a
+//! second time.
+
+use num_enum::{FromPrimitive, IntoPrimitive};
 
 /// Sentinel opcode value every reply to a specific request carries in the
 /// header's type field, instead of echoing `0` or the original request's
 /// opcode. See the module docs for how real (and buggy) servers use this.
 const TASK_REPLY: u32 = 0x0001_0000;
 
+/// Declares a `const fn original_name(&self) -> &'static str` from a list
+/// of `(ORIGINAL_WIRE_NAME, Variant)` pairs, so `Debug` impls don't need
+/// to store each variant's original wire constant name a second time.
+macro_rules! opcode_names {
+    ($name:ident, $(($orig:ident, $variant:ident)),* $(,)?) => {
+        impl $name {
+            const fn original_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => stringify!($orig),)*
+                    Self::Unknown(_) => "(unrecognized)",
+                }
+            }
+        }
+    };
+}
+
 /// Client -> server transaction opcodes.
 #[repr(u32)]
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
 pub enum ClientOpcode {
     /// Read articles from the classic (non-threaded) news (101).
     /// Original: `HTLC_HDR_NEWSFILE_GET`.
@@ -140,111 +162,60 @@ pub enum ClientOpcode {
     /// Idle keep-alive ping (500).
     /// Original: `HTLC_HDR_PING`.
     Ping = 500,
+    /// Not recognized by this build. Carries the raw wire value so
+    /// callers can still log/forward it.
+    #[num_enum(catch_all)]
+    Unknown(u32),
 }
 
-impl ClientOpcode {
-    /// Map a wire value to a known client opcode, or `None` if this build
-    /// doesn't recognize it (the catch-all a `match` should fall through
-    /// to, since this enum is `#[non_exhaustive]`).
-    pub const fn from_u32(v: u32) -> Option<Self> {
-        use ClientOpcode::*;
-        Some(match v {
-            101 => NewsfileGet,
-            103 => NewsfilePost,
-            105 => Chat,
-            107 => Login,
-            108 => Msg,
-            110 => UserKick,
-            112 => ChatCreate,
-            113 => ChatInvite,
-            114 => ChatDecline,
-            115 => ChatJoin,
-            116 => ChatPart,
-            120 => ChatSubject,
-            121 => Agreed,
-            200 => FileList,
-            202 => FileGet,
-            203 => FilePut,
-            204 => FileDelete,
-            205 => FileMkdir,
-            206 => FileGetinfo,
-            207 => FileSetinfo,
-            208 => FileMove,
-            209 => FileSymlink,
-            300 => UserGetlist,
-            303 => UserGetinfo,
-            304 => UserChange,
-            350 => AccountCreate,
-            351 => AccountDelete,
-            352 => AccountRead,
-            353 => AccountModify,
-            355 => MsgBroadcast,
-            370 => NewsListdir,
-            371 => NewsListcategory,
-            380 => NewsDelete,
-            381 => NewsMkdir,
-            382 => NewsMkcategory,
-            400 => NewsGetthread,
-            410 => NewsPostthread,
-            411 => NewsDeletethread,
-            500 => Ping,
-            _ => return None,
-        })
-    }
-
-    /// The wire `type` value.
-    pub const fn as_u32(self) -> u32 {
-        self as u32
-    }
-}
+opcode_names!(
+    ClientOpcode,
+    (HTLC_HDR_NEWSFILE_GET, NewsfileGet),
+    (HTLC_HDR_NEWSFILE_POST, NewsfilePost),
+    (HTLC_HDR_CHAT, Chat),
+    (HTLC_HDR_LOGIN, Login),
+    (HTLC_HDR_MSG, Msg),
+    (HTLC_HDR_USER_KICK, UserKick),
+    (HTLC_HDR_CHAT_CREATE, ChatCreate),
+    (HTLC_HDR_CHAT_INVITE, ChatInvite),
+    (HTLC_HDR_CHAT_DECLINE, ChatDecline),
+    (HTLC_HDR_CHAT_JOIN, ChatJoin),
+    (HTLC_HDR_CHAT_PART, ChatPart),
+    (HTLC_HDR_CHAT_SUBJECT, ChatSubject),
+    (HTLC_HDR_AGREED, Agreed),
+    (HTLC_HDR_FILE_LIST, FileList),
+    (HTLC_HDR_FILE_GET, FileGet),
+    (HTLC_HDR_FILE_PUT, FilePut),
+    (HTLC_HDR_FILE_DELETE, FileDelete),
+    (HTLC_HDR_FILE_MKDIR, FileMkdir),
+    (HTLC_HDR_FILE_GETINFO, FileGetinfo),
+    (HTLC_HDR_FILE_SETINFO, FileSetinfo),
+    (HTLC_HDR_FILE_MOVE, FileMove),
+    (HTLC_HDR_FILE_SYMLINK, FileSymlink),
+    (HTLC_HDR_USER_GETLIST, UserGetlist),
+    (HTLC_HDR_USER_GETINFO, UserGetinfo),
+    (HTLC_HDR_USER_CHANGE, UserChange),
+    (HTLC_HDR_ACCOUNT_CREATE, AccountCreate),
+    (HTLC_HDR_ACCOUNT_DELETE, AccountDelete),
+    (HTLC_HDR_ACCOUNT_READ, AccountRead),
+    (HTLC_HDR_ACCOUNT_MODIFY, AccountModify),
+    (HTLC_HDR_MSG_BROADCAST, MsgBroadcast),
+    (HTLC_HDR_NEWS_LISTDIR, NewsListdir),
+    (HTLC_HDR_NEWS_LISTCATEGORY, NewsListcategory),
+    (HTLC_HDR_NEWS_DELETE, NewsDelete),
+    (HTLC_HDR_NEWS_MKDIR, NewsMkdir),
+    (HTLC_HDR_NEWS_MKCATEGORY, NewsMkcategory),
+    (HTLC_HDR_NEWS_GETTHREAD, NewsGetthread),
+    (HTLC_HDR_NEWS_POSTTHREAD, NewsPostthread),
+    (HTLC_HDR_NEWS_DELETETHREAD, NewsDeletethread),
+    (HTLC_HDR_PING, Ping),
+);
 
 impl std::fmt::Debug for ClientOpcode {
-    /// Prints the variant name and the original `HTLC_HDR_*` constant
-    /// name, e.g. `Login (HTLC_HDR_LOGIN)`.
+    /// Prints the wire value and the original constant name, e.g.
+    /// `107 HTLC_HDR_LOGIN`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = self.as_u32();
-        let name = match self {
-            Self::NewsfileGet => "HTLC_HDR_NEWSFILE_GET",
-            Self::NewsfilePost => "HTLC_HDR_NEWSFILE_POST",
-            Self::Chat => "HTLC_HDR_CHAT",
-            Self::Login => "HTLC_HDR_LOGIN",
-            Self::Msg => "HTLC_HDR_MSG",
-            Self::UserKick => "HTLC_HDR_USER_KICK",
-            Self::ChatCreate => "HTLC_HDR_CHAT_CREATE",
-            Self::ChatInvite => "HTLC_HDR_CHAT_INVITE",
-            Self::ChatDecline => "HTLC_HDR_CHAT_DECLINE",
-            Self::ChatJoin => "HTLC_HDR_CHAT_JOIN",
-            Self::ChatPart => "HTLC_HDR_CHAT_PART",
-            Self::ChatSubject => "HTLC_HDR_CHAT_SUBJECT",
-            Self::Agreed => "HTLC_HDR_AGREED",
-            Self::FileList => "HTLC_HDR_FILE_LIST",
-            Self::FileGet => "HTLC_HDR_FILE_GET",
-            Self::FilePut => "HTLC_HDR_FILE_PUT",
-            Self::FileDelete => "HTLC_HDR_FILE_DELETE",
-            Self::FileMkdir => "HTLC_HDR_FILE_MKDIR",
-            Self::FileGetinfo => "HTLC_HDR_FILE_GETINFO",
-            Self::FileSetinfo => "HTLC_HDR_FILE_SETINFO",
-            Self::FileMove => "HTLC_HDR_FILE_MOVE",
-            Self::FileSymlink => "HTLC_HDR_FILE_SYMLINK",
-            Self::UserGetlist => "HTLC_HDR_USER_GETLIST",
-            Self::UserGetinfo => "HTLC_HDR_USER_GETINFO",
-            Self::UserChange => "HTLC_HDR_USER_CHANGE",
-            Self::AccountCreate => "HTLC_HDR_ACCOUNT_CREATE",
-            Self::AccountDelete => "HTLC_HDR_ACCOUNT_DELETE",
-            Self::AccountRead => "HTLC_HDR_ACCOUNT_READ",
-            Self::AccountModify => "HTLC_HDR_ACCOUNT_MODIFY",
-            Self::MsgBroadcast => "HTLC_HDR_MSG_BROADCAST",
-            Self::NewsListdir => "HTLC_HDR_NEWS_LISTDIR",
-            Self::NewsListcategory => "HTLC_HDR_NEWS_LISTCATEGORY",
-            Self::NewsDelete => "HTLC_HDR_NEWS_DELETE",
-            Self::NewsMkdir => "HTLC_HDR_NEWS_MKDIR",
-            Self::NewsMkcategory => "HTLC_HDR_NEWS_MKCATEGORY",
-            Self::NewsGetthread => "HTLC_HDR_NEWS_GETTHREAD",
-            Self::NewsPostthread => "HTLC_HDR_NEWS_POSTTHREAD",
-            Self::NewsDeletethread => "HTLC_HDR_NEWS_DELETETHREAD",
-            Self::Ping => "HTLC_HDR_PING",
-        };
-        write!(f, "{value} {name}")
+        write!(f, "{} {}", u32::from(*self), self.original_name())
     }
 }
 
@@ -252,9 +223,9 @@ impl std::fmt::Debug for ClientOpcode {
 /// user list changes, news posts, ...). Replies to a specific client
 /// request are *not* represented here; see [`TASK_REPLY`] and
 /// [`Opcode::Reply`].
-#[repr(u32)]
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
+#[repr(u32)]
 pub enum ServerOpcode {
     /// A new (non-threaded) news post arrived (102).
     /// Original: `HTLS_HDR_NEWSFILE_POST`.
@@ -295,63 +266,41 @@ pub enum ServerOpcode {
     /// A message broadcast to every connected user (355).
     /// Original: `HTLS_HDR_MSG_BROADCAST`.
     MsgBroadcast = 355,
+    /// Not recognized by this build. Carries the raw wire value so
+    /// callers can still log/forward it.
+    #[num_enum(catch_all)]
+    Unknown(u32),
 }
 
-impl ServerOpcode {
-    /// Map a wire value to a known server-push opcode, or `None`.
-    pub const fn from_u32(v: u32) -> Option<Self> {
-        use ServerOpcode::*;
-        Some(match v {
-            102 => NewsfilePost,
-            104 => Msg,
-            106 => Chat,
-            109 => Agreement,
-            111 => Politequit,
-            113 => ChatInvite,
-            117 => ChatUserChange,
-            118 => ChatUserPart,
-            119 => ChatSubject,
-            301 => UserChange,
-            302 => UserPart,
-            354 => UserSelfinfo,
-            355 => MsgBroadcast,
-            _ => return None,
-        })
-    }
-
-    /// The wire `type` value.
-    pub const fn as_u32(self) -> u32 {
-        self as u32
-    }
-}
+opcode_names!(
+    ServerOpcode,
+    (HTLS_HDR_NEWSFILE_POST, NewsfilePost),
+    (HTLS_HDR_MSG, Msg),
+    (HTLS_HDR_CHAT, Chat),
+    (HTLS_HDR_AGREEMENT, Agreement),
+    (HTLS_HDR_POLITEQUIT, Politequit),
+    (HTLS_HDR_CHAT_INVITE, ChatInvite),
+    (HTLS_HDR_CHAT_USER_CHANGE, ChatUserChange),
+    (HTLS_HDR_CHAT_USER_PART, ChatUserPart),
+    (HTLS_HDR_CHAT_SUBJECT, ChatSubject),
+    (HTLS_HDR_USER_CHANGE, UserChange),
+    (HTLS_HDR_USER_PART, UserPart),
+    (HTLS_HDR_USER_SELFINFO, UserSelfinfo),
+    (HTLS_HDR_MSG_BROADCAST, MsgBroadcast),
+);
 
 impl std::fmt::Debug for ServerOpcode {
-    /// Prints the variant name and the original `HTLS_HDR_*` constant
-    /// name, e.g. `Chat (HTLS_HDR_CHAT)`.
+    /// Prints the wire value and the original constant name, e.g.
+    /// `106 HTLS_HDR_CHAT`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = self.as_u32();
-        let name = match self {
-            Self::NewsfilePost => "HTLS_HDR_NEWSFILE_POST",
-            Self::Msg => "HTLS_HDR_MSG",
-            Self::Chat => "HTLS_HDR_CHAT",
-            Self::Agreement => "HTLS_HDR_AGREEMENT",
-            Self::Politequit => "HTLS_HDR_POLITEQUIT",
-            Self::ChatInvite => "HTLS_HDR_CHAT_INVITE",
-            Self::ChatUserChange => "HTLS_HDR_CHAT_USER_CHANGE",
-            Self::ChatUserPart => "HTLS_HDR_CHAT_USER_PART",
-            Self::ChatSubject => "HTLS_HDR_CHAT_SUBJECT",
-            Self::UserChange => "HTLS_HDR_USER_CHANGE",
-            Self::UserPart => "HTLS_HDR_USER_PART",
-            Self::UserSelfinfo => "HTLS_HDR_USER_SELFINFO",
-            Self::MsgBroadcast => "HTLS_HDR_MSG_BROADCAST",
-        };
-        write!(f, "{value} {name}")
+        write!(f, "{} {}", u32::from(*self), self.original_name())
     }
 }
 
 /// A decoded header `type` value: either the generic reply sentinel, a
-/// recognized client request opcode, a recognized server push opcode, or
-/// something this build doesn't know about yet.
+/// client request opcode, or a server push opcode (unrecognized wire
+/// values still resolve to a direction via
+/// [`ClientOpcode::Unknown`]/[`ServerOpcode::Unknown`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
     /// This transaction is a reply to an earlier request (see
@@ -361,42 +310,32 @@ pub enum Opcode {
     Request(ClientOpcode),
     /// An unsolicited server push.
     Push(ServerOpcode),
-    /// Not recognized by this build. Carries the raw wire value so
-    /// callers can still log/forward it.
-    Unknown(u32),
 }
 
 impl Opcode {
     /// Classify a raw wire `type` value known to have been sent **by a
     /// client**. Never consults [`ServerOpcode`]'s table; see the
     /// [module docs](self) for why direction can't be guessed.
-    pub const fn from_client_wire(v: u32) -> Self {
-        match ClientOpcode::from_u32(v) {
-            Some(c) => Opcode::Request(c),
-            None => Opcode::Unknown(v),
-        }
+    pub fn from_client_wire(v: u32) -> Self {
+        Opcode::Request(ClientOpcode::from(v))
     }
 
     /// Classify a raw wire `type` value known to have been sent **by a
-    /// server**: the reply sentinel first, then a recognized push, else
-    /// `Unknown`. Never consults [`ClientOpcode`]'s table.
-    pub const fn from_server_wire(v: u32) -> Self {
+    /// server**: the reply sentinel first, then a push. Never consults
+    /// [`ClientOpcode`]'s table.
+    pub fn from_server_wire(v: u32) -> Self {
         if v & 0xFFFF_0000 == TASK_REPLY {
             return Opcode::Reply;
         }
-        match ServerOpcode::from_u32(v) {
-            Some(s) => Opcode::Push(s),
-            None => Opcode::Unknown(v),
-        }
+        Opcode::Push(ServerOpcode::from(v))
     }
 
     /// The wire `type` value this opcode encodes to.
-    pub const fn as_u32(self) -> u32 {
+    pub fn as_u32(self) -> u32 {
         match self {
             Opcode::Reply => TASK_REPLY,
-            Opcode::Request(c) => c.as_u32(),
-            Opcode::Push(s) => s.as_u32(),
-            Opcode::Unknown(v) => v,
+            Opcode::Request(c) => u32::from(c),
+            Opcode::Push(s) => u32::from(s),
         }
     }
 }
@@ -407,31 +346,43 @@ mod tests {
 
     #[test]
     fn task_reply_sentinel_is_recognized_exactly() {
-        assert_eq!(Opcode::from_server_wire(TASK_REPLY), Opcode::Reply);
+        assert_eq!(
+            Opcode::from_server_wire(TASK_REPLY),
+            Opcode::Reply
+        );
     }
 
     #[test]
     fn buggy_server_task_reply_with_opcode_in_low_bits_still_matches() {
-        let buggy = TASK_REPLY | ClientOpcode::Login.as_u32();
-        assert_eq!(Opcode::from_server_wire(buggy), Opcode::Reply);
+        let buggy = TASK_REPLY | u32::from(ClientOpcode::Login);
+        assert_eq!(
+            Opcode::from_server_wire(buggy),
+            Opcode::Reply
+        );
     }
 
     #[test]
     fn known_client_and_server_opcodes_round_trip() {
         assert_eq!(
-            Opcode::from_client_wire(ClientOpcode::Login.as_u32()),
+            Opcode::from_client_wire(u32::from(ClientOpcode::Login)),
             Opcode::Request(ClientOpcode::Login)
         );
         assert_eq!(
-            Opcode::from_server_wire(ServerOpcode::Chat.as_u32()),
+            Opcode::from_server_wire(u32::from(ServerOpcode::Chat)),
             Opcode::Push(ServerOpcode::Chat)
         );
     }
 
     #[test]
     fn unrecognized_opcode_is_preserved_not_dropped() {
-        assert_eq!(Opcode::from_client_wire(0xDEAD), Opcode::Unknown(0xDEAD));
-        assert_eq!(Opcode::from_server_wire(0xDEAD), Opcode::Unknown(0xDEAD));
+        assert_eq!(
+            Opcode::from_client_wire(0xDEAD),
+            Opcode::Request(ClientOpcode::Unknown(0xDEAD))
+        );
+        assert_eq!(
+            Opcode::from_server_wire(0xDEAD),
+            Opcode::Push(ServerOpcode::Unknown(0xDEAD))
+        );
     }
 
     /// `113` (`HTLC_HDR_CHAT_INVITE`/`HTLS_HDR_CHAT_INVITE`) exists in
@@ -446,5 +397,43 @@ mod tests {
             Opcode::from_server_wire(113),
             Opcode::Push(ServerOpcode::ChatInvite)
         );
+    }
+
+    /// `Debug`'s reconstructed name must match every opcode's real
+    /// original wire constant, not just look plausible.
+    #[test]
+    fn debug_reconstructs_every_client_opcodes_original_name() {
+        let cases = [
+            (ClientOpcode::NewsfileGet, "101 HTLC_HDR_NEWSFILE_GET"),
+            (ClientOpcode::FileSetinfo, "207 HTLC_HDR_FILE_SETINFO"),
+            (ClientOpcode::UserGetlist, "300 HTLC_HDR_USER_GETLIST"),
+            (
+                ClientOpcode::NewsListcategory,
+                "371 HTLC_HDR_NEWS_LISTCATEGORY",
+            ),
+            (ClientOpcode::Ping, "500 HTLC_HDR_PING"),
+        ];
+        for (opcode, expected) in cases {
+            assert_eq!(format!("{opcode:?}"), expected);
+        }
+        assert_eq!(
+            format!("{:?}", ClientOpcode::Unknown(0xDEAD)),
+            "57005 (unrecognized)"
+        );
+    }
+
+    #[test]
+    fn debug_reconstructs_every_server_opcodes_original_name() {
+        let cases = [
+            (
+                ServerOpcode::ChatUserChange,
+                "117 HTLS_HDR_CHAT_USER_CHANGE",
+            ),
+            (ServerOpcode::UserSelfinfo, "354 HTLS_HDR_USER_SELFINFO"),
+            (ServerOpcode::MsgBroadcast, "355 HTLS_HDR_MSG_BROADCAST"),
+        ];
+        for (opcode, expected) in cases {
+            assert_eq!(format!("{opcode:?}"), expected);
+        }
     }
 }

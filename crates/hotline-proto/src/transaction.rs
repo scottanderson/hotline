@@ -134,7 +134,7 @@ impl Transaction {
 
     /// The raw wire `type` value, mainly for logging. Prefer
     /// [`Transaction::opcode`] for anything that branches on it.
-    pub const fn type_(&self) -> u32 {
+    pub fn type_(&self) -> u32 {
         self.opcode.as_u32()
     }
 
@@ -271,7 +271,7 @@ impl TransactionHeader {
     /// bytes were sent **by a client**. [`TransactionHeader::remaining_len`]
     /// says how many more bytes to read, then
     /// [`TransactionHeader::finish_decode`] parses them.
-    pub const fn decode_from_client(buf: &[u8; PREFIX_LEN]) -> Self {
+    pub fn decode_from_client(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
         let (r, type_) = r.u32();
         let (r, trans) = r.u32();
@@ -289,7 +289,7 @@ impl TransactionHeader {
     /// Like [`TransactionHeader::decode_from_client`], but for bytes known
     /// to have been sent **by a server** (a client reading its own
     /// incoming traffic).
-    pub const fn decode_from_server(buf: &[u8; PREFIX_LEN]) -> Self {
+    pub fn decode_from_server(buf: &[u8; PREFIX_LEN]) -> Self {
         let r = PacketReader::new(*buf);
         let (r, type_) = r.u32();
         let (r, trans) = r.u32();
@@ -384,10 +384,6 @@ impl fmt::Debug for Transaction {
                     })
                     .collect::<Vec<_>>(),
             ),
-            // The wire value isn't a recognized opcode in either table,
-            // so there's no schema to name fields against; fall back to
-            // the plain, honest (unnamed) Field::Debug.
-            Opcode::Unknown(_) => out.field("fields", &self.fields),
         }
         .finish()
     }

@@ -103,6 +103,18 @@ priority order (backlog below).
    `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
    (370–411, item 4).
+7. **Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s
+   `From`/`Into` conversions.** Adopting `num_enum` (`FromPrimitive`/
+   `IntoPrimitive`, `#[num_enum(catch_all)]` for `Unknown(u32)`) to
+   generate these from real enum discriminants dropped their `const fn`
+   — `From`/`Into` aren't const-stable, so this also cascaded to
+   `Opcode::from_client_wire`/`from_server_wire` and
+   `TransactionHeader::decode_from_client`/`decode_from_server`. Nothing
+   currently calls any of these from a real `const`/`static` binding, so
+   it costs nothing today, but it's a real departure from this crate's
+   otherwise consistently `const fn` style (`PacketReader`,
+   `numbers::encode`/`decode`) worth deciding on deliberately rather than
+   leaving as a side effect. Low priority, no known concrete need yet.
 
 ## Needs manual verification against the real client
 
