@@ -16,7 +16,7 @@
 /// Sentinel opcode value every reply to a specific request carries in the
 /// header's type field, instead of echoing `0` or the original request's
 /// opcode. See the module docs for how real (and buggy) servers use this.
-pub const TASK_REPLY: u32 = 0x0001_0000;
+const TASK_REPLY: u32 = 0x0001_0000;
 
 /// Client -> server transaction opcodes.
 #[repr(u32)]
