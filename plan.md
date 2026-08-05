@@ -98,7 +98,7 @@ priority order (backlog below).
    implementing.
 6. **Remaining unhandled opcodes.** All map to an item above rather than
    being new independent work: `FileGet`/`FilePut` (202/203, item 3);
-   `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetnfo`/`FileMove`/
+   `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetinfo`/`FileMove`/
    `FileSymlink` (204–209, blocked on real file storage, item 3);
    `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`

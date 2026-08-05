@@ -82,7 +82,7 @@ pub enum ClientOpcode {
     FileGetinfo = 206,
     /// Rename/comment a file (207).
     /// Original: `HTLC_HDR_FILE_SETINFO`.
-    FileSetnfo = 207,
+    FileSetinfo = 207,
     /// Move a file to another folder (208).
     /// Original: `HTLC_HDR_FILE_MOVE`.
     FileMove = 208,
@@ -168,7 +168,7 @@ impl ClientOpcode {
             204 => FileDelete,
             205 => FileMkdir,
             206 => FileGetinfo,
-            207 => FileSetnfo,
+            207 => FileSetinfo,
             208 => FileMove,
             209 => FileSymlink,
             300 => UserGetlist,
@@ -223,7 +223,7 @@ impl std::fmt::Debug for ClientOpcode {
             Self::FileDelete => "HTLC_HDR_FILE_DELETE",
             Self::FileMkdir => "HTLC_HDR_FILE_MKDIR",
             Self::FileGetinfo => "HTLC_HDR_FILE_GETINFO",
-            Self::FileSetnfo => "HTLC_HDR_FILE_SETINFO",
+            Self::FileSetinfo => "HTLC_HDR_FILE_SETINFO",
             Self::FileMove => "HTLC_HDR_FILE_MOVE",
             Self::FileSymlink => "HTLC_HDR_FILE_SYMLINK",
             Self::UserGetlist => "HTLC_HDR_USER_GETLIST",
