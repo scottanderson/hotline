@@ -8,8 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bitflags = { workspace = true }
+bitflags = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
+serde = { workspace = true }
 
 [lints.rust]
 missing_docs = "warn"

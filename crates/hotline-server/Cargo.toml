@@ -16,4 +16,5 @@ futures = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
-bitflags = { workspace = true }
+bitflags = { workspace = true, features = ["serde"] }
+serde = { workspace = true }

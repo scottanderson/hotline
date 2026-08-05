@@ -6,42 +6,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use hotline_proto::consts::AccessPrivileges;
-use hotline_server::{default_accounts, AccessExtra, Account, AccountProvider};
+use hotline_server::{default_accounts, Account, AccountProvider};
 use tokio::sync::RwLock;
-
-/// The on-disk shape of an [`Account`]; keeps `serde` out of
-/// `hotline-proto`/`hotline-server` by converting through plain integers
-/// here instead of deriving `Serialize`/`Deserialize` on the bitflags types.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StoredAccount {
-    password: String,
-    name: String,
-    access: u64,
-    access_extra: u32,
-}
-
-impl From<&Account> for StoredAccount {
-    fn from(account: &Account) -> Self {
-        Self {
-            password: account.password.clone(),
-            name: account.name.clone(),
-            access: account.access.bits(),
-            access_extra: account.access_extra.bits(),
-        }
-    }
-}
-
-impl From<StoredAccount> for Account {
-    fn from(stored: StoredAccount) -> Self {
-        Self {
-            password: stored.password,
-            name: stored.name,
-            access: AccessPrivileges::from_bits_truncate(stored.access),
-            access_extra: AccessExtra::from_bits_truncate(stored.access_extra),
-        }
-    }
-}
 
 /// Persists accounts as one `<login>.json` file per account under a
 /// directory, with an in-memory cache so `get` never touches disk.
@@ -69,9 +35,9 @@ impl FileAccountProvider {
                 continue;
             };
             let bytes = tokio::fs::read(&path).await?;
-            let stored: StoredAccount = serde_json::from_slice(&bytes)
+            let account: Account = serde_json::from_slice(&bytes)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            cache.insert(login.to_string(), stored.into());
+            cache.insert(login.to_string(), account);
         }
 
         let provider = Self {
@@ -100,7 +66,7 @@ impl FileAccountProvider {
         let path = self.path_for(login).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid login")
         })?;
-        let bytes = serde_json::to_vec_pretty(&StoredAccount::from(account))
+        let bytes = serde_json::to_vec_pretty(account)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         tokio::fs::write(path, bytes).await
     }
@@ -138,6 +104,8 @@ impl AccountProvider for FileAccountProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hotline_proto::consts::AccessPrivileges;
+    use hotline_server::AccessExtra;
 
     fn alice() -> Account {
         Account {

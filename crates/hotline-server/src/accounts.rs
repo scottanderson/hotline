@@ -14,7 +14,7 @@ use hotline_proto::consts::AccessPrivileges;
 bitflags::bitflags! {
     /// Per-account settings with no `USER_ACCESS` wire bit at all, only
     /// resolved server-side at login.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     pub struct AccessExtra: u32 {
         /// Open or create a private chat.
         /// Config key: `chat_private`.
@@ -107,7 +107,7 @@ impl Default for AccessExtra {
 }
 
 /// One named account.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Account {
     /// Compared for exact equality against the submitted password; an
     /// empty stored password requires an empty submission too.

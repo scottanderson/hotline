@@ -15,7 +15,9 @@ bitflags::bitflags! {
     /// and should always be zero on the wire unless a server
     /// specifically implements one of the extensions this module
     /// documents.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize
+    )]
     pub struct AccessPrivileges: u64 {
         /// Delete a file.
         /// Wire field: `delete_files`.
