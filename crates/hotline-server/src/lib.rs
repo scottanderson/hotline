@@ -11,9 +11,7 @@ mod server;
 mod session;
 mod state;
 
-pub use accounts::{
-    default_accounts, AccessExtra, Account, AccountProvider, InMemoryAccountProvider,
-};
+pub use accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 pub use error::{Result, ServerError};
 pub use server::{Server, ServerConfig};
 pub use session::Session;

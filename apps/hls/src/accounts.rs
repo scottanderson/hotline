@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use hotline_server::{default_accounts, Account, AccountProvider};
+use hotline_server::{Account, AccountProvider, InMemoryAccountProvider};
 use tokio::sync::RwLock;
 
 /// Persists accounts as one `<login>.json` file per account under a
@@ -17,9 +17,8 @@ pub struct FileAccountProvider {
 }
 
 impl FileAccountProvider {
-    /// Loads every account under `dir`, creating it and seeding
-    /// [`default_accounts`] if it's empty (fresh directory or none of the
-    /// files parsed), so a new deployment always has a way to log in.
+    /// Loads every account under `dir`, seeding it with
+    /// [`InMemoryAccountProvider`]'s defaults if empty.
     pub async fn open(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
         tokio::fs::create_dir_all(&dir).await?;
@@ -40,16 +39,17 @@ impl FileAccountProvider {
             cache.insert(login.to_string(), account);
         }
 
-        let provider = Self {
-            dir,
-            cache: RwLock::new(cache),
-        };
-        if provider.cache.read().await.is_empty() {
-            for (login, account) in default_accounts() {
-                provider.write_account(&login, &account).await?;
-                provider.cache.write().await.insert(login, account);
+        let provider = if cache.is_empty() {
+            let cache = RwLock::new(InMemoryAccountProvider::default().into_inner());
+            let provider = Self { dir, cache };
+            for (login, account) in provider.cache.read().await.iter() {
+                provider.write_account(login, account).await?;
             }
-        }
+            provider
+        } else {
+            let cache = RwLock::new(cache);
+            Self { dir, cache }
+        };
         Ok(provider)
     }
 
