@@ -15,7 +15,7 @@ use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
 use crate::accounts::{AccessExtra, Account};
 use crate::error::Result;
 use crate::server::ServerConfig;
-use crate::state::{AccessUpdate, SharedState, UserEntry, IDLE_THRESHOLD};
+use crate::state::{AccessUpdate, RecipientMessage, SharedState, UserEntry, IDLE_THRESHOLD};
 
 /// Which opcodes a session may currently send.
 enum SessionState {
@@ -64,10 +64,7 @@ impl Session {
         };
 
         let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::for_server()).split();
-        let mut broadcast_rx = state.subscribe();
-        let mut targeted_rx = state.subscribe_targeted();
-        let mut announce_rx = state.subscribe_announcements();
-        let mut access_update_rx = state.subscribe_access_updates();
+        let mut rx = state.register_recipient(user_id).await;
         let idle_sleep = tokio::time::sleep(IDLE_THRESHOLD);
         tokio::pin!(idle_sleep);
 
@@ -89,59 +86,26 @@ impl Session {
                 () = &mut idle_sleep, if !session.is_away && matches!(session.state, SessionState::Joined) => {
                     session.set_away(true, &state).await;
                 }
-                // Broadcast traffic (public chat, user list changes)
-                // fanned out from every session.
-                msg = broadcast_rx.recv() => {
+                // Everything server-initiated for this session.
+                msg = rx.recv() => {
                     match msg {
-                        Ok(tx) => {
-                            if !session.may_receive(tx.opcode()) {
-                                continue;
-                            }
+                        Some(RecipientMessage::Push(tx)) => {
+                            let is_kick = tx.opcode() == Opcode::Push(ServerOpcode::Politequit);
                             writer.send(tx).await?;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-                // Traffic addressed to this user specifically (private
-                // messages, chat-room traffic, a kick notice).
-                msg = targeted_rx.recv() => {
-                    match msg {
-                        Ok(targeted) if targeted.target_user_id == session.user_id => {
-                            let is_kick =
-                                targeted.tx.opcode() == Opcode::Push(ServerOpcode::Politequit);
-                            writer.send(targeted.tx).await?;
                             if is_kick {
                                 break; // the whole point of Politequit is disconnection
                             }
                         }
-                        Ok(_) => continue, // addressed to someone else
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-                // Everyone-except-one traffic (currently only the login
-                // join notification - see `SharedState::announce`).
-                msg = announce_rx.recv() => {
-                    match msg {
-                        Ok(a) if a.exclude_user_id == session.user_id => continue,
-                        Ok(a) if !session.may_receive(a.tx.opcode()) => continue,
-                        Ok(a) => writer.send(a.tx).await?,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-                // A live account-modify change for this session's login.
-                msg = access_update_rx.recv() => {
-                    match msg {
-                        Ok(update) => session.apply_access_update(update, &state).await,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Some(RecipientMessage::AccessUpdate(update)) => {
+                            session.apply_access_update(update, &state).await;
+                        }
+                        None => break,
                     }
                 }
             }
         }
 
+        state.remove_recipient(session.user_id).await;
         state.remove_user(session.user_id).await;
         for (chat_id, remaining) in state.leave_all_chat_rooms(session.user_id).await {
             let notify = Transaction::push(
@@ -152,14 +116,14 @@ impl Session {
                 ],
             );
             for member in remaining {
-                state.send_to(member, notify.clone());
+                state.send_to(member, notify.clone()).await;
             }
         }
         let leave = Transaction::push(
             ServerOpcode::UserPart,
             vec![Field::u16(ServerFieldId::UserId, session.user_id)],
         );
-        state.publish(leave);
+        state.publish(leave).await;
         Ok(())
     }
 
@@ -169,21 +133,6 @@ impl Session {
         ClientHello::decode(&buf)?;
         stream.write_all(&ServerHello::OK.encode()).await?;
         Ok(())
-    }
-
-    /// Whether this session should receive a broadcast/announce push, based
-    /// on its own privileges. Pushes not listed here are unfiltered.
-    fn may_receive(&self, opcode: Opcode) -> bool {
-        match opcode {
-            Opcode::Push(ServerOpcode::UserChange) | Opcode::Push(ServerOpcode::UserPart) => {
-                self.access_extra.contains(AccessExtra::USER_GETLIST)
-            }
-            Opcode::Push(ServerOpcode::Chat) => self.access.contains(AccessPrivileges::READ_CHAT),
-            Opcode::Push(ServerOpcode::NewsfilePost) => {
-                self.access.contains(AccessPrivileges::READ_NEWS)
-            }
-            _ => true,
-        }
     }
 
     /// Handle one request, returning zero or more transactions in reply.
@@ -343,13 +292,15 @@ impl Session {
         state: &SharedState,
         reason: &str,
     ) -> Vec<Transaction> {
-        state.send_to(
-            self.user_id,
-            Transaction::push(
-                ServerOpcode::Politequit,
-                vec![Field::string(ServerFieldId::Text, reason)],
-            ),
-        );
+        state
+            .send_to(
+                self.user_id,
+                Transaction::push(
+                    ServerOpcode::Politequit,
+                    vec![Field::string(ServerFieldId::Text, reason)],
+                ),
+            )
+            .await;
         vec![tx.reply_error(reason)]
     }
 
@@ -410,6 +361,7 @@ impl Session {
                 name: self.name.clone(),
                 icon,
                 access: self.access,
+                access_extra: self.access_extra,
                 last_active: Instant::now(),
             })
             .await;
@@ -424,9 +376,9 @@ impl Session {
             ],
         );
         if exclude_self {
-            state.announce(self.user_id, notify);
+            state.announce(self.user_id, notify).await;
         } else {
-            state.publish(notify);
+            state.publish(notify).await;
         }
     }
 
@@ -457,15 +409,17 @@ impl Session {
         let Some(entry) = state.user(self.user_id).await else {
             return;
         };
-        state.publish(Transaction::push(
-            ServerOpcode::UserChange,
-            vec![
-                Field::u16(ServerFieldId::UserId, self.user_id),
-                Field::u16(ServerFieldId::Icon, entry.icon),
-                Field::string(ServerFieldId::Name, entry.name),
-                Field::u16(ServerFieldId::Color, self.user_flags().bits()),
-            ],
-        ));
+        state
+            .publish(Transaction::push(
+                ServerOpcode::UserChange,
+                vec![
+                    Field::u16(ServerFieldId::UserId, self.user_id),
+                    Field::u16(ServerFieldId::Icon, entry.icon),
+                    Field::string(ServerFieldId::Name, entry.name),
+                    Field::u16(ServerFieldId::Color, self.user_flags().bits()),
+                ],
+            ))
+            .await;
     }
 
     /// This session's own admin + away flags, for `UserChange`/`UserSelfinfo`.
@@ -507,12 +461,12 @@ impl Session {
             Some(chat_id) => {
                 if let Some(members) = state.chat_room_members(chat_id).await {
                     for member in members {
-                        state.send_to(member, relay.clone());
+                        state.send_to(member, relay.clone()).await;
                     }
                 }
             }
             // Public chat: everyone.
-            None => state.publish(relay),
+            None => state.publish(relay).await,
         }
         Vec::new()
     }
@@ -596,16 +550,18 @@ impl Session {
             return vec![tx.reply_error("that user can't be disconnected")];
         }
 
-        state.send_to(
-            target_id,
-            Transaction::push(
-                ServerOpcode::Politequit,
-                vec![Field::string(
-                    ServerFieldId::Text,
-                    format!("You have been disconnected by {}.", self.name),
-                )],
-            ),
-        );
+        state
+            .send_to(
+                target_id,
+                Transaction::push(
+                    ServerOpcode::Politequit,
+                    vec![Field::string(
+                        ServerFieldId::Text,
+                        format!("You have been disconnected by {}.", self.name),
+                    )],
+                ),
+            )
+            .await;
         vec![tx.reply(vec![])]
     }
 
@@ -621,17 +577,19 @@ impl Session {
             return vec![tx.reply_error("missing message")];
         };
 
-        state.send_to(
-            target_id,
-            Transaction::push(
-                ServerOpcode::Msg,
-                vec![
-                    Field::u16(ServerFieldId::UserId, self.user_id),
-                    Field::string(ServerFieldId::Name, self.name.clone()),
-                    Field::string(ServerFieldId::Text, message.as_string()),
-                ],
-            ),
-        );
+        state
+            .send_to(
+                target_id,
+                Transaction::push(
+                    ServerOpcode::Msg,
+                    vec![
+                        Field::u16(ServerFieldId::UserId, self.user_id),
+                        Field::string(ServerFieldId::Name, self.name.clone()),
+                        Field::string(ServerFieldId::Text, message.as_string()),
+                    ],
+                ),
+            )
+            .await;
         vec![tx.reply(vec![])]
     }
 
@@ -644,14 +602,16 @@ impl Session {
             return vec![tx.reply_error("missing message")];
         };
 
-        state.publish(Transaction::push(
-            ServerOpcode::MsgBroadcast,
-            vec![
-                Field::u16(ServerFieldId::UserId, self.user_id),
-                Field::string(ServerFieldId::Text, message.as_string()),
-                Field::string(ServerFieldId::Name, self.name.clone()),
-            ],
-        ));
+        state
+            .publish(Transaction::push(
+                ServerOpcode::MsgBroadcast,
+                vec![
+                    Field::u16(ServerFieldId::UserId, self.user_id),
+                    Field::string(ServerFieldId::Text, message.as_string()),
+                    Field::string(ServerFieldId::Name, self.name.clone()),
+                ],
+            ))
+            .await;
         vec![tx.reply(vec![])]
     }
 
@@ -696,10 +656,12 @@ impl Session {
         };
         let entry = state.post_news(&self.name, &text.as_string()).await;
 
-        state.publish(Transaction::push(
-            ServerOpcode::NewsfilePost,
-            vec![Field::string(ServerFieldId::Text, entry)],
-        ));
+        state
+            .publish(Transaction::push(
+                ServerOpcode::NewsfilePost,
+                vec![Field::string(ServerFieldId::Text, entry)],
+            ))
+            .await;
         vec![tx.reply(vec![])]
     }
 
@@ -718,17 +680,19 @@ impl Session {
         let chat_id = state.create_chat_room(self.user_id).await;
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
         if target_id != self.user_id {
-            state.send_to(
-                target_id,
-                Transaction::push(
-                    ServerOpcode::ChatInvite,
-                    vec![
-                        Field::u32(ServerFieldId::ChatId, chat_id),
-                        Field::u16(ServerFieldId::UserId, self.user_id),
-                        Field::string(ServerFieldId::Name, self.name.clone()),
-                    ],
-                ),
-            );
+            state
+                .send_to(
+                    target_id,
+                    Transaction::push(
+                        ServerOpcode::ChatInvite,
+                        vec![
+                            Field::u32(ServerFieldId::ChatId, chat_id),
+                            Field::u16(ServerFieldId::UserId, self.user_id),
+                            Field::string(ServerFieldId::Name, self.name.clone()),
+                        ],
+                    ),
+                )
+                .await;
         }
         tx.reply(vec![
             Field::u32(ServerFieldId::ChatId, chat_id),
@@ -758,17 +722,19 @@ impl Session {
         }
         state.invited(chat_id, target_id).await;
 
-        state.send_to(
-            target_id,
-            Transaction::push(
-                ServerOpcode::ChatInvite,
-                vec![
-                    Field::u32(ServerFieldId::ChatId, chat_id),
-                    Field::u16(ServerFieldId::UserId, self.user_id),
-                    Field::string(ServerFieldId::Name, self.name.clone()),
-                ],
-            ),
-        );
+        state
+            .send_to(
+                target_id,
+                Transaction::push(
+                    ServerOpcode::ChatInvite,
+                    vec![
+                        Field::u32(ServerFieldId::ChatId, chat_id),
+                        Field::u16(ServerFieldId::UserId, self.user_id),
+                        Field::string(ServerFieldId::Name, self.name.clone()),
+                    ],
+                ),
+            )
+            .await;
         tx.reply(vec![])
     }
 
@@ -797,7 +763,7 @@ impl Session {
         let mut fields = Vec::new();
         for member_id in room.members {
             if member_id != self.user_id {
-                state.send_to(member_id, notify.clone());
+                state.send_to(member_id, notify.clone()).await;
             }
             if let Some(entry) = state.user(member_id).await {
                 fields.push(Field::bytes(
@@ -832,7 +798,7 @@ impl Session {
             ],
         );
         for member in remaining.into_iter().filter(|&m| m != self.user_id) {
-            state.send_to(member, notify.clone());
+            state.send_to(member, notify.clone()).await;
         }
         tx.reply(vec![])
     }
@@ -871,10 +837,10 @@ impl Session {
             ],
         );
         if is_global {
-            state.publish(notify);
+            state.publish(notify).await;
         } else if let Some(members) = state.chat_room_members(chat_id).await {
             for member in members {
-                state.send_to(member, notify.clone());
+                state.send_to(member, notify.clone()).await;
             }
         }
         vec![tx.reply(vec![])]
@@ -972,7 +938,7 @@ impl Session {
         let reply = match result {
             Ok(()) => {
                 let name = (!name.is_empty()).then_some(name);
-                state.push_access_update(login, access, name);
+                state.push_access_update(login, access, name).await;
                 tx.reply(vec![])
             }
             Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
@@ -984,6 +950,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
 
     fn test_session(name: &str, access: AccessPrivileges) -> Session {
         Session {
@@ -997,6 +964,40 @@ mod tests {
         }
     }
 
+    /// Registers `user_id` as a connected recipient with the given
+    /// privileges, returning its inbound channel.
+    async fn recipient(
+        state: &SharedState,
+        user_id: u16,
+        access: AccessPrivileges,
+        access_extra: AccessExtra,
+    ) -> mpsc::Receiver<RecipientMessage> {
+        state
+            .insert_user(UserEntry {
+                user_id,
+                name: format!("user{user_id}"),
+                icon: 0,
+                access,
+                access_extra,
+                last_active: Instant::now(),
+            })
+            .await;
+        state.register_recipient(user_id).await
+    }
+
+    /// Drains `rx` until an `AccessUpdate` arrives, skipping the
+    /// `UserChange` push a prior `apply_access_update` already queued.
+    fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> AccessUpdate {
+        loop {
+            match rx.try_recv().expect("expected an access update") {
+                RecipientMessage::AccessUpdate(update) => return update,
+                RecipientMessage::Push(tx) => {
+                    assert_eq!(tx.opcode(), Opcode::Push(ServerOpcode::UserChange));
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn user_get_list_denied_without_user_getlist() {
         let mut session = test_session("Alice", AccessPrivileges::all());
@@ -1005,40 +1006,6 @@ mod tests {
         let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
 
         assert!(session.on_user_get_list(&request, &state).await[0].is_error());
-    }
-
-    #[test]
-    fn may_receive_gates_presence_pushes_on_user_getlist_not_other_traffic() {
-        let mut session = test_session("Alice", AccessPrivileges::all());
-        session.access_extra.remove(AccessExtra::USER_GETLIST);
-
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
-
-        session.access_extra.insert(AccessExtra::USER_GETLIST);
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserChange)));
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::UserPart)));
-    }
-
-    #[test]
-    fn may_receive_gates_chat_on_read_chat() {
-        let mut session = test_session("Alice", AccessPrivileges::all());
-        session.access.remove(AccessPrivileges::READ_CHAT);
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::Chat)));
-
-        session.access.insert(AccessPrivileges::READ_CHAT);
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::Chat)));
-    }
-
-    #[test]
-    fn may_receive_gates_newsfile_post_on_read_news() {
-        let mut session = test_session("Alice", AccessPrivileges::all());
-        session.access.remove(AccessPrivileges::READ_NEWS);
-        assert!(!session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
-
-        session.access.insert(AccessPrivileges::READ_NEWS);
-        assert!(session.may_receive(Opcode::Push(ServerOpcode::NewsfilePost)));
     }
 
     #[tokio::test]
@@ -1051,11 +1018,23 @@ mod tests {
             vec![Field::string(ClientFieldId::Text, "hi")],
         );
 
-        let mut broadcast_rx = state.subscribe();
+        let mut rx = recipient(
+            &state,
+            1,
+            AccessPrivileges::default(),
+            AccessExtra::default(),
+        )
+        .await;
         assert!(session.on_chat(&request, &state).await.is_empty());
 
-        let relay = broadcast_rx.try_recv().unwrap();
-        let text = relay.field(ServerFieldId::Text).unwrap().as_string();
+        let text = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push")
+            .field(ServerFieldId::Text)
+            .unwrap()
+            .as_string();
         assert_eq!(text, "\r        Alice:  hi");
     }
 
@@ -1064,7 +1043,14 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut announce_rx = state.subscribe_announcements();
+        let mut observer = recipient(
+            &state,
+            2,
+            AccessPrivileges::empty(),
+            AccessExtra::USER_GETLIST,
+        )
+        .await;
+        let mut joiner_rx = state.register_recipient(1).await;
 
         // Name/Icon can arrive directly in Login, not just SET_CLIENT_USER_INFO.
         let login = Transaction::request(
@@ -1077,24 +1063,27 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        // The join announcement excludes the joiner itself.
-        let notify = announce_rx
+        let notify = observer
             .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
-        assert_eq!(notify.exclude_user_id, 1); // test_session()'s fixed user_id
         assert_eq!(
-            notify.tx.field(ServerFieldId::Name).unwrap().as_string(),
+            notify.field(ServerFieldId::Name).unwrap().as_string(),
             "Alice"
         );
         assert_eq!(
-            notify.tx.field(ServerFieldId::Icon).and_then(Field::as_u16),
+            notify.field(ServerFieldId::Icon).and_then(Field::as_u16),
             Some(42)
         );
+        assert!(
+            joiner_rx.try_recv().is_err(),
+            "the joiner itself must not receive its own join announcement"
+        );
 
-        let users = state.users().await;
-        assert_eq!(users.len(), 1);
-        assert_eq!(users[0].name, "Alice");
-        assert_eq!(users[0].icon, 42);
+        let joiner = state.user(1).await.expect("joiner should be registered");
+        assert_eq!(joiner.name, "Alice");
+        assert_eq!(joiner.icon, 42);
         assert!(matches!(session.state, SessionState::Joined));
     }
 
@@ -1175,7 +1164,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let mut targeted_rx = state.subscribe_targeted();
+        let mut rx = state.register_recipient(session.user_id).await;
 
         let login = Transaction::request(
             ClientOpcode::Login,
@@ -1188,9 +1177,12 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(replies[0].is_error());
-        let kick = targeted_rx.try_recv().unwrap();
-        assert_eq!(kick.target_user_id, session.user_id);
-        assert_eq!(kick.tx.opcode(), Opcode::Push(ServerOpcode::Politequit));
+        let kick = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Politequit push");
+        assert_eq!(kick.opcode(), Opcode::Push(ServerOpcode::Politequit));
     }
 
     #[tokio::test]
@@ -1229,7 +1221,7 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut targeted_rx = state.subscribe_targeted();
+        let mut rx = state.register_recipient(session.user_id).await;
 
         let login = Transaction::request(
             ClientOpcode::Login,
@@ -1239,7 +1231,7 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(replies[0].is_error());
-        assert!(targeted_rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_ok());
     }
 
     #[tokio::test]
@@ -1248,13 +1240,13 @@ mod tests {
         let state = SharedState::default();
         state.delete_account("guest").await.unwrap();
         let config = ServerConfig::default();
-        let mut targeted_rx = state.subscribe_targeted();
+        let mut rx = state.register_recipient(session.user_id).await;
 
         let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(replies[0].is_error());
-        assert!(targeted_rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_ok());
     }
 
     #[tokio::test]
@@ -1262,7 +1254,13 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut announce_rx = state.subscribe_announcements();
+        let mut bystander = recipient(
+            &state,
+            2,
+            AccessPrivileges::empty(),
+            AccessExtra::USER_GETLIST,
+        )
+        .await;
 
         session.state = SessionState::Agreement;
         let login = Transaction::request(
@@ -1272,7 +1270,7 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        assert!(announce_rx.try_recv().is_err());
+        assert!(bystander.try_recv().is_err());
         assert!(matches!(session.state, SessionState::Agreement));
 
         let agreed = Transaction::request(
@@ -1285,11 +1283,13 @@ mod tests {
         );
         session.on_agreed(&agreed, &state).await;
 
-        let notify = announce_rx
+        let notify = bystander
             .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
             .expect("agreed should announce a join");
         assert_eq!(
-            notify.tx.field(ServerFieldId::Name).unwrap().as_string(),
+            notify.field(ServerFieldId::Name).unwrap().as_string(),
             "Alice"
         );
         assert!(matches!(session.state, SessionState::Joined));
@@ -1300,7 +1300,13 @@ mod tests {
         let mut session = test_session("guest1", AccessPrivileges::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
-        let mut announce_rx = state.subscribe_announcements();
+        let mut bystander = recipient(
+            &state,
+            2,
+            AccessPrivileges::empty(),
+            AccessExtra::USER_GETLIST,
+        )
+        .await;
 
         session.state = SessionState::Agreement;
         // No Version field: counts as pre-150.
@@ -1308,7 +1314,7 @@ mod tests {
         session.on_login(&login, &state, &config).await;
 
         assert!(
-            announce_rx.try_recv().is_ok(),
+            bystander.try_recv().is_ok(),
             "pre-150 clients join immediately even without a name"
         );
         assert!(matches!(session.state, SessionState::Joined));
@@ -1428,7 +1434,13 @@ mod tests {
             .await
             .unwrap();
         let config = ServerConfig::default();
-        let mut announce_rx = state.subscribe_announcements();
+        let mut bystander = recipient(
+            &state,
+            2,
+            AccessPrivileges::empty(),
+            AccessExtra::USER_GETLIST,
+        )
+        .await;
 
         let login = Transaction::request(
             ClientOpcode::Login,
@@ -1437,11 +1449,12 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        let notify = announce_rx
+        let notify = bystander
             .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
         let color = notify
-            .tx
             .field(ServerFieldId::Color)
             .and_then(Field::as_u16)
             .unwrap_or(0);
@@ -1461,15 +1474,18 @@ mod tests {
                 name: session.name.clone(),
                 icon: 0,
                 access: session.access,
+                access_extra: AccessExtra::USER_GETLIST,
                 last_active: Instant::now(),
             })
             .await;
-        let mut broadcast_rx = state.subscribe();
+        let mut rx = state.register_recipient(session.user_id).await;
 
         session.set_away(true, &state).await;
-        let color = broadcast_rx
+        let color = rx
             .try_recv()
-            .unwrap()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a UserChange push")
             .field(ServerFieldId::Color)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
@@ -1477,9 +1493,11 @@ mod tests {
         assert!(color.contains(UserFlags::AWAY));
 
         session.set_away(false, &state).await;
-        let color = broadcast_rx
+        let color = rx
             .try_recv()
-            .unwrap()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a UserChange push")
             .field(ServerFieldId::Color)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
@@ -1508,10 +1526,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newsfile_post_publishes_once_for_may_receive_to_filter() {
+    async fn newsfile_post_publishes_once_for_recipient_may_receive_to_filter() {
         let session = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
-        let mut broadcast_rx = state.subscribe();
+        let mut rx = recipient(
+            &state,
+            1,
+            AccessPrivileges::READ_NEWS,
+            AccessExtra::default(),
+        )
+        .await;
         let post = Transaction::request(
             ClientOpcode::NewsfilePost,
             1,
@@ -1519,9 +1543,13 @@ mod tests {
         );
         session.on_newsfile_post(&post, &state).await;
 
-        let notify = broadcast_rx.try_recv().unwrap();
+        let notify = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a NewsfilePost push");
         assert_eq!(notify.opcode(), Opcode::Push(ServerOpcode::NewsfilePost));
-        assert!(broadcast_rx.try_recv().is_err(), "published only once");
+        assert!(rx.try_recv().is_err(), "published only once");
     }
 
     #[tokio::test]
@@ -1542,7 +1570,8 @@ mod tests {
     async fn private_message_delivered_only_to_target() {
         let session = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
-        let mut targeted_rx = state.subscribe_targeted();
+        let mut target_rx = state.register_recipient(42).await;
+        let mut sender_rx = state.register_recipient(session.user_id).await;
 
         let request = Transaction::request(
             ClientOpcode::Msg,
@@ -1555,11 +1584,18 @@ mod tests {
         let replies = session.on_private_msg(&request, &state).await;
         assert!(!replies[0].is_error());
 
-        let delivered = targeted_rx.try_recv().unwrap();
-        assert_eq!(delivered.target_user_id, 42);
+        let delivered = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Msg push");
         assert_eq!(
-            delivered.tx.field(ServerFieldId::Text).unwrap().as_string(),
+            delivered.field(ServerFieldId::Text).unwrap().as_string(),
             "hi there"
+        );
+        assert!(
+            sender_rx.try_recv().is_err(),
+            "must not also deliver to the sender"
         );
     }
 
@@ -1567,7 +1603,7 @@ mod tests {
     async fn message_broadcast_reaches_everyone() {
         let session = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
-        let mut broadcast_rx = state.subscribe();
+        let mut rx = state.register_recipient(2).await;
 
         let request = Transaction::request(
             ClientOpcode::MsgBroadcast,
@@ -1577,7 +1613,11 @@ mod tests {
         let replies = session.on_msg_broadcast(&request, &state).await;
         assert!(!replies[0].is_error());
 
-        let sent = broadcast_rx.try_recv().unwrap();
+        let sent = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a MsgBroadcast push");
         assert_eq!(sent.opcode(), Opcode::Push(ServerOpcode::MsgBroadcast));
         assert_eq!(
             sent.field(ServerFieldId::Text).unwrap().as_string(),
@@ -1690,8 +1730,7 @@ mod tests {
         // Bob is already connected, logged in under the "bob" account.
         let mut bob = test_session("Bob", AccessPrivileges::empty());
         bob.login = "bob".to_string();
-        let mut broadcast_rx = state.subscribe();
-        let mut access_rx = state.subscribe_access_updates();
+        let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let modify = Transaction::request(
             ClientOpcode::AccountModify,
@@ -1706,14 +1745,20 @@ mod tests {
         );
         admin.on_account_modify(&modify, &state).await;
 
-        // Simulate bob's session loop applying the broadcast update.
-        let received = access_rx.try_recv().expect("access update broadcast");
+        // Simulate bob's session loop applying the access update.
+        let received = bob_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_access_update)
+            .expect("expected an access update");
         bob.apply_access_update(received, &state).await;
 
         assert_eq!(bob.access, AccessPrivileges::CAN_BROADCAST);
-        let notify = broadcast_rx
+        let notify = bob_rx
             .try_recv()
-            .expect("the live update should also broadcast UserChange");
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("the live update should also push a UserChange");
         assert_eq!(
             notify.field(ServerFieldId::UserId).and_then(Field::as_u16),
             Some(bob.user_id)
@@ -1740,7 +1785,7 @@ mod tests {
         // Bob is connected with USE_ANY_NAME and has picked a custom name.
         let mut bob = test_session("Bobby the Great", AccessPrivileges::USE_ANY_NAME);
         bob.login = "bob".to_string();
-        let mut access_rx = state.subscribe_access_updates();
+        let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let revoke = Transaction::request(
             ClientOpcode::AccountModify,
@@ -1751,7 +1796,7 @@ mod tests {
             ],
         );
         admin.on_account_modify(&revoke, &state).await;
-        let update = access_rx.try_recv().unwrap();
+        let update = next_access_update(&mut bob_rx);
         bob.apply_access_update(update, &state).await;
         assert_eq!(bob.name, "Bob");
 
@@ -1770,7 +1815,7 @@ mod tests {
             ],
         );
         admin.on_account_modify(&regrant, &state).await;
-        let update = access_rx.try_recv().unwrap();
+        let update = next_access_update(&mut bob_rx);
         bob.apply_access_update(update, &state).await;
         assert_eq!(bob.name, "Bobby Returns");
     }
@@ -1833,6 +1878,7 @@ mod tests {
                 name: "Alice".to_string(),
                 icon: 0,
                 access: AccessPrivileges::all(),
+                access_extra: AccessExtra::default(),
                 last_active: Instant::now(),
             })
             .await;
@@ -1842,11 +1888,12 @@ mod tests {
                 name: "Bob".to_string(),
                 icon: 0,
                 access: AccessPrivileges::all(),
+                access_extra: AccessExtra::default(),
                 last_active: Instant::now(),
             })
             .await;
 
-        let mut targeted_rx = state.subscribe_targeted();
+        let mut bob_rx = state.register_recipient(2).await;
         let create = Transaction::request(
             ClientOpcode::ChatCreate,
             1,
@@ -1859,10 +1906,13 @@ mod tests {
             .as_u32()
             .unwrap();
 
-        let invite = targeted_rx.try_recv().unwrap();
-        assert_eq!(invite.target_user_id, 2);
+        let invite = bob_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ChatInvite push");
         assert_eq!(
-            invite.tx.field(ServerFieldId::ChatId).unwrap().as_u32(),
+            invite.field(ServerFieldId::ChatId).unwrap().as_u32(),
             Some(chat_id)
         );
 
@@ -1896,10 +1946,8 @@ mod tests {
         let members = state.chat_room_members(chat_id).await.unwrap();
         assert_eq!(members.len(), 2);
 
-        // A chat sent with this ChatId should go to room members via
-        // targeted delivery, not the public broadcast.
-        let mut public_rx = state.subscribe();
-        let mut targeted_rx = state.subscribe_targeted();
+        // Room chat goes via targeted delivery, not the public broadcast.
+        let mut creator_rx = state.register_recipient(1).await;
         let room_chat = Transaction::request(
             ClientOpcode::Chat,
             2,
@@ -1910,14 +1958,18 @@ mod tests {
         );
         creator.on_chat(&room_chat, &state).await;
 
-        assert!(
-            public_rx.try_recv().is_err(),
-            "must not broadcast room chat"
-        );
-        let delivered = targeted_rx.try_recv().unwrap();
+        let delivered = creator_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a room-chat push");
         assert_eq!(
-            delivered.tx.field(ServerFieldId::Text).unwrap().as_string(),
+            delivered.field(ServerFieldId::Text).unwrap().as_string(),
             "\r        Alice:  room only"
+        );
+        assert!(
+            creator_rx.try_recv().is_err(),
+            "must not also broadcast room chat publicly"
         );
     }
 
@@ -1966,7 +2018,7 @@ mod tests {
         let mut admin = test_session("Admin", AccessPrivileges::empty());
         admin.access_extra.insert(AccessExtra::SET_SUBJECT);
         let state = SharedState::default();
-        let mut broadcast_rx = state.subscribe();
+        let mut rx = state.register_recipient(admin.user_id).await;
 
         let request = Transaction::request(
             ClientOpcode::ChatSubject,
@@ -1980,7 +2032,11 @@ mod tests {
         assert!(!replies[0].is_error());
         assert_eq!(state.chat_room(0).await.unwrap().subject, "Welcome");
 
-        let notify = broadcast_rx.try_recv().unwrap();
+        let notify = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ChatSubject push");
         assert_eq!(
             notify.field(ServerFieldId::ChatId).unwrap().as_u32(),
             Some(0)

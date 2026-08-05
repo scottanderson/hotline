@@ -1,19 +1,20 @@
 //! Shared, cross-session server state: the connected-user table, chat
-//! rooms, classic news, and the two delivery channels sessions use to
-//! reach each other (broadcast to everyone, targeted to one user).
+//! rooms, classic news, and the one per-recipient channel sessions use to
+//! reach each other.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{mpsc, RwLock};
 
 use hotline_proto::consts::AccessPrivileges;
+use hotline_proto::opcode::{Opcode, ServerOpcode};
 use hotline_proto::types::{FileNameWithInfo, UserFlags};
 use hotline_proto::Transaction;
 
-use crate::accounts::{Account, AccountProvider, InMemoryAccountProvider};
+use crate::accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 
 /// How long without any request before a user is considered idle.
 pub const IDLE_THRESHOLD: Duration = Duration::from_secs(10 * 60);
@@ -30,6 +31,9 @@ pub struct UserEntry {
     /// Privileges granted at login. Also kept in
     /// [`crate::session::Session`], which is what handlers check against.
     pub access: AccessPrivileges,
+    /// Server-side-only account settings granted at login, also kept in
+    /// [`crate::session::Session`].
+    pub access_extra: AccessExtra,
     /// Last time this user sent any request. Compared against
     /// [`IDLE_THRESHOLD`] by [`UserEntry::is_idle`].
     pub last_active: Instant,
@@ -68,29 +72,6 @@ pub struct ChatRoom {
     pub invited: HashSet<u16>,
 }
 
-/// A transaction addressed to exactly one connected user (private
-/// message, chat-room traffic, a kick notice) rather than everyone -
-/// see [`SharedState::send_to`].
-#[derive(Debug, Clone)]
-pub struct Targeted {
-    /// Recipient's user ID. Every session subscribes to the same
-    /// channel and forwards only what's addressed to itself.
-    pub target_user_id: u16,
-    /// The transaction to forward.
-    pub tx: Transaction,
-}
-
-/// A transaction broadcast to everyone *except* one user, currently only
-/// the login join notification. Contrast [`Targeted`] (exactly one user)
-/// and [`SharedState::publish`] (everyone, including the sender).
-#[derive(Debug, Clone)]
-pub struct Announcement {
-    /// User ID to skip when fanning this out.
-    pub exclude_user_id: u16,
-    /// The transaction to forward to everyone else.
-    pub tx: Transaction,
-}
-
 /// A live privilege change for every session logged in under `login`.
 #[derive(Debug, Clone)]
 pub struct AccessUpdate {
@@ -102,24 +83,40 @@ pub struct AccessUpdate {
     pub name: Option<String>,
 }
 
+/// Everything server-initiated that can arrive on a recipient's channel.
+#[derive(Debug, Clone)]
+pub enum RecipientMessage {
+    /// A wire transaction to forward as-is.
+    Push(Transaction),
+    /// A live privilege change for this session's login to apply.
+    AccessUpdate(AccessUpdate),
+}
+
+impl RecipientMessage {
+    #[cfg(test)]
+    pub(crate) fn into_push(self) -> Option<Transaction> {
+        match self {
+            Self::Push(transaction) => Some(transaction),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_access_update(self) -> Option<AccessUpdate> {
+        match self {
+            Self::AccessUpdate(access_update) => Some(access_update),
+            _ => None,
+        }
+    }
+}
+
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
 #[derive(Clone)]
 pub struct SharedState {
     users: Arc<RwLock<HashMap<u16, UserEntry>>>,
     next_user_id: Arc<AtomicU16>,
-    /// Server-initiated transactions meant for everyone (public chat,
-    /// user list changes) get published here; each session subscribes
-    /// and forwards them to its own client.
-    broadcast: broadcast::Sender<Transaction>,
-    /// Transactions meant for exactly one user (private messages, chat
-    /// rooms, kicks). See [`Targeted`].
-    targeted: broadcast::Sender<Targeted>,
-    /// Transactions meant for everyone except one user. See
-    /// [`Announcement`].
-    announcements: broadcast::Sender<Announcement>,
-    /// Live privilege changes for sessions logged in under a modified
-    /// account. See [`AccessUpdate`].
-    access_updates: broadcast::Sender<AccessUpdate>,
+    /// One inbound channel per currently connected recipient.
+    recipients: Arc<RwLock<HashMap<u16, mpsc::Sender<RecipientMessage>>>>,
     /// Root-folder file listing. In-memory placeholder for a real
     /// filesystem-backed implementation.
     files: Arc<RwLock<Vec<FileNameWithInfo>>>,
@@ -142,10 +139,6 @@ impl Default for SharedState {
 impl SharedState {
     /// Build fresh shared state backed by `accounts`.
     pub fn new(accounts: Arc<dyn AccountProvider>) -> Self {
-        let (broadcast, _rx) = broadcast::channel(256);
-        let (targeted, _rx) = broadcast::channel(256);
-        let (announcements, _rx) = broadcast::channel(256);
-        let (access_updates, _rx) = broadcast::channel(256);
         let files = vec![
             FileNameWithInfo {
                 file_type: *b"fldr",
@@ -163,10 +156,7 @@ impl SharedState {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
             next_user_id: Arc::new(AtomicU16::new(1)),
-            broadcast,
-            targeted,
-            announcements,
-            access_updates,
+            recipients: Arc::new(RwLock::new(HashMap::new())),
             files: Arc::new(RwLock::new(files)),
             news: Arc::new(RwLock::new(String::new())),
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
@@ -217,64 +207,83 @@ impl SharedState {
         }
     }
 
-    /// Publish a transaction to every session (e.g. a chat message or a
-    /// user list change notification). Sessions that are slow/gone just
-    /// miss it; delivery is best-effort like the real protocol's chat.
-    pub fn publish(&self, tx: Transaction) {
-        let _ = self.broadcast.send(tx);
+    /// Register a newly connected socket as a recipient, returning its
+    /// inbound channel. Called once per connection, before login.
+    pub async fn register_recipient(&self, user_id: u16) -> mpsc::Receiver<RecipientMessage> {
+        let (tx, rx) = mpsc::channel(256);
+        self.recipients.write().await.insert(user_id, tx);
+        rx
     }
 
-    /// Subscribe to the broadcast (everyone) stream. Called once per
-    /// session.
-    pub fn subscribe(&self) -> broadcast::Receiver<Transaction> {
-        self.broadcast.subscribe()
+    /// Drop a recipient's channel on disconnect.
+    pub async fn remove_recipient(&self, user_id: u16) {
+        self.recipients.write().await.remove(&user_id);
     }
 
-    /// Send a transaction to exactly one connected user (private
-    /// message, chat-room traffic, a kick notice). A no-op if that user
-    /// isn't connected, same best-effort delivery as [`Self::publish`].
-    pub fn send_to(&self, target_user_id: u16, tx: Transaction) {
-        let _ = self.targeted.send(Targeted { target_user_id, tx });
+    /// Whether `user_id` may receive `opcode`, based on its connected
+    /// user entry's privileges. Pushes not listed here are unfiltered.
+    async fn recipient_may_receive(&self, user_id: u16, opcode: Opcode) -> bool {
+        let (access, access_extra) = match self.user(user_id).await {
+            Some(entry) => (entry.access, entry.access_extra),
+            None => (AccessPrivileges::empty(), AccessExtra::empty()),
+        };
+        match opcode {
+            Opcode::Push(ServerOpcode::UserChange) | Opcode::Push(ServerOpcode::UserPart) => {
+                access_extra.contains(AccessExtra::USER_GETLIST)
+            }
+            Opcode::Push(ServerOpcode::Chat) => access.contains(AccessPrivileges::READ_CHAT),
+            Opcode::Push(ServerOpcode::NewsfilePost) => {
+                access.contains(AccessPrivileges::READ_NEWS)
+            }
+            _ => true,
+        }
     }
 
-    /// Subscribe to the targeted-delivery stream. Called once per
-    /// session; each session filters for its own `user_id`.
-    pub fn subscribe_targeted(&self) -> broadcast::Receiver<Targeted> {
-        self.targeted.subscribe()
+    /// Publish a transaction to every privileged session. Sessions that
+    /// are slow/gone, or not privileged to see it, just miss it.
+    pub async fn publish(&self, tx: Transaction) {
+        let opcode = tx.opcode();
+        for (&user_id, sender) in self.recipients.read().await.iter() {
+            if self.recipient_may_receive(user_id, opcode).await {
+                let _ = sender.try_send(RecipientMessage::Push(tx.clone()));
+            }
+        }
     }
 
-    /// Broadcast a transaction to every session except `exclude_user_id`
-    /// (the login join notification, see [`Announcement`]).
-    pub fn announce(&self, exclude_user_id: u16, tx: Transaction) {
-        let _ = self.announcements.send(Announcement {
-            exclude_user_id,
-            tx,
-        });
+    /// Send a transaction to exactly one connected user, unfiltered. A
+    /// no-op if that user isn't connected.
+    pub async fn send_to(&self, target_user_id: u16, tx: Transaction) {
+        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
+            let _ = sender.try_send(RecipientMessage::Push(tx));
+        }
     }
 
-    /// Subscribe to the announcement stream. Called once per session;
-    /// each session skips announcements that exclude its own `user_id`.
-    pub fn subscribe_announcements(&self) -> broadcast::Receiver<Announcement> {
-        self.announcements.subscribe()
+    /// Like [`Self::publish`], except `exclude_user_id` never receives it.
+    pub async fn announce(&self, exclude_user_id: u16, tx: Transaction) {
+        let opcode = tx.opcode();
+        for (&user_id, sender) in self.recipients.read().await.iter() {
+            if user_id != exclude_user_id && self.recipient_may_receive(user_id, opcode).await {
+                let _ = sender.try_send(RecipientMessage::Push(tx.clone()));
+            }
+        }
     }
 
-    /// Push a live privilege change for every session logged in under `login`.
-    pub fn push_access_update(
+    /// Push a live privilege change to every connected recipient; each
+    /// session applies it only if it matches its own login.
+    pub async fn push_access_update(
         &self,
         login: String,
         access: AccessPrivileges,
         name: Option<String>,
     ) {
-        let _ = self.access_updates.send(AccessUpdate {
+        let update = AccessUpdate {
             login,
             access,
             name,
-        });
-    }
-
-    /// Subscribe to the access-update stream.
-    pub fn subscribe_access_updates(&self) -> broadcast::Receiver<AccessUpdate> {
-        self.access_updates.subscribe()
+        };
+        for sender in self.recipients.read().await.values() {
+            let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
+        }
     }
 
     /// Snapshot of the (currently root-only) file listing. `path` is
@@ -443,6 +452,7 @@ mod tests {
                     name: format!("user{id}"),
                     icon: 0,
                     access: AccessPrivileges::empty(),
+                    access_extra: AccessExtra::default(),
                     last_active: Instant::now(),
                 })
                 .await;
@@ -477,6 +487,7 @@ mod tests {
                     name: format!("user{id}"),
                     icon: 0,
                     access: AccessPrivileges::empty(),
+                    access_extra: AccessExtra::default(),
                     last_active: Instant::now(),
                 })
                 .await;
