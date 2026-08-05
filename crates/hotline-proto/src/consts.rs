@@ -15,9 +15,8 @@ bitflags::bitflags! {
     /// and should always be zero on the wire unless a server
     /// specifically implements one of the extensions this module
     /// documents.
-    #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
     pub struct AccessPrivileges: u64 {
         /// Delete a file.
         /// Wire field: `delete_files`.
@@ -148,7 +147,7 @@ bitflags::bitflags! {
 
 impl Default for AccessPrivileges {
     /// A reasonable "guest" default: read/send public chat, browse,
-    /// upload, and download files, read and post news, and send/receive
+    /// upload, and download files, read and post news, send and receive
     /// private messages. No admin or destructive privileges.
     fn default() -> Self {
         Self::READ_CHAT
