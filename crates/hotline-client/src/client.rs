@@ -162,23 +162,6 @@ impl HotlineClient {
         Ok(())
     }
 
-    /// Send `HTLC_HDR_USER_CHANGE` (304) to announce nick/icon.
-    pub async fn set_client_user_info(&self, nick: &str, icon: u16) -> Result<()> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let tx = Transaction::request(
-            ClientOpcode::UserChange,
-            id,
-            vec![
-                Field::string(ClientFieldId::Name, nick),
-                Field::u16(ClientFieldId::Icon, icon),
-                Field::u16(ClientFieldId::Options, 0),
-            ],
-        );
-        // No reply expected per the reference.
-        self.writer.lock().await.send(tx).await?;
-        Ok(())
-    }
-
     /// Send a public chat message (`HTLC_HDR_CHAT`, 105).
     pub async fn send_chat(&self, message: &str) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);

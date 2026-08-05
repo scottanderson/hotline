@@ -163,20 +163,6 @@ impl Default for AccessPrivileges {
 }
 
 impl AccessPrivileges {
-    /// Decode the big-endian 8-byte wire representation of the
-    /// `USER_ACCESS` field. Returns `None` if any bit outside the named
-    /// flags is set, rather than silently discarding it. Use
-    /// [`AccessPrivileges::from_bits_truncate`] directly to ignore
-    /// unknown bits instead.
-    pub const fn from_be_bytes(bytes: [u8; 8]) -> Option<Self> {
-        Self::from_bits(u64::from_be_bytes(bytes))
-    }
-
-    /// Encode to the big-endian 8-byte wire representation.
-    pub const fn to_be_bytes(self) -> [u8; 8] {
-        self.bits().to_be_bytes()
-    }
-
     /// The original `HL_ACCESS_*` constant name for a single flag, or
     /// `None` if `self` isn't exactly one named flag.
     pub const fn flag_name(self) -> Option<&'static str> {
@@ -232,8 +218,11 @@ mod tests {
     #[test]
     fn access_privileges_round_trip_bytes() {
         let privs = AccessPrivileges::default();
-        let bytes = privs.to_be_bytes();
-        assert_eq!(AccessPrivileges::from_be_bytes(bytes), Some(privs));
+        let bytes = privs.bits().to_be_bytes();
+        assert_eq!(
+            AccessPrivileges::from_bits(u64::from_be_bytes(bytes)),
+            Some(privs)
+        );
     }
 
     /// A known "everything enabled" wire value decodes to exactly the
@@ -248,21 +237,27 @@ mod tests {
             - AccessPrivileges::DONT_SHOW_AGREEMENT
             - AccessPrivileges::VOICE_CHAT
             - AccessPrivileges::READ_CHAT_HISTORY;
-        assert_eq!(AccessPrivileges::from_be_bytes(bytes), Some(expected));
+        assert_eq!(
+            AccessPrivileges::from_bits(u64::from_be_bytes(bytes)),
+            Some(expected)
+        );
     }
 
     #[test]
     fn reserved_bit_set_is_rejected_not_silently_dropped() {
         // Bit 0 is reserved.
         let bytes = 1u64.to_be_bytes();
-        assert_eq!(AccessPrivileges::from_be_bytes(bytes), None);
+        assert_eq!(AccessPrivileges::from_bits(u64::from_be_bytes(bytes)), None);
     }
 
     #[test]
     fn extension_bits_round_trip() {
         let privs = AccessPrivileges::VOICE_CHAT | AccessPrivileges::READ_CHAT_HISTORY;
-        let bytes = privs.to_be_bytes();
-        assert_eq!(AccessPrivileges::from_be_bytes(bytes), Some(privs));
+        let bytes = privs.bits().to_be_bytes();
+        assert_eq!(
+            AccessPrivileges::from_bits(u64::from_be_bytes(bytes)),
+            Some(privs)
+        );
     }
 
     #[test]
