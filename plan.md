@@ -22,52 +22,13 @@ priority order (backlog below).
   `"Uh, no."`, ...); this server uses friendlier custom text. Not changed
   yet — decide with the user whether exact-string parity matters for any
   known client before touching this everywhere.
-- ~~Join broadcast reaches every session unconditionally.~~ Fixed, and
-  generalized: `Session::may_receive` is now a small opcode-to-required-
-  privilege table checked in both the `broadcast_rx` and `announce_rx`
-  arms of `Session::run`'s `select!` loop, covering `UserChange`/
-  `UserPart` (`AccessExtra::USER_GETLIST`), public `Chat`
-  (`AccessPrivileges::READ_CHAT`), and `NewsfilePost`
-  (`AccessPrivileges::READ_NEWS` — `on_newsfile_post` now does a single
-  `state.publish` instead of a manual per-user `send_to` loop). Room-
-  scoped chat is untouched (delivered via `targeted_rx`/room membership,
-  never `READ_CHAT`), matching the reference's own split between its
-  public-chat and room-chat send paths.
-- ~~Cross-channel delivery ordering isn't guaranteed for a single
-  recipient.~~ Fixed: see backlog item 2.
 
 ## Backlog, in priority order
 
-1. ~~`access_extra`-equivalent modeling.~~ Done. `AccessExtra`
-   (`accounts.rs`) models the reference's `extra_access_bits` struct as
-   its own bitflags type; `USER_GETLIST` gates both issuing
-   `HTLC_HDR_USER_GETLIST` and, as of `Session::may_receive`, receiving
-   `UserChange`/`UserPart` pushes, and `SET_SUBJECT` gates setting the
-   global chat room's subject. Both are set at login from
-   `Account::access_extra`.
-2. ~~Unify per-recipient delivery into one ordered channel.~~ Done.
-   `SharedState`'s four broadcast channels
-   (`broadcast`/`targeted`/`announcements`/`access_updates`) are now one
-   `HashMap<u16, mpsc::Sender<RecipientMessage>>`, `RecipientMessage`
-   being `Push(Transaction) | AccessUpdate(AccessUpdate)`; `publish`/
-   `send_to`/`announce`/`push_access_update` all fan out through it, so
-   `Session::run` collapses to a single inbound `select!` arm per
-   connection — every recipient now sees everything in true send order.
-   Privilege/login filtering deliberately stayed on the session side
-   (`Session::may_receive`, the login check in `apply_access_update`)
-   rather than moving into `SharedState`: an earlier version centralized
-   it there (`SharedState::recipient_may_receive`, looking up each
-   recipient's privileges from the shared `users` table at fan-out time),
-   but that traded an O(1) lock-free broadcast for an O(N) sequential
-   locked lookup per recipient, borne synchronously by whichever session
-   was sending — a real latency/contention regression under load, for no
-   benefit the channel unification actually required. Reverted in favor
-   of keeping filtering free (a plain bitflag check against fields the
-   receiving session already holds in memory). Deliberately out of scope:
-   ordering between two genuinely independent concurrent clients' actions
-   arriving at a third client — only per-recipient ordering of a single
-   server-side send sequence is guaranteed, matching what the reference
-   actually relies on.
+1. ~~`access_extra`-equivalent modeling.~~ Done — see `AccessExtra` in
+   `accounts.rs`.
+2. ~~Unify per-recipient delivery into one ordered channel.~~ Done — see
+   AGENTS.md's "Server session/state split".
 3. **File transfer (`HTXF`).** Second-port transfer handshake, not
    started. Large standalone gap — no file upload/download exists at all,
    and `SharedState::root_files` is still a hardcoded placeholder listing,
@@ -91,25 +52,10 @@ priority order (backlog below).
      `_PUTFOLDER`, a separate `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` command
      loop on the transfer connection), and resource-fork (`"MACR"`) data.
 4. **Threaded news.** Current news support is flat/classic only.
-5. ~~Chat room passwords.~~ Done. `ChatRoom` has a `password` field (empty
-   means unprotected). The reference never accepts a password at room
-   creation; it's set (and changed) via `HTLC_HDR_CHAT_SUBJECT`, the same
-   opcode that sets the subject, alongside it or on its own; the resulting
-   push carries whichever of `HTLS_DATA_CHAT_SUBJECT`/`HTLS_DATA_PASSWORD`
-   changed, as its own separate push per field when both are set in one
-   request. `HTLC_HDR_CHAT_JOIN` accepts a password field and rejects a
-   missing/wrong one, but skips the check entirely for a user with a
-   pending invite. While implementing this, also found and fixed a real
-   gap: setting a private room's subject/password had no membership
-   check at all (only global-room subject changes were gated, on
-   `AccessExtra::SET_SUBJECT`) — now gated on room membership, matching
-   the reference's own `chat_isset(htlc, chat, 0)` check. Reviewing
-   `HTLC_HDR_CHAT_INVITE` against the reference alongside this also
-   found `on_chat_invite` was missing two checks the reference has:
-   the target user must be a connected client (`isclient(uid)`), and a
-   literal `0` for either the chat ID or the target's user ID is
-   rejected the same as a missing field (`if (ref && uid)`) rather than
-   silently accepted — both now fixed.
+5. ~~Chat room passwords.~~ Done — `ChatRoom.password`, set via
+   `HTLC_HDR_CHAT_SUBJECT` and checked on `HTLC_HDR_CHAT_JOIN`; also
+   closed missing membership/validation checks found on
+   `HTLC_HDR_CHAT_SUBJECT`/`HTLC_HDR_CHAT_INVITE` along the way.
 6. **Remaining unhandled opcodes.** All map to an item above rather than
    being new independent work: `FileGet`/`FilePut` (202/203, item 3);
    `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetinfo`/`FileMove`/
