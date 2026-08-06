@@ -774,6 +774,9 @@ impl Session {
         if members.contains(&target_id) {
             return tx.reply_error("that user is already in the chat");
         }
+        if state.is_invited(chat_id, target_id).await {
+            return tx.reply_error("that user is already invited to the chat");
+        }
         state.invited(chat_id, target_id).await;
 
         state
@@ -2205,6 +2208,40 @@ mod tests {
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
         state.join_chat_room(chat_id, 2).await;
+
+        let invite = Transaction::request(
+            ClientOpcode::ChatInvite,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::u16(ClientFieldId::Uid, 2),
+            ],
+        );
+        let reply = alice.on_chat_invite(&invite, &state).await;
+
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn inviting_an_already_invited_user_is_an_error() {
+        let alice = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: String::new(),
+                name: "Bob".to_string(),
+                icon: 0,
+                access: AccessPrivileges::all(),
+                access_extra: AccessExtra::default(),
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+            })
+            .await;
+        let chat_id = state.create_chat_room(1).await;
+        state.invited(chat_id, 2).await;
 
         let invite = Transaction::request(
             ClientOpcode::ChatInvite,
