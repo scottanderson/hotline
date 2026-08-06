@@ -36,7 +36,7 @@ pub fn encode_client_request_v1() -> [u8; 6] {
     PacketWriter::<6>::new().bytes(MAGIC).u16(1).finish()
 }
 
-/// Decode the fixed 8-byte header a tracker reply starts with, checking
+/// Decode the fixed 6-byte header a tracker reply starts with, checking
 /// the magic and returning the version.
 pub fn decode_reply_header(buf: &[u8]) -> Result<u16> {
     let prefix: [u8; 6] =
@@ -122,8 +122,8 @@ impl TrackedServer {
 /// login/password).
 #[derive(Debug, Clone)]
 pub struct ServerBeacon {
-    /// Server's UDP listening port (for the beacon itself).
-    pub udp_port: u16,
+    /// Server's Hotline (TCP) listening port.
+    pub port: u16,
     /// Number of connected users.
     pub user_count: u16,
     /// Random per-server ID the tracker uses to correlate updates.
@@ -144,7 +144,7 @@ impl ServerBeacon {
     pub fn encode(&self) -> Result<Vec<u8>> {
         Ok(VecWriter::new()
             .u16(1)
-            .u16(self.udp_port)
+            .u16(self.port)
             .u16(self.user_count)
             .u16(0)
             .u32(self.pass_id)
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn server_beacon_round_trips_through_encode() {
         let beacon = ServerBeacon {
-            udp_port: 5499,
+            port: 5500,
             user_count: 2,
             pass_id: 0xdead_beef,
             name: "Test Server".to_string(),
@@ -194,13 +194,13 @@ mod tests {
         };
         let bytes = beacon.encode().unwrap();
         assert_eq!(u16::from_be_bytes([bytes[0], bytes[1]]), 1); // beacon version
-        assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), 5499);
+        assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), 5500);
     }
 
     #[test]
     fn server_beacon_encode_rejects_an_oversized_field() {
         let beacon = ServerBeacon {
-            udp_port: 0,
+            port: 0,
             user_count: 0,
             pass_id: 0,
             name: "x".repeat(256),
