@@ -8,7 +8,7 @@
 //! field.
 
 use crate::error::{ProtoError, Result};
-use crate::wire::PacketWriter;
+use crate::wire::{PacketReader, PacketWriter};
 
 const MAGIC: [u8; 4] = *b"TRTP";
 
@@ -50,22 +50,27 @@ impl ClientHandshake {
 
     /// Decode a 12-byte client handshake.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 12 {
-            return Err(ProtoError::UnexpectedEof {
+        let buf: [u8; 12] = buf.get(..12).and_then(|b| b.try_into().ok()).ok_or(
+            ProtoError::UnexpectedEof {
                 needed: 12,
                 available: buf.len(),
-            });
-        }
-        if buf[0..4] != MAGIC {
+            },
+        )?;
+        let r = PacketReader::new(buf);
+        let (r, protocol) = r.take::<4>();
+        let (r, sub_protocol) = r.take::<4>();
+        let (r, version) = r.u16();
+        let (_, sub_version) = r.u16();
+        if protocol != MAGIC {
             return Err(ProtoError::BadMagic {
                 expected: MAGIC,
-                got: [buf[0], buf[1], buf[2], buf[3]],
+                got: protocol,
             });
         }
         Ok(Self {
-            sub_protocol: buf[4..8].try_into().unwrap(),
-            version: u16::from_be_bytes([buf[8], buf[9]]),
-            sub_version: u16::from_be_bytes([buf[10], buf[11]]),
+            sub_protocol,
+            version,
+            sub_version,
         })
     }
 }
