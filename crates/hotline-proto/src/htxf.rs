@@ -6,7 +6,7 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
 
 use crate::error::{ProtoError, Result};
-use crate::wire::{FixedEncode, PacketReader, PacketWriter, VecWriter};
+use crate::wire::{PacketReader, PacketWriter, VecWriter};
 
 const MAGIC: &[u8; 4] = b"HTXF";
 
@@ -83,12 +83,6 @@ impl HtxfHeader {
             transfer_type,
         };
         Ok(htxf_header)
-    }
-}
-
-impl FixedEncode<16> for HtxfHeader {
-    fn encode(&self) -> [u8; 16] {
-        HtxfHeader::encode(self)
     }
 }
 

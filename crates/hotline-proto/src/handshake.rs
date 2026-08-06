@@ -8,7 +8,7 @@
 //! field.
 
 use crate::error::{ProtoError, Result};
-use crate::wire::{FixedEncode, PacketWriter};
+use crate::wire::PacketWriter;
 
 const MAGIC: &[u8; 4] = b"TRTP";
 
@@ -111,18 +111,6 @@ impl ServerHandshake {
             return Err(ProtoError::Rejected(error_code));
         }
         Ok(Self { error_code })
-    }
-}
-
-impl FixedEncode<12> for ClientHandshake {
-    fn encode(&self) -> [u8; 12] {
-        ClientHandshake::encode(self)
-    }
-}
-
-impl FixedEncode<8> for ServerHandshake {
-    fn encode(&self) -> [u8; 8] {
-        ServerHandshake::encode(self)
     }
 }
 

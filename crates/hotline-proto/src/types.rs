@@ -2,7 +2,7 @@
 //! the packed file/user list-entry records.
 
 use crate::error::{ProtoError, Result};
-use crate::wire::{FixedEncode, PacketWriter, VecWriter};
+use crate::wire::{PacketWriter, VecWriter};
 
 /// A Hotline date: `year(2) | milliseconds(2) | seconds-since-midnight(4)`.
 /// Used by `FILE_CREATE_DATE`, `FILE_MODIFY_DATE`, `NEWS_ART_DATE`, and the
@@ -238,12 +238,6 @@ bitflags::bitflags! {
         const REFUSES_PM          = 1 << 2;
         /// User refuses private chat invites.
         const REFUSES_CHAT        = 1 << 3;
-    }
-}
-
-impl FixedEncode<8> for HlDate {
-    fn encode(&self) -> [u8; 8] {
-        HlDate::encode(self)
     }
 }
 

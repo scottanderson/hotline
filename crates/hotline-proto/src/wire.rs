@@ -229,15 +229,6 @@ impl<const N: usize> PacketReader<N> {
     }
 }
 
-/// A type that always encodes to the same fixed number of wire bytes.
-/// `N` is a type parameter, not an associated const, since using one as
-/// an array length in a trait method's return type needs the unstable
-/// `generic_const_exprs` feature.
-pub trait FixedEncode<const N: usize> {
-    /// Encode to exactly `N` bytes.
-    fn encode(&self) -> [u8; N];
-}
-
 /// A string was too long to fit a 1-byte Pascal-string length prefix
 /// (max 255 bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
