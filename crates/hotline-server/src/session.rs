@@ -782,10 +782,9 @@ impl Session {
         if members.contains(&target_id) {
             return tx.reply_error("that user is already in the chat");
         }
-        if state.is_invited(chat_id, target_id).await {
+        if !state.invited(chat_id, target_id).await {
             return tx.reply_error("that user is already invited to the chat");
         }
-        state.invited(chat_id, target_id).await;
 
         state
             .send_to(

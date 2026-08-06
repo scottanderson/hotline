@@ -330,40 +330,40 @@ impl SharedState {
     }
 
     /// Add `user_id` to a chat room, at the end of the join order, and
-    /// clear any pending invite for them. `false` if the room doesn't
-    /// exist.
+    /// clear any pending invite for them. Returns whether they had a
+    /// pending invite to clear, or `false` if the room doesn't exist.
     pub async fn join_chat_room(&self, chat_id: u32, user_id: u16) -> bool {
         self.chat_rooms
             .write()
             .await
             .get_mut(&chat_id)
-            .map(|room| {
+            .is_some_and(|room| {
                 if !room.members.contains(&user_id) {
                     room.members.push(user_id);
                 }
-                room.invited.remove(&user_id);
+                room.invited.remove(&user_id)
             })
-            .is_some()
     }
 
-    /// Mark `user_id` as invited to a chat room. `false` if the room
-    /// doesn't exist.
+    /// Mark `user_id` as invited to a chat room. Returns whether this was
+    /// a new invite (`false` if already invited, or if the room doesn't
+    /// exist).
     pub async fn invited(&self, chat_id: u32, user_id: u16) -> bool {
         self.chat_rooms
             .write()
             .await
             .get_mut(&chat_id)
-            .map(|room| {
-                room.invited.insert(user_id);
-            })
-            .is_some()
+            .is_some_and(|room| room.invited.insert(user_id))
     }
 
-    /// Clear a pending invite without joining, e.g. on decline.
-    pub async fn invite_declined(&self, chat_id: u32, user_id: u16) {
-        if let Some(room) = self.chat_rooms.write().await.get_mut(&chat_id) {
-            room.invited.remove(&user_id);
-        }
+    /// Clear a pending invite without joining, e.g. on decline. Returns
+    /// whether there was one to clear.
+    pub async fn invite_declined(&self, chat_id: u32, user_id: u16) -> bool {
+        self.chat_rooms
+            .write()
+            .await
+            .get_mut(&chat_id)
+            .is_some_and(|room| room.invited.remove(&user_id))
     }
 
     /// Whether `user_id` has a pending invite to a chat room.
