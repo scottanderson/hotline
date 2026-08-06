@@ -209,6 +209,11 @@ impl SharedState {
         self.users.read().await.get(&user_id).cloned()
     }
 
+    /// Whether `user_id` is currently connected, without cloning its entry.
+    pub async fn has_user(&self, user_id: u16) -> bool {
+        self.users.read().await.contains_key(&user_id)
+    }
+
     /// Record that `user_id` just sent a request, resetting their idle
     /// timer. Called once per received frame in the session loop.
     pub async fn touch_user(&self, user_id: u16) {

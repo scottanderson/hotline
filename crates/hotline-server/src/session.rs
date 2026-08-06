@@ -727,7 +727,7 @@ impl Session {
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
             return tx.reply_error("missing user id");
         };
-        if state.user(target_id).await.is_none() {
+        if !state.has_user(target_id).await {
             return tx.reply_error("no such user");
         }
 
