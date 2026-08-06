@@ -759,12 +759,20 @@ impl Session {
 
     /// 113: invite another user to a room this session belongs to.
     async fn on_chat_invite(&self, tx: &Transaction, state: &SharedState) -> Transaction {
-        let (Some(chat_id), Some(target_id)) = (
-            tx.field(ClientFieldId::ChatId).and_then(Field::as_u32),
-            tx.field(ClientFieldId::Uid).and_then(Field::as_u16),
-        ) else {
+        let chat_id = tx
+            .field(ClientFieldId::ChatId)
+            .and_then(Field::as_u32)
+            .unwrap_or(0);
+        let target_id = tx
+            .field(ClientFieldId::Uid)
+            .and_then(Field::as_u16)
+            .unwrap_or(0);
+        if chat_id == 0 || target_id == 0 {
             return tx.reply_error("missing chat id or user id");
-        };
+        }
+        if !state.has_user(target_id).await {
+            return tx.reply_error("no such user");
+        }
         let Some(members) = state.chat_room_members(chat_id).await else {
             return tx.reply_error("no such chat room");
         };
@@ -2203,9 +2211,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inviting_a_disconnected_user_is_an_error() {
+        let alice = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+
+        let invite = Transaction::request(
+            ClientOpcode::ChatInvite,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::u16(ClientFieldId::Uid, 2),
+            ],
+        );
+        let reply = alice.on_chat_invite(&invite, &state).await;
+
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn inviting_with_a_zero_chat_id_or_user_id_is_an_error() {
+        let alice = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+
+        let missing_uid = Transaction::request(
+            ClientOpcode::ChatInvite,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        assert!(alice.on_chat_invite(&missing_uid, &state).await.is_error());
+
+        let zero_chat_id = Transaction::request(
+            ClientOpcode::ChatInvite,
+            2,
+            vec![
+                Field::u32(ClientFieldId::ChatId, 0),
+                Field::u16(ClientFieldId::Uid, 2),
+            ],
+        );
+        assert!(alice.on_chat_invite(&zero_chat_id, &state).await.is_error());
+    }
+
+    #[tokio::test]
     async fn inviting_an_existing_member_is_an_error() {
         let alice = test_session("Alice", AccessPrivileges::all());
         let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: String::new(),
+                name: "Bob".to_string(),
+                icon: 0,
+                access: AccessPrivileges::all(),
+                access_extra: AccessExtra::default(),
+                account_name: String::new(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+            })
+            .await;
         let chat_id = state.create_chat_room(1).await;
         state.join_chat_room(chat_id, 2).await;
 

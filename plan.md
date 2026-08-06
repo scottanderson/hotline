@@ -91,11 +91,25 @@ priority order (backlog below).
      `_PUTFOLDER`, a separate `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` command
      loop on the transfer connection), and resource-fork (`"MACR"`) data.
 4. **Threaded news.** Current news support is flat/classic only.
-5. **Chat room passwords.** Extend `ChatRoom` with an optional password;
-   `HTLC_HDR_CHAT_CREATE`/`HTLC_HDR_CHAT_JOIN` should accept/check it,
-   matching how the invite bit already bypasses the check. Verify against
-   the reference's exact join/create field names and error text before
-   implementing.
+5. ~~Chat room passwords.~~ Done. `ChatRoom` has a `password` field (empty
+   means unprotected). The reference never accepts a password at room
+   creation; it's set (and changed) via `HTLC_HDR_CHAT_SUBJECT`, the same
+   opcode that sets the subject, alongside it or on its own; the resulting
+   push carries whichever of `HTLS_DATA_CHAT_SUBJECT`/`HTLS_DATA_PASSWORD`
+   changed, as its own separate push per field when both are set in one
+   request. `HTLC_HDR_CHAT_JOIN` accepts a password field and rejects a
+   missing/wrong one, but skips the check entirely for a user with a
+   pending invite. While implementing this, also found and fixed a real
+   gap: setting a private room's subject/password had no membership
+   check at all (only global-room subject changes were gated, on
+   `AccessExtra::SET_SUBJECT`) — now gated on room membership, matching
+   the reference's own `chat_isset(htlc, chat, 0)` check. Reviewing
+   `HTLC_HDR_CHAT_INVITE` against the reference alongside this also
+   found `on_chat_invite` was missing two checks the reference has:
+   the target user must be a connected client (`isclient(uid)`), and a
+   literal `0` for either the chat ID or the target's user ID is
+   rejected the same as a missing field (`if (ref && uid)`) rather than
+   silently accepted — both now fixed.
 6. **Remaining unhandled opcodes.** All map to an item above rather than
    being new independent work: `FileGet`/`FilePut` (202/203, item 3);
    `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetinfo`/`FileMove`/
