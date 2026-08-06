@@ -12,12 +12,12 @@ use crate::wire::{FixedEncode, PacketWriter};
 
 const MAGIC: &[u8; 4] = b"TRTP";
 
-/// The fixed `"HOTL"` sub-protocol tag every client's hello uses.
+/// The fixed `"HOTL"` sub-protocol tag every client's handshake uses.
 pub const SUB_PROTOCOL_HOTLINE: [u8; 4] = *b"HOTL";
 
 /// The 12-byte packet the client sends first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClientHello {
+pub struct ClientHandshake {
     /// Sub-protocol tag. Always [`SUB_PROTOCOL_HOTLINE`] for a normal
     /// Hotline connection.
     pub sub_protocol: [u8; 4],
@@ -27,7 +27,7 @@ pub struct ClientHello {
     pub sub_version: u16,
 }
 
-impl Default for ClientHello {
+impl Default for ClientHandshake {
     fn default() -> Self {
         Self {
             sub_protocol: SUB_PROTOCOL_HOTLINE,
@@ -37,7 +37,7 @@ impl Default for ClientHello {
     }
 }
 
-impl ClientHello {
+impl ClientHandshake {
     /// Encode to the wire format: `"TRTP" | sub_protocol | version | sub_version`.
     pub fn encode(&self) -> [u8; 12] {
         PacketWriter::<12>::new()
@@ -48,7 +48,7 @@ impl ClientHello {
             .finish()
     }
 
-    /// Decode a 12-byte client hello.
+    /// Decode a 12-byte client handshake.
     pub fn decode(buf: &[u8]) -> Result<Self> {
         if buf.len() < 12 {
             return Err(ProtoError::UnexpectedEof {
@@ -73,15 +73,15 @@ impl ClientHello {
 /// The 8-byte packet the server replies with: `"TRTP"` plus a 4-byte
 /// error code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServerHello {
+pub struct ServerHandshake {
     /// `0` means the connection is accepted; any other value is an error
     /// code and the connection should be closed.
     pub error_code: u32,
 }
 
-impl ServerHello {
+impl ServerHandshake {
     /// A successful handshake reply.
-    pub const OK: ServerHello = ServerHello { error_code: 0 };
+    pub const OK: ServerHandshake = ServerHandshake { error_code: 0 };
 
     /// Encode to the wire format: `"TRTP" | error_code`.
     pub fn encode(&self) -> [u8; 8] {
@@ -91,7 +91,7 @@ impl ServerHello {
             .finish()
     }
 
-    /// Decode an 8-byte server hello. Returns `Err(ProtoError::Rejected)`
+    /// Decode an 8-byte server handshake. Returns `Err(ProtoError::Rejected)`
     /// if the server reported a nonzero error code.
     pub fn decode(buf: &[u8]) -> Result<Self> {
         if buf.len() < 8 {
@@ -114,15 +114,15 @@ impl ServerHello {
     }
 }
 
-impl FixedEncode<12> for ClientHello {
+impl FixedEncode<12> for ClientHandshake {
     fn encode(&self) -> [u8; 12] {
-        ClientHello::encode(self)
+        ClientHandshake::encode(self)
     }
 }
 
-impl FixedEncode<8> for ServerHello {
+impl FixedEncode<8> for ServerHandshake {
     fn encode(&self) -> [u8; 8] {
-        ServerHello::encode(self)
+        ServerHandshake::encode(self)
     }
 }
 
@@ -131,29 +131,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_hello_encodes_expected_bytes() {
-        let hello = ClientHello::default();
-        assert_eq!(&hello.encode(), b"TRTPHOTL\x00\x01\x00\x02");
+    fn client_handshake_encodes_expected_bytes() {
+        let handshake = ClientHandshake::default();
+        assert_eq!(&handshake.encode(), b"TRTPHOTL\x00\x01\x00\x02");
     }
 
     #[test]
-    fn client_hello_round_trips() {
-        let hello = ClientHello::default();
-        let bytes = hello.encode();
-        assert_eq!(ClientHello::decode(&bytes).unwrap(), hello);
+    fn client_handshake_round_trips() {
+        let handshake = ClientHandshake::default();
+        let bytes = handshake.encode();
+        assert_eq!(ClientHandshake::decode(&bytes).unwrap(), handshake);
     }
 
     #[test]
-    fn server_hello_ok_round_trips() {
-        let bytes = ServerHello::OK.encode();
-        assert_eq!(ServerHello::decode(&bytes).unwrap(), ServerHello::OK);
+    fn server_handshake_ok_round_trips() {
+        let bytes = ServerHandshake::OK.encode();
+        assert_eq!(
+            ServerHandshake::decode(&bytes).unwrap(),
+            ServerHandshake::OK
+        );
     }
 
     #[test]
-    fn server_hello_rejection_is_an_error() {
-        let bytes = ServerHello { error_code: 1 }.encode();
+    fn server_handshake_rejection_is_an_error() {
+        let bytes = ServerHandshake { error_code: 1 }.encode();
         assert!(matches!(
-            ServerHello::decode(&bytes),
+            ServerHandshake::decode(&bytes),
             Err(ProtoError::Rejected(1))
         ));
     }

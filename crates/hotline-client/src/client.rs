@@ -12,7 +12,8 @@ use tokio_util::codec::Framed;
 use hotline_codec::TransactionCodec;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use hotline_proto::{
-    ClientFieldId, ClientHello, ClientOpcode, Field, ServerFieldId, ServerHello, Transaction,
+    ClientFieldId, ClientHandshake, ClientOpcode, Field, ServerFieldId, ServerHandshake,
+    Transaction,
 };
 
 use crate::error::{ClientError, Result};
@@ -63,11 +64,13 @@ impl HotlineClient {
 
         // The TRTP handshake isn't shaped like a Transaction, so it's
         // done on the raw stream before handing it to the codec.
-        stream.write_all(&ClientHello::default().encode()).await?;
+        stream
+            .write_all(&ClientHandshake::default().encode())
+            .await?;
 
-        let mut hello_buf = [0u8; 8];
-        stream.read_exact(&mut hello_buf).await?;
-        ServerHello::decode(&hello_buf)?;
+        let mut handshake_buf = [0u8; 8];
+        stream.read_exact(&mut handshake_buf).await?;
+        ServerHandshake::decode(&handshake_buf)?;
 
         let (writer, reader) = Framed::new(stream, TransactionCodec::for_client()).split();
         let pending: PendingMap = Arc::new(Mutex::new(PendingState::Open(HashMap::new())));

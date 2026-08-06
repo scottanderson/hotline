@@ -11,7 +11,7 @@ use hotline_proto::consts::AccessPrivileges;
 use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
 use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use hotline_proto::types::{HlPath, UserFlags, UserNameWithInfo};
-use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
+use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
 
 use crate::accounts::{AccessExtra, Account};
 use crate::error::Result;
@@ -159,8 +159,8 @@ impl Session {
     async fn handshake(stream: &mut TcpStream) -> Result<()> {
         let mut buf = [0u8; 12];
         stream.read_exact(&mut buf).await?;
-        ClientHello::decode(&buf)?;
-        stream.write_all(&ServerHello::OK.encode()).await?;
+        ClientHandshake::decode(&buf)?;
+        stream.write_all(&ServerHandshake::OK.encode()).await?;
         Ok(())
     }
 
