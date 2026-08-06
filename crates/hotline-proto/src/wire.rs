@@ -221,12 +221,6 @@ impl<const N: usize> PacketReader<N> {
         self.pos += L;
         (self, out)
     }
-
-    /// Bytes consumed so far. Mainly useful for `debug_assert`s mirroring
-    /// [`PacketWriter::finish`]'s check on the write side.
-    pub const fn position(&self) -> usize {
-        self.pos
-    }
 }
 
 /// A string was too long to fit a 1-byte Pascal-string length prefix
@@ -277,7 +271,7 @@ mod tests {
         let (r, b) = r.u16();
         let (r, c) = r.u32();
         assert_eq!((a, b, c), (0x1234, 0x5678, 0x9abc_def0));
-        assert_eq!(r.position(), 8);
+        assert_eq!(r.pos, 8);
     }
 
     #[test]
