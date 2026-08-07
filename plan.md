@@ -15,8 +15,9 @@ priority order (backlog below).
 - **`UserSelfinfo`'s access field.** The reference always sends a hardcoded
   "everything enabled" fake access bitmap in this push, regardless of real
   granted privileges (enforcement is entirely server-side). This server
-  sends the real computed access. Left as-is; flagging in case it turns out
-  to matter for client compatibility.
+  sends the real computed access instead. Confirmed to matter: real clients
+  don't display their own permissions correctly when sent the real bitmap
+  instead of the reference's hardcoded one — see backlog item 4.
 - **`reply_error()` text does not match the reference's error strings.**
   The reference uses short, sometimes cryptic strings (`"who?!?"`,
   `"Uh, no."`, ...); this server uses friendlier custom text. Not changed
@@ -58,19 +59,32 @@ priority order (backlog below).
      `HTLS_HDR_QUEUE_UPDATE`), folder transfers (`HTLC_HDR_FILE_GETFOLDER`/
      `_PUTFOLDER`, a separate `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` command
      loop on the transfer connection), and resource-fork (`"MACR"`) data.
-4. **Threaded news.** Current news support is flat/classic only.
-5. ~~Chat room passwords.~~ Done — `ChatRoom.password`, set via
-   `HTLC_HDR_CHAT_SUBJECT` and checked on `HTLC_HDR_CHAT_JOIN`; also
-   closed missing membership/validation checks found on
-   `HTLC_HDR_CHAT_SUBJECT`/`HTLC_HDR_CHAT_INVITE` along the way.
-6. **Remaining unhandled opcodes.** Mostly map to an item above rather
+4. **Fix `UserSelfinfo`'s access field to match the reference's hardcoded
+   bitmap.** Confirmed real-client-visible bug: sending the real computed
+   `AccessPrivileges` bitmap (`self.access.bits()` in
+   `Session::complete_join`) instead of the reference's hardcoded
+   "everything enabled" value means real Hotline clients don't display
+   their own permissions correctly. Enforcement is entirely server-side
+   regardless of what this field says, so sending the reference's
+   hardcoded value should be safe. See the divergence note above.
+5. **Threaded news.** Current news support is flat/classic only.
+6. ~~Chat room passwords.~~ Done — `ChatRoom.password`, set via
+   `HTLC_HDR_CHAT_SUBJECT` and checked on `HTLC_HDR_CHAT_JOIN`. A pending
+   invite always admits regardless of password; without one, a room with
+   no password can't be joined at all — a password is the only other way
+   in, not a bypass for skipping invitation (`SharedState::join_chat_room`
+   now returns `Result<(), &'static str>` folding that check into one
+   atomic operation). Also closed a real gap where `on_chat_create` never
+   recorded its own invitee via `state.invited()`, so a later password on
+   that room would have locked out someone validly invited to it.
+7. **Remaining unhandled opcodes.** Mostly map to an item above rather
    than being new independent work: `FileDelete`/`FileMkdir`/
    `FileGetinfo`/`FileSetinfo`/`FileMove`/`FileSymlink` (204–209, now
    unblocked by item 3's real file storage, but each still its own
    handler); `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
-   (370–411, item 4).
-7. **Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s
+   (370–411, item 5).
+8. **Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s
    `From`/`Into` conversions.** Adopting `num_enum` (`FromPrimitive`/
    `IntoPrimitive`, `#[num_enum(catch_all)]` for `Unknown(u32)`) to
    generate these from real enum discriminants dropped their `const fn`
@@ -82,7 +96,7 @@ priority order (backlog below).
    otherwise consistently `const fn` style (`PacketReader`,
    `numbers::encode`/`decode`) worth deciding on deliberately rather than
    leaving as a side effect. Low priority, no known concrete need yet.
-8. **Clean up `Session::handshake`'s exact-match approach some day.**
+9. **Clean up `Session::handshake`'s exact-match approach some day.**
    Currently a single `buf != ClientHandshake::default().encode()` byte
    comparison, matching the reference server's own `memcmp` against one
    fixed 12-byte constant (no per-field sub-protocol/version reasoning,
@@ -91,22 +105,28 @@ priority order (backlog below).
    diagnostic on failure is a blunt instrument; worth revisiting once
    there's a reason to (e.g. wanting a logged reason for a rejected
    connection) without regressing the "no reply on mismatch" behavior.
-9. **Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
-   naming convention used throughout doc comments and `opcode_names!`/
-   field-id tables.** That convention comes from the reference
-   implementation's own C header, which has no more claim to being
-   "the" canonical name than any other implementation's internal
-   naming — there's no real reason to preserve it here. `HLProtocol.md`
-   (repo root) is the actual official source and uses its own constant
-   names (`myTran_*` for transactions, `myField_*` for fields, `myAcc_*`
-   for access privileges); those should be what this codebase's doc
-   comments and naming cite instead, not the reference server's
-   internal `HTLC_HDR_*` spelling. Not started: this touches
-   `opcode.rs`'s `opcode_names!` invocations, `field_id.rs`'s tables,
-   every "Original: `HTLC_HDR_X`"-style doc comment, and AGENTS.md's
-   own style rule mandating the `HTLC_HDR_*` convention (which would
-   need to change too if this is adopted) - a wide, mechanical, but
-   non-trivial rename across the crate.
+10. **Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
+    naming convention used throughout doc comments and `opcode_names!`/
+    field-id tables.** That convention comes from the reference
+    implementation's own C header, which has no more claim to being
+    "the" canonical name than any other implementation's internal
+    naming — there's no real reason to preserve it here. `HLProtocol.md`
+    (repo root) is the actual official source and uses its own constant
+    names (`myTran_*` for transactions, `myField_*` for fields, `myAcc_*`
+    for access privileges); those should be what this codebase's doc
+    comments and naming cite instead, not the reference server's
+    internal `HTLC_HDR_*` spelling. Not started: this touches
+    `opcode.rs`'s `opcode_names!` invocations, `field_id.rs`'s tables,
+    every "Original: `HTLC_HDR_X`"-style doc comment, and AGENTS.md's
+    own style rule mandating the `HTLC_HDR_*` convention (which would
+    need to change too if this is adopted) - a wide, mechanical, but
+    non-trivial rename across the crate.
+11. **Bring the other `session.rs` `on_*` handlers in line with the
+    `if let Err(reason) = state.some_call(...).await { return
+    tx.reply_error(reason); }` pattern** now documented in AGENTS.md and
+    used by `on_chat_join`. Most handlers still do their own inline
+    `Option`/bool checks against `SharedState` calls instead of getting
+    a `Result<T, &'static str>` back directly. Not started.
 
 ## Needs manual verification against the real client
 
@@ -117,6 +137,12 @@ login, account CRUD opcodes, the seeded `admin`/`admin` and passwordless
 have only been unit-tested plus one manual `hlc` smoke test (login
 accepted with the seeded admin account, rejected on wrong
 password/unknown login) — not yet exercised against a real client.
+
+Chat room invite/password gating (backlog item 6) is unit-tested only,
+not yet exercised against a real client. The `UserSelfinfo` access-field
+bug (backlog item 4) *was* found by real-client testing — see the
+divergence note above — so real-client checks do surface real gaps here,
+not just theoretical ones.
 
 ## `HLProtocol.md` review
 
