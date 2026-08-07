@@ -307,7 +307,10 @@ impl Session {
         // No HTLC_DATA_CLIENTVERSION (160) counts as pre-150.
         let modern = tx.client_version().unwrap_or(0) >= 150;
 
-        if !config.agreement.is_empty() {
+        // DONT_SHOW_AGREEMENT skips the real text, not just its display.
+        let show_agreement = !self.access.contains(AccessPrivileges::DONT_SHOW_AGREEMENT);
+        let have_agreement = !config.agreement.is_empty();
+        if show_agreement && have_agreement {
             replies.push(Transaction::push(
                 ServerOpcode::Agreement,
                 vec![Field::string(ServerFieldId::Text, config.agreement.clone())],
@@ -1610,6 +1613,81 @@ mod tests {
                 .any(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement)),
             "pre-150 clients don't understand the agreement handshake at all"
         );
+    }
+
+    #[tokio::test]
+    async fn dont_show_agreement_skips_the_configured_text_but_still_marks_modern_clients_done() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "skipper".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: String::new(),
+                    name: "Skipper".to_string(),
+                    access: AccessPrivileges::DONT_SHOW_AGREEMENT,
+                },
+            )
+            .await
+            .unwrap();
+        let config = ServerConfig {
+            agreement: "please behave".to_string(),
+            ..ServerConfig::default()
+        };
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "skipper"),
+                Field::u16(ClientFieldId::Version, 151),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        let agreement = replies
+            .iter()
+            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement))
+            .expect("modern client still gets a no-agreement marker");
+        assert!(
+            agreement.field(ServerFieldId::Noagreement).is_some(),
+            "DONT_SHOW_AGREEMENT must skip the real text, not just its display"
+        );
+        assert!(agreement.field(ServerFieldId::Text).is_none());
+    }
+
+    #[tokio::test]
+    async fn dont_show_agreement_sends_nothing_to_a_pre_150_client() {
+        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "skipper".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: String::new(),
+                    name: "Skipper".to_string(),
+                    access: AccessPrivileges::DONT_SHOW_AGREEMENT,
+                },
+            )
+            .await
+            .unwrap();
+        let config = ServerConfig {
+            agreement: "please behave".to_string(),
+            ..ServerConfig::default()
+        };
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![Field::obfuscated_string(ClientFieldId::Login, "skipper")],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert!(!replies
+            .iter()
+            .any(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement)),);
     }
 
     #[tokio::test]
