@@ -246,8 +246,8 @@ impl App {
         self.access = tx.access().unwrap_or(self.access);
 
         // This session's own uid/icon/name.
-        if let Some(field) = tx.field(ServerFieldId::UserList) {
-            match UserNameWithInfo::decode(&field.as_bytes()) {
+        if let Some(result) = tx.user_list_entry() {
+            match result {
                 Ok(entry) => match self.users.iter_mut().find(|u| u.user_id == entry.user_id) {
                     Some(existing) => *existing = entry,
                     None => self.users.push(entry),

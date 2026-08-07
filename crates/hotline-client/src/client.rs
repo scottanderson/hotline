@@ -180,23 +180,13 @@ impl HotlineClient {
     /// Fetch the connected-user list (`HTLC_HDR_USER_GETLIST`, 300).
     pub async fn get_user_name_list(&self) -> Result<Vec<UserNameWithInfo>> {
         let reply = self.request(ClientOpcode::UserGetlist, vec![]).await?;
-        Ok(reply
-            .fields
-            .iter()
-            .filter(|f| f.id == u16::from(ServerFieldId::UserList))
-            .map(|f| UserNameWithInfo::decode(&f.as_bytes()))
-            .collect::<hotline_proto::Result<_>>()?)
+        Ok(reply.user_list_entries()?)
     }
 
     /// Fetch the root folder's file listing (`HTLC_HDR_FILE_LIST`, 200).
     pub async fn get_file_name_list(&self) -> Result<Vec<FileNameWithInfo>> {
         let reply = self.request(ClientOpcode::FileList, vec![]).await?;
-        Ok(reply
-            .fields
-            .iter()
-            .filter(|f| f.id == u16::from(ServerFieldId::FileList))
-            .map(|f| FileNameWithInfo::decode(&f.as_bytes()))
-            .collect::<hotline_proto::Result<_>>()?)
+        Ok(reply.file_list_entries()?)
     }
 }
 

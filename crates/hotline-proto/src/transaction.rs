@@ -34,6 +34,7 @@ use crate::error::{ProtoError, Result};
 use crate::field::Field;
 use crate::field_id::{ClientFieldId, ServerFieldId};
 use crate::opcode::{ClientOpcode, ServerOpcode, TransactionType};
+use crate::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
 use crate::wire::{PacketReader, VecWriter};
 use crate::AccessPrivileges;
 
@@ -143,6 +144,37 @@ impl Transaction {
     pub fn field(&self, id: impl Into<u16>) -> Option<&Field> {
         let id = id.into();
         self.fields.iter().find(|f| f.id == id)
+    }
+
+    /// Find all fields with the given ID.
+    pub fn fields(&self, id: impl Into<u16>) -> impl Iterator<Item = &Field> {
+        let id = id.into();
+        self.fields.iter().filter(move |f| f.id == id)
+    }
+
+    /// The first `USER_LIST` (300) field, decoded (`None` if absent, `Some(Err(_))` if malformed).
+    pub fn user_list_entry(&self) -> Option<Result<UserNameWithInfo>> {
+        self.field(ServerFieldId::UserList)
+            .map(|f| UserNameWithInfo::decode(&f.as_bytes()))
+    }
+
+    /// Every `USER_LIST` (300) field, decoded; fails on the first that doesn't decode.
+    pub fn user_list_entries(&self) -> Result<Vec<UserNameWithInfo>> {
+        self.fields(ServerFieldId::UserList)
+            .map(|f| UserNameWithInfo::decode(&f.as_bytes()))
+            .collect()
+    }
+
+    /// Every `FILE_LIST` (200) field, decoded; fails on the first that doesn't decode.
+    pub fn file_list_entries(&self) -> Result<Vec<FileNameWithInfo>> {
+        self.fields(ServerFieldId::FileList)
+            .map(|f| FileNameWithInfo::decode(&f.as_bytes()))
+            .collect()
+    }
+
+    /// A `FILE_PATH`-shaped field (`FilePath`/`FileNewPath`), decoded.
+    pub fn file_path(&self, id: ClientFieldId) -> Option<Result<HlPath>> {
+        self.field(id).map(|f| HlPath::decode(&f.as_bytes()))
     }
 
     /// The `LOGIN` field, deobfuscated, if present.

@@ -692,11 +692,9 @@ impl Session {
 
         // FILE_PATH (202) is optional in the request; root is assumed
         // when absent.
-        let dir = match tx.field(ClientFieldId::FilePath) {
-            Some(field) => match HlPath::decode(&field.as_bytes()) {
-                Ok(dir) => dir,
-                Err(_) => return vec![tx.reply_error("bad path")],
-            },
+        let dir = match tx.file_path(ClientFieldId::FilePath) {
+            Some(Ok(dir)) => dir,
+            Some(Err(_)) => return vec![tx.reply_error("bad path")],
             None => HlPath::default(),
         };
 
@@ -715,8 +713,9 @@ impl Session {
     /// `None` if the name is missing or the path field is malformed.
     fn file_name_and_dir(&self, tx: &Transaction) -> Option<(String, HlPath)> {
         let name = tx.field(ClientFieldId::FileName)?.as_string();
-        let dir = match tx.field(ClientFieldId::FilePath) {
-            Some(field) => HlPath::decode(&field.as_bytes()).ok()?,
+        let dir = match tx.file_path(ClientFieldId::FilePath) {
+            Some(Ok(dir)) => dir,
+            Some(Err(_)) => return None,
             None => HlPath::default(),
         };
         Some((name, dir))
