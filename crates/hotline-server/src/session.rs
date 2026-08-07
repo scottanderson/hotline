@@ -769,9 +769,8 @@ impl Session {
             return vec![tx.reply_error("huh?!?")];
         };
         let requester = FileRequester { login: &self.login };
-        let upload_anywhere = self.access.contains(AccessPrivileges::UPLOAD_ANYWHERE);
         if let Err(reason) = state
-            .authorize_upload(requester, &dir, &name, upload_anywhere)
+            .authorize_upload(requester, &dir, &name, self.access)
             .await
         {
             return vec![tx.reply_error(reason)];

@@ -386,8 +386,9 @@ impl SharedState {
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
-        upload_anywhere: bool,
+        access: AccessPrivileges,
     ) -> Result<(), &'static str> {
+        let upload_anywhere = access.contains(AccessPrivileges::UPLOAD_ANYWHERE);
         if !upload_anywhere && !is_dropbox_path(dir) {
             return Err("You are not allowed to do that.");
         }
