@@ -9,7 +9,7 @@
 //! `Sink<Transaction>`, used as `.next().await` / `.send(tx).await`.
 
 use bytes::{Buf, BytesMut};
-use hotline_proto::{ProtoError, Transaction, TransactionHeader, PREFIX_LEN};
+use hotline_proto::{ProtoError, Transaction, TransactionHeader};
 use tokio_util::codec::{Decoder, Encoder};
 
 /// Framing errors: either the transport failed (`io::Error`, required by
@@ -42,7 +42,7 @@ enum DecodeState {
 #[derive(Debug)]
 pub struct TransactionCodec {
     state: DecodeState,
-    decode_prefix: fn(&[u8; PREFIX_LEN]) -> TransactionHeader,
+    decode_prefix: fn(&[u8; TransactionHeader::LEN]) -> TransactionHeader,
     /// Next `trans` to stamp on an outgoing push; `None` on a client codec.
     next_push_trans: Option<u32>,
 }
@@ -78,13 +78,13 @@ impl Decoder for TransactionCodec {
         loop {
             match &self.state {
                 DecodeState::Prefix => {
-                    if src.len() < PREFIX_LEN {
+                    if src.len() < TransactionHeader::LEN {
                         return Ok(None);
                     }
-                    let prefix: [u8; PREFIX_LEN] = src[..PREFIX_LEN]
+                    let prefix: [u8; TransactionHeader::LEN] = src[..TransactionHeader::LEN]
                         .try_into()
                         .expect("slice length checked above");
-                    src.advance(PREFIX_LEN);
+                    src.advance(TransactionHeader::LEN);
                     self.state = DecodeState::Body((self.decode_prefix)(&prefix));
                     // loop: the body may already be in this segment too
                 }

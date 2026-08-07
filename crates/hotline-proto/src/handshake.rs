@@ -38,9 +38,13 @@ impl Default for ClientHandshake {
 }
 
 impl ClientHandshake {
+    /// Wire length in bytes: `magic(4) | sub_protocol(4) | version(2) |
+    /// sub_version(2)`.
+    pub const LEN: usize = 12;
+
     /// Encode to the wire format: `"TRTP" | sub_protocol | version | sub_version`.
-    pub fn encode(&self) -> [u8; 12] {
-        PacketWriter::<12>::new()
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        PacketWriter::new()
             .bytes(&MAGIC)
             .bytes(&self.sub_protocol)
             .u16(self.version)
@@ -50,9 +54,9 @@ impl ClientHandshake {
 
     /// Decode a 12-byte client handshake.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        let buf: [u8; 12] = buf.get(..12).and_then(|b| b.try_into().ok()).ok_or(
+        let buf: [u8; Self::LEN] = buf.get(..Self::LEN).and_then(|b| b.try_into().ok()).ok_or(
             ProtoError::UnexpectedEof {
-                needed: 12,
+                needed: Self::LEN,
                 available: buf.len(),
             },
         )?;
@@ -85,12 +89,15 @@ pub struct ServerHandshake {
 }
 
 impl ServerHandshake {
+    /// Wire length in bytes: `magic(4) | error_code(4)`.
+    pub const LEN: usize = 8;
+
     /// A successful handshake reply.
     pub const OK: ServerHandshake = ServerHandshake { error_code: 0 };
 
     /// Encode to the wire format: `"TRTP" | error_code`.
-    pub fn encode(&self) -> [u8; 8] {
-        PacketWriter::<8>::new()
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        PacketWriter::new()
             .bytes(&MAGIC)
             .u32(self.error_code)
             .finish()
@@ -99,19 +106,21 @@ impl ServerHandshake {
     /// Decode an 8-byte server handshake. Returns `Err(ProtoError::Rejected)`
     /// if the server reported a nonzero error code.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 8 {
-            return Err(ProtoError::UnexpectedEof {
-                needed: 8,
+        let buf: [u8; Self::LEN] = buf.get(..Self::LEN).and_then(|b| b.try_into().ok()).ok_or(
+            ProtoError::UnexpectedEof {
+                needed: Self::LEN,
                 available: buf.len(),
-            });
-        }
-        if buf[0..4] != MAGIC {
+            },
+        )?;
+        let r = PacketReader::new(buf);
+        let (r, magic) = r.take::<4>();
+        let (_, error_code) = r.u32();
+        if magic != MAGIC {
             return Err(ProtoError::BadMagic {
                 expected: MAGIC,
-                got: [buf[0], buf[1], buf[2], buf[3]],
+                got: magic,
             });
         }
-        let error_code = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if error_code != 0 {
             return Err(ProtoError::Rejected(error_code));
         }

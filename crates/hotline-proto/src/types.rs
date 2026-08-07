@@ -2,7 +2,7 @@
 //! the packed file/user list-entry records.
 
 use crate::error::{ProtoError, Result};
-use crate::wire::{PacketWriter, VecWriter};
+use crate::wire::{PacketReader, PacketWriter, VecWriter};
 
 /// A Hotline date: `year(2) | milliseconds(2) | seconds-since-midnight(4)`.
 /// Used by `FILE_CREATE_DATE`, `FILE_MODIFY_DATE`, `NEWS_ART_DATE`, and the
@@ -18,9 +18,12 @@ pub struct HlDate {
 }
 
 impl HlDate {
+    /// Wire length in bytes: `year(2) | milliseconds(2) | seconds(4)`.
+    pub const LEN: usize = 8;
+
     /// Encode as the 8-byte wire representation.
-    pub fn encode(&self) -> [u8; 8] {
-        PacketWriter::<8>::new()
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        PacketWriter::new()
             .u16(self.year)
             .u16(self.milliseconds)
             .u32(self.seconds)
@@ -28,17 +31,21 @@ impl HlDate {
     }
 
     /// Decode from an 8-byte buffer.
-    pub const fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 8 {
-            return Err(ProtoError::UnexpectedEof {
-                needed: 8,
+    pub fn decode(buf: &[u8]) -> Result<Self> {
+        let buf: [u8; Self::LEN] = buf.get(..Self::LEN).and_then(|b| b.try_into().ok()).ok_or(
+            ProtoError::UnexpectedEof {
+                needed: Self::LEN,
                 available: buf.len(),
-            });
-        }
+            },
+        )?;
+        let r = PacketReader::new(buf);
+        let (r, year) = r.u16();
+        let (r, milliseconds) = r.u16();
+        let (_, seconds) = r.u32();
         Ok(Self {
-            year: u16::from_be_bytes([buf[0], buf[1]]),
-            milliseconds: u16::from_be_bytes([buf[2], buf[3]]),
-            seconds: u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]),
+            year,
+            milliseconds,
+            seconds,
         })
     }
 }
@@ -122,41 +129,50 @@ pub struct FileNameWithInfo {
 }
 
 impl FileNameWithInfo {
+    /// Byte length of the fixed part, before the variable-length name:
+    /// `file_type(4) | creator(4) | size(4) | reserved(4) |
+    /// name_script(2) | name_len(2)`.
+    const LEN: usize = 20;
+
     /// Encode to the packed wire representation.
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&self.file_type);
-        buf.extend_from_slice(&self.creator);
-        buf.extend_from_slice(&self.size.to_be_bytes());
-        buf.extend_from_slice(&0u32.to_be_bytes()); // reserved
-        buf.extend_from_slice(&0u16.to_be_bytes()); // name script
         let name_bytes = self.name.as_bytes();
-        buf.extend_from_slice(&(name_bytes.len() as u16).to_be_bytes());
-        buf.extend_from_slice(name_bytes);
-        buf
+        VecWriter::with_capacity(Self::LEN + name_bytes.len())
+            .bytes(&self.file_type)
+            .bytes(&self.creator)
+            .u32(self.size)
+            .u32(0) // reserved
+            .u16(0) // name script
+            .u16(name_bytes.len() as u16)
+            .bytes(name_bytes)
+            .finish()
     }
 
     /// Decode from a field's raw data.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        const FIXED_LEN: usize = 4 + 4 + 4 + 4 + 2 + 2;
-        if buf.len() < FIXED_LEN {
+        if buf.len() < Self::LEN {
             return Err(ProtoError::UnexpectedEof {
-                needed: FIXED_LEN,
+                needed: Self::LEN,
                 available: buf.len(),
             });
         }
-        let file_type = buf[0..4].try_into().unwrap();
-        let creator = buf[4..8].try_into().unwrap();
-        let size = u32::from_be_bytes(buf[8..12].try_into().unwrap());
-        let name_len = u16::from_be_bytes([buf[18], buf[19]]) as usize;
-        let name_end = 20 + name_len;
+        let fixed: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
+        let r = PacketReader::new(fixed);
+        let (r, file_type) = r.take::<4>();
+        let (r, creator) = r.take::<4>();
+        let (r, size) = r.u32();
+        let (r, _reserved) = r.u32();
+        let (r, _name_script) = r.u16();
+        let (_, name_len) = r.u16();
+        let name_len = name_len as usize;
+        let name_end = Self::LEN + name_len;
         if buf.len() < name_end {
             return Err(ProtoError::UnexpectedEof {
                 needed: name_end,
                 available: buf.len(),
             });
         }
-        let name = String::from_utf8_lossy(&buf[20..name_end]).into_owned();
+        let name = String::from_utf8_lossy(&buf[Self::LEN..name_end]).into_owned();
         Ok(Self {
             file_type,
             creator,
@@ -185,38 +201,45 @@ pub struct UserNameWithInfo {
 }
 
 impl UserNameWithInfo {
+    /// Byte length of the fixed part, before the variable-length name:
+    /// `user_id(2) | icon(2) | flags(2) | name_len(2)`.
+    const LEN: usize = 8;
+
     /// Encode to the packed wire representation.
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(8 + self.name.len());
-        buf.extend_from_slice(&self.user_id.to_be_bytes());
-        buf.extend_from_slice(&self.icon.to_be_bytes());
-        buf.extend_from_slice(&self.flags.to_be_bytes());
         let name_bytes = self.name.as_bytes();
-        buf.extend_from_slice(&(name_bytes.len() as u16).to_be_bytes());
-        buf.extend_from_slice(name_bytes);
-        buf
+        VecWriter::with_capacity(Self::LEN + name_bytes.len())
+            .u16(self.user_id)
+            .u16(self.icon)
+            .u16(self.flags)
+            .u16(name_bytes.len() as u16)
+            .bytes(name_bytes)
+            .finish()
     }
 
     /// Decode from a field's raw data.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 8 {
+        if buf.len() < Self::LEN {
             return Err(ProtoError::UnexpectedEof {
-                needed: 8,
+                needed: Self::LEN,
                 available: buf.len(),
             });
         }
-        let user_id = u16::from_be_bytes([buf[0], buf[1]]);
-        let icon = u16::from_be_bytes([buf[2], buf[3]]);
-        let flags = u16::from_be_bytes([buf[4], buf[5]]);
-        let name_len = u16::from_be_bytes([buf[6], buf[7]]) as usize;
-        let end = 8 + name_len;
+        let fixed: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
+        let r = PacketReader::new(fixed);
+        let (r, user_id) = r.u16();
+        let (r, icon) = r.u16();
+        let (r, flags) = r.u16();
+        let (_, name_len) = r.u16();
+        let name_len = name_len as usize;
+        let end = Self::LEN + name_len;
         if buf.len() < end {
             return Err(ProtoError::UnexpectedEof {
                 needed: end,
                 available: buf.len(),
             });
         }
-        let name = String::from_utf8_lossy(&buf[8..end]).into_owned();
+        let name = String::from_utf8_lossy(&buf[Self::LEN..end]).into_owned();
         Ok(Self {
             user_id,
             icon,

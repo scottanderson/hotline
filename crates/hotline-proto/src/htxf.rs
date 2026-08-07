@@ -39,9 +39,13 @@ pub struct HtxfHeader {
 }
 
 impl HtxfHeader {
+    /// Wire length in bytes: `magic(4) | reference(4) | len(4) |
+    /// transfer_type(2) | reserved(2)`.
+    pub const LEN: usize = 16;
+
     /// Encode to the wire format.
-    pub fn encode(&self) -> [u8; 16] {
-        PacketWriter::<16>::new()
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        PacketWriter::new()
             .bytes(MAGIC)
             .u32(self.reference)
             .u32(self.len)
@@ -52,13 +56,13 @@ impl HtxfHeader {
 
     /// Decode a 16-byte header.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 16 {
+        if buf.len() < Self::LEN {
             return Err(ProtoError::UnexpectedEof {
-                needed: 16,
+                needed: Self::LEN,
                 available: buf.len(),
             });
         }
-        let buf: [u8; 16] = buf[..16].try_into().unwrap();
+        let buf: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
         let r = PacketReader::new(buf);
         let (r, magic) = r.take::<4>();
         let (r, reference) = r.u32();
@@ -103,7 +107,7 @@ pub const FLAT_FILE_HEADER_LEN: usize = 24 + 16 + INFO_DATA_LEN + 16;
 /// `data_size` is the number of raw file bytes that follow this header
 /// on the wire.
 pub fn flat_file_header(data_size: u32) -> [u8; FLAT_FILE_HEADER_LEN] {
-    PacketWriter::<FLAT_FILE_HEADER_LEN>::new()
+    PacketWriter::new()
         // Flat file header.
         .bytes(b"FILP")
         .u16(1) // version
@@ -157,18 +161,20 @@ pub fn decode_flat_file_prefix(buf: &[u8]) -> Result<u16> {
             available: buf.len(),
         });
     }
-    if buf[0..4] != *b"FILP" {
+    let prefix: [u8; FLAT_FILE_PREFIX_LEN] = buf[..FLAT_FILE_PREFIX_LEN].try_into().unwrap();
+    let r = PacketReader::new(prefix);
+    let (r, magic) = r.take::<4>();
+    let (r, _version) = r.u16();
+    let (r, _reserved) = r.take::<16>();
+    let (_, fork_count) = r.u16();
+    if magic != *b"FILP" {
         return Err(ProtoError::BadMagic {
             expected: *b"FILP",
-            got: [buf[0], buf[1], buf[2], buf[3]],
+            got: magic,
         });
     }
-    Ok(u16::from_be_bytes([buf[22], buf[23]]))
+    Ok(fork_count)
 }
-
-/// Byte length of one fork header: `fork type(4) | compression type(4) |
-/// reserved(4) | data size(4)`.
-pub const FORK_HEADER_LEN: usize = 16;
 
 /// One fork's header, read between the `FILP` prefix and its data
 /// (`INFO`, `DATA`, or `MACR`). Compression is always `0` (uncompressed)
@@ -182,17 +188,27 @@ pub struct ForkHeader {
 }
 
 impl ForkHeader {
+    /// Wire length in bytes: `fork_type(4) | compression_type(4) |
+    /// reserved(4) | data_size(4)`.
+    pub const LEN: usize = 16;
+
     /// Decode one fork header.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < FORK_HEADER_LEN {
+        if buf.len() < Self::LEN {
             return Err(ProtoError::UnexpectedEof {
-                needed: FORK_HEADER_LEN,
+                needed: Self::LEN,
                 available: buf.len(),
             });
         }
+        let buf: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
+        let r = PacketReader::new(buf);
+        let (r, fork_type) = r.take::<4>();
+        let (r, _compression_type) = r.u32();
+        let (r, _reserved) = r.u32();
+        let (_, data_size) = r.u32();
         Ok(Self {
-            fork_type: buf[0..4].try_into().unwrap(),
-            data_size: u32::from_be_bytes(buf[12..16].try_into().unwrap()),
+            fork_type,
+            data_size,
         })
     }
 }
@@ -267,7 +283,7 @@ mod tests {
         assert_eq!(&info.fork_type, b"INFO");
         assert_eq!(info.data_size, INFO_DATA_LEN as u32);
 
-        let data_fork_offset = FLAT_FILE_PREFIX_LEN + FORK_HEADER_LEN + INFO_DATA_LEN;
+        let data_fork_offset = FLAT_FILE_PREFIX_LEN + ForkHeader::LEN + INFO_DATA_LEN;
         let data = ForkHeader::decode(&header[data_fork_offset..]).unwrap();
         assert_eq!(&data.fork_type, b"DATA");
         assert_eq!(data.data_size, 42);

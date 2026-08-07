@@ -159,7 +159,7 @@ impl Session {
     /// Checks the client's opening 12 bytes as one fixed byte string;
     /// closes the connection without a reply on any mismatch.
     async fn handshake(stream: &mut TcpStream) -> Result<()> {
-        let mut buf = [0u8; 12];
+        let mut buf = [0u8; ClientHandshake::LEN];
         stream.read_exact(&mut buf).await?;
         if buf != ClientHandshake::default().encode() {
             return Err(ServerError::HandshakeRejected(

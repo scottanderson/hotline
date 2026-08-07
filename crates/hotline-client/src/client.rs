@@ -68,7 +68,7 @@ impl HotlineClient {
             .write_all(&ClientHandshake::default().encode())
             .await?;
 
-        let mut handshake_buf = [0u8; 8];
+        let mut handshake_buf = [0u8; ServerHandshake::LEN];
         stream.read_exact(&mut handshake_buf).await?;
         ServerHandshake::decode(&handshake_buf)?;
 

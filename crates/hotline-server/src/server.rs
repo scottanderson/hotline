@@ -174,7 +174,7 @@ async fn receive_file(
         .await?;
 
     for _ in 0..fork_count {
-        let mut fork_header_buf = [0u8; htxf::FORK_HEADER_LEN];
+        let mut fork_header_buf = [0u8; htxf::ForkHeader::LEN];
         stream.read_exact(&mut fork_header_buf).await?;
         let fork_header = ForkHeader::decode(&fork_header_buf)?;
 
