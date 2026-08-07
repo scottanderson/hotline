@@ -135,6 +135,31 @@ priority order (backlog below).
     list/get) were deliberately left `Option`-based since they mirror
     `FileProvider`'s own `Option`-returning shape and forcing `Result`
     there would just wrap-then-unwrap the same information.
+12. **Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
+    `ClientOpcode`/`ServerOpcode` into one `Opcode`.** `HLProtocol.md`
+    itself has no client/server split in its numbering: one flat
+    `myField_*` list for fields, one flat `myTran_*` list for
+    transactions, with direction recorded separately per transaction
+    (`Initiator: Client`/`Server`) rather than via two disjoint ID
+    spaces. A full field-by-field, transaction-by-transaction audit
+    against the doc (this session) found no case where the same numeric
+    ID means something different depending on direction — every
+    match was either identical in meaning both ways, or (per
+    `field_id.rs`'s own module docs, e.g. `ErrorText` server-only,
+    `Options` client-only) simply unused in the other direction, not
+    conflicting. The original rationale for splitting the types (`field_id.rs`
+    module docs, `opcode.rs` module docs, and AGENTS.md's "same numeric
+    field tag can mean different things" framing) doesn't appear to be
+    backed by an actual collision anywhere in the protocol as documented.
+    Not started, and distinct from item 10 (that's a naming-convention
+    swap within the current two-type structure; this is removing the
+    structure itself) — touches `field_id.rs`, `opcode.rs`,
+    `transaction.rs`'s `Debug` impl (which currently picks a field table
+    based on direction), and every `ClientFieldId::X`/`ServerFieldId::X`/
+    `ClientOpcode::X`/`ServerOpcode::X` reference across `hotline-proto`,
+    `hotline-server`, `hotline-client`, `hotline-cli`. Confirm the
+    "no real collision" premise holds before starting, since a single
+    counterexample would justify keeping the split.
 
 ## Needs manual verification against the real client
 
