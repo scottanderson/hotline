@@ -81,6 +81,8 @@ pub struct ChatRoom {
     pub subject: String,
     /// Users invited but not yet joined.
     pub invited: HashSet<u16>,
+    /// Join password. Empty means the room is unprotected.
+    pub password: String,
 }
 
 /// Which way a pending `HTXF` transfer moves file bytes.
@@ -215,7 +217,7 @@ impl SharedState {
     pub async fn insert_user(&self, entry: UserEntry) {
         let user_id = entry.user_id;
         self.users.write().await.insert(user_id, entry);
-        self.join_chat_room(0, user_id).await;
+        self.add_chat_member(0, user_id).await;
     }
 
     /// Remove a user on disconnect.
@@ -423,17 +425,41 @@ impl SharedState {
         self.chat_rooms.read().await.get(&chat_id).cloned()
     }
 
-    /// Add `user_id` to a chat room, at the end of the join order, and
-    /// clear any pending invite for them. `None` if the room doesn't
-    /// exist; otherwise `Some` of whether they had a pending invite to
-    /// clear.
-    pub async fn join_chat_room(&self, chat_id: u32, user_id: u16) -> Option<bool> {
-        self.chat_rooms.write().await.get_mut(&chat_id).map(|room| {
+    /// Add `user_id` to a chat room. Requires a pending invite, or the
+    /// room's password if one is set.
+    pub async fn join_chat_room(
+        &self,
+        chat_id: u32,
+        user_id: u16,
+        password: &str,
+    ) -> Result<(), &'static str> {
+        let mut rooms = self.chat_rooms.write().await;
+        let room = rooms.get_mut(&chat_id).ok_or("no such chat room")?;
+        let invited = room.invited.remove(&user_id);
+        if !invited {
+            if room.password.is_empty() {
+                return Err("not invited");
+            }
+            if password != room.password {
+                return Err("wrong password");
+            }
+        }
+        if !room.members.contains(&user_id) {
+            room.members.push(user_id);
+        }
+        Ok(())
+    }
+
+    /// Add `user_id` to a chat room directly, no invite or password
+    /// check. For internal auto-membership (room 0 on login) and test
+    /// setup, not the `CHAT_JOIN` request path.
+    pub(crate) async fn add_chat_member(&self, chat_id: u32, user_id: u16) {
+        if let Some(room) = self.chat_rooms.write().await.get_mut(&chat_id) {
             if !room.members.contains(&user_id) {
                 room.members.push(user_id);
             }
-            room.invited.remove(&user_id)
-        })
+            room.invited.remove(&user_id);
+        }
     }
 
     /// Mark `user_id` as invited to a chat room. Returns whether this was
@@ -506,6 +532,18 @@ impl SharedState {
             .is_some()
     }
 
+    /// Set a chat room's join password. `false` if the room doesn't exist.
+    pub async fn set_chat_password(&self, chat_id: u32, password: String) -> bool {
+        self.chat_rooms
+            .write()
+            .await
+            .get_mut(&chat_id)
+            .map(|room| {
+                room.password = password;
+            })
+            .is_some()
+    }
+
     /// Look up an account by login.
     pub async fn account(&self, login: &str) -> Option<Account> {
         self.accounts.get(login).await
@@ -556,7 +594,7 @@ mod tests {
         let state = SharedState::default();
         let solo = state.create_chat_room(1).await;
         let shared = state.create_chat_room(2).await;
-        state.join_chat_room(shared, 1).await;
+        state.add_chat_member(shared, 1).await;
 
         let left = state.leave_all_chat_rooms(1).await;
 

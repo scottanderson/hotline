@@ -849,6 +849,7 @@ impl Session {
         let chat_id = state.create_chat_room(self.user_id).await;
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
         if target_id != self.user_id {
+            state.invited(chat_id, target_id).await;
             state
                 .send_to(
                     target_id,
@@ -917,13 +918,17 @@ impl Session {
         tx.reply(vec![])
     }
 
-    /// 115: join a room, accepting an invitation.
+    /// 115: join a room, accepting an invitation or supplying its password.
     async fn on_chat_join(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
-        if state.join_chat_room(chat_id, self.user_id).await.is_none() {
-            return tx.reply_error("no such chat room");
+        let password = tx
+            .field(ClientFieldId::Password)
+            .map(Field::as_string)
+            .unwrap_or_default();
+        if let Err(reason) = state.join_chat_room(chat_id, self.user_id, &password).await {
+            return tx.reply_error(reason);
         }
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
 
@@ -990,30 +995,65 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 120: set a chat room's subject.
+    /// 120: set a chat room's subject and/or its join password.
     async fn on_chat_subject(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        let (Some(chat_id), Some(subject)) = (
-            tx.field(ClientFieldId::ChatId).and_then(Field::as_u32),
-            tx.field(ClientFieldId::ChatSubject).map(Field::as_string),
-        ) else {
-            return vec![tx.reply_error("missing chat id or subject")];
+        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
+            return vec![tx.reply_error("missing chat id")];
         };
+        let subject = tx.field(ClientFieldId::ChatSubject).map(Field::as_string);
+        let password = tx.field(ClientFieldId::Password).map(Field::as_string);
+        if subject.is_none() && password.is_none() {
+            return vec![tx.reply_error("missing subject or password")];
+        }
 
-        // Chat ID 0 (main room) gates on a privilege, not membership.
         let is_global = chat_id == 0;
-        if is_global && !self.access_extra.contains(AccessExtra::SET_SUBJECT) {
-            return vec![tx.reply_error("You are not allowed to do that.")];
-        }
-        if !state.set_chat_subject(chat_id, subject.clone()).await {
-            return vec![tx.reply_error("no such chat room")];
+        if is_global {
+            if !self.access_extra.contains(AccessExtra::SET_SUBJECT) {
+                return vec![tx.reply_error("You are not allowed to do that.")];
+            }
+        } else {
+            match state.chat_room_members(chat_id).await {
+                Some(members) if members.contains(&self.user_id) => {}
+                Some(_) => return vec![tx.reply_error("you are not in that chat room")],
+                None => return vec![tx.reply_error("no such chat room")],
+            }
         }
 
+        if let Some(subject) = subject {
+            state.set_chat_subject(chat_id, subject.clone()).await;
+            self.broadcast_chat_field(
+                state,
+                chat_id,
+                is_global,
+                Field::string(ServerFieldId::ChatSubject, subject),
+            )
+            .await;
+        }
+        if let Some(password) = password {
+            state.set_chat_password(chat_id, password.clone()).await;
+            self.broadcast_chat_field(
+                state,
+                chat_id,
+                is_global,
+                Field::string(ServerFieldId::Password, password),
+            )
+            .await;
+        }
+        vec![tx.reply(vec![])]
+    }
+
+    /// Send a `ChatSubject` push carrying one changed field (subject or
+    /// password) to a room's members, or everyone for the main room.
+    async fn broadcast_chat_field(
+        &self,
+        state: &SharedState,
+        chat_id: u32,
+        is_global: bool,
+        field: Field,
+    ) {
         let notify = Transaction::push(
             ServerOpcode::ChatSubject,
-            vec![
-                Field::u32(ServerFieldId::ChatId, chat_id),
-                Field::string(ServerFieldId::ChatSubject, subject),
-            ],
+            vec![Field::u32(ServerFieldId::ChatId, chat_id), field],
         );
         if is_global {
             state.publish(notify).await;
@@ -1022,7 +1062,6 @@ impl Session {
                 state.send_to(member, notify.clone()).await;
             }
         }
-        vec![tx.reply(vec![])]
     }
 
     /// `HTLC_HDR_ACCOUNT_CREATE` (350)
@@ -2248,11 +2287,8 @@ mod tests {
         );
     }
 
-    /// Real clients encode small integer fields (including a chat room
-    /// ID) in as few bytes as fit, so a request carrying a 2-byte
-    /// `ChatId` must decode just as well as one using the full 4 bytes.
     #[tokio::test]
-    async fn chat_join_accepts_a_short_encoded_chat_id() {
+    async fn joining_an_unprotected_room_without_an_invite_is_an_error() {
         let bob = test_session("Bob", AccessPrivileges::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
@@ -2265,8 +2301,139 @@ mod tests {
         let reply = bob.on_chat_join(&join, &state).await;
 
         assert!(
+            reply.is_error(),
+            "a password isn't the only gate - no password set still requires an invite"
+        );
+    }
+
+    /// Real clients encode small integer fields (including a chat room
+    /// ID) in as few bytes as fit, so a request carrying a 2-byte
+    /// `ChatId` must decode just as well as one using the full 4 bytes.
+    #[tokio::test]
+    async fn chat_join_accepts_a_short_encoded_chat_id() {
+        let bob = test_session("Bob", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state.invited(chat_id, bob.user_id).await;
+
+        let join = Transaction::request(
+            ClientOpcode::ChatJoin,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        let reply = bob.on_chat_join(&join, &state).await;
+
+        assert!(
             !reply.is_error(),
             "a short-encoded chat id should still be found"
+        );
+    }
+
+    #[tokio::test]
+    async fn joining_a_password_protected_room_requires_the_right_password() {
+        let bob = test_session("Bob", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state
+            .set_chat_password(chat_id, "hunter2".to_string())
+            .await;
+
+        let no_password = Transaction::request(
+            ClientOpcode::ChatJoin,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        assert!(bob.on_chat_join(&no_password, &state).await.is_error());
+
+        let wrong_password = Transaction::request(
+            ClientOpcode::ChatJoin,
+            2,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::string(ClientFieldId::Password, "nope"),
+            ],
+        );
+        assert!(bob.on_chat_join(&wrong_password, &state).await.is_error());
+
+        let right_password = Transaction::request(
+            ClientOpcode::ChatJoin,
+            3,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::string(ClientFieldId::Password, "hunter2"),
+            ],
+        );
+        assert!(!bob.on_chat_join(&right_password, &state).await.is_error());
+    }
+
+    #[tokio::test]
+    async fn a_pending_invite_bypasses_a_rooms_password() {
+        let bob = test_session("Bob", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state
+            .set_chat_password(chat_id, "hunter2".to_string())
+            .await;
+        state.invited(chat_id, bob.user_id).await;
+
+        let join = Transaction::request(
+            ClientOpcode::ChatJoin,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        assert!(!bob.on_chat_join(&join, &state).await.is_error());
+    }
+
+    #[tokio::test]
+    async fn setting_a_private_rooms_subject_requires_membership() {
+        let outsider = test_session("Eve", AccessPrivileges::all());
+        let outsider = Session {
+            user_id: 2,
+            ..outsider
+        };
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+
+        let request = Transaction::request(
+            ClientOpcode::ChatSubject,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::string(ClientFieldId::ChatSubject, "Nope"),
+            ],
+        );
+        let replies = outsider.on_chat_subject(&request, &state).await;
+        assert!(replies[0].is_error());
+        assert_eq!(state.chat_room(chat_id).await.unwrap().subject, "");
+    }
+
+    #[tokio::test]
+    async fn a_member_can_set_a_private_rooms_password() {
+        let member = test_session("Alice", AccessPrivileges::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(member.user_id).await;
+        let mut rx = state.register_recipient(member.user_id).await;
+
+        let request = Transaction::request(
+            ClientOpcode::ChatSubject,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::string(ClientFieldId::Password, "hunter2"),
+            ],
+        );
+        let replies = member.on_chat_subject(&request, &state).await;
+        assert!(!replies[0].is_error());
+        assert_eq!(state.chat_room(chat_id).await.unwrap().password, "hunter2");
+
+        let notify = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ChatSubject push");
+        assert_eq!(
+            notify.field(ServerFieldId::Password).map(Field::as_string),
+            Some("hunter2".to_string())
         );
     }
 
@@ -2386,7 +2553,7 @@ mod tests {
             })
             .await;
         let chat_id = state.create_chat_room(1).await;
-        state.join_chat_room(chat_id, 2).await;
+        state.add_chat_member(chat_id, 2).await;
 
         let invite = Transaction::request(
             ClientOpcode::ChatInvite,
