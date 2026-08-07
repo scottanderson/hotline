@@ -228,9 +228,7 @@ impl Transaction {
             .iter()
             .map(Field::encode)
             .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
+            .concat();
 
         let len = fields.len() + 2;
         let capacity = TransactionHeader::LEN + len;
