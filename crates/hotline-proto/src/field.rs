@@ -10,6 +10,8 @@
 //! [`FieldValue::Bytes`] until something interprets it (`as_string()`,
 //! `as_u16()`, ...); there's no schema table to guess a raw id's type.
 
+use std::borrow::Cow;
+
 use crate::error::{ProtoError, Result};
 use crate::numbers::{decode as decode_number, encode};
 use crate::wire::VecWriter;
@@ -184,11 +186,11 @@ impl Field {
         }
     }
 
-    /// Raw bytes, however this field is actually represented.
-    pub fn as_bytes(&self) -> Vec<u8> {
+    /// Raw bytes, borrowed when already `FieldValue::Bytes`, encoded fresh otherwise.
+    pub fn as_bytes(&self) -> Cow<'_, [u8]> {
         match &self.value {
-            FieldValue::Bytes(b) => b.clone(),
-            other => other.encode(),
+            FieldValue::Bytes(b) => Cow::Borrowed(b),
+            other => Cow::Owned(other.encode()),
         }
     }
 

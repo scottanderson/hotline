@@ -1102,7 +1102,7 @@ impl Session {
         let existing = state.account(&login).await;
         // Absent PASSWORD clears it; raw byte 0x00 means unchanged.
         let password = match tx.field(ClientFieldId::Password) {
-            Some(field) if field.as_bytes() == [0u8] => existing
+            Some(field) if field.as_bytes().as_ref() == [0u8] => existing
                 .as_ref()
                 .map(|a| a.password.clone())
                 .unwrap_or_default(),
@@ -2104,7 +2104,7 @@ mod tests {
             .unwrap();
 
         let password_field = reply.field(ServerFieldId::Password).unwrap();
-        assert_eq!(password_field.as_bytes(), vec![0u8]);
+        assert_eq!(password_field.as_bytes().as_ref(), [0u8]);
     }
 
     #[tokio::test]
