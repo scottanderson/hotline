@@ -67,7 +67,7 @@ impl HtxfHeader {
         let (_, reserved) = r.u16();
         if magic != *MAGIC {
             return Err(ProtoError::BadMagic {
-                expected: MAGIC,
+                expected: *MAGIC,
                 got: magic,
             });
         }
@@ -157,9 +157,9 @@ pub fn decode_flat_file_prefix(buf: &[u8]) -> Result<u16> {
             available: buf.len(),
         });
     }
-    if &buf[0..4] != b"FILP" {
+    if buf[0..4] != *b"FILP" {
         return Err(ProtoError::BadMagic {
-            expected: b"FILP",
+            expected: *b"FILP",
             got: [buf[0], buf[1], buf[2], buf[3]],
         });
     }

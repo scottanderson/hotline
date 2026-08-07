@@ -10,7 +10,7 @@
 use crate::error::{ProtoError, Result};
 use crate::wire::PacketWriter;
 
-const MAGIC: &[u8; 4] = b"TRTP";
+const MAGIC: [u8; 4] = *b"TRTP";
 
 /// The fixed `"HOTL"` sub-protocol tag every client's handshake uses.
 pub const SUB_PROTOCOL_HOTLINE: [u8; 4] = *b"HOTL";
@@ -41,7 +41,7 @@ impl ClientHandshake {
     /// Encode to the wire format: `"TRTP" | sub_protocol | version | sub_version`.
     pub fn encode(&self) -> [u8; 12] {
         PacketWriter::<12>::new()
-            .bytes(MAGIC)
+            .bytes(&MAGIC)
             .bytes(&self.sub_protocol)
             .u16(self.version)
             .u16(self.sub_version)
@@ -56,9 +56,9 @@ impl ClientHandshake {
                 available: buf.len(),
             });
         }
-        if &buf[0..4] != MAGIC {
+        if buf[0..4] != MAGIC {
             return Err(ProtoError::BadMagic {
-                expected: b"TRTP",
+                expected: MAGIC,
                 got: [buf[0], buf[1], buf[2], buf[3]],
             });
         }
@@ -86,7 +86,7 @@ impl ServerHandshake {
     /// Encode to the wire format: `"TRTP" | error_code`.
     pub fn encode(&self) -> [u8; 8] {
         PacketWriter::<8>::new()
-            .bytes(MAGIC)
+            .bytes(&MAGIC)
             .u32(self.error_code)
             .finish()
     }
@@ -100,9 +100,9 @@ impl ServerHandshake {
                 available: buf.len(),
             });
         }
-        if &buf[0..4] != MAGIC {
+        if buf[0..4] != MAGIC {
             return Err(ProtoError::BadMagic {
-                expected: b"TRTP",
+                expected: MAGIC,
                 got: [buf[0], buf[1], buf[2], buf[3]],
             });
         }

@@ -25,7 +25,7 @@ pub enum ProtoError {
     #[error("bad magic: expected {expected:?}, got {got:?}")]
     BadMagic {
         /// The magic bytes we expected.
-        expected: &'static [u8; 4],
+        expected: [u8; 4],
         /// The magic bytes we actually read.
         got: [u8; 4],
     },
