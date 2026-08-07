@@ -122,6 +122,122 @@ impl FileProvider for DirectoryFileProvider {
         }
         Ok(Box::new(tokio::fs::File::create(path).await?))
     }
+
+    async fn info(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<FileNameWithInfo> {
+        let path = self.resolve_file(dir, name)?;
+        let metadata = tokio::fs::metadata(&path).await.ok()?;
+        Some(FileNameWithInfo {
+            file_type: if metadata.is_dir() {
+                *b"fldr"
+            } else {
+                *b"\0\0\0\0"
+            },
+            creator: *b"\0\0\0\0",
+            size: if metadata.is_dir() {
+                0
+            } else {
+                metadata.len() as u32
+            },
+            name: name.to_string(),
+        })
+    }
+
+    async fn delete(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        is_dir: bool,
+    ) -> io::Result<()> {
+        let path = self
+            .resolve_file(dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        if is_dir {
+            tokio::fs::remove_dir_all(&path).await
+        } else {
+            tokio::fs::remove_file(&path).await
+        }
+    }
+
+    async fn mkdir(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> io::Result<()> {
+        let path = self
+            .resolve_file(dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        tokio::fs::create_dir(&path).await
+    }
+
+    async fn rename(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        old_name: &str,
+        new_name: &str,
+    ) -> io::Result<()> {
+        let old_path = self
+            .resolve_file(dir, old_name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let new_path = self
+            .resolve_file(dir, new_name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        if tokio::fs::metadata(&new_path).await.is_ok() {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        tokio::fs::rename(old_path, new_path).await
+    }
+
+    async fn r#move(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        to_dir: &HlPath,
+    ) -> io::Result<()> {
+        let old_path = self
+            .resolve_file(dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let new_path = self
+            .resolve_file(to_dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        if tokio::fs::metadata(&new_path).await.is_ok() {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        tokio::fs::rename(old_path, new_path).await
+    }
+
+    async fn symlink(
+        &self,
+        _requester: FileRequester<'_>,
+        target_dir: &HlPath,
+        target_name: &str,
+        link_dir: &HlPath,
+        link_name: &str,
+    ) -> io::Result<()> {
+        let target_path = self
+            .resolve_file(target_dir, target_name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let link_path = self
+            .resolve_file(link_dir, link_name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        #[cfg(unix)]
+        {
+            tokio::fs::symlink(target_path, link_path).await
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (target_path, link_path);
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +316,22 @@ mod tests {
         let mut buf = Vec::new();
         reader.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf, b"hello");
+    }
+
+    #[tokio::test]
+    async fn delete_trusts_the_passed_is_dir_instead_of_restatting() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir(dir.path().join("actually_a_folder"))
+            .await
+            .unwrap();
+        let provider = DirectoryFileProvider::open(dir.path()).await.unwrap();
+
+        // Authorized as a file (is_dir = false); must not fall back to
+        // deleting the real directory on disk.
+        let result = provider
+            .delete(requester(), &HlPath::default(), "actually_a_folder", false)
+            .await;
+        assert!(result.is_err());
+        assert!(dir.path().join("actually_a_folder").is_dir());
     }
 }

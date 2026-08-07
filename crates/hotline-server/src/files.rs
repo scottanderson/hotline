@@ -73,14 +73,68 @@ pub trait FileProvider: Send + Sync {
         dir: &HlPath,
         name: &str,
     ) -> io::Result<BoxedWriter>;
+
+    /// One file or folder's listing metadata, or `None` if it doesn't
+    /// exist (or isn't visible to `requester`). Whether it's a folder is
+    /// `entry.file_type == *b"fldr"`, matching [`Self::list`]'s entries.
+    async fn info(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<FileNameWithInfo>;
+
+    /// Delete a file, or a folder and everything under it. Trusts
+    /// `is_dir` rather than re-deriving it, closing a TOCTOU window.
+    async fn delete(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        is_dir: bool,
+    ) -> io::Result<()>;
+
+    /// Create a folder.
+    async fn mkdir(&self, requester: FileRequester<'_>, dir: &HlPath, name: &str)
+        -> io::Result<()>;
+
+    /// Rename a file or folder in place.
+    async fn rename(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        old_name: &str,
+        new_name: &str,
+    ) -> io::Result<()>;
+
+    /// Move a file or folder into another directory, keeping its name.
+    async fn r#move(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        to_dir: &HlPath,
+    ) -> io::Result<()>;
+
+    /// Create an alias at `link_dir`/`link_name` pointing at
+    /// `target_dir`/`target_name`.
+    async fn symlink(
+        &self,
+        requester: FileRequester<'_>,
+        target_dir: &HlPath,
+        target_name: &str,
+        link_dir: &HlPath,
+        link_name: &str,
+    ) -> io::Result<()>;
 }
 
+#[derive(Clone)]
 enum Entry {
     File(Vec<u8>),
     Dir(Dir),
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Dir {
     entries: HashMap<String, Entry>,
 }
@@ -251,6 +305,128 @@ impl FileProvider for InMemoryFileProvider {
             name.to_string(),
         )))
     }
+
+    async fn info(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<FileNameWithInfo> {
+        let root = self.root.lock().unwrap();
+        let d = root.get_dir(&dir.components)?;
+        Some(match d.entries.get(name)? {
+            Entry::Dir(_) => FileNameWithInfo {
+                file_type: *b"fldr",
+                creator: *b"\0\0\0\0",
+                size: 0,
+                name: name.to_string(),
+            },
+            Entry::File(data) => FileNameWithInfo {
+                file_type: *b"\0\0\0\0",
+                creator: *b"\0\0\0\0",
+                size: data.len() as u32,
+                name: name.to_string(),
+            },
+        })
+    }
+
+    async fn delete(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        _is_dir: bool,
+    ) -> io::Result<()> {
+        let mut root = self.root.lock().unwrap();
+        let d = root.get_dir_mut(&dir.components);
+        d.entries
+            .remove(name)
+            .map(|_| ())
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+    }
+
+    async fn mkdir(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> io::Result<()> {
+        let mut root = self.root.lock().unwrap();
+        let d = root.get_dir_mut(&dir.components);
+        if d.entries.contains_key(name) {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        d.entries
+            .insert(name.to_string(), Entry::Dir(Dir::default()));
+        Ok(())
+    }
+
+    async fn rename(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        old_name: &str,
+        new_name: &str,
+    ) -> io::Result<()> {
+        let mut root = self.root.lock().unwrap();
+        let d = root.get_dir_mut(&dir.components);
+        if d.entries.contains_key(new_name) {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        let entry = d
+            .entries
+            .remove(old_name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        d.entries.insert(new_name.to_string(), entry);
+        Ok(())
+    }
+
+    async fn r#move(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        to_dir: &HlPath,
+    ) -> io::Result<()> {
+        let mut root = self.root.lock().unwrap();
+        let entry = root
+            .get_dir_mut(&dir.components)
+            .entries
+            .remove(name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        let dest = root.get_dir_mut(&to_dir.components);
+        if dest.entries.contains_key(name) {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        dest.entries.insert(name.to_string(), entry);
+        Ok(())
+    }
+
+    /// Simplified: deep-copies the target entry rather than a real
+    /// symlink, since this in-memory tree has no symlink entry kind.
+    async fn symlink(
+        &self,
+        _requester: FileRequester<'_>,
+        target_dir: &HlPath,
+        target_name: &str,
+        link_dir: &HlPath,
+        link_name: &str,
+    ) -> io::Result<()> {
+        let mut root = self.root.lock().unwrap();
+        let entry = match root
+            .get_dir(&target_dir.components)
+            .and_then(|d| d.entries.get(target_name))
+        {
+            Some(entry) => entry.clone(),
+            None => return Err(io::Error::from(io::ErrorKind::NotFound)),
+        };
+        let dest = root.get_dir_mut(&link_dir.components);
+        if dest.entries.contains_key(link_name) {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        dest.entries.insert(link_name.to_string(), entry);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -333,5 +509,30 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "a.txt");
+    }
+
+    #[tokio::test]
+    async fn symlink_of_a_folder_deep_copies_its_contents() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::new(["Folder"]), "a.txt", *b"hi");
+
+        provider
+            .symlink(
+                requester(),
+                &HlPath::default(),
+                "Folder",
+                &HlPath::default(),
+                "Alias",
+            )
+            .await
+            .unwrap();
+
+        let entries = provider
+            .list(requester(), &HlPath::new(["Alias"]))
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(entries[0].size, 2);
     }
 }

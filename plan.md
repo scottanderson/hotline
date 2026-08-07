@@ -1,207 +1,118 @@
 # Near-term goals
 
-Working on this Rust reimplementation of the Hotline client/server
-wire protocol, cross-checked against a reference implementation for behavior
+Closing feature gaps versus the reference implementation used for behavior
 parity (see AGENTS.md: never name it in code/commits/docs, only describe
-*what*/*why*). Current focus: closing feature gaps versus the reference, in
-priority order (backlog below).
+*what*/*why*). Backlog below, in priority order.
 
-## Known deliberate divergences from the reference server (flagged, not fixed)
+## Known deliberate divergences from the reference server
 
 - **`GETLIST` visibility timing.** The reference makes a raw TCP connection
   visible to `GETLIST` immediately at accept, before `Login` even arrives
   (blank name/icon until set). This server only becomes visible at `Login`
   time. Low priority.
 - **`UserSelfinfo`'s access field.** The reference always sends a hardcoded
-  "everything enabled" fake access bitmap in this push, regardless of real
-  granted privileges (enforcement is entirely server-side). This server
-  sends the real computed access instead. Confirmed to matter: real clients
-  don't display their own permissions correctly when sent the real bitmap
-  instead of the reference's hardcoded one — see backlog item 4.
-- **`reply_error()` text does not match the reference's error strings.**
-  The reference uses short, sometimes cryptic strings (`"who?!?"`,
-  `"Uh, no."`, ...); this server uses friendlier custom text. Not changed
-  yet — decide with the user whether exact-string parity matters for any
-  known client before touching this everywhere.
+  "everything enabled" fake access bitmap in this push; enforcement is
+  entirely server side. This server sends the real computed access instead,
+  which real clients render wrong (see backlog item 1).
+- **`reply_error()` text doesn't match the reference's error strings.** The
+  reference uses short, sometimes cryptic strings (`"who?!?"`, `"Uh, no."`);
+  this server uses friendlier text. Not changed yet — decide with the user
+  whether exact-string parity matters for any known client first.
 
 ## Backlog, in priority order
 
-1. ~~`access_extra`-equivalent modeling.~~ Done — see `AccessExtra` in
-   `accounts.rs`.
-2. ~~Unify per-recipient delivery into one ordered channel.~~ Done — see
-   AGENTS.md's "Server session/state split".
-3. ~~File transfer (`HTXF`), single-file slice.~~ Done — a second
-   `TcpListener` on `port + 1` (`hotline_server::server::run_htxf_listener`);
-   `HTLC_HDR_FILE_GET`/`_PUT` (202/203) allocate an opaque `u32` ref and
-   record a pending transfer (login, dir, name, size), matched on the data
-   connection by that ref plus the client's IP; the handshake is the
-   16-byte `"HTXF"` header (`hotline_proto::htxf::HtxfHeader`); data is
-   framed in the "FILP" container (`hotline_proto::htxf`) — an `INFO`
-   fork (zeroed type/creator, no real HFS metadata) then a `DATA` fork
-   with raw bytes, no resource fork; confirmed byte-for-byte against
-   `HLProtocol.md`'s "Flattened File Object" section (see below).
-   File storage goes through `hotline_server::FileProvider`
-   (`list`/`size`/`exists`/`open_read`/`create_write`, each call carrying
-   a `FileRequester { login }`), on the same plug-in shape as
-   `AccountProvider`: `hotline-server` only ships `InMemoryFileProvider`
-   (default/tests); `hls` plugs in a real `DirectoryFileProvider`
-   (`--files-dir`, mirroring `--accounts-dir`, defined in
-   `hotline-daemon`, not `hotline-server`). The interface supports
-   per-login file visibility (an alternate daemon could show different
-   logins different files), but `DirectoryFileProvider` itself doesn't
-   use that yet — it serves the same directory to everyone. Verified
-   with a manual round-trip (download + upload) against a running
-   `hls`/`hotline-client`; not yet exercised against a real Hotline
-   client.
-   - **Explicitly deferred** (own follow-up items, not silently dropped):
-     resume support (client-sent `RFLT` blob with `data_pos`/`rsrc_pos`
-     offsets), the transfer queue (`HTLS_DATA_QUEUE_POSITION`,
-     `HTLS_HDR_QUEUE_UPDATE`), folder transfers (`HTLC_HDR_FILE_GETFOLDER`/
-     `_PUTFOLDER`, a separate `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` command
-     loop on the transfer connection), and resource-fork (`"MACR"`) data.
-4. **Fix `UserSelfinfo`'s access field to match the reference's hardcoded
-   bitmap.** Confirmed real-client-visible bug: sending the real computed
-   `AccessPrivileges` bitmap (`self.access.bits()` in
-   `Session::complete_join`) instead of the reference's hardcoded
-   "everything enabled" value means real Hotline clients don't display
-   their own permissions correctly. Enforcement is entirely server-side
-   regardless of what this field says, so sending the reference's
-   hardcoded value should be safe. See the divergence note above.
-5. **Threaded news.** Current news support is flat/classic only.
-6. ~~Chat room passwords.~~ Done — `ChatRoom.password`, set via
-   `HTLC_HDR_CHAT_SUBJECT` and checked on `HTLC_HDR_CHAT_JOIN`. A pending
-   invite always admits regardless of password; without one, a room with
-   no password can't be joined at all — a password is the only other way
-   in, not a bypass for skipping invitation (`SharedState::join_chat_room`
-   now returns `Result<(), &'static str>` folding that check into one
-   atomic operation). Also closed a real gap where `on_chat_create` never
-   recorded its own invitee via `state.invited()`, so a later password on
-   that room would have locked out someone validly invited to it.
-7. **Remaining unhandled opcodes.** Mostly map to an item above rather
-   than being new independent work: `FileDelete`/`FileMkdir`/
-   `FileGetinfo`/`FileSetinfo`/`FileMove`/`FileSymlink` (204–209, now
-   unblocked by item 3's real file storage, but each still its own
-   handler); `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
-   `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
-   (370–411, item 5).
-8. **Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s
-   `From`/`Into` conversions.** Adopting `num_enum` (`FromPrimitive`/
-   `IntoPrimitive`, `#[num_enum(catch_all)]` for `Unknown(u32)`) to
-   generate these from real enum discriminants dropped their `const fn`
-   — `From`/`Into` aren't const-stable, so this also cascaded to
-   `TransactionType::from_client_wire`/`from_server_wire` and
-   `TransactionHeader::decode_from_client`/`decode_from_server`. Nothing
-   currently calls any of these from a real `const`/`static` binding
-   (every call site here decodes runtime socket bytes, so `const fn`
-   buys nothing today regardless — just preserved optionality), but
-   it's a real departure from this crate's otherwise consistently
-   `const fn` style (`PacketReader`, `numbers::encode`/`decode`) worth
-   deciding on deliberately rather than leaving as a side effect. Low
-   priority, no known concrete need yet.
-9. **Clean up `Session::handshake`'s exact-match approach some day.**
-   Currently a single `buf != ClientHandshake::default().encode()` byte
-   comparison, matching the reference server's own `memcmp` against one
-   fixed 12-byte constant (no per-field sub-protocol/version reasoning,
-   no rejection reply sent on mismatch - just a silent close). Works and
-   is reference-accurate, but a raw byte-array comparison with no
-   diagnostic on failure is a blunt instrument; worth revisiting once
-   there's a reason to (e.g. wanting a logged reason for a rejected
-   connection) without regressing the "no reply on mismatch" behavior.
-10. **Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
-    naming convention used throughout doc comments and `opcode_names!`/
-    field-id tables.** That convention comes from the reference
-    implementation's own C header, which has no more claim to being
-    "the" canonical name than any other implementation's internal
-    naming — there's no real reason to preserve it here. `HLProtocol.md`
-    (repo root) is the actual official source and uses its own constant
-    names (`myTran_*` for transactions, `myField_*` for fields, `myAcc_*`
-    for access privileges); those should be what this codebase's doc
-    comments and naming cite instead, not the reference server's
-    internal `HTLC_HDR_*` spelling. Not started: this touches
-    `opcode.rs`'s `opcode_names!` invocations, `field_id.rs`'s tables,
-    every "Original: `HTLC_HDR_X`"-style doc comment, and AGENTS.md's
-    own style rule mandating the `HTLC_HDR_*` convention (which would
-    need to change too if this is adopted) - a wide, mechanical, but
-    non-trivial rename across the crate.
-11. ~~Bring the other `session.rs` `on_*` handlers in line with the
-    `if let Err(reason) = state.some_call(...).await { return
-    tx.reply_error(reason); }` pattern.~~ Done — `on_user_kick`,
-    `on_file_put`, `on_chat_create`, `on_chat_invite`, `on_chat_subject`,
-    and `on_account_delete` now delegate to a new `SharedState` method
-    each (`authorize_kick`, `authorize_upload`, `require_connected_user`,
-    `invite_to_chat_room`, `authorize_chat_subject_change`,
-    `delete_account`'s `Result<(), String>`) instead of inline
-    `Option`/bool checks. A few handlers (`on_user_get_info`, file
-    list/get) were deliberately left `Option`-based since they mirror
-    `FileProvider`'s own `Option`-returning shape and forcing `Result`
-    there would just wrap-then-unwrap the same information.
-12. **Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
-    `ClientOpcode`/`ServerOpcode` into one `Opcode`.** `HLProtocol.md`
-    itself has no client/server split in its numbering: one flat
-    `myField_*` list for fields, one flat `myTran_*` list for
-    transactions, with direction recorded separately per transaction
-    (`Initiator: Client`/`Server`) rather than via two disjoint ID
-    spaces. A full field-by-field, transaction-by-transaction audit
-    against the doc (this session) found no case where the same numeric
-    ID means something different depending on direction — every
-    match was either identical in meaning both ways, or (per
+1. **Fix `UserSelfinfo`'s access field to match the reference's hardcoded
+   bitmap.** Confirmed real-client bug: sending the real computed
+   `AccessPrivileges` (`self.access.bits()` in `Session::complete_join`)
+   instead of the reference's hardcoded "everything enabled" value means
+   real clients show wrong permissions for themselves. Enforcement is
+   server side regardless of this field, so sending the hardcoded value
+   should be safe.
+2. `on_file_getinfo` sends `FileType`/`FileCreator`/`FileDateCreate`/
+   `FileComment` as zeroed placeholders. With HFS disabled (this codebase's
+   own "no real HFS metadata" scope) the reference sends only
+   `FILE_SIZE`/`FILE_NAME`/`FILE_DATE_MODIFY`.
+3. `on_file_setinfo` wrongly requires `FileNewName`. The reference only
+   errors if *both* rename and comment are absent; since comment storage
+   isn't implemented, the correct behavior is a no-op (empty reply) when
+   `FileNewName` is absent.
+4. `on_file_mkdir`/`on_file_getinfo` don't support the `FileName`-absent
+   fallback: when only `FilePath` is given, the reference derives the
+   target from `FilePath`'s last component. Lower priority (unusual client
+   behavior).
+5. **Threaded news.** Current news support is flat/classic only; also
+   covers the unhandled `NewsListdir`/`NewsListcategory`/`NewsDelete`/
+   `NewsMkdir`/`NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/
+   `NewsDeletethread` opcodes (370-411).
+6. **HTXF follow ups, deferred out of the initial file-transfer work:**
+   resume support (client-sent `RFLT` blob with `data_pos`/`rsrc_pos`),
+   the transfer queue (`HTLS_DATA_QUEUE_POSITION`, `HTLS_HDR_QUEUE_UPDATE`),
+   folder transfers (`HTLC_HDR_FILE_GETFOLDER`/`_PUTFOLDER`, a separate
+   `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the transfer connection),
+   and resource-fork (`"MACR"`) data.
+7. Unbounded `FILE_PATH` component count: `HlPath::decode` caps nothing
+   beyond the wire's own per-component 255-byte length, so one request can
+   carry up to 65535 path levels. Pre-existing on `FILE_LIST`/`_GET`/
+   `_PUT`; `FILE_MOVE`/`FILE_SYMLINK` each decode two such paths. Worth a
+   depth/size limit eventually, not urgent.
+8. `InMemoryFileProvider::delete`/`rename`/`r#move` auto-vivify missing
+   intermediate directories as a side effect of a failed lookup (routes
+   through `get_dir_mut`), leaving an empty directory tree behind instead
+   of erroring "not found". `hls` always uses `DirectoryFileProvider`, so
+   this doesn't affect production, but it's a test-only divergence.
+9. `HTLC_HDR_PING` (500) isn't in the original `HLProtocol.md` doc — a
+   post-original addition, like `AccessPrivileges::VOICE_CHAT`/
+   `READ_CHAT_HISTORY`. `opcode.rs` doesn't flag `Ping` the same way yet.
+   Cosmetic, not confirmed with the user.
+10. Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s `From`/
+    `Into` (via `num_enum`, not const-stable), which cascaded to
+    `TransactionType::from_client_wire`/`from_server_wire` and
+    `TransactionHeader::decode_from_client`/`decode_from_server`. Nothing
+    currently calls these from a `const`/`static` binding, so this costs
+    nothing today, but it departs from the crate's otherwise consistent
+    `const fn` style (`PacketReader`, `numbers::encode`/`decode`). Low
+    priority.
+11. Clean up `Session::handshake`'s exact match: a single `buf !=
+    ClientHandshake::default().encode()` comparison, matching the
+    reference's own `memcmp` (no per-field version reasoning, no reply on
+    mismatch). Works and is reference-accurate, but gives no diagnostic on
+    failure. Revisit without regressing the "no reply on mismatch"
+    behavior.
+12. Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
+    naming used throughout doc comments and `opcode_names!`/field-id
+    tables. That convention comes from the reference's own C header, which
+    has no stronger claim to being canonical than any other
+    implementation's naming. `HLProtocol.md` (repo root) is the actual
+    official source and uses its own names (`myTran_*`, `myField_*`,
+    `myAcc_*`); doc comments and naming could cite those instead. Touches
+    `opcode.rs`, `field_id.rs`, every "Original: `HTLC_HDR_X`" comment, and
+    AGENTS.md's own style rule mandating `HTLC_HDR_*` (which would need to
+    change too). Not started — wide, mechanical, non-trivial rename.
+13. Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
+    `ClientOpcode`/`ServerOpcode` into one `Opcode`. `HLProtocol.md` has no
+    client/server split in its numbering — one flat `myField_*` list, one
+    flat `myTran_*` list, with direction recorded separately per
+    transaction. A full field-by-field, transaction-by-transaction audit
+    against the doc found no case where the same numeric ID means
+    something different depending on direction; every match was either
+    identical both ways or simply unused in the other direction (per
     `field_id.rs`'s own module docs, e.g. `ErrorText` server-only,
-    `Options` client-only) simply unused in the other direction, not
-    conflicting. The original rationale for splitting the types (`field_id.rs`
-    module docs, `opcode.rs` module docs, and AGENTS.md's "same numeric
-    field tag can mean different things" framing) doesn't appear to be
-    backed by an actual collision anywhere in the protocol as documented.
-    Not started, and distinct from item 10 (that's a naming-convention
-    swap within the current two-type structure; this is removing the
-    structure itself) — touches `field_id.rs`, `opcode.rs`,
-    `transaction.rs`'s `Debug` impl (which currently picks a field table
-    based on direction), and every `ClientFieldId::X`/`ServerFieldId::X`/
-    `ClientOpcode::X`/`ServerOpcode::X` reference across `hotline-proto`,
-    `hotline-server`, `hotline-client`, `hotline-cli`. Confirm the
-    "no real collision" premise holds before starting, since a single
-    counterexample would justify keeping the split.
+    `Options` client-only). Touches `field_id.rs`, `opcode.rs`,
+    `transaction.rs`'s `Debug` impl, and every `ClientFieldId::X`/
+    `ServerFieldId::X`/`ClientOpcode::X`/`ServerOpcode::X` reference across
+    the workspace. Confirm the "no real collision" premise holds before
+    starting.
 
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
 the real Hotline 1.2.3 client), the accounts subsystem (named-account
 login, account CRUD opcodes, the seeded `admin`/`admin` and passwordless
-`guest` both providers start with) and the idle-to-away status broadcast
-have only been unit-tested plus one manual `hlc` smoke test (login
-accepted with the seeded admin account, rejected on wrong
-password/unknown login) — not yet exercised against a real client.
-
-Chat room invite/password gating (backlog item 6) is unit-tested only,
-not yet exercised against a real client. The `UserSelfinfo` access-field
-bug (backlog item 4) *was* found by real-client testing — see the
-divergence note above — so real-client checks do surface real gaps here,
-not just theoretical ones.
-
-## `HLProtocol.md` review
-
-`HLProtocol.md` (repo root) is the official protocol doc predating
-community extensions — a stronger source of truth than the community
-docs used for day-to-day cross-checking. Reviewed against current
-behavior:
-
-- Transaction opcode table (chat, file listing/transfer, users, news):
-  matches this codebase's numbers and constant names exactly.
-- The Flattened File Object framing: matches `hotline_proto::htxf`
-  byte-for-byte (see item 3 above).
-- `AccessPrivileges` bit layout: the doc lists 38 privileges (0–37) as a
-  flat sequential list with no explicit bit numbers. Assuming privilege
-  *N* → bit `63-N` throughout is **wrong** past privilege ~11 — the real
-  wire layout has unnamed reserved bits partway through (confirmed
-  against the reference's own `struct hl_access_bits`) that the doc's
-  flat list doesn't show. `consts.rs`'s current bit positions were
-  cross-checked against that struct and are correct; this was a
-  false-alarm double check, not a bug.
-- `HTLC_HDR_PING` (500) isn't in this original doc at all — a
-  post-original addition, like `AccessPrivileges::VOICE_CHAT`/
-  `READ_CHAT_HISTORY` (already flagged as community extensions in
-  `consts.rs`'s module docs). `opcode.rs` doesn't currently flag `Ping`
-  the same way. Cosmetic gap, offered to fix but not yet confirmed by
-  the user.
+`guest` both providers start with), idle-to-away status broadcast, and
+chat room invite/password gating have only been unit-tested plus one
+manual `hlc` smoke test — not yet exercised against a real client. The
+`UserSelfinfo` access-field bug (backlog item 1) *was* found by real-client
+testing, so that pass is worth repeating as more surface lands.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

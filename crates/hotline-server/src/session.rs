@@ -10,7 +10,7 @@ use hotline_codec::TransactionCodec;
 use hotline_proto::consts::AccessPrivileges;
 use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
 use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
-use hotline_proto::types::{HlPath, UserFlags, UserNameWithInfo};
+use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
 
 use crate::accounts::{AccessExtra, Account};
@@ -239,6 +239,12 @@ impl Session {
             /* 200 */ ClientOpcode::FileList => self.on_get_file_name_list(tx, state).await,
             /* 202 */ ClientOpcode::FileGet => self.on_file_get(tx, state).await,
             /* 203 */ ClientOpcode::FilePut => self.on_file_put(tx, state).await,
+            /* 204 */ ClientOpcode::FileDelete => self.on_file_delete(tx, state).await,
+            /* 205 */ ClientOpcode::FileMkdir => self.on_file_mkdir(tx, state).await,
+            /* 206 */ ClientOpcode::FileGetinfo => self.on_file_getinfo(tx, state).await,
+            /* 207 */ ClientOpcode::FileSetinfo => self.on_file_setinfo(tx, state).await,
+            /* 208 */ ClientOpcode::FileMove => self.on_file_move(tx, state).await,
+            /* 209 */ ClientOpcode::FileSymlink => self.on_file_symlink(tx, state).await,
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
             /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
@@ -699,7 +705,7 @@ impl Session {
         };
 
         let requester = FileRequester { login: &self.login };
-        let Some(entries) = state.list_files(requester, &dir).await else {
+        let Some(entries) = state.list_files(requester, &dir, self.access).await else {
             return vec![tx.reply_error("file or folder not found.")];
         };
         let fields = entries
@@ -721,6 +727,13 @@ impl Session {
         Some((name, dir))
     }
 
+    /// Decode a `FILE_PATH`-shaped field (`FilePath` or `FileNewPath`).
+    /// `None` if the field is missing or malformed.
+    fn path_field(&self, tx: &Transaction, id: ClientFieldId) -> Option<HlPath> {
+        tx.field(id)
+            .and_then(|field| HlPath::decode(&field.as_bytes()).ok())
+    }
+
     /// 202: start a download. Allocates a transfer reference and tells
     /// the client the total byte count (flattened-object overhead plus
     /// the file's own bytes) to expect on the data connection.
@@ -733,8 +746,9 @@ impl Session {
             return vec![tx.reply_error("huh?!?")];
         };
         let requester = FileRequester { login: &self.login };
-        let Some(data_size) = state.file_size(requester, &dir, &name).await else {
-            return vec![tx.reply_error("file or folder not found.")];
+        let data_size = match state.file_size(requester, &dir, &name, self.access).await {
+            Ok(size) => size,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
 
         let total_size = data_size + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64;
@@ -791,6 +805,129 @@ impl Session {
             .await;
 
         vec![tx.reply(vec![Field::u32(ServerFieldId::TransferId, reference)])]
+    }
+
+    /// 204: delete a file, or a folder and everything under it.
+    async fn on_file_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let requester = FileRequester { login: &self.login };
+        if let Err(reason) = state.delete_file(requester, &dir, &name, self.access).await {
+            return vec![tx.reply_error(reason)];
+        }
+        vec![tx.reply(vec![])]
+    }
+
+    /// 205: create a folder.
+    async fn on_file_mkdir(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::CREATE_FOLDERS) {
+            return vec![tx.reply_error(reason)];
+        }
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let requester = FileRequester { login: &self.login };
+        if let Err(reason) = state.mkdir(requester, &dir, &name, self.access).await {
+            return vec![tx.reply_error(reason)];
+        }
+        vec![tx.reply(vec![])]
+    }
+
+    /// 206: fetch a file or folder's metadata. Type/creator/dates are
+    /// always zeroed and the comment is always empty; nothing in this
+    /// server persists real HFS metadata (see `HTXF`'s `INFO` fork).
+    async fn on_file_getinfo(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if !self.access_extra.contains(AccessExtra::FILE_GETINFO) {
+            return vec![tx.reply_error("You are not allowed to do that.")];
+        }
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let requester = FileRequester { login: &self.login };
+        let info = match state.file_info(requester, &dir, &name, self.access).await {
+            Ok(info) => info,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let zero_date = HlDate {
+            year: 0,
+            milliseconds: 0,
+            seconds: 0,
+        }
+        .encode()
+        .to_vec();
+        vec![tx.reply(vec![
+            Field::string(ServerFieldId::FileName, info.name),
+            Field::bytes(ServerFieldId::FileType, info.file_type.to_vec()),
+            Field::bytes(ServerFieldId::FileCreator, info.creator.to_vec()),
+            Field::u32(ServerFieldId::FileSize, info.size),
+            Field::bytes(ServerFieldId::FileDateCreate, zero_date.clone()),
+            Field::bytes(ServerFieldId::FileDateModify, zero_date),
+            Field::string(ServerFieldId::FileComment, ""),
+        ])]
+    }
+
+    /// 207: rename a file or folder. `FILE_COMMENT` is accepted on the
+    /// wire but not stored, matching `FILE_GETINFO`'s always-empty
+    /// comment.
+    async fn on_file_setinfo(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let Some(new_name) = tx.field(ClientFieldId::FileNewName).map(Field::as_string) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let requester = FileRequester { login: &self.login };
+        if let Err(reason) = state
+            .rename_file(requester, &dir, &name, &new_name, self.access)
+            .await
+        {
+            return vec![tx.reply_error(reason)];
+        }
+        vec![tx.reply(vec![])]
+    }
+
+    /// 208: move a file or folder into another folder.
+    async fn on_file_move(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let Some(to_dir) = self.path_field(tx, ClientFieldId::FileNewPath) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let requester = FileRequester { login: &self.login };
+        if let Err(reason) = state
+            .move_file(requester, &dir, &name, &to_dir, self.access)
+            .await
+        {
+            return vec![tx.reply_error(reason)];
+        }
+        vec![tx.reply(vec![])]
+    }
+
+    /// 209: create an alias pointing at another file.
+    async fn on_file_symlink(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::MAKE_ALIASES) {
+            return vec![tx.reply_error(reason)];
+        }
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let Some(link_dir) = self.path_field(tx, ClientFieldId::FileNewPath) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let link_name = tx
+            .field(ClientFieldId::FileNewName)
+            .map(Field::as_string)
+            .unwrap_or_else(|| name.clone());
+        let requester = FileRequester { login: &self.login };
+        if let Err(reason) = state
+            .symlink_file(requester, &dir, &name, &link_dir, &link_name, self.access)
+            .await
+        {
+            return vec![tx.reply_error(reason)];
+        }
+        vec![tx.reply(vec![])]
     }
 
     /// 101: read the classic (non-threaded) news.
@@ -2836,6 +2973,290 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_list_of_a_dropbox_is_empty_without_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let list = Transaction::request(
+            ClientOpcode::FileList,
+            1,
+            vec![Field::bytes(
+                ClientFieldId::FilePath,
+                HlPath::new(["Drop Box"]).encode().unwrap(),
+            )],
+        );
+        let [reply] = session
+            .on_get_file_name_list(&list, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(reply.fields.is_empty());
+    }
+
+    #[tokio::test]
+    async fn file_list_of_a_dropbox_is_visible_with_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let list = Transaction::request(
+            ClientOpcode::FileList,
+            1,
+            vec![Field::bytes(
+                ClientFieldId::FilePath,
+                HlPath::new(["Drop Box"]).encode().unwrap(),
+            )],
+        );
+        let [reply] = session
+            .on_get_file_name_list(&list, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert_eq!(reply.fields.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn file_get_from_a_dropbox_is_denied_without_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let get = Transaction::request(
+            ClientOpcode::FileGet,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_delete_in_a_dropbox_is_denied_without_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let delete = Transaction::request(
+            ClientOpcode::FileDelete,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_delete(&delete, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            state
+                .file_exists(requester, &HlPath::new(["Drop Box"]), "secret.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_getinfo_in_a_dropbox_is_denied_without_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut session = test_session("Alice", access);
+        session.access_extra.insert(AccessExtra::FILE_GETINFO);
+
+        let getinfo = Transaction::request(
+            ClientOpcode::FileGetinfo,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_getinfo(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_mkdir_in_a_dropbox_is_denied_without_view_drop_boxes() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let mkdir = Transaction::request(
+            ClientOpcode::FileMkdir,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "Drop Box"),
+                Field::bytes(ClientFieldId::FilePath, HlPath::default().encode().unwrap()),
+            ],
+        );
+        let [reply] = session
+            .on_file_mkdir(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_setinfo_in_a_dropbox_is_denied_without_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let setinfo = Transaction::request(
+            ClientOpcode::FileSetinfo,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::string(ClientFieldId::FileNewName, "renamed.txt"),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_setinfo(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_move_into_a_dropbox_is_denied_without_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let move_tx = Transaction::request(
+            ClientOpcode::FileMove,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FileNewPath,
+                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_move(&move_tx, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_symlink_only_checks_the_target_not_the_link_destination() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        // Target is outside any drop box; link destination is inside one.
+        let symlink = Transaction::request(
+            ClientOpcode::FileSymlink,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FileNewPath,
+                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_symlink(&symlink, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_symlink_of_a_dropbox_target_is_denied_without_view_drop_boxes() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let symlink = Transaction::request(
+            ClientOpcode::FileSymlink,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                ),
+                Field::bytes(
+                    ClientFieldId::FileNewPath,
+                    HlPath::default().encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_symlink(&symlink, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
     async fn file_put_outside_a_dropbox_is_denied_without_upload_anywhere() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
         let mut access = AccessPrivileges::all();
@@ -2890,5 +3311,346 @@ mod tests {
         );
         let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
         assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_delete_removes_a_file() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"bye");
+        let state = state_with_files(files);
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let delete = Transaction::request(
+            ClientOpcode::FileDelete,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_file_delete(&delete, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(
+            !state
+                .file_exists(FileRequester { login: "" }, &HlPath::default(), "a.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_delete_denied_without_delete_files() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"bye");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::DELETE_FILES);
+        let session = test_session("Alice", access);
+
+        let delete = Transaction::request(
+            ClientOpcode::FileDelete,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_file_delete(&delete, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_delete_missing_file_is_an_error() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let delete = Transaction::request(
+            ClientOpcode::FileDelete,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "missing.txt")],
+        );
+        let [reply] = session
+            .on_file_delete(&delete, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_mkdir_creates_a_folder() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let mkdir = Transaction::request(
+            ClientOpcode::FileMkdir,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "NewFolder")],
+        );
+        let [reply] = session
+            .on_file_mkdir(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(
+            state
+                .file_exists(FileRequester { login: "" }, &HlPath::default(), "NewFolder")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_mkdir_denied_without_create_folders() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::CREATE_FOLDERS);
+        let session = test_session("Alice", access);
+
+        let mkdir = Transaction::request(
+            ClientOpcode::FileMkdir,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "NewFolder")],
+        );
+        let [reply] = session
+            .on_file_mkdir(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_getinfo_denied_without_access_extra() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access_extra.remove(AccessExtra::FILE_GETINFO);
+
+        let getinfo = Transaction::request(
+            ClientOpcode::FileGetinfo,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_file_getinfo(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_getinfo_returns_name_and_size() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", AccessPrivileges::all());
+        session.access_extra.insert(AccessExtra::FILE_GETINFO);
+
+        let getinfo = Transaction::request(
+            ClientOpcode::FileGetinfo,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_file_getinfo(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert_eq!(
+            reply.field(ServerFieldId::FileName).unwrap().as_string(),
+            "a.txt"
+        );
+        assert_eq!(
+            reply.field(ServerFieldId::FileSize).and_then(Field::as_u32),
+            Some(5)
+        );
+    }
+
+    #[tokio::test]
+    async fn file_setinfo_renames_a_file() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let setinfo = Transaction::request(
+            ClientOpcode::FileSetinfo,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(ClientFieldId::FileNewName, "b.txt"),
+            ],
+        );
+        let [reply] = session
+            .on_file_setinfo(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "b.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_setinfo_denied_without_rename_files() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::RENAME_FILES);
+        let session = test_session("Alice", access);
+
+        let setinfo = Transaction::request(
+            ClientOpcode::FileSetinfo,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(ClientFieldId::FileNewName, "b.txt"),
+            ],
+        );
+        let [reply] = session
+            .on_file_setinfo(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_move_relocates_a_file() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let move_tx = Transaction::request(
+            ClientOpcode::FileMove,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FileNewPath,
+                    HlPath::new(["Sub"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_move(&move_tx, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+        assert!(
+            state
+                .file_exists(requester, &HlPath::new(["Sub"]), "a.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_move_denied_without_move_files() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::MOVE_FILES);
+        let session = test_session("Alice", access);
+
+        let move_tx = Transaction::request(
+            ClientOpcode::FileMove,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FileNewPath,
+                    HlPath::new(["Sub"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_move(&move_tx, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_symlink_denied_without_make_aliases() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::MAKE_ALIASES);
+        let session = test_session("Alice", access);
+
+        let symlink = Transaction::request(
+            ClientOpcode::FileSymlink,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FileNewPath,
+                    HlPath::new(["Sub"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_symlink(&symlink, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_symlink_creates_an_alias_reachable_at_the_new_location() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let symlink = Transaction::request(
+            ClientOpcode::FileSymlink,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FileNewPath,
+                    HlPath::new(["Sub"]).encode().unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_file_symlink(&symlink, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(
+            state
+                .file_exists(FileRequester { login: "" }, &HlPath::new(["Sub"]), "a.txt")
+                .await
+        );
     }
 }

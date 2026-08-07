@@ -81,6 +81,20 @@ fn is_dropbox_path(dir: &HlPath) -> bool {
     })
 }
 
+/// `true` if `access` lacks `VIEW_DROP_BOXES` and `dir`/`name`'s path
+/// contains "drop box" (case-insensitive). `name` is `None` for a bare
+/// directory listing.
+fn dropbox_blocked(dir: &HlPath, name: Option<&str>, access: AccessPrivileges) -> bool {
+    if access.contains(AccessPrivileges::VIEW_DROP_BOXES) {
+        return false;
+    }
+    dir.components
+        .iter()
+        .map(String::as_str)
+        .chain(name)
+        .any(|c| c.to_ascii_lowercase().contains("drop box"))
+}
+
 /// A private chat room: its member user IDs, in join order, plus a
 /// subject line.
 #[derive(Debug, Clone, Default)]
@@ -346,25 +360,36 @@ impl SharedState {
     }
 
     /// List a directory as seen by `requester`. `dir` is empty for the
-    /// root folder. `None` if it doesn't exist (or isn't visible to
-    /// `requester`); see [`crate::FileProvider::list`].
+    /// root folder. A blocked drop box lists as empty, not an error.
+    /// `None` if the directory doesn't exist or isn't visible.
     pub async fn list_files(
         &self,
         requester: FileRequester<'_>,
         dir: &HlPath,
+        access: AccessPrivileges,
     ) -> Option<Vec<FileNameWithInfo>> {
+        if dropbox_blocked(dir, None, access) {
+            return Some(Vec::new());
+        }
         self.files.list(requester, dir).await
     }
 
-    /// A file's size in bytes, or `None` if it doesn't exist, is a
-    /// folder, or isn't visible to `requester`.
+    /// A file's size in bytes, for starting a `FILE_GET` download. `Err`
+    /// if it doesn't exist, is a folder, or is a drop box `access` can't view.
     pub async fn file_size(
         &self,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
-    ) -> Option<u64> {
-        self.files.size(requester, dir, name).await
+        access: AccessPrivileges,
+    ) -> Result<u64, &'static str> {
+        if dropbox_blocked(dir, Some(name), access) {
+            return Err("You are not allowed to do that.");
+        }
+        self.files
+            .size(requester, dir, name)
+            .await
+            .ok_or("file or folder not found.")
     }
 
     /// Whether a file or folder already exists at this path.
@@ -416,6 +441,159 @@ impl SharedState {
         name: &str,
     ) -> std::io::Result<BoxedWriter> {
         self.files.create_write(requester, dir, name).await
+    }
+
+    /// One file or folder's listing metadata. `Err` if missing or
+    /// drop-box-blocked.
+    pub async fn file_info(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        access: AccessPrivileges,
+    ) -> Result<FileNameWithInfo, &'static str> {
+        if dropbox_blocked(dir, Some(name), access) {
+            return Err("You are not allowed to do that.");
+        }
+        self.files
+            .info(requester, dir, name)
+            .await
+            .ok_or("file or folder not found.")
+    }
+
+    /// Delete a file, or a folder and everything under it, after
+    /// checking the matching privilege and drop box visibility.
+    pub async fn delete_file(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        access: AccessPrivileges,
+    ) -> Result<(), String> {
+        if dropbox_blocked(dir, Some(name), access) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        let info = self
+            .files
+            .info(requester, dir, name)
+            .await
+            .ok_or("file or folder not found.")?;
+        let is_dir = info.file_type == *b"fldr";
+        let required = if is_dir {
+            AccessPrivileges::DELETE_FOLDERS
+        } else {
+            AccessPrivileges::DELETE_FILES
+        };
+        if !access.contains(required) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        self.files
+            .delete(requester, dir, name, is_dir)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Create a folder, after checking drop box visibility.
+    pub async fn mkdir(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        access: AccessPrivileges,
+    ) -> Result<(), String> {
+        if dropbox_blocked(dir, Some(name), access) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        self.files
+            .mkdir(requester, dir, name)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Rename a file or folder in place, after checking the matching
+    /// privilege and drop box visibility.
+    pub async fn rename_file(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        new_name: &str,
+        access: AccessPrivileges,
+    ) -> Result<(), String> {
+        if dropbox_blocked(dir, Some(name), access) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        let info = self
+            .files
+            .info(requester, dir, name)
+            .await
+            .ok_or("file or folder not found.")?;
+        let required = if info.file_type == *b"fldr" {
+            AccessPrivileges::RENAME_FOLDERS
+        } else {
+            AccessPrivileges::RENAME_FILES
+        };
+        if !access.contains(required) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        self.files
+            .rename(requester, dir, name, new_name)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Move a file or folder into another directory, keeping its name,
+    /// after checking the matching privilege and drop box visibility at
+    /// both ends.
+    pub async fn move_file(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        to_dir: &HlPath,
+        access: AccessPrivileges,
+    ) -> Result<(), String> {
+        if dropbox_blocked(dir, Some(name), access) || dropbox_blocked(to_dir, Some(name), access) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        let info = self
+            .files
+            .info(requester, dir, name)
+            .await
+            .ok_or("file or folder not found.")?;
+        let required = if info.file_type == *b"fldr" {
+            AccessPrivileges::MOVE_FOLDERS
+        } else {
+            AccessPrivileges::MOVE_FILES
+        };
+        if !access.contains(required) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        self.files
+            .r#move(requester, dir, name, to_dir)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Create an alias at `link_dir`/`link_name` pointing at
+    /// `target_dir`/`target_name`. Only the target is checked for drop
+    /// box visibility, not the link destination.
+    pub async fn symlink_file(
+        &self,
+        requester: FileRequester<'_>,
+        target_dir: &HlPath,
+        target_name: &str,
+        link_dir: &HlPath,
+        link_name: &str,
+        access: AccessPrivileges,
+    ) -> Result<(), String> {
+        if dropbox_blocked(target_dir, Some(target_name), access) {
+            return Err("You are not allowed to do that.".to_string());
+        }
+        self.files
+            .symlink(requester, target_dir, target_name, link_dir, link_name)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Register a pending transfer, returning the reference number to
@@ -753,7 +931,7 @@ mod tests {
 
         let requester = FileRequester { login: "alice" };
         let mut entries = state
-            .list_files(requester, &HlPath::default())
+            .list_files(requester, &HlPath::default(), AccessPrivileges::all())
             .await
             .unwrap();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
