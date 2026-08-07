@@ -1077,7 +1077,7 @@ impl Session {
             Field::string(ServerFieldId::Name, account.name),
             Field::obfuscated_string(ServerFieldId::Login, login),
             // Never echoes the real password back.
-            Field::obfuscated_string(ServerFieldId::Password, ""),
+            Field::string(ServerFieldId::Password, "\0"),
             Field::u64(ServerFieldId::Access, account.access.bits()),
         ])]
     }
@@ -1102,10 +1102,15 @@ impl Session {
             return vec![tx.reply_error("missing login")];
         };
         let existing = state.account(&login).await;
-        let password = tx
-            .password()
-            .or_else(|| existing.as_ref().map(|x| x.password.clone()))
-            .unwrap_or_default();
+        // Absent PASSWORD clears it; raw byte 0x00 means unchanged.
+        let password = match tx.field(ClientFieldId::Password) {
+            Some(field) if field.as_bytes() == [0u8] => existing
+                .as_ref()
+                .map(|a| a.password.clone())
+                .unwrap_or_default(),
+            Some(field) => field.as_deobfuscated_string(),
+            None => String::new(),
+        };
         let name = tx
             .name()
             .or_else(|| existing.as_ref().map(|a| a.name.clone()))
@@ -2021,7 +2026,43 @@ mod tests {
             .await
             .unwrap();
 
-        // Only the name changes; password/access should be untouched.
+        // Password unchanged via the sentinel, not by omitting the field.
+        let modify = Transaction::request(
+            ClientOpcode::AccountModify,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "bob"),
+                Field::string(ClientFieldId::Name, "Bobby"),
+                Field::bytes(ClientFieldId::Password, vec![0]),
+            ],
+        );
+        session.on_account_modify(&modify, &state).await;
+
+        let account = state.account("bob").await.unwrap();
+        assert_eq!(account.name, "Bobby");
+        assert_eq!(account.password, "secret");
+        assert_eq!(account.access, AccessPrivileges::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn account_modify_without_a_password_field_at_all_clears_it() {
+        let session = test_session("Admin", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "secret".to_string(),
+                    name: "Bob".to_string(),
+                    access: AccessPrivileges::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+
+        // No PASSWORD field at all, not the "unchanged" sentinel: this
+        // clears the password, matching the reference's own behavior.
         let modify = Transaction::request(
             ClientOpcode::AccountModify,
             1,
@@ -2033,9 +2074,39 @@ mod tests {
         session.on_account_modify(&modify, &state).await;
 
         let account = state.account("bob").await.unwrap();
-        assert_eq!(account.name, "Bobby");
-        assert_eq!(account.password, "secret");
-        assert_eq!(account.access, AccessPrivileges::SEND_CHAT);
+        assert_eq!(account.password, "");
+    }
+
+    #[tokio::test]
+    async fn account_read_password_field_round_trips_as_the_unchanged_sentinel() {
+        let session = test_session("Admin", AccessPrivileges::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "secret".to_string(),
+                    name: "Bob".to_string(),
+                    access: AccessPrivileges::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+
+        let read = Transaction::request(
+            ClientOpcode::AccountRead,
+            1,
+            vec![Field::obfuscated_string(ClientFieldId::Login, "bob")],
+        );
+        let [reply] = session
+            .on_account_read(&read, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        let password_field = reply.field(ServerFieldId::Password).unwrap();
+        assert_eq!(password_field.as_bytes(), vec![0u8]);
     }
 
     #[tokio::test]
