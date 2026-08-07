@@ -184,8 +184,8 @@ impl HotlineClient {
             .fields
             .iter()
             .filter(|f| f.id == u16::from(ServerFieldId::UserList))
-            .filter_map(|f| UserNameWithInfo::decode(&f.as_bytes()).ok())
-            .collect())
+            .map(|f| UserNameWithInfo::decode(&f.as_bytes()))
+            .collect::<hotline_proto::Result<_>>()?)
     }
 
     /// Fetch the root folder's file listing (`HTLC_HDR_FILE_LIST`, 200).
@@ -195,8 +195,8 @@ impl HotlineClient {
             .fields
             .iter()
             .filter(|f| f.id == u16::from(ServerFieldId::FileList))
-            .filter_map(|f| FileNameWithInfo::decode(&f.as_bytes()).ok())
-            .collect())
+            .map(|f| FileNameWithInfo::decode(&f.as_bytes()))
+            .collect::<hotline_proto::Result<_>>()?)
     }
 }
 
