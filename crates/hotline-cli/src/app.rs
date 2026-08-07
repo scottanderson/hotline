@@ -78,7 +78,10 @@ impl App {
         if let Err(e) = client.agree(&self.nick, self.icon).await {
             self.push(format!("failed to complete login: {e}"), LineKind::Error);
         }
-        self.users = client.get_user_name_list().await.unwrap_or_default();
+        match client.get_user_name_list().await {
+            Ok(users) => self.users = users,
+            Err(e) => self.push(format!("failed to fetch user list: {e}"), LineKind::Error),
+        }
         self.mode = Mode::Chat;
     }
 
@@ -243,13 +246,16 @@ impl App {
         self.access = tx.access().unwrap_or(self.access);
 
         // This session's own uid/icon/name.
-        if let Some(entry) = tx
-            .field(ServerFieldId::UserList)
-            .and_then(|f| UserNameWithInfo::decode(&f.as_bytes()).ok())
-        {
-            match self.users.iter_mut().find(|u| u.user_id == entry.user_id) {
-                Some(existing) => *existing = entry,
-                None => self.users.push(entry),
+        if let Some(field) = tx.field(ServerFieldId::UserList) {
+            match UserNameWithInfo::decode(&field.as_bytes()) {
+                Ok(entry) => match self.users.iter_mut().find(|u| u.user_id == entry.user_id) {
+                    Some(existing) => *existing = entry,
+                    None => self.users.push(entry),
+                },
+                Err(e) => self.push(
+                    format!("failed to parse own user info: {e}"),
+                    LineKind::Error,
+                ),
             }
         }
     }
