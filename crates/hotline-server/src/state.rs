@@ -3,7 +3,7 @@
 //! reach each other.
 
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 
 use hotline_proto::consts::AccessPrivileges;
-use hotline_proto::types::{FileNameWithInfo, UserFlags};
+use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags};
 use hotline_proto::Transaction;
 
 use crate::accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
+use crate::files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
 
 /// How long without any request before a user is considered idle.
 pub const IDLE_THRESHOLD: Duration = Duration::from_secs(10 * 60);
@@ -82,6 +83,39 @@ pub struct ChatRoom {
     pub invited: HashSet<u16>,
 }
 
+/// Which way a pending `HTXF` transfer moves file bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferDirection {
+    /// Client downloading a file from the server (`FILE_GET`).
+    Get,
+    /// Client uploading a file to the server (`FILE_PUT`).
+    Put,
+}
+
+/// A transfer awaiting its data connection: allocated when `FILE_GET`/
+/// `FILE_PUT` replies with a reference number, consumed once the client
+/// opens the second connection and sends that reference back. Identifies
+/// the file by [`FileRequester`] login plus directory/name, not a raw
+/// path, so completing the transfer still goes through the
+/// [`FileProvider`] rather than assuming filesystem storage.
+#[derive(Debug, Clone)]
+pub struct PendingTransfer {
+    /// Whether this is a download or upload.
+    pub direction: TransferDirection,
+    /// The requesting session's account login.
+    pub login: String,
+    /// Directory the file is in.
+    pub dir: HlPath,
+    /// File name.
+    pub name: String,
+    /// Download: the file's size in bytes. Upload: the size the client
+    /// declared it will send.
+    pub size: u64,
+    /// The control connection's remote address; the data connection must
+    /// arrive from the same IP or the transfer is refused.
+    pub client_ip: IpAddr,
+}
+
 /// A live privilege change for every session logged in under `login`.
 #[derive(Debug, Clone)]
 pub struct AccessUpdate {
@@ -127,9 +161,9 @@ pub struct SharedState {
     next_user_id: Arc<AtomicU16>,
     /// One inbound channel per currently connected recipient.
     recipients: Arc<RwLock<HashMap<u16, mpsc::Sender<RecipientMessage>>>>,
-    /// Root-folder file listing. In-memory placeholder for a real
-    /// filesystem-backed implementation.
-    files: Arc<RwLock<Vec<FileNameWithInfo>>>,
+    /// File storage backing the file listing and `FILE_GET`/`FILE_PUT`;
+    /// see [`crate::FileProvider`].
+    files: Arc<dyn FileProvider>,
     /// Classic (pre-threaded) news: one flat, newest-first text blob.
     news: Arc<RwLock<String>>,
     /// Chat ID `0` is always present: the main room every connected
@@ -138,40 +172,35 @@ pub struct SharedState {
     next_chat_id: Arc<AtomicU32>,
     /// Account storage; see [`crate::AccountProvider`].
     accounts: Arc<dyn AccountProvider>,
+    /// Transfers awaiting their `HTXF` data connection, keyed by the
+    /// reference number handed to the client.
+    transfers: Arc<RwLock<HashMap<u32, PendingTransfer>>>,
+    next_transfer_ref: Arc<AtomicU32>,
 }
 
 impl Default for SharedState {
     fn default() -> Self {
-        Self::new(Arc::new(InMemoryAccountProvider::default()))
+        Self::new(
+            Arc::new(InMemoryAccountProvider::default()),
+            Arc::new(InMemoryFileProvider::default()),
+        )
     }
 }
 
 impl SharedState {
-    /// Build fresh shared state backed by `accounts`.
-    pub fn new(accounts: Arc<dyn AccountProvider>) -> Self {
-        let files = vec![
-            FileNameWithInfo {
-                file_type: *b"fldr",
-                creator: *b"\0\0\0\0",
-                size: 0,
-                name: "Uploads".to_string(),
-            },
-            FileNameWithInfo {
-                file_type: *b"TEXT",
-                creator: *b"ttxt",
-                size: 0,
-                name: "readme.txt".to_string(),
-            },
-        ];
+    /// Build fresh shared state backed by `accounts` and `files`.
+    pub fn new(accounts: Arc<dyn AccountProvider>, files: Arc<dyn FileProvider>) -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
             next_user_id: Arc::new(AtomicU16::new(1)),
             recipients: Arc::new(RwLock::new(HashMap::new())),
-            files: Arc::new(RwLock::new(files)),
+            files,
             news: Arc::new(RwLock::new(String::new())),
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
             accounts,
+            transfers: Arc::new(RwLock::new(HashMap::new())),
+            next_transfer_ref: Arc::new(AtomicU32::new(1)),
         }
     }
 }
@@ -281,11 +310,76 @@ impl SharedState {
         }
     }
 
-    /// Snapshot of the (currently root-only) file listing. `path` is
-    /// accepted for API shape but ignored until real subfolder support
-    /// lands.
-    pub async fn root_files(&self) -> Vec<FileNameWithInfo> {
-        self.files.read().await.clone()
+    /// List a directory as seen by `requester`. `dir` is empty for the
+    /// root folder. `None` if it doesn't exist (or isn't visible to
+    /// `requester`); see [`crate::FileProvider::list`].
+    pub async fn list_files(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+    ) -> Option<Vec<FileNameWithInfo>> {
+        self.files.list(requester, dir).await
+    }
+
+    /// A file's size in bytes, or `None` if it doesn't exist, is a
+    /// folder, or isn't visible to `requester`.
+    pub async fn file_size(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<u64> {
+        self.files.size(requester, dir, name).await
+    }
+
+    /// Whether a file or folder already exists at this path.
+    pub async fn file_exists(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> bool {
+        self.files.exists(requester, dir, name).await
+    }
+
+    /// Open a file for reading, for a `FILE_GET` download.
+    pub async fn open_file_for_read(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> std::io::Result<BoxedReader> {
+        self.files.open_read(requester, dir, name).await
+    }
+
+    /// Create a file for writing, for a `FILE_PUT` upload.
+    pub async fn create_file_for_write(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> std::io::Result<BoxedWriter> {
+        self.files.create_write(requester, dir, name).await
+    }
+
+    /// Register a pending transfer, returning the reference number to
+    /// hand the client. Retries on the vanishingly unlikely case the
+    /// counter wraps into a still-pending ref.
+    pub async fn register_transfer(&self, transfer: PendingTransfer) -> u32 {
+        let mut transfers = self.transfers.write().await;
+        loop {
+            let reference = self.next_transfer_ref.fetch_add(1, Ordering::Relaxed);
+            if reference != 0 && !transfers.contains_key(&reference) {
+                transfers.insert(reference, transfer);
+                return reference;
+            }
+        }
+    }
+
+    /// Remove and return a pending transfer by reference number, if one
+    /// is still waiting. Consumes it: a reference is only good once.
+    pub async fn take_transfer(&self, reference: u32) -> Option<PendingTransfer> {
+        self.transfers.write().await.remove(&reference)
     }
 
     /// The full classic news text.
@@ -503,5 +597,47 @@ mod tests {
         let state = SharedState::default();
         state.leave_chat_room(0, 1).await;
         assert!(state.chat_room(0).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_files_lists_the_root_directory() {
+        let files = Arc::new(InMemoryFileProvider::default());
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        files.seed(&HlPath::new(["sub"]), "inner.txt", *b"x");
+        let state = SharedState::new(Arc::new(InMemoryAccountProvider::default()), files);
+
+        let requester = FileRequester { login: "alice" };
+        let mut entries = state
+            .list_files(requester, &HlPath::default())
+            .await
+            .unwrap();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(entries[0].size, 2);
+        assert_eq!(entries[1].name, "sub");
+        assert_eq!(&entries[1].file_type, b"fldr");
+    }
+
+    #[tokio::test]
+    async fn register_transfer_allocates_distinct_refs_and_take_consumes_them() {
+        let state = SharedState::default();
+        let make = || PendingTransfer {
+            direction: TransferDirection::Get,
+            login: "alice".to_string(),
+            dir: HlPath::default(),
+            name: "x".to_string(),
+            size: 0,
+            client_ip: "127.0.0.1".parse().unwrap(),
+        };
+
+        let ref_a = state.register_transfer(make()).await;
+        let ref_b = state.register_transfer(make()).await;
+        assert_ne!(ref_a, ref_b);
+
+        assert!(state.take_transfer(ref_a).await.is_some());
+        assert!(state.take_transfer(ref_a).await.is_none());
+        assert!(state.take_transfer(ref_b).await.is_some());
     }
 }

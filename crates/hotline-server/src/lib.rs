@@ -7,12 +7,14 @@
 
 mod accounts;
 mod error;
+mod files;
 mod server;
 mod session;
 mod state;
 
 pub use accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 pub use error::{Result, ServerError};
+pub use files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
 pub use server::{Server, ServerConfig};
 pub use session::Session;
-pub use state::{SharedState, UserEntry};
+pub use state::{PendingTransfer, SharedState, TransferDirection, UserEntry};

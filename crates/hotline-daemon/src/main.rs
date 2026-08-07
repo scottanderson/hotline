@@ -1,4 +1,5 @@
 mod accounts;
+mod files;
 
 use std::sync::Arc;
 
@@ -6,6 +7,7 @@ use clap::Parser;
 use hotline_server::{Server, ServerConfig};
 
 use accounts::FileAccountProvider;
+use files::DirectoryFileProvider;
 
 /// A minimal Hotline server.
 #[derive(Parser, Debug)]
@@ -30,6 +32,11 @@ struct Args {
     /// Directory to store account files in (created if missing).
     #[arg(long, default_value = "accounts")]
     accounts_dir: String,
+
+    /// Directory served by file listing/download/upload (created if
+    /// missing). The transfer data connection listens on `port + 1`.
+    #[arg(long, default_value = "files")]
+    files_dir: String,
 }
 
 #[tokio::main]
@@ -44,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let accounts = Arc::new(FileAccountProvider::open(args.accounts_dir).await?);
-    Server::new(config, accounts).run().await?;
+    let files = Arc::new(DirectoryFileProvider::open(args.files_dir).await?);
+    Server::new(config, accounts, files).run().await?;
     Ok(())
 }

@@ -10,13 +10,27 @@ use hotline_codec::TransactionCodec;
 use hotline_proto::consts::AccessPrivileges;
 use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
 use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
-use hotline_proto::types::{UserFlags, UserNameWithInfo};
+use hotline_proto::types::{HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHello, Field, ServerHello, Transaction};
 
 use crate::accounts::{AccessExtra, Account};
 use crate::error::Result;
+use crate::files::FileRequester;
 use crate::server::ServerConfig;
-use crate::state::{AccessUpdate, RecipientMessage, SharedState, UserEntry, IDLE_THRESHOLD};
+use crate::state::{
+    AccessUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection, UserEntry,
+    IDLE_THRESHOLD,
+};
+
+/// `true` if any component of `dir` names an "Upload" or "Drop Box"
+/// folder (case-insensitive), the one place an account without
+/// `UPLOAD_ANYWHERE` may still upload to.
+fn is_dropbox_path(dir: &HlPath) -> bool {
+    dir.components.iter().any(|c| {
+        let c = c.to_ascii_lowercase();
+        c.contains("upload") || c.contains("drop box")
+    })
+}
 
 /// Which opcodes a session may currently send.
 enum SessionState {
@@ -227,6 +241,8 @@ impl Session {
             /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,
             /* 121 */ ClientOpcode::Agreed => vec![tx.reply_error("already logged in")],
             /* 200 */ ClientOpcode::FileList => self.on_get_file_name_list(tx, state).await,
+            /* 202 */ ClientOpcode::FileGet => self.on_file_get(tx, state).await,
+            /* 203 */ ClientOpcode::FilePut => self.on_file_put(tx, state).await,
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
             /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
@@ -680,15 +696,108 @@ impl Session {
         }
 
         // FILE_PATH (202) is optional in the request; root is assumed
-        // when absent. Subfolder navigation isn't wired up yet - see
-        // SharedState::root_files.
-        let fields = state
-            .root_files()
-            .await
+        // when absent.
+        let dir = match tx.field(ClientFieldId::FilePath) {
+            Some(field) => match HlPath::decode(&field.as_bytes()) {
+                Ok(dir) => dir,
+                Err(_) => return vec![tx.reply_error("bad path")],
+            },
+            None => HlPath::default(),
+        };
+
+        let requester = FileRequester { login: &self.login };
+        let Some(entries) = state.list_files(requester, &dir).await else {
+            return vec![tx.reply_error("file or folder not found.")];
+        };
+        let fields = entries
             .into_iter()
             .map(|entry| Field::bytes(ServerFieldId::FileList, entry.encode()))
             .collect();
         vec![tx.reply(fields)]
+    }
+
+    /// A request's `FILE_NAME` (201) and `FILE_PATH` (202) fields.
+    /// `None` if the name is missing or the path field is malformed.
+    fn file_name_and_dir(&self, tx: &Transaction) -> Option<(String, HlPath)> {
+        let name = tx.field(ClientFieldId::FileName)?.as_string();
+        let dir = match tx.field(ClientFieldId::FilePath) {
+            Some(field) => HlPath::decode(&field.as_bytes()).ok()?,
+            None => HlPath::default(),
+        };
+        Some((name, dir))
+    }
+
+    /// 202: start a download. Allocates a transfer reference and tells
+    /// the client the total byte count (flattened-object overhead plus
+    /// the file's own bytes) to expect on the data connection.
+    async fn on_file_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILES) {
+            return vec![tx.reply_error(reason)];
+        }
+
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        let requester = FileRequester { login: &self.login };
+        let Some(data_size) = state.file_size(requester, &dir, &name).await else {
+            return vec![tx.reply_error("file or folder not found.")];
+        };
+
+        let total_size = data_size + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64;
+        let reference = state
+            .register_transfer(PendingTransfer {
+                direction: TransferDirection::Get,
+                login: self.login.clone(),
+                dir,
+                name,
+                size: data_size,
+                client_ip: self.remote_addr.ip(),
+            })
+            .await;
+
+        vec![tx.reply(vec![
+            Field::u32(ServerFieldId::TransferId, reference),
+            Field::u32(ServerFieldId::TransferSize, total_size as u32),
+        ])]
+    }
+
+    /// 203: start an upload. The destination must be under a folder
+    /// named "Upload" or "Drop Box" unless the account can upload
+    /// anywhere; an existing file at the destination is rejected (resume
+    /// isn't supported yet).
+    async fn on_file_put(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(AccessPrivileges::UPLOAD_FILES) {
+            return vec![tx.reply_error(reason)];
+        }
+
+        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+            return vec![tx.reply_error("huh?!?")];
+        };
+        if !self.access.contains(AccessPrivileges::UPLOAD_ANYWHERE) && !is_dropbox_path(&dir) {
+            return vec![tx.reply_error("You are not allowed to do that.")];
+        }
+
+        let requester = FileRequester { login: &self.login };
+        if state.file_exists(requester, &dir, &name).await {
+            return vec![tx.reply_error("file already exists.")];
+        }
+
+        let size = tx
+            .field(ClientFieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap_or(0);
+        let reference = state
+            .register_transfer(PendingTransfer {
+                direction: TransferDirection::Put,
+                login: self.login.clone(),
+                dir,
+                name,
+                size: size as u64,
+                client_ip: self.remote_addr.ip(),
+            })
+            .await;
+
+        vec![tx.reply(vec![Field::u32(ServerFieldId::TransferId, reference)])]
     }
 
     /// 101: read the classic (non-threaded) news.
@@ -2364,5 +2473,130 @@ mod tests {
 
         assert!(!reply.is_error());
         assert!(!state.is_invited(chat_id, 2).await);
+    }
+
+    fn state_with_files(files: crate::files::InMemoryFileProvider) -> SharedState {
+        SharedState::new(
+            std::sync::Arc::new(crate::accounts::InMemoryAccountProvider::default()),
+            std::sync::Arc::new(files),
+        )
+    }
+
+    #[tokio::test]
+    async fn file_get_denied_without_download_files() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let session = test_session("Alice", AccessPrivileges::empty());
+
+        let get = Transaction::request(
+            ClientOpcode::FileGet,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_get_replies_with_ref_and_total_size() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let get = Transaction::request(
+            ClientOpcode::FileGet,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+
+        assert!(!reply.is_error());
+        let reference = reply
+            .field(ServerFieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+        let total_size = reply
+            .field(ServerFieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert_eq!(
+            total_size,
+            5 + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32
+        );
+
+        let transfer = state.take_transfer(reference).await.unwrap();
+        assert_eq!(transfer.direction, TransferDirection::Get);
+        assert_eq!(transfer.size, 5);
+    }
+
+    #[tokio::test]
+    async fn file_get_missing_file_is_an_error() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let get = Transaction::request(
+            ClientOpcode::FileGet,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "missing.txt")],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_put_outside_a_dropbox_is_denied_without_upload_anywhere() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::UPLOAD_ANYWHERE);
+        let session = test_session("Alice", access);
+
+        let put = Transaction::request(
+            ClientOpcode::FilePut,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_put_into_a_dropbox_is_allowed_without_upload_anywhere() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let mut access = AccessPrivileges::all();
+        access.remove(AccessPrivileges::UPLOAD_ANYWHERE);
+        let session = test_session("Alice", access);
+
+        let put = Transaction::request(
+            ClientOpcode::FilePut,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    hotline_proto::types::HlPath::new(["Uploads"])
+                        .encode()
+                        .unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(!reply.is_error());
+        assert!(reply.field(ServerFieldId::TransferId).is_some());
+    }
+
+    #[tokio::test]
+    async fn file_put_rejects_an_existing_file() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"existing");
+        let state = state_with_files(files);
+        let session = test_session("Alice", AccessPrivileges::all());
+
+        let put = Transaction::request(
+            ClientOpcode::FilePut,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(reply.is_error());
     }
 }

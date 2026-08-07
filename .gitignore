@@ -1,5 +1,6 @@
 /target
 /accounts
+/files
 **/*.rs.bk
 Cargo.lock
 .DS_Store

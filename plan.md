@@ -29,22 +29,19 @@ priority order (backlog below).
    `accounts.rs`.
 2. ~~Unify per-recipient delivery into one ordered channel.~~ Done — see
    AGENTS.md's "Server session/state split".
-3. **File transfer (`HTXF`).** Second-port transfer handshake, not
-   started. Large standalone gap — no file upload/download exists at all,
-   and `SharedState::root_files` is still a hardcoded placeholder listing,
-   not real storage. Protocol researched; scoped first slice proposed to
-   and not yet confirmed by the user:
-   - **In scope**: a second `TcpListener` on `port + 1`; `HTLC_HDR_FILE_GET`/
-     `_PUT` (202/203) on the main connection allocate an opaque `u32` ref
-     and record a pending transfer (path, direction, size for PUT) keyed by
-     that ref + the client's IP; the second-connection handshake is a fixed
-     16-byte header (`"HTXF"` magic = `0x48545846`, `ref: u32`, `len: u32`,
-     `type: u16`, 2 reserved bytes), matched against the pending entry; data
-     is framed in the reference's "FILP" container — `"INFO"` fork (zeroed
-     type/creator, no real HFS metadata) then `"DATA"` fork with raw bytes,
-     skipping the resource fork entirely. Real file storage backing
-     `SharedState::root_files` via a `--files-dir` flag, mirroring the
-     `--accounts-dir` pattern `FileAccountProvider` already uses.
+3. ~~File transfer (`HTXF`), single-file slice.~~ Done — a second
+   `TcpListener` on `port + 1` (`hotline_server::server::run_htxf_listener`);
+   `HTLC_HDR_FILE_GET`/`_PUT` (202/203) allocate an opaque `u32` ref and
+   record a pending transfer (path, direction, size), matched on the data
+   connection by that ref plus the client's IP; the handshake is the
+   16-byte `"HTXF"` header (`hotline_proto::htxf::HtxfHeader`); data is
+   framed in the "FILP" container (`hotline_proto::htxf`) — an `INFO`
+   fork (zeroed type/creator, no real HFS metadata) then a `DATA` fork
+   with raw bytes, no resource fork. File storage goes through
+   `FileProvider` (a directory-backed default, `--files-dir`, mirroring
+   `--accounts-dir`), not a hardcoded placeholder. Verified with a manual
+   round-trip (download + upload) against a running `hls`/`hotline-client`;
+   not yet exercised against a real Hotline client.
    - **Explicitly deferred** (own follow-up items, not silently dropped):
      resume support (client-sent `RFLT` blob with `data_pos`/`rsrc_pos`
      offsets), the transfer queue (`HTLS_DATA_QUEUE_POSITION`,
@@ -56,11 +53,11 @@ priority order (backlog below).
    `HTLC_HDR_CHAT_SUBJECT` and checked on `HTLC_HDR_CHAT_JOIN`; also
    closed missing membership/validation checks found on
    `HTLC_HDR_CHAT_SUBJECT`/`HTLC_HDR_CHAT_INVITE` along the way.
-6. **Remaining unhandled opcodes.** All map to an item above rather than
-   being new independent work: `FileGet`/`FilePut` (202/203, item 3);
-   `FileDelete`/`FileMkdir`/`FileGetinfo`/`FileSetinfo`/`FileMove`/
-   `FileSymlink` (204–209, blocked on real file storage, item 3);
-   `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
+6. **Remaining unhandled opcodes.** Mostly map to an item above rather
+   than being new independent work: `FileDelete`/`FileMkdir`/
+   `FileGetinfo`/`FileSetinfo`/`FileMove`/`FileSymlink` (204–209, now
+   unblocked by item 3's real file storage, but each still its own
+   handler); `NewsListdir`/`NewsListcategory`/`NewsDelete`/`NewsMkdir`/
    `NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/`NewsDeletethread`
    (370–411, item 4).
 7. **Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s
