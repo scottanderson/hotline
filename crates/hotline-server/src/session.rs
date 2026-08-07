@@ -807,7 +807,7 @@ impl Session {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
-        if !state.join_chat_room(chat_id, self.user_id).await {
+        if state.join_chat_room(chat_id, self.user_id).await.is_none() {
             return tx.reply_error("no such chat room");
         }
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);

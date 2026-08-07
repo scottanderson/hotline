@@ -330,19 +330,16 @@ impl SharedState {
     }
 
     /// Add `user_id` to a chat room, at the end of the join order, and
-    /// clear any pending invite for them. Returns whether they had a
-    /// pending invite to clear, or `false` if the room doesn't exist.
-    pub async fn join_chat_room(&self, chat_id: u32, user_id: u16) -> bool {
-        self.chat_rooms
-            .write()
-            .await
-            .get_mut(&chat_id)
-            .is_some_and(|room| {
-                if !room.members.contains(&user_id) {
-                    room.members.push(user_id);
-                }
-                room.invited.remove(&user_id)
-            })
+    /// clear any pending invite for them. `None` if the room doesn't
+    /// exist; otherwise `Some` of whether they had a pending invite to
+    /// clear.
+    pub async fn join_chat_room(&self, chat_id: u32, user_id: u16) -> Option<bool> {
+        self.chat_rooms.write().await.get_mut(&chat_id).map(|room| {
+            if !room.members.contains(&user_id) {
+                room.members.push(user_id);
+            }
+            room.invited.remove(&user_id)
+        })
     }
 
     /// Mark `user_id` as invited to a chat room. Returns whether this was
