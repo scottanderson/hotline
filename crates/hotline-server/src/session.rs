@@ -14,7 +14,7 @@ use hotline_proto::types::{HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
 
 use crate::accounts::{AccessExtra, Account};
-use crate::error::Result;
+use crate::error::{Result, ServerError};
 use crate::files::FileRequester;
 use crate::server::ServerConfig;
 use crate::state::{
@@ -156,10 +156,16 @@ impl Session {
         Ok(())
     }
 
+    /// Checks the client's opening 12 bytes as one fixed byte string;
+    /// closes the connection without a reply on any mismatch.
     async fn handshake(stream: &mut TcpStream) -> Result<()> {
         let mut buf = [0u8; 12];
         stream.read_exact(&mut buf).await?;
-        ClientHandshake::decode(&buf)?;
+        if buf != ClientHandshake::default().encode() {
+            return Err(ServerError::HandshakeRejected(
+                "unrecognized client handshake",
+            ));
+        }
         stream.write_all(&ServerHandshake::OK.encode()).await?;
         Ok(())
     }
