@@ -71,6 +71,16 @@ impl UserEntry {
     }
 }
 
+/// `true` if any component of `dir` names an "Upload" or "Drop Box"
+/// folder (case-insensitive), the one place an account without
+/// `UPLOAD_ANYWHERE` may still upload to.
+fn is_dropbox_path(dir: &HlPath) -> bool {
+    dir.components.iter().any(|c| {
+        let c = c.to_ascii_lowercase();
+        c.contains("upload") || c.contains("drop box")
+    })
+}
+
 /// A private chat room: its member user IDs, in join order, plus a
 /// subject line.
 #[derive(Debug, Clone, Default)]
@@ -245,6 +255,29 @@ impl SharedState {
         self.users.read().await.contains_key(&user_id)
     }
 
+    /// `Err("no such user")` unless `user_id` is currently connected.
+    pub async fn require_connected_user(&self, user_id: u16) -> Result<(), &'static str> {
+        self.has_user(user_id)
+            .await
+            .then_some(())
+            .ok_or("no such user")
+    }
+
+    /// Whether `target_id` may be kicked: `Err` if that user holds
+    /// `CANT_BE_DISCONNECTED`. A target that isn't connected at all is
+    /// allowed through, since kicking one is already a no-op (`send_to`
+    /// silently drops a push to nobody).
+    pub async fn authorize_kick(&self, target_id: u16) -> Result<(), &'static str> {
+        if self
+            .user(target_id)
+            .await
+            .is_some_and(|u| u.access.contains(AccessPrivileges::CANT_BE_DISCONNECTED))
+        {
+            return Err("that user can't be disconnected");
+        }
+        Ok(())
+    }
+
     /// Record that `user_id` just sent a request, resetting their idle
     /// timer. Called once per received frame in the session loop.
     pub async fn touch_user(&self, user_id: u16) {
@@ -342,6 +375,26 @@ impl SharedState {
         name: &str,
     ) -> bool {
         self.files.exists(requester, dir, name).await
+    }
+
+    /// Whether `requester` may start a `FILE_PUT` upload of `name` under
+    /// `dir`: the destination must be under an "Upload"/"Drop Box" folder
+    /// unless `upload_anywhere`, and nothing may already exist there (no
+    /// resume support yet).
+    pub async fn authorize_upload(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        upload_anywhere: bool,
+    ) -> Result<(), &'static str> {
+        if !upload_anywhere && !is_dropbox_path(dir) {
+            return Err("You are not allowed to do that.");
+        }
+        if self.files.exists(requester, dir, name).await {
+            return Err("file already exists.");
+        }
+        Ok(())
     }
 
     /// Open a file for reading, for a `FILE_GET` download.
@@ -473,6 +526,33 @@ impl SharedState {
             .is_some_and(|room| room.invited.insert(user_id))
     }
 
+    /// Invite `target_id` to a chat room on `inviter`'s behalf: `target_id`
+    /// must be connected, the room must exist, `inviter` must already be a
+    /// member, and `target_id` must be neither a member nor already
+    /// invited. One atomic operation, like [`Self::join_chat_room`].
+    pub async fn invite_to_chat_room(
+        &self,
+        chat_id: u32,
+        inviter: u16,
+        target_id: u16,
+    ) -> Result<(), &'static str> {
+        if !self.has_user(target_id).await {
+            return Err("no such user");
+        }
+        let mut rooms = self.chat_rooms.write().await;
+        let room = rooms.get_mut(&chat_id).ok_or("no such chat room")?;
+        if !room.members.contains(&inviter) {
+            return Err("you are not in that chat room");
+        }
+        if room.members.contains(&target_id) {
+            return Err("that user is already in the chat");
+        }
+        if !room.invited.insert(target_id) {
+            return Err("that user is already invited to the chat");
+        }
+        Ok(())
+    }
+
     /// Clear a pending invite without joining, e.g. on decline. Returns
     /// whether there was one to clear.
     pub async fn invite_declined(&self, chat_id: u32, user_id: u16) -> bool {
@@ -544,6 +624,28 @@ impl SharedState {
             .is_some()
     }
 
+    /// Whether `user_id` may change a chat room's subject/password: the
+    /// global room (`chat_id == 0`) needs `has_set_subject`; any other
+    /// room just needs `user_id` to already be a member.
+    pub async fn authorize_chat_subject_change(
+        &self,
+        chat_id: u32,
+        user_id: u16,
+        is_global: bool,
+        has_set_subject: bool,
+    ) -> Result<(), &'static str> {
+        if is_global {
+            return has_set_subject
+                .then_some(())
+                .ok_or("You are not allowed to do that.");
+        }
+        match self.chat_room_members(chat_id).await {
+            Some(members) if members.contains(&user_id) => Ok(()),
+            Some(_) => Err("you are not in that chat room"),
+            None => Err("no such chat room"),
+        }
+    }
+
     /// Look up an account by login.
     pub async fn account(&self, login: &str) -> Option<Account> {
         self.accounts.get(login).await
@@ -554,9 +656,13 @@ impl SharedState {
         self.accounts.put(login, account).await
     }
 
-    /// Delete an account. `false` if it didn't exist.
-    pub async fn delete_account(&self, login: &str) -> Result<bool, String> {
-        self.accounts.delete(login).await
+    /// Delete an account. `Err("no such account")` if it didn't exist.
+    pub async fn delete_account(&self, login: &str) -> Result<(), String> {
+        match self.accounts.delete(login).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("no such account".to_string()),
+            Err(reason) => Err(reason),
+        }
     }
 }
 

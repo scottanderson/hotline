@@ -123,12 +123,18 @@ priority order (backlog below).
     own style rule mandating the `HTLC_HDR_*` convention (which would
     need to change too if this is adopted) - a wide, mechanical, but
     non-trivial rename across the crate.
-11. **Bring the other `session.rs` `on_*` handlers in line with the
+11. ~~Bring the other `session.rs` `on_*` handlers in line with the
     `if let Err(reason) = state.some_call(...).await { return
-    tx.reply_error(reason); }` pattern** now documented in AGENTS.md and
-    used by `on_chat_join`. Most handlers still do their own inline
-    `Option`/bool checks against `SharedState` calls instead of getting
-    a `Result<T, &'static str>` back directly. Not started.
+    tx.reply_error(reason); }` pattern.~~ Done — `on_user_kick`,
+    `on_file_put`, `on_chat_create`, `on_chat_invite`, `on_chat_subject`,
+    and `on_account_delete` now delegate to a new `SharedState` method
+    each (`authorize_kick`, `authorize_upload`, `require_connected_user`,
+    `invite_to_chat_room`, `authorize_chat_subject_change`,
+    `delete_account`'s `Result<(), String>`) instead of inline
+    `Option`/bool checks. A few handlers (`on_user_get_info`, file
+    list/get) were deliberately left `Option`-based since they mirror
+    `FileProvider`'s own `Option`-returning shape and forcing `Result`
+    there would just wrap-then-unwrap the same information.
 
 ## Needs manual verification against the real client
 

@@ -22,16 +22,6 @@ use crate::state::{
     IDLE_THRESHOLD,
 };
 
-/// `true` if any component of `dir` names an "Upload" or "Drop Box"
-/// folder (case-insensitive), the one place an account without
-/// `UPLOAD_ANYWHERE` may still upload to.
-fn is_dropbox_path(dir: &HlPath) -> bool {
-    dir.components.iter().any(|c| {
-        let c = c.to_ascii_lowercase();
-        c.contains("upload") || c.contains("drop box")
-    })
-}
-
 /// Which opcodes a session may currently send.
 enum SessionState {
     /// Before `HTLC_HDR_LOGIN` (107) or `HTLC_HDR_AGREED` (121) complete login.
@@ -618,12 +608,8 @@ impl Session {
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
-        if state
-            .user(target_id)
-            .await
-            .is_some_and(|u| u.access.contains(AccessPrivileges::CANT_BE_DISCONNECTED))
-        {
-            return vec![tx.reply_error("that user can't be disconnected")];
+        if let Err(reason) = state.authorize_kick(target_id).await {
+            return vec![tx.reply_error(reason)];
         }
 
         state
@@ -779,13 +765,13 @@ impl Session {
         let Some((name, dir)) = self.file_name_and_dir(tx) else {
             return vec![tx.reply_error("huh?!?")];
         };
-        if !self.access.contains(AccessPrivileges::UPLOAD_ANYWHERE) && !is_dropbox_path(&dir) {
-            return vec![tx.reply_error("You are not allowed to do that.")];
-        }
-
         let requester = FileRequester { login: &self.login };
-        if state.file_exists(requester, &dir, &name).await {
-            return vec![tx.reply_error("file already exists.")];
+        let upload_anywhere = self.access.contains(AccessPrivileges::UPLOAD_ANYWHERE);
+        if let Err(reason) = state
+            .authorize_upload(requester, &dir, &name, upload_anywhere)
+            .await
+        {
+            return vec![tx.reply_error(reason)];
         }
 
         let size = tx
@@ -842,8 +828,8 @@ impl Session {
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
             return tx.reply_error("missing user id");
         };
-        if !state.has_user(target_id).await {
-            return tx.reply_error("no such user");
+        if let Err(reason) = state.require_connected_user(target_id).await {
+            return tx.reply_error(reason);
         }
 
         let chat_id = state.create_chat_room(self.user_id).await;
@@ -886,20 +872,11 @@ impl Session {
         if chat_id == 0 || target_id == 0 {
             return tx.reply_error("missing chat id or user id");
         }
-        if !state.has_user(target_id).await {
-            return tx.reply_error("no such user");
-        }
-        let Some(members) = state.chat_room_members(chat_id).await else {
-            return tx.reply_error("no such chat room");
-        };
-        if !members.contains(&self.user_id) {
-            return tx.reply_error("you are not in that chat room");
-        }
-        if members.contains(&target_id) {
-            return tx.reply_error("that user is already in the chat");
-        }
-        if !state.invite(chat_id, target_id).await {
-            return tx.reply_error("that user is already invited to the chat");
+        if let Err(reason) = state
+            .invite_to_chat_room(chat_id, self.user_id, target_id)
+            .await
+        {
+            return tx.reply_error(reason);
         }
 
         state
@@ -1007,16 +984,12 @@ impl Session {
         }
 
         let is_global = chat_id == 0;
-        if is_global {
-            if !self.access_extra.contains(AccessExtra::SET_SUBJECT) {
-                return vec![tx.reply_error("You are not allowed to do that.")];
-            }
-        } else {
-            match state.chat_room_members(chat_id).await {
-                Some(members) if members.contains(&self.user_id) => {}
-                Some(_) => return vec![tx.reply_error("you are not in that chat room")],
-                None => return vec![tx.reply_error("no such chat room")],
-            }
+        let has_set_subject = self.access_extra.contains(AccessExtra::SET_SUBJECT);
+        if let Err(reason) = state
+            .authorize_chat_subject_change(chat_id, self.user_id, is_global, has_set_subject)
+            .await
+        {
+            return vec![tx.reply_error(reason)];
         }
 
         if let Some(subject) = subject {
@@ -1080,11 +1053,10 @@ impl Session {
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
-        match state.delete_account(&login).await {
-            Ok(true) => vec![tx.reply(vec![])],
-            Ok(false) => vec![tx.reply_error("no such account")],
-            Err(_) => vec![tx.reply_error("could not delete account")],
+        if let Err(reason) = state.delete_account(&login).await {
+            return vec![tx.reply_error(reason)];
         }
+        vec![tx.reply(vec![])]
     }
 
     /// `HTLC_HDR_ACCOUNT_READ` (352)
