@@ -465,7 +465,7 @@ impl SharedState {
     /// Mark `user_id` as invited to a chat room. Returns whether this was
     /// a new invite (`false` if already invited, or if the room doesn't
     /// exist).
-    pub async fn invited(&self, chat_id: u32, user_id: u16) -> bool {
+    pub async fn invite(&self, chat_id: u32, user_id: u16) -> bool {
         self.chat_rooms
             .write()
             .await

@@ -849,7 +849,7 @@ impl Session {
         let chat_id = state.create_chat_room(self.user_id).await;
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
         if target_id != self.user_id {
-            state.invited(chat_id, target_id).await;
+            state.invite(chat_id, target_id).await;
             state
                 .send_to(
                     target_id,
@@ -898,7 +898,7 @@ impl Session {
         if members.contains(&target_id) {
             return tx.reply_error("that user is already in the chat");
         }
-        if !state.invited(chat_id, target_id).await {
+        if !state.invite(chat_id, target_id).await {
             return tx.reply_error("that user is already invited to the chat");
         }
 
@@ -2314,7 +2314,7 @@ mod tests {
         let bob = test_session("Bob", AccessPrivileges::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
-        state.invited(chat_id, bob.user_id).await;
+        state.invite(chat_id, bob.user_id).await;
 
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
@@ -2374,7 +2374,7 @@ mod tests {
         state
             .set_chat_password(chat_id, "hunter2".to_string())
             .await;
-        state.invited(chat_id, bob.user_id).await;
+        state.invite(chat_id, bob.user_id).await;
 
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
@@ -2587,7 +2587,7 @@ mod tests {
             })
             .await;
         let chat_id = state.create_chat_room(1).await;
-        state.invited(chat_id, 2).await;
+        state.invite(chat_id, 2).await;
 
         let invite = Transaction::request(
             ClientOpcode::ChatInvite,
@@ -2606,7 +2606,7 @@ mod tests {
     async fn joining_clears_the_invite() {
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
-        state.invited(chat_id, 2).await;
+        state.invite(chat_id, 2).await;
         assert!(state.is_invited(chat_id, 2).await);
 
         let bob = Session {
@@ -2627,7 +2627,7 @@ mod tests {
     async fn declining_clears_the_invite() {
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
-        state.invited(chat_id, 2).await;
+        state.invite(chat_id, 2).await;
 
         let bob = Session {
             user_id: 2,
