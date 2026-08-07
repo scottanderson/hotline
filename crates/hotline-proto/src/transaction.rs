@@ -265,12 +265,13 @@ impl TransactionHeader {
     /// says how many more bytes to read, then
     /// [`TransactionHeader::finish_decode`] parses them.
     pub fn decode_from_client(buf: &[u8; Self::LEN]) -> Self {
-        let r = PacketReader::new(*buf);
-        let (r, wire_type) = r.u32();
-        let (r, trans) = r.u32();
-        let (r, flag) = r.u32();
-        let (r, _len) = r.u32();
-        let (_, len2) = r.u32();
+        let mut r = PacketReader::new(*buf);
+        let wire_type = r.u32();
+        let trans = r.u32();
+        let flag = r.u32();
+        let _len = r.u32();
+        let len2 = r.u32();
+        r.finish();
         Self {
             r#type: TransactionType::from_client_wire(wire_type),
             trans,
@@ -283,12 +284,13 @@ impl TransactionHeader {
     /// to have been sent **by a server** (a client reading its own
     /// incoming traffic).
     pub fn decode_from_server(buf: &[u8; Self::LEN]) -> Self {
-        let r = PacketReader::new(*buf);
-        let (r, wire_type) = r.u32();
-        let (r, trans) = r.u32();
-        let (r, flag) = r.u32();
-        let (r, _len) = r.u32();
-        let (_, len2) = r.u32();
+        let mut r = PacketReader::new(*buf);
+        let wire_type = r.u32();
+        let trans = r.u32();
+        let flag = r.u32();
+        let _len = r.u32();
+        let len2 = r.u32();
+        r.finish();
         Self {
             r#type: TransactionType::from_server_wire(wire_type),
             trans,

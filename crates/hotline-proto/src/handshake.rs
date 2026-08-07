@@ -60,11 +60,12 @@ impl ClientHandshake {
                 available: buf.len(),
             },
         )?;
-        let r = PacketReader::new(buf);
-        let (r, protocol) = r.take::<4>();
-        let (r, sub_protocol) = r.take::<4>();
-        let (r, version) = r.u16();
-        let (_, sub_version) = r.u16();
+        let mut r = PacketReader::new(buf);
+        let protocol = r.take::<4>();
+        let sub_protocol = r.take::<4>();
+        let version = r.u16();
+        let sub_version = r.u16();
+        r.finish();
         if protocol != MAGIC {
             return Err(ProtoError::BadMagic {
                 expected: MAGIC,
@@ -112,9 +113,10 @@ impl ServerHandshake {
                 available: buf.len(),
             },
         )?;
-        let r = PacketReader::new(buf);
-        let (r, magic) = r.take::<4>();
-        let (_, error_code) = r.u32();
+        let mut r = PacketReader::new(buf);
+        let magic = r.take::<4>();
+        let error_code = r.u32();
+        r.finish();
         if magic != MAGIC {
             return Err(ProtoError::BadMagic {
                 expected: MAGIC,

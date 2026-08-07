@@ -180,38 +180,30 @@ impl<const N: usize> PacketReader<N> {
     }
 
     /// Read a big-endian `u8`.
-    pub const fn u8(mut self) -> (Self, u8) {
-        let (next, bytes) = self.take::<1>();
-        self = next;
-        (self, u8::from_be_bytes(bytes))
+    pub const fn u8(&mut self) -> u8 {
+        u8::from_be_bytes(self.take::<1>())
     }
 
     /// Read a big-endian `u16`.
-    pub const fn u16(mut self) -> (Self, u16) {
-        let (next, bytes) = self.take::<2>();
-        self = next;
-        (self, u16::from_be_bytes(bytes))
+    pub const fn u16(&mut self) -> u16 {
+        u16::from_be_bytes(self.take::<2>())
     }
 
     /// Read a big-endian `u32`.
-    pub const fn u32(mut self) -> (Self, u32) {
-        let (next, bytes) = self.take::<4>();
-        self = next;
-        (self, u32::from_be_bytes(bytes))
+    pub const fn u32(&mut self) -> u32 {
+        u32::from_be_bytes(self.take::<4>())
     }
 
     /// Read a big-endian `u64`.
-    pub const fn u64(mut self) -> (Self, u64) {
-        let (next, bytes) = self.take::<8>();
-        self = next;
-        (self, u64::from_be_bytes(bytes))
+    pub const fn u64(&mut self) -> u64 {
+        u64::from_be_bytes(self.take::<8>())
     }
 
     /// Read exactly `L` raw bytes.
     ///
     /// # Panics
     /// Panics if fewer than `L` bytes remain in the buffer.
-    pub const fn take<const L: usize>(mut self) -> (Self, [u8; L]) {
+    pub const fn take<const L: usize>(&mut self) -> [u8; L] {
         let mut out = [0u8; L];
         let mut i = 0;
         while i < L {
@@ -219,7 +211,26 @@ impl<const N: usize> PacketReader<N> {
             i += 1;
         }
         self.pos += L;
-        (self, out)
+        out
+    }
+
+    /// Bytes consumed so far. Mainly useful for `debug_assert`s mirroring
+    /// [`PacketWriter::finish`]'s check on the write side.
+    pub const fn position(&self) -> usize {
+        self.pos
+    }
+
+    /// Finish reading.
+    ///
+    /// # Panics
+    /// In debug builds, panics if fewer than `N` bytes were read -
+    /// catching a forgotten field at the call site, mirroring
+    /// [`PacketWriter::finish`]'s check on the write side.
+    pub const fn finish(self) {
+        debug_assert!(
+            self.pos == N,
+            "PacketReader finished after reading fewer than N bytes"
+        );
     }
 }
 
@@ -266,19 +277,28 @@ mod tests {
             .u32(0x9abc_def0)
             .finish();
 
-        let r = PacketReader::<8>::new(bytes);
-        let (r, a) = r.u16();
-        let (r, b) = r.u16();
-        let (r, c) = r.u32();
+        let mut r = PacketReader::<8>::new(bytes);
+        let a = r.u16();
+        let b = r.u16();
+        let c = r.u32();
         assert_eq!((a, b, c), (0x1234, 0x5678, 0x9abc_def0));
-        assert_eq!(r.pos, 8);
+        assert_eq!(r.position(), 8);
+        r.finish();
+    }
+
+    #[test]
+    #[should_panic]
+    fn finishing_early_panics_in_debug_builds_on_read_too() {
+        let r = PacketReader::<4>::new([0, 0, 0, 0]);
+        r.finish();
     }
 
     #[test]
     #[should_panic]
     fn reading_past_the_end_panics() {
-        let (r, _) = PacketReader::<2>::new([0, 0]).u16();
-        let _ = r.u16(); // nothing left
+        let mut r = PacketReader::<2>::new([0, 0]);
+        r.u16();
+        r.u16(); // nothing left
     }
 
     #[test]

@@ -33,7 +33,7 @@ const MAGIC: &[u8; 4] = b"HTRK";
 /// The client's initial request to a tracker (version 1, "old protocol":
 /// just the magic + version, no login).
 pub fn encode_client_request_v1() -> [u8; 6] {
-    PacketWriter::<6>::new().bytes(MAGIC).u16(1).finish()
+    PacketWriter::new().bytes(MAGIC).u16(1).finish()
 }
 
 /// Decode the fixed 6-byte header a tracker reply starts with, checking
@@ -47,11 +47,14 @@ pub fn decode_reply_header(buf: &[u8]) -> Result<u16> {
                 available: buf.len(),
             })?;
 
-    let (reader, magic) = PacketReader::new(prefix).take::<4>();
+    let mut reader = PacketReader::new(prefix);
+    let magic = reader.take::<4>();
+    let version = reader.u16();
+    reader.finish();
+
     if &magic != MAGIC {
         return Err(TrackerError::BadMagic);
     }
-    let (_, version) = reader.u16();
     Ok(version)
 }
 

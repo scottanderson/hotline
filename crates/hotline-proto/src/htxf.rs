@@ -63,12 +63,13 @@ impl HtxfHeader {
             });
         }
         let buf: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
-        let r = PacketReader::new(buf);
-        let (r, magic) = r.take::<4>();
-        let (r, reference) = r.u32();
-        let (r, len) = r.u32();
-        let (r, transfer_type) = r.u16();
-        let (_, reserved) = r.u16();
+        let mut r = PacketReader::new(buf);
+        let magic = r.take::<4>();
+        let reference = r.u32();
+        let len = r.u32();
+        let transfer_type = r.u16();
+        let reserved = r.u16();
+        r.finish();
         if magic != *MAGIC {
             return Err(ProtoError::BadMagic {
                 expected: *MAGIC,
@@ -162,11 +163,14 @@ pub fn decode_flat_file_prefix(buf: &[u8]) -> Result<u16> {
         });
     }
     let prefix: [u8; FLAT_FILE_PREFIX_LEN] = buf[..FLAT_FILE_PREFIX_LEN].try_into().unwrap();
-    let r = PacketReader::new(prefix);
-    let (r, magic) = r.take::<4>();
-    let (r, _version) = r.u16();
-    let (r, _reserved) = r.take::<16>();
-    let (_, fork_count) = r.u16();
+    let mut r = PacketReader::new(prefix);
+    let magic = r.take::<4>();
+    let version = r.u16();
+    let reserved = r.take::<16>();
+    let fork_count = r.u16();
+    r.finish();
+    debug_assert_eq!(version, 1);
+    debug_assert_eq!(reserved, [0; 16]);
     if magic != *b"FILP" {
         return Err(ProtoError::BadMagic {
             expected: *b"FILP",
@@ -201,11 +205,14 @@ impl ForkHeader {
             });
         }
         let buf: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
-        let r = PacketReader::new(buf);
-        let (r, fork_type) = r.take::<4>();
-        let (r, _compression_type) = r.u32();
-        let (r, _reserved) = r.u32();
-        let (_, data_size) = r.u32();
+        let mut r = PacketReader::new(buf);
+        let fork_type = r.take::<4>();
+        let compression_type = r.u32();
+        let reserved = r.u32();
+        let data_size = r.u32();
+        r.finish();
+        debug_assert_eq!(compression_type, 0);
+        debug_assert_eq!(reserved, 0);
         Ok(Self {
             fork_type,
             data_size,

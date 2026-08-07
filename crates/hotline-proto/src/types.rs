@@ -38,10 +38,11 @@ impl HlDate {
                 available: buf.len(),
             },
         )?;
-        let r = PacketReader::new(buf);
-        let (r, year) = r.u16();
-        let (r, milliseconds) = r.u16();
-        let (_, seconds) = r.u32();
+        let mut r = PacketReader::new(buf);
+        let year = r.u16();
+        let milliseconds = r.u16();
+        let seconds = r.u32();
+        r.finish();
         Ok(Self {
             year,
             milliseconds,
@@ -157,13 +158,16 @@ impl FileNameWithInfo {
             });
         }
         let fixed: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
-        let r = PacketReader::new(fixed);
-        let (r, file_type) = r.take::<4>();
-        let (r, creator) = r.take::<4>();
-        let (r, size) = r.u32();
-        let (r, _reserved) = r.u32();
-        let (r, _name_script) = r.u16();
-        let (_, name_len) = r.u16();
+        let mut r = PacketReader::new(fixed);
+        let file_type = r.take::<4>();
+        let creator = r.take::<4>();
+        let size = r.u32();
+        let reserved = r.u32();
+        let name_script = r.u16();
+        let name_len = r.u16();
+        r.finish();
+        debug_assert_eq!(reserved, 0);
+        debug_assert_eq!(name_script, 0);
         let name_len = name_len as usize;
         let name_end = Self::LEN + name_len;
         if buf.len() < name_end {
@@ -226,11 +230,12 @@ impl UserNameWithInfo {
             });
         }
         let fixed: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
-        let r = PacketReader::new(fixed);
-        let (r, user_id) = r.u16();
-        let (r, icon) = r.u16();
-        let (r, flags) = r.u16();
-        let (_, name_len) = r.u16();
+        let mut r = PacketReader::new(fixed);
+        let user_id = r.u16();
+        let icon = r.u16();
+        let flags = r.u16();
+        let name_len = r.u16();
+        r.finish();
         let name_len = name_len as usize;
         let end = Self::LEN + name_len;
         if buf.len() < end {
