@@ -144,6 +144,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `ServerOpcode::X` reference across the workspace. Re-confirm the "no
     real collision" premise (now known to have at least one exception)
     before starting.
+17. Consider `Cow<'_, str>` in place of `String` on the workspace's many
+    string fields to cut needless clones, e.g. `UserEntry`/`Session`
+    duplicating `name`/`login`/`automatic_response`, or the field decode
+    paths that copy wire bytes into an owned `String` even when the value
+    is only read once. Worth a small proof of concept on one struct's
+    fields before deciding whether it's worth the lifetime plumbing
+    workspace-wide. Not started.
 
 ## Needs manual verification against the real client
 
