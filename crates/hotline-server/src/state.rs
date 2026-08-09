@@ -59,7 +59,7 @@ impl UserEntry {
 
     /// Current `UserFlags` bits: admin (from `DISCONNECT_USERS`) plus idle.
     pub fn flags(&self) -> u16 {
-        let mut bits = if self.access.contains(AccessPrivileges::DISCONNECT_USERS) {
+        let mut bits = if self.access.contains(AccessPrivileges::DISCON_USER) {
             UserFlags::ADMIN.bits()
         } else {
             0
@@ -285,7 +285,7 @@ impl SharedState {
         if self
             .user(target_id)
             .await
-            .is_some_and(|u| u.access.contains(AccessPrivileges::CANT_BE_DISCONNECTED))
+            .is_some_and(|u| u.access.contains(AccessPrivileges::CANNOT_BE_DISCON))
         {
             return Err("that user can't be disconnected");
         }
@@ -480,9 +480,9 @@ impl SharedState {
             .ok_or("file or folder not found.")?;
         let is_dir = info.file_type == *b"fldr";
         let required = if is_dir {
-            AccessPrivileges::DELETE_FOLDERS
+            AccessPrivileges::DELETE_FOLDER
         } else {
-            AccessPrivileges::DELETE_FILES
+            AccessPrivileges::DELETE_FILE
         };
         if !access.contains(required) {
             return Err("You are not allowed to do that.".to_string());
@@ -529,9 +529,9 @@ impl SharedState {
             .await
             .ok_or("file or folder not found.")?;
         let required = if info.file_type == *b"fldr" {
-            AccessPrivileges::RENAME_FOLDERS
+            AccessPrivileges::RENAME_FOLDER
         } else {
-            AccessPrivileges::RENAME_FILES
+            AccessPrivileges::RENAME_FILE
         };
         if !access.contains(required) {
             return Err("You are not allowed to do that.".to_string());
@@ -562,9 +562,9 @@ impl SharedState {
             .await
             .ok_or("file or folder not found.")?;
         let required = if info.file_type == *b"fldr" {
-            AccessPrivileges::MOVE_FOLDERS
+            AccessPrivileges::MOVE_FOLDER
         } else {
-            AccessPrivileges::MOVE_FILES
+            AccessPrivileges::MOVE_FILE
         };
         if !access.contains(required) {
             return Err("You are not allowed to do that.".to_string());

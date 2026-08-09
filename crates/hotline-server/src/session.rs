@@ -172,7 +172,7 @@ impl Session {
                 self.access.contains(AccessPrivileges::READ_CHAT)
             }
             TransactionType::Push(ServerOpcode::NewsfilePost) => {
-                self.access.contains(AccessPrivileges::READ_NEWS)
+                self.access.contains(AccessPrivileges::NEWS_READ_ART)
             }
             _ => true,
         }
@@ -314,7 +314,7 @@ impl Session {
         let modern = tx.client_version().unwrap_or(0) >= 150;
 
         // DONT_SHOW_AGREEMENT skips the real text, not just its display.
-        let show_agreement = !self.access.contains(AccessPrivileges::DONT_SHOW_AGREEMENT);
+        let show_agreement = !self.access.contains(AccessPrivileges::NO_AGREEMENT);
         let have_agreement = !config.agreement.is_empty();
         if show_agreement && have_agreement {
             replies.push(Transaction::push(
@@ -447,8 +447,8 @@ impl Session {
             return;
         }
         // Only force the account's name when this modify revokes USE_ANY_NAME.
-        let losing_use_any_name = self.access.contains(AccessPrivileges::USE_ANY_NAME)
-            && !update.access.contains(AccessPrivileges::USE_ANY_NAME);
+        let losing_use_any_name = self.access.contains(AccessPrivileges::ANY_NAME)
+            && !update.access.contains(AccessPrivileges::ANY_NAME);
         self.access = update.access;
         if losing_use_any_name {
             if let Some(name) = update.name {
@@ -483,7 +483,7 @@ impl Session {
 
     /// This session's own admin + away flags, for `UserChange`/`UserSelfinfo`.
     fn user_flags(&self) -> UserFlags {
-        let is_admin = self.access.contains(AccessPrivileges::DISCONNECT_USERS);
+        let is_admin = self.access.contains(AccessPrivileges::DISCON_USER);
         let mut flags = UserFlags::empty();
         flags.set(UserFlags::ADMIN, is_admin);
         flags.set(UserFlags::AWAY, self.is_away);
@@ -553,7 +553,7 @@ impl Session {
     /// 303: another user's info text (name, login, account name, icon,
     /// remote address, connected duration, and a privilege summary).
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::GET_USER_INFO) {
+        if let Err(reason) = self.require(AccessPrivileges::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -580,7 +580,7 @@ impl Session {
             "{name}{admin}\rLogin: {login}\rAccount name: {account_name}\rIcon: {icon}\r\
              Address: {addr}\rConnected: {mins}m {secs}s\rPrivileges: {privileges}",
             name = target.name,
-            admin = if target.access.contains(AccessPrivileges::DISCONNECT_USERS) {
+            admin = if target.access.contains(AccessPrivileges::DISCON_USER) {
                 " (admin)"
             } else {
                 ""
@@ -611,7 +611,7 @@ impl Session {
     /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
     /// fuller implementation ban) another user.
     async fn on_user_kick(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DISCONNECT_USERS) {
+        if let Err(reason) = self.require(AccessPrivileges::DISCON_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -638,7 +638,7 @@ impl Session {
 
     /// 108: a private instant message to one other user.
     async fn on_private_msg(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::SEND_MSGS) {
+        if let Err(reason) = self.require(AccessPrivileges::SEND_MESSAGE) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -666,7 +666,7 @@ impl Session {
 
     /// 355: a message broadcast to every connected user.
     async fn on_msg_broadcast(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::CAN_BROADCAST) {
+        if let Err(reason) = self.require(AccessPrivileges::BROADCAST) {
             return vec![tx.reply_error(reason)];
         }
         let Some(message) = tx.field(ClientFieldId::Text) else {
@@ -692,7 +692,7 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILES) {
+        if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -738,7 +738,7 @@ impl Session {
     /// the client the total byte count (flattened-object overhead plus
     /// the file's own bytes) to expect on the data connection.
     async fn on_file_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILES) {
+        if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -774,7 +774,7 @@ impl Session {
     /// anywhere; an existing file at the destination is rejected (resume
     /// isn't supported yet).
     async fn on_file_put(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::UPLOAD_FILES) {
+        if let Err(reason) = self.require(AccessPrivileges::UPLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -821,7 +821,7 @@ impl Session {
 
     /// 205: create a folder.
     async fn on_file_mkdir(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::CREATE_FOLDERS) {
+        if let Err(reason) = self.require(AccessPrivileges::CREATE_FOLDER) {
             return vec![tx.reply_error(reason)];
         }
         let Some((name, dir)) = self.file_name_and_dir(tx) else {
@@ -907,7 +907,7 @@ impl Session {
 
     /// 209: create an alias pointing at another file.
     async fn on_file_symlink(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::MAKE_ALIASES) {
+        if let Err(reason) = self.require(AccessPrivileges::MAKE_ALIAS) {
             return vec![tx.reply_error(reason)];
         }
         let Some((name, dir)) = self.file_name_and_dir(tx) else {
@@ -932,7 +932,7 @@ impl Session {
 
     /// 101: read the classic (non-threaded) news.
     async fn on_newsfile_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::READ_NEWS) {
+        if let Err(reason) = self.require(AccessPrivileges::NEWS_READ_ART) {
             return vec![tx.reply_error(reason)];
         }
         let news = state.news().await;
@@ -941,7 +941,7 @@ impl Session {
 
     /// 103: post to the classic (non-threaded) news.
     async fn on_newsfile_post(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::POST_NEWS) {
+        if let Err(reason) = self.require(AccessPrivileges::POST_NEWS_ART) {
             return vec![tx.reply_error(reason)];
         }
         let Some(text) = tx.field(ClientFieldId::Text) else {
@@ -960,7 +960,7 @@ impl Session {
 
     /// 112: create a private chat room and invite its target user.
     async fn on_chat_create(&self, tx: &Transaction, state: &SharedState) -> Transaction {
-        if let Err(reason) = self.require(AccessPrivileges::CREATE_PCHATS) {
+        if let Err(reason) = self.require(AccessPrivileges::CREATE_CHAT) {
             return tx.reply_error(reason);
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -1177,7 +1177,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_CREATE` (350)
     async fn on_account_create(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::CREATE_USERS) {
+        if let Err(reason) = self.require(AccessPrivileges::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
         self.on_account_create_or_modify(tx, state).await
@@ -1185,7 +1185,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_DELETE` (351)
     async fn on_account_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DELETE_USERS) {
+        if let Err(reason) = self.require(AccessPrivileges::DELETE_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(login) = tx.login() else {
@@ -1199,7 +1199,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_READ` (352)
     async fn on_account_read(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::READ_USERS) {
+        if let Err(reason) = self.require(AccessPrivileges::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(login) = tx.field(ClientFieldId::Login).map(Field::as_string) else {
@@ -1219,7 +1219,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_MODIFY` (353)
     async fn on_account_modify(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::MODIFY_USERS) {
+        if let Err(reason) = self.require(AccessPrivileges::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
         self.on_account_create_or_modify(tx, state).await
@@ -1327,10 +1327,10 @@ mod tests {
     #[test]
     fn may_receive_gates_newsfile_post_on_read_news() {
         let mut session = test_session("Alice", AccessPrivileges::all());
-        session.access.remove(AccessPrivileges::READ_NEWS);
+        session.access.remove(AccessPrivileges::NEWS_READ_ART);
         assert!(!session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
 
-        session.access.insert(AccessPrivileges::READ_NEWS);
+        session.access.insert(AccessPrivileges::NEWS_READ_ART);
         assert!(session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
     }
 
@@ -1500,7 +1500,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".to_string(),
                     name: "Alice".to_string(),
-                    access: AccessPrivileges::CAN_BROADCAST,
+                    access: AccessPrivileges::BROADCAST,
                 },
             )
             .await
@@ -1516,7 +1516,7 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        assert_eq!(session.access, AccessPrivileges::CAN_BROADCAST);
+        assert_eq!(session.access, AccessPrivileges::BROADCAST);
         assert_eq!(session.name, "Alice");
     }
 
@@ -1560,7 +1560,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".to_string(),
                     name: "Alice".to_string(),
-                    access: AccessPrivileges::CAN_BROADCAST,
+                    access: AccessPrivileges::BROADCAST,
                 },
             )
             .await
@@ -1601,7 +1601,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Alice".to_string(),
-                    access: AccessPrivileges::CAN_BROADCAST,
+                    access: AccessPrivileges::BROADCAST,
                 },
             )
             .await
@@ -1766,7 +1766,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Skipper".to_string(),
-                    access: AccessPrivileges::DONT_SHOW_AGREEMENT,
+                    access: AccessPrivileges::NO_AGREEMENT,
                 },
             )
             .await
@@ -1808,7 +1808,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Skipper".to_string(),
-                    access: AccessPrivileges::DONT_SHOW_AGREEMENT,
+                    access: AccessPrivileges::NO_AGREEMENT,
                 },
             )
             .await
@@ -1898,7 +1898,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: String::new(),
-                    access: AccessPrivileges::DISCONNECT_USERS,
+                    access: AccessPrivileges::DISCON_USER,
                 },
             )
             .await
@@ -2285,10 +2285,7 @@ mod tests {
             1,
             vec![
                 Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::u64(
-                    ClientFieldId::Access,
-                    AccessPrivileges::CAN_BROADCAST.bits(),
-                ),
+                Field::u64(ClientFieldId::Access, AccessPrivileges::BROADCAST.bits()),
             ],
         );
         admin.on_account_modify(&modify, &state).await;
@@ -2301,7 +2298,7 @@ mod tests {
             .expect("expected an access update");
         bob.apply_access_update(received, &state).await;
 
-        assert_eq!(bob.access, AccessPrivileges::CAN_BROADCAST);
+        assert_eq!(bob.access, AccessPrivileges::BROADCAST);
         let notify = bob_rx
             .try_recv()
             .ok()
@@ -2324,14 +2321,14 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Bob".to_string(),
-                    access: AccessPrivileges::USE_ANY_NAME,
+                    access: AccessPrivileges::ANY_NAME,
                 },
             )
             .await
             .unwrap();
 
         // Bob is connected with USE_ANY_NAME and has picked a custom name.
-        let mut bob = test_session("Bobby the Great", AccessPrivileges::USE_ANY_NAME);
+        let mut bob = test_session("Bobby the Great", AccessPrivileges::ANY_NAME);
         bob.login = "bob".to_string();
         state
             .insert_user(UserEntry {
@@ -2364,7 +2361,7 @@ mod tests {
 
         // Still holds USE_ANY_NAME, so this modify must not touch the name.
         bob.name = "Bobby Returns".to_string();
-        bob.access = AccessPrivileges::USE_ANY_NAME;
+        bob.access = AccessPrivileges::ANY_NAME;
         let regrant = Transaction::request(
             ClientOpcode::AccountModify,
             1,
@@ -2372,7 +2369,7 @@ mod tests {
                 Field::obfuscated_string(ClientFieldId::Login, "bob"),
                 Field::u64(
                     ClientFieldId::Access,
-                    (AccessPrivileges::USE_ANY_NAME | AccessPrivileges::SEND_CHAT).bits(),
+                    (AccessPrivileges::ANY_NAME | AccessPrivileges::SEND_CHAT).bits(),
                 ),
             ],
         );
@@ -3344,7 +3341,7 @@ mod tests {
         files.seed(&HlPath::default(), "a.txt", *b"bye");
         let state = state_with_files(files);
         let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::DELETE_FILES);
+        access.remove(AccessPrivileges::DELETE_FILE);
         let session = test_session("Alice", access);
 
         let delete = Transaction::request(
@@ -3405,7 +3402,7 @@ mod tests {
     async fn file_mkdir_denied_without_create_folders() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
         let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::CREATE_FOLDERS);
+        access.remove(AccessPrivileges::CREATE_FOLDER);
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
@@ -3511,7 +3508,7 @@ mod tests {
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
         let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::RENAME_FILES);
+        access.remove(AccessPrivileges::RENAME_FILE);
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
@@ -3573,7 +3570,7 @@ mod tests {
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
         let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::MOVE_FILES);
+        access.remove(AccessPrivileges::MOVE_FILE);
         let session = test_session("Alice", access);
 
         let move_tx = Transaction::request(
@@ -3601,7 +3598,7 @@ mod tests {
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
         let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::MAKE_ALIASES);
+        access.remove(AccessPrivileges::MAKE_ALIAS);
         let session = test_session("Alice", access);
 
         let symlink = Transaction::request(

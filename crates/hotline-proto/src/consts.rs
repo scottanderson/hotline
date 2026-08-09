@@ -9,139 +9,94 @@
 //! the base privilege set.
 
 bitflags::bitflags! {
-    /// The 64-bit `USER_ACCESS` privilege bitmap (plus two community
-    /// extension bits, see the [module docs](self)). Bits with no
-    /// named flag below (51, 50, 45, 44, 22..=9, 6..=0) are reserved
-    /// and should always be zero on the wire unless a server
-    /// specifically implements one of the extensions this module
-    /// documents.
+    /// The 64-bit `USER_ACCESS` privilege bitmap. Bits 51, 50, 45, and 44 are
+    /// named, but have no use. Bits 22..=0 are reserved.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     #[derive(serde::Serialize, serde::Deserialize)]
     pub struct AccessPrivileges: u64 {
         /// Delete a file.
-        /// Wire field: `delete_files`.
-        const DELETE_FILES           = 1 << 63;
+        const DELETE_FILE           = 1 << 63;
         /// Upload a file.
-        /// Wire field: `upload_files`.
-        const UPLOAD_FILES           = 1 << 62;
+        const UPLOAD_FILE           = 1 << 62;
         /// Download a file.
-        /// Wire field: `download_files`.
-        const DOWNLOAD_FILES         = 1 << 61;
+        const DOWNLOAD_FILE         = 1 << 61;
         /// Rename a file.
-        /// Wire field: `rename_files`.
-        const RENAME_FILES           = 1 << 60;
+        const RENAME_FILE           = 1 << 60;
         /// Move a file between folders.
-        /// Wire field: `move_files`.
-        const MOVE_FILES             = 1 << 59;
+        const MOVE_FILE             = 1 << 59;
         /// Create a folder.
-        /// Wire field: `create_folders`.
-        const CREATE_FOLDERS         = 1 << 58;
+        const CREATE_FOLDER         = 1 << 58;
         /// Delete a folder.
-        /// Wire field: `delete_folders`.
-        const DELETE_FOLDERS         = 1 << 57;
+        const DELETE_FOLDER         = 1 << 57;
         /// Rename a folder.
-        /// Wire field: `rename_folders`.
-        const RENAME_FOLDERS         = 1 << 56;
+        const RENAME_FOLDER         = 1 << 56;
         /// Move a folder.
-        /// Wire field: `move_folders`.
-        const MOVE_FOLDERS           = 1 << 55;
+        const MOVE_FOLDER           = 1 << 55;
         /// Read public chat.
-        /// Wire field: `read_chat`.
-        const READ_CHAT              = 1 << 54;
+        const READ_CHAT             = 1 << 54;
         /// Send public chat.
-        /// Wire field: `send_chat`.
-        const SEND_CHAT              = 1 << 53;
-        /// Open/create a private chat.
-        /// Wire field: `create_pchats`.
-        const CREATE_PCHATS          = 1 << 52;
-        // bits reserved.
+        const SEND_CHAT             = 1 << 53;
+        /// Create a private chat.
+        const CREATE_CHAT           = 1 << 52;
+        // Unused: Close chat.
+        // const CLOSE_CHAT            = 1 << 51;
+        // Unused: Show in list.
+        // const SHOW_IN_LIST          = 1 << 50;
         /// Create a user account.
-        /// Wire field: `create_users`.
-        const CREATE_USERS           = 1 << 49;
+        const CREATE_USER           = 1 << 49;
         /// Delete a user account.
-        /// Wire field: `delete_users`.
-        const DELETE_USERS           = 1 << 48;
+        const DELETE_USER           = 1 << 48;
         /// Read a user account's details.
-        /// Wire field: `read_users`.
-        const READ_USERS             = 1 << 47;
+        const OPEN_USER             = 1 << 47;
         /// Modify a user account's details.
-        /// Wire field: `modify_users`.
-        const MODIFY_USERS           = 1 << 46;
-        // bits reserved.
+        const MODIFY_USER           = 1 << 46;
+        // Unused: Change own passowrd.
+        // const CHANGE_OWN_PASS       = 1 << 45;
+        // Unused: Send private message.
+        // const SEND_PRIV_MSG         = 1 << 44;
         /// Read news articles.
-        /// Wire field: `read_news`.
-        const READ_NEWS              = 1 << 43;
+        const NEWS_READ_ART         = 1 << 43;
         /// Post news articles.
-        /// Wire field: `post_news`.
-        const POST_NEWS              = 1 << 42;
+        const POST_NEWS_ART         = 1 << 42;
         /// Disconnect (kick) another user.
-        /// Wire field: `disconnect_users`.
-        const DISCONNECT_USERS       = 1 << 41;
+        const DISCON_USER           = 1 << 41;
         /// This user cannot be disconnected/kicked.
-        /// Wire field: `cant_be_disconnected`.
-        const CANT_BE_DISCONNECTED   = 1 << 40;
-        /// Fetch another user's client info text.
-        /// Wire field: `get_user_info`.
-        const GET_USER_INFO          = 1 << 39;
+        const CANNOT_BE_DISCON      = 1 << 40;
+        /// Fetch another client's info text.
+        const GET_CLIENT_INFO       = 1 << 39;
         /// Upload outside the normal upload folder.
-        /// Wire field: `upload_anywhere`.
-        const UPLOAD_ANYWHERE        = 1 << 38;
+        const UPLOAD_ANYWHERE       = 1 << 38;
         /// Use any nickname, bypassing name restrictions.
-        /// Wire field: `use_any_name`.
-        const USE_ANY_NAME           = 1 << 37;
+        const ANY_NAME              = 1 << 37;
         /// Skip the server agreement on login.
-        /// Wire field: `dont_show_agreement`.
-        const DONT_SHOW_AGREEMENT    = 1 << 36;
+        const NO_AGREEMENT          = 1 << 36;
         /// Set a file's comment.
-        /// Wire field: `comment_files`.
-        const COMMENT_FILES          = 1 << 35;
+        const SET_FILE_COMMENT      = 1 << 35;
         /// Set a folder's comment.
-        /// Wire field: `comment_folders`.
-        const COMMENT_FOLDERS        = 1 << 34;
+        const SET_FOLDER_COMMENT    = 1 << 34;
         /// View drop boxes (upload-only, no listing, folders).
-        /// Wire field: `view_drop_boxes`.
-        const VIEW_DROP_BOXES        = 1 << 33;
+        const VIEW_DROP_BOXES       = 1 << 33;
         /// Create a file alias.
-        /// Wire field: `make_aliases`.
-        const MAKE_ALIASES           = 1 << 32;
+        const MAKE_ALIAS            = 1 << 32;
         /// Broadcast a message to every connected user.
-        /// Wire field: `can_broadcast`.
-        const CAN_BROADCAST          = 1 << 31;
+        const BROADCAST             = 1 << 31;
         /// Delete a news article.
-        /// Wire field: `delete_articles`.
-        const DELETE_ARTICLES        = 1 << 30;
+        const NEWS_DELETE_ART       = 1 << 30;
         /// Create a news category.
-        /// Wire field: `create_categories`.
-        const CREATE_CATEGORIES      = 1 << 29;
+        const NEWS_CREATE_CAT       = 1 << 29;
         /// Delete a news category.
-        /// Wire field: `delete_categories`.
-        const DELETE_CATEGORIES      = 1 << 28;
+        const NEWS_DELETE_CAT       = 1 << 28;
         /// Create a news bundle (folder).
-        /// Wire field: `create_news_bundles`.
-        const CREATE_NEWS_BUNDLES    = 1 << 27;
+        const NEWS_CREATE_FLDR      = 1 << 27;
         /// Delete a news bundle (folder).
-        /// Wire field: `delete_news_bundles`.
-        const DELETE_NEWS_BUNDLES    = 1 << 26;
+        const NEWS_DELETE_FLDR      = 1 << 26;
         /// Upload a whole folder.
-        /// Wire field: `upload_folders`.
-        const UPLOAD_FOLDERS         = 1 << 25;
+        const UPLOAD_FOLDER         = 1 << 25;
         /// Download a whole folder.
-        /// Wire field: `download_folders`.
-        const DOWNLOAD_FOLDERS       = 1 << 24;
+        const DOWNLOAD_FOLDER       = 1 << 24;
         /// Send a private instant message.
-        /// Wire field: `send_msgs`.
-        const SEND_MSGS              = 1 << 23;
-        // bits 22..=9 reserved.
-
-        /// Join voice chat. Community extension gating `HTLC_HDR_VOICE_JOIN`
-        /// (600) under capability negotiation.
-        /// Wire field: `HL_ACCESS_VOICE_CHAT`.
-        const VOICE_CHAT              = 1 << 8;
-        /// Query chat history. Community extension gating
-        /// `HTLC_HDR_GET_CHAT_HISTORY`.
-        /// Wire field: `HL_ACCESS_READ_CHAT_HISTORY`.
-        const READ_CHAT_HISTORY       = 1 << 7;
-        // bits 6..=0 reserved.
+        const SEND_MESSAGE          = 1 << 23;
+        // bits 22..=0 reserved.
     }
 }
 
@@ -152,59 +107,57 @@ impl Default for AccessPrivileges {
     fn default() -> Self {
         Self::READ_CHAT
             | Self::SEND_CHAT
-            | Self::DOWNLOAD_FILES
-            | Self::UPLOAD_FILES
-            | Self::READ_NEWS
-            | Self::POST_NEWS
-            | Self::USE_ANY_NAME
-            | Self::SEND_MSGS
+            | Self::DOWNLOAD_FILE
+            | Self::UPLOAD_FILE
+            | Self::NEWS_READ_ART
+            | Self::POST_NEWS_ART
+            | Self::ANY_NAME
+            | Self::SEND_MESSAGE
     }
 }
 
 impl AccessPrivileges {
-    /// The original `HL_ACCESS_*` constant name for a single flag, or
-    /// `None` if `self` isn't exactly one named flag.
+    /// The constant name for a single flag, or `None` if `self` isn't
+    /// exactly one named flag.
     pub const fn flag_name(self) -> Option<&'static str> {
         match self {
-            Self::DELETE_FILES => Some("HL_ACCESS_DELETE_FILES"),
-            Self::UPLOAD_FILES => Some("HL_ACCESS_UPLOAD_FILES"),
-            Self::DOWNLOAD_FILES => Some("HL_ACCESS_DOWNLOAD_FILES"),
-            Self::RENAME_FILES => Some("HL_ACCESS_RENAME_FILES"),
-            Self::MOVE_FILES => Some("HL_ACCESS_MOVE_FILES"),
-            Self::CREATE_FOLDERS => Some("HL_ACCESS_CREATE_FOLDERS"),
-            Self::DELETE_FOLDERS => Some("HL_ACCESS_DELETE_FOLDERS"),
-            Self::RENAME_FOLDERS => Some("HL_ACCESS_RENAME_FOLDERS"),
-            Self::MOVE_FOLDERS => Some("HL_ACCESS_MOVE_FOLDERS"),
-            Self::READ_CHAT => Some("HL_ACCESS_READ_CHAT"),
-            Self::SEND_CHAT => Some("HL_ACCESS_SEND_CHAT"),
-            Self::CREATE_PCHATS => Some("HL_ACCESS_CREATE_PCHATS"),
-            Self::CREATE_USERS => Some("HL_ACCESS_CREATE_USERS"),
-            Self::DELETE_USERS => Some("HL_ACCESS_DELETE_USERS"),
-            Self::READ_USERS => Some("HL_ACCESS_READ_USERS"),
-            Self::MODIFY_USERS => Some("HL_ACCESS_MODIFY_USERS"),
-            Self::READ_NEWS => Some("HL_ACCESS_READ_NEWS"),
-            Self::POST_NEWS => Some("HL_ACCESS_POST_NEWS"),
-            Self::DISCONNECT_USERS => Some("HL_ACCESS_DISCONNECT_USERS"),
-            Self::CANT_BE_DISCONNECTED => Some("HL_ACCESS_CANT_BE_DISCONNECTED"),
-            Self::GET_USER_INFO => Some("HL_ACCESS_GET_USER_INFO"),
-            Self::UPLOAD_ANYWHERE => Some("HL_ACCESS_UPLOAD_ANYWHERE"),
-            Self::USE_ANY_NAME => Some("HL_ACCESS_USE_ANY_NAME"),
-            Self::DONT_SHOW_AGREEMENT => Some("HL_ACCESS_DONT_SHOW_AGREEMENT"),
-            Self::COMMENT_FILES => Some("HL_ACCESS_COMMENT_FILES"),
-            Self::COMMENT_FOLDERS => Some("HL_ACCESS_COMMENT_FOLDERS"),
-            Self::VIEW_DROP_BOXES => Some("HL_ACCESS_VIEW_DROP_BOXES"),
-            Self::MAKE_ALIASES => Some("HL_ACCESS_MAKE_ALIASES"),
-            Self::CAN_BROADCAST => Some("HL_ACCESS_CAN_BROADCAST"),
-            Self::DELETE_ARTICLES => Some("HL_ACCESS_DELETE_ARTICLES"),
-            Self::CREATE_CATEGORIES => Some("HL_ACCESS_CREATE_CATEGORIES"),
-            Self::DELETE_CATEGORIES => Some("HL_ACCESS_DELETE_CATEGORIES"),
-            Self::CREATE_NEWS_BUNDLES => Some("HL_ACCESS_CREATE_NEWS_BUNDLES"),
-            Self::DELETE_NEWS_BUNDLES => Some("HL_ACCESS_DELETE_NEWS_BUNDLES"),
-            Self::UPLOAD_FOLDERS => Some("HL_ACCESS_UPLOAD_FOLDERS"),
-            Self::DOWNLOAD_FOLDERS => Some("HL_ACCESS_DOWNLOAD_FOLDERS"),
-            Self::SEND_MSGS => Some("HL_ACCESS_SEND_MSGS"),
-            Self::VOICE_CHAT => Some("HL_ACCESS_VOICE_CHAT"),
-            Self::READ_CHAT_HISTORY => Some("HL_ACCESS_READ_CHAT_HISTORY"),
+            Self::DELETE_FILE => Some("DELETE_FILE"),
+            Self::UPLOAD_FILE => Some("UPLOAD_FILE"),
+            Self::DOWNLOAD_FILE => Some("DOWNLOAD_FILE"),
+            Self::RENAME_FILE => Some("RENAME_FILE"),
+            Self::MOVE_FILE => Some("MOVE_FILE"),
+            Self::CREATE_FOLDER => Some("CREATE_FOLDER"),
+            Self::DELETE_FOLDER => Some("DELETE_FOLDER"),
+            Self::RENAME_FOLDER => Some("RENAME_FOLDER"),
+            Self::MOVE_FOLDER => Some("MOVE_FOLDER"),
+            Self::READ_CHAT => Some("READ_CHAT"),
+            Self::SEND_CHAT => Some("SEND_CHAT"),
+            Self::CREATE_CHAT => Some("CREATE_CHAT"),
+            Self::CREATE_USER => Some("CREATE_USER"),
+            Self::DELETE_USER => Some("DELETE_USER"),
+            Self::OPEN_USER => Some("OPEN_USER"),
+            Self::MODIFY_USER => Some("MODIFY_USER"),
+            Self::NEWS_READ_ART => Some("NEWS_READ_ART"),
+            Self::POST_NEWS_ART => Some("POST_NEWS_ART"),
+            Self::DISCON_USER => Some("DISCON_USER"),
+            Self::CANNOT_BE_DISCON => Some("CANNOT_BE_DISCON"),
+            Self::GET_CLIENT_INFO => Some("GET_CLIENT_INFO"),
+            Self::UPLOAD_ANYWHERE => Some("UPLOAD_ANYWHERE"),
+            Self::ANY_NAME => Some("ANY_NAME"),
+            Self::NO_AGREEMENT => Some("NO_AGREEMENT"),
+            Self::SET_FILE_COMMENT => Some("SET_FILE_COMMENT"),
+            Self::SET_FOLDER_COMMENT => Some("SET_FOLDER_COMMENT"),
+            Self::VIEW_DROP_BOXES => Some("VIEW_DROP_BOXES"),
+            Self::MAKE_ALIAS => Some("MAKE_ALIAS"),
+            Self::BROADCAST => Some("BROADCAST"),
+            Self::NEWS_DELETE_ART => Some("NEWS_DELETE_ART"),
+            Self::NEWS_CREATE_CAT => Some("NEWS_CREATE_CAT"),
+            Self::NEWS_DELETE_CAT => Some("NEWS_DELETE_CAT"),
+            Self::NEWS_CREATE_FLDR => Some("NEWS_CREATE_FLDR"),
+            Self::NEWS_DELETE_FLDR => Some("NEWS_DELETE_FLDR"),
+            Self::UPLOAD_FOLDER => Some("UPLOAD_FOLDER"),
+            Self::DOWNLOAD_FOLDER => Some("DOWNLOAD_FOLDER"),
+            Self::SEND_MESSAGE => Some("SEND_MESSAGE"),
             _ => None,
         }
     }
@@ -232,10 +185,7 @@ mod tests {
         bytes[0..4].copy_from_slice(&0xfff3cfefu32.to_be_bytes());
         bytes[4..8].copy_from_slice(&0xff800000u32.to_be_bytes());
 
-        let expected = AccessPrivileges::all()
-            - AccessPrivileges::DONT_SHOW_AGREEMENT
-            - AccessPrivileges::VOICE_CHAT
-            - AccessPrivileges::READ_CHAT_HISTORY;
+        let expected = AccessPrivileges::all() - AccessPrivileges::NO_AGREEMENT;
         assert_eq!(
             AccessPrivileges::from_bits(u64::from_be_bytes(bytes)),
             Some(expected)
@@ -250,29 +200,48 @@ mod tests {
     }
 
     #[test]
-    fn extension_bits_round_trip() {
-        let privs = AccessPrivileges::VOICE_CHAT | AccessPrivileges::READ_CHAT_HISTORY;
-        let bytes = privs.bits().to_be_bytes();
-        assert_eq!(
-            AccessPrivileges::from_bits(u64::from_be_bytes(bytes)),
-            Some(privs)
-        );
-    }
-
-    #[test]
     fn flag_name_identifies_every_single_flag() {
-        assert_eq!(
-            AccessPrivileges::SEND_CHAT.flag_name(),
-            Some("HL_ACCESS_SEND_CHAT")
-        );
-        assert_eq!(
-            AccessPrivileges::SEND_MSGS.flag_name(),
-            Some("HL_ACCESS_SEND_MSGS")
-        );
-        assert_eq!(
-            AccessPrivileges::VOICE_CHAT.flag_name(),
-            Some("HL_ACCESS_VOICE_CHAT")
-        );
+        for (p, n) in [
+            (AccessPrivileges::DELETE_FILE, "DELETE_FILE"),
+            (AccessPrivileges::UPLOAD_FILE, "UPLOAD_FILE"),
+            (AccessPrivileges::DOWNLOAD_FILE, "DOWNLOAD_FILE"),
+            (AccessPrivileges::RENAME_FILE, "RENAME_FILE"),
+            (AccessPrivileges::MOVE_FILE, "MOVE_FILE"),
+            (AccessPrivileges::CREATE_FOLDER, "CREATE_FOLDER"),
+            (AccessPrivileges::DELETE_FOLDER, "DELETE_FOLDER"),
+            (AccessPrivileges::RENAME_FOLDER, "RENAME_FOLDER"),
+            (AccessPrivileges::MOVE_FOLDER, "MOVE_FOLDER"),
+            (AccessPrivileges::READ_CHAT, "READ_CHAT"),
+            (AccessPrivileges::SEND_CHAT, "SEND_CHAT"),
+            (AccessPrivileges::CREATE_CHAT, "CREATE_CHAT"),
+            (AccessPrivileges::CREATE_USER, "CREATE_USER"),
+            (AccessPrivileges::DELETE_USER, "DELETE_USER"),
+            (AccessPrivileges::OPEN_USER, "OPEN_USER"),
+            (AccessPrivileges::MODIFY_USER, "MODIFY_USER"),
+            (AccessPrivileges::NEWS_READ_ART, "NEWS_READ_ART"),
+            (AccessPrivileges::POST_NEWS_ART, "POST_NEWS_ART"),
+            (AccessPrivileges::DISCON_USER, "DISCON_USER"),
+            (AccessPrivileges::CANNOT_BE_DISCON, "CANNOT_BE_DISCON"),
+            (AccessPrivileges::GET_CLIENT_INFO, "GET_CLIENT_INFO"),
+            (AccessPrivileges::UPLOAD_ANYWHERE, "UPLOAD_ANYWHERE"),
+            (AccessPrivileges::ANY_NAME, "ANY_NAME"),
+            (AccessPrivileges::NO_AGREEMENT, "NO_AGREEMENT"),
+            (AccessPrivileges::SET_FILE_COMMENT, "SET_FILE_COMMENT"),
+            (AccessPrivileges::SET_FOLDER_COMMENT, "SET_FOLDER_COMMENT"),
+            (AccessPrivileges::VIEW_DROP_BOXES, "VIEW_DROP_BOXES"),
+            (AccessPrivileges::MAKE_ALIAS, "MAKE_ALIAS"),
+            (AccessPrivileges::BROADCAST, "BROADCAST"),
+            (AccessPrivileges::NEWS_DELETE_ART, "NEWS_DELETE_ART"),
+            (AccessPrivileges::NEWS_CREATE_CAT, "NEWS_CREATE_CAT"),
+            (AccessPrivileges::NEWS_DELETE_CAT, "NEWS_DELETE_CAT"),
+            (AccessPrivileges::NEWS_CREATE_FLDR, "NEWS_CREATE_FLDR"),
+            (AccessPrivileges::NEWS_DELETE_FLDR, "NEWS_DELETE_FLDR"),
+            (AccessPrivileges::UPLOAD_FOLDER, "UPLOAD_FOLDER"),
+            (AccessPrivileges::DOWNLOAD_FOLDER, "DOWNLOAD_FOLDER"),
+            (AccessPrivileges::SEND_MESSAGE, "SEND_MESSAGE"),
+        ] {
+            assert_eq!(p.flag_name(), Some(n));
+        }
     }
 
     #[test]

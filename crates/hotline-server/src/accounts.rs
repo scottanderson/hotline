@@ -207,7 +207,7 @@ mod tests {
         Account {
             password: PASS_ALICE.to_string(),
             name: NAME_ALICE.to_string(),
-            access: AccessPrivileges::CAN_BROADCAST,
+            access: AccessPrivileges::BROADCAST,
             access_extra: AccessExtra::default(),
         }
     }

@@ -111,7 +111,7 @@ mod tests {
         Account {
             password: "hunter2".to_string(),
             name: "Alice".to_string(),
-            access: AccessPrivileges::CAN_BROADCAST,
+            access: AccessPrivileges::BROADCAST,
             access_extra: AccessExtra::USER_GETLIST,
         }
     }
