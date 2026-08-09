@@ -50,21 +50,52 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    folder transfers (`HTLC_HDR_FILE_GETFOLDER`/`_PUTFOLDER`, a separate
    `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the transfer connection),
    and resource-fork (`"MACR"`) data.
-7. Unbounded `FILE_PATH` component count: `HlPath::decode` caps nothing
-   beyond the wire's own per-component 255-byte length, so one request can
-   carry up to 65535 path levels. Pre-existing on `FILE_LIST`/`_GET`/
-   `_PUT`; `FILE_MOVE`/`FILE_SYMLINK` each decode two such paths. Worth a
-   depth/size limit eventually, not urgent.
-8. `InMemoryFileProvider::delete`/`rename`/`r#move` auto-vivify missing
-   intermediate directories as a side effect of a failed lookup (routes
-   through `get_dir_mut`), leaving an empty directory tree behind instead
-   of erroring "not found". `hls` always uses `DirectoryFileProvider`, so
-   this doesn't affect production, but it's a test-only divergence.
-9. `HTLC_HDR_PING` (500) isn't in the original `HLProtocol.md` doc — a
-   post-original addition, like `AccessPrivileges::VOICE_CHAT`/
-   `READ_CHAT_HISTORY`. `opcode.rs` doesn't flag `Ping` the same way yet.
-   Cosmetic, not confirmed with the user.
-10. Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s `From`/
+7. **Private-message/chat refusal and automatic response are entirely
+   unimplemented.** `UserFlags::REFUSES_PM`/`REFUSES_CHAT` are declared
+   but nothing ever sets them: `on_user_change` (`UserChange`, 304) only
+   reads `Name`/`Icon` from the request, dropping the client's `Options`
+   field (113) entirely, so there's no `Session` state for these
+   preferences (or an "automatic response" message) and no enforcement in
+   `on_private_msg`/`on_chat_invite` — a user who's turned on "refuse
+   private messages" still receives every one. Reference shape: on
+   refusal, or when the target has an automatic response configured, the
+   *sender* gets a server-generated bounce (a canned "so-and-so does not
+   accept..." notice, or the target's custom auto-response text) instead
+   of the message/invite reaching the target; delivery only happens when
+   the target isn't refusing. Needs the `AutomaticResponse` (215) and
+   `QuotingMsg` (214) fields, neither of which exist in `field_id.rs` yet
+   either. Not started, no user-facing precedent confirmed yet for the
+   bounce transaction's exact field shape.
+8. **`ServerFieldId` has no `Options` (113) variant**, discovered while
+   scoping item 7 above: `field_id.rs`'s own module docs cite `Options` as
+   the canonical example of a one-directional, client-only field, but the
+   push variant of the private-message transaction sends `Options` too
+   (to tag a bounce as a refusal notice vs. an automatic response vs. a
+   real message). This is a concrete counterexample to item 15's "no real
+   collision" premise, found by tracing one specific transaction rather
+   than the full field-by-field audit item 15 describes — worth folding
+   into that audit rather than fixing in isolation.
+9. `USER_FLAGS` (112) may have two more meaningful bits beyond the four
+   already implemented (away, admin, refuses messages, refuses chat): one
+   for "every privilege granted", one for "no privileges at all". Not in
+   `HLProtocol.md`'s documented table, so possibly a client-specific
+   extension rather than base protocol. Not confirmed with the user
+   whether any real client relies on it before adopting.
+10. Unbounded `FILE_PATH` component count: `HlPath::decode` caps nothing
+    beyond the wire's own per-component 255-byte length, so one request can
+    carry up to 65535 path levels. Pre-existing on `FILE_LIST`/`_GET`/
+    `_PUT`; `FILE_MOVE`/`FILE_SYMLINK` each decode two such paths. Worth a
+    depth/size limit eventually, not urgent.
+11. `InMemoryFileProvider::delete`/`rename`/`r#move` auto-vivify missing
+    intermediate directories as a side effect of a failed lookup (routes
+    through `get_dir_mut`), leaving an empty directory tree behind instead
+    of erroring "not found". `hls` always uses `DirectoryFileProvider`, so
+    this doesn't affect production, but it's a test-only divergence.
+12. `HTLC_HDR_PING` (500) isn't in the original `HLProtocol.md` doc — a
+    post-original addition, like `AccessPrivileges::VOICE_CHAT`/
+    `READ_CHAT_HISTORY`. `opcode.rs` doesn't flag `Ping` the same way yet.
+    Cosmetic, not confirmed with the user.
+13. Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s `From`/
     `Into` (via `num_enum`, not const-stable), which cascaded to
     `TransactionType::from_client_wire`/`from_server_wire` and
     `TransactionHeader::decode_from_client`/`decode_from_server`. Nothing
@@ -72,13 +103,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     nothing today, but it departs from the crate's otherwise consistent
     `const fn` style (`PacketReader`, `numbers::encode`/`decode`). Low
     priority.
-11. Clean up `Session::handshake`'s exact match: a single `buf !=
+14. Clean up `Session::handshake`'s exact match: a single `buf !=
     ClientHandshake::default().encode()` comparison, matching the
     reference's own `memcmp` (no per-field version reasoning, no reply on
     mismatch). Works and is reference-accurate, but gives no diagnostic on
     failure. Revisit without regressing the "no reply on mismatch"
     behavior.
-12. Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
+15. Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
     naming used throughout doc comments and `opcode_names!`/field-id
     tables. That convention comes from the reference's own C header, which
     has no stronger claim to being canonical than any other
@@ -88,7 +119,7 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `opcode.rs`, `field_id.rs`, every "Original: `HTLC_HDR_X`" comment, and
     AGENTS.md's own style rule mandating `HTLC_HDR_*` (which would need to
     change too). Not started — wide, mechanical, non-trivial rename.
-13. Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
+16. Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
     `ClientOpcode`/`ServerOpcode` into one `Opcode`. `HLProtocol.md` has no
     client/server split in its numbering — one flat `myField_*` list, one
     flat `myTran_*` list, with direction recorded separately per
@@ -97,11 +128,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     something different depending on direction; every match was either
     identical both ways or simply unused in the other direction (per
     `field_id.rs`'s own module docs, e.g. `ErrorText` server-only,
-    `Options` client-only). Touches `field_id.rs`, `opcode.rs`,
-    `transaction.rs`'s `Debug` impl, and every `ClientFieldId::X`/
-    `ServerFieldId::X`/`ClientOpcode::X`/`ServerOpcode::X` reference across
-    the workspace. Confirm the "no real collision" premise holds before
-    starting.
+    `Options` client-only) — **except `Options` itself, per item 8 above**,
+    found after this item was originally written. Touches `field_id.rs`,
+    `opcode.rs`, `transaction.rs`'s `Debug` impl, and every
+    `ClientFieldId::X`/`ServerFieldId::X`/`ClientOpcode::X`/
+    `ServerOpcode::X` reference across the workspace. Re-confirm the "no
+    real collision" premise (now known to have at least one exception)
+    before starting.
 
 ## Needs manual verification against the real client
 
