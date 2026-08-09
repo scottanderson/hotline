@@ -8,9 +8,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bitflags = { workspace = true, features = ["serde"] }
+bitflags = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true }
 num_enum = { workspace = true }
 
 [lints.rust]

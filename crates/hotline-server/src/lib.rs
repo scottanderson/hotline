@@ -6,6 +6,7 @@
 //! by transaction type to the handlers registered on [`Server`].
 
 mod accounts;
+mod bitflags_serde;
 mod error;
 mod files;
 mod server;

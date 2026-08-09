@@ -12,7 +12,6 @@ bitflags::bitflags! {
     /// The 64-bit `USER_ACCESS` privilege bitmap. Bits 51, 50, 45, and 44 are
     /// named, but have no use. Bits 22..=0 are reserved.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    #[derive(serde::Serialize, serde::Deserialize)]
     pub struct Access: u64 {
         /// Delete a file.
         const DELETE_FILE           = 1 << 63;

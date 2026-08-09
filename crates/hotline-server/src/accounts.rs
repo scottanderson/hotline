@@ -14,7 +14,7 @@ use hotline_proto::consts::Access;
 bitflags::bitflags! {
     /// Per-account settings with no `USER_ACCESS` wire bit at all, only
     /// resolved server-side at login.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct AccessExtra: u32 {
         /// Open or create a private chat.
         /// Config key: `chat_private`.
@@ -113,8 +113,10 @@ pub struct Account {
     /// empty stored password requires an empty submission too.
     pub password: String,
     pub name: String,
+    #[serde(with = "crate::bitflags_serde")]
     pub access: Access,
     /// See [`AccessExtra`].
+    #[serde(with = "crate::bitflags_serde")]
     pub access_extra: AccessExtra,
 }
 
