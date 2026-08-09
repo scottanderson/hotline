@@ -75,12 +75,21 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    collision" premise, found by tracing one specific transaction rather
    than the full field-by-field audit item 15 describes — worth folding
    into that audit rather than fixing in isolation.
-9. `USER_FLAGS` (112) may have two more meaningful bits beyond the four
-   already implemented (away, admin, refuses messages, refuses chat): one
-   for "every privilege granted", one for "no privileges at all". Not in
-   `HLProtocol.md`'s documented table, so possibly a client-specific
-   extension rather than base protocol. Not confirmed with the user
-   whether any real client relies on it before adopting.
+9. ~~`USER_FLAGS` (112) may have two more meaningful bits...~~ **Resolved
+   and implemented.** The reference server computes this field from a
+   dedicated function, ORing in two bits beyond the four already
+   implemented: one set when the connection's privileges are exactly the
+   full set of currently-defined privileges (excluding the "no agreement
+   needed" bit, which it deliberately ignores), one set when the
+   connection has no privileges at all (all zero). Both are computed and
+   sent by the server itself, not a client-only rendering convention, so
+   they're in scope here. Added as `UserFlags::ALL_PRIVS`/`NO_PRIVS`
+   (`crates/hotline-proto/src/types.rs`), computed in
+   `Session::user_flags` and `UserEntry::flags`
+   (`crates/hotline-server/src/session.rs`, `state.rs`) using the same
+   `Access::all() - Access::NO_AGREEMENT`/`Access::is_empty()` comparisons
+   already used elsewhere for the "everything enabled" hardcoded bitmap
+   (backlog item 1) and account file `"ALL"` parsing.
 10. Unbounded `FILE_PATH` component count: `HlPath::decode` caps nothing
     beyond the wire's own per-component 255-byte length, so one request can
     carry up to 65535 path levels. Pre-existing on `FILE_LIST`/`_GET`/

@@ -485,6 +485,11 @@ impl Session {
         let mut flags = UserFlags::empty();
         flags.set(UserFlags::ADMIN, is_admin);
         flags.set(UserFlags::AWAY, self.is_away);
+        flags.set(
+            UserFlags::ALL_PRIVS,
+            self.access == Access::all() - Access::NO_AGREEMENT,
+        );
+        flags.set(UserFlags::NO_PRIVS, self.access.is_empty());
         flags
     }
 
@@ -1969,6 +1974,21 @@ mod tests {
             .map(UserFlags::from_bits_truncate)
             .unwrap_or_else(UserFlags::empty);
         assert!(!color.contains(UserFlags::AWAY));
+    }
+
+    #[test]
+    fn user_flags_reports_all_privs_and_no_privs() {
+        let all_privs = test_session("Alice", Access::all() - Access::NO_AGREEMENT);
+        assert!(all_privs.user_flags().contains(UserFlags::ALL_PRIVS));
+        assert!(!all_privs.user_flags().contains(UserFlags::NO_PRIVS));
+
+        let no_privs = test_session("Bob", Access::empty());
+        assert!(no_privs.user_flags().contains(UserFlags::NO_PRIVS));
+        assert!(!no_privs.user_flags().contains(UserFlags::ALL_PRIVS));
+
+        let partial = test_session("Carol", Access::READ_CHAT);
+        assert!(!partial.user_flags().contains(UserFlags::ALL_PRIVS));
+        assert!(!partial.user_flags().contains(UserFlags::NO_PRIVS));
     }
 
     #[tokio::test]

@@ -266,6 +266,10 @@ bitflags::bitflags! {
         const REFUSES_PM          = 1 << 2;
         /// User refuses private chat invites.
         const REFUSES_CHAT        = 1 << 3;
+        /// User holds every currently-defined `USER_ACCESS` privilege.
+        const ALL_PRIVS           = 1 << 4;
+        /// User holds no `USER_ACCESS` privileges at all.
+        const NO_PRIVS            = 1 << 5;
     }
 }
 

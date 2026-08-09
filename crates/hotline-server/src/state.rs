@@ -57,7 +57,8 @@ impl UserEntry {
         self.last_active.elapsed() > IDLE_THRESHOLD
     }
 
-    /// Current `UserFlags` bits: admin (from `DISCONNECT_USERS`) plus idle.
+    /// Current `UserFlags` bits: admin (from `DISCONNECT_USERS`), idle, and
+    /// whether this user holds every/no currently-defined privilege.
     pub fn flags(&self) -> u16 {
         let mut bits = if self.access.contains(Access::DISCON_USER) {
             UserFlags::ADMIN.bits()
@@ -66,6 +67,12 @@ impl UserEntry {
         };
         if self.is_idle() {
             bits |= UserFlags::AWAY.bits();
+        }
+        if self.access == Access::all() - Access::NO_AGREEMENT {
+            bits |= UserFlags::ALL_PRIVS.bits();
+        }
+        if self.access.is_empty() {
+            bits |= UserFlags::NO_PRIVS.bits();
         }
         bits
     }
