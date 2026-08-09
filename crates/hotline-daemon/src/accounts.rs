@@ -104,14 +104,14 @@ impl AccountProvider for FileAccountProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hotline_proto::consts::AccessPrivileges;
+    use hotline_proto::consts::Access;
     use hotline_server::AccessExtra;
 
     fn alice() -> Account {
         Account {
             password: "hunter2".to_string(),
             name: "Alice".to_string(),
-            access: AccessPrivileges::BROADCAST,
+            access: Access::BROADCAST,
             access_extra: AccessExtra::USER_GETLIST,
         }
     }

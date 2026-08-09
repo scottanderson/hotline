@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, RwLock};
 
-use hotline_proto::consts::AccessPrivileges;
+use hotline_proto::consts::Access;
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags};
 use hotline_proto::Transaction;
 
@@ -41,7 +41,7 @@ pub struct UserEntry {
     pub connected_at: Instant,
     /// Privileges granted at login. Also kept in
     /// [`crate::session::Session`], which is what handlers check against.
-    pub access: AccessPrivileges,
+    pub access: Access,
     /// Server-side-only account settings granted at login, also kept in
     /// [`crate::session::Session`].
     pub access_extra: AccessExtra,
@@ -59,7 +59,7 @@ impl UserEntry {
 
     /// Current `UserFlags` bits: admin (from `DISCONNECT_USERS`) plus idle.
     pub fn flags(&self) -> u16 {
-        let mut bits = if self.access.contains(AccessPrivileges::DISCON_USER) {
+        let mut bits = if self.access.contains(Access::DISCON_USER) {
             UserFlags::ADMIN.bits()
         } else {
             0
@@ -84,8 +84,8 @@ fn is_dropbox_path(dir: &HlPath) -> bool {
 /// `true` if `access` lacks `VIEW_DROP_BOXES` and `dir`/`name`'s path
 /// contains "drop box" (case-insensitive). `name` is `None` for a bare
 /// directory listing.
-fn dropbox_blocked(dir: &HlPath, name: Option<&str>, access: AccessPrivileges) -> bool {
-    if access.contains(AccessPrivileges::VIEW_DROP_BOXES) {
+fn dropbox_blocked(dir: &HlPath, name: Option<&str>, access: Access) -> bool {
+    if access.contains(Access::VIEW_DROP_BOXES) {
         return false;
     }
     dir.components
@@ -148,7 +148,7 @@ pub struct AccessUpdate {
     /// Login the modified account is stored under.
     pub login: String,
     /// The account's new privileges.
-    pub access: AccessPrivileges,
+    pub access: Access,
     /// The account's new display name, if non-empty.
     pub name: Option<String>,
 }
@@ -285,7 +285,7 @@ impl SharedState {
         if self
             .user(target_id)
             .await
-            .is_some_and(|u| u.access.contains(AccessPrivileges::CANNOT_BE_DISCON))
+            .is_some_and(|u| u.access.contains(Access::CANNOT_BE_DISCON))
         {
             return Err("that user can't be disconnected");
         }
@@ -343,12 +343,7 @@ impl SharedState {
     }
 
     /// Push a live privilege change for every session logged in under `login`.
-    pub async fn push_access_update(
-        &self,
-        login: String,
-        access: AccessPrivileges,
-        name: Option<String>,
-    ) {
+    pub async fn push_access_update(&self, login: String, access: Access, name: Option<String>) {
         let update = AccessUpdate {
             login,
             access,
@@ -366,7 +361,7 @@ impl SharedState {
         &self,
         requester: FileRequester<'_>,
         dir: &HlPath,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Option<Vec<FileNameWithInfo>> {
         if dropbox_blocked(dir, None, access) {
             return Some(Vec::new());
@@ -381,7 +376,7 @@ impl SharedState {
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<u64, &'static str> {
         if dropbox_blocked(dir, Some(name), access) {
             return Err("You are not allowed to do that.");
@@ -411,9 +406,9 @@ impl SharedState {
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<(), &'static str> {
-        let upload_anywhere = access.contains(AccessPrivileges::UPLOAD_ANYWHERE);
+        let upload_anywhere = access.contains(Access::UPLOAD_ANYWHERE);
         if !upload_anywhere && !is_dropbox_path(dir) {
             return Err("You are not allowed to do that.");
         }
@@ -450,7 +445,7 @@ impl SharedState {
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<FileNameWithInfo, &'static str> {
         if dropbox_blocked(dir, Some(name), access) {
             return Err("You are not allowed to do that.");
@@ -468,7 +463,7 @@ impl SharedState {
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<(), String> {
         if dropbox_blocked(dir, Some(name), access) {
             return Err("You are not allowed to do that.".to_string());
@@ -480,9 +475,9 @@ impl SharedState {
             .ok_or("file or folder not found.")?;
         let is_dir = info.file_type == *b"fldr";
         let required = if is_dir {
-            AccessPrivileges::DELETE_FOLDER
+            Access::DELETE_FOLDER
         } else {
-            AccessPrivileges::DELETE_FILE
+            Access::DELETE_FILE
         };
         if !access.contains(required) {
             return Err("You are not allowed to do that.".to_string());
@@ -499,7 +494,7 @@ impl SharedState {
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<(), String> {
         if dropbox_blocked(dir, Some(name), access) {
             return Err("You are not allowed to do that.".to_string());
@@ -518,7 +513,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         new_name: &str,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<(), String> {
         if dropbox_blocked(dir, Some(name), access) {
             return Err("You are not allowed to do that.".to_string());
@@ -529,9 +524,9 @@ impl SharedState {
             .await
             .ok_or("file or folder not found.")?;
         let required = if info.file_type == *b"fldr" {
-            AccessPrivileges::RENAME_FOLDER
+            Access::RENAME_FOLDER
         } else {
-            AccessPrivileges::RENAME_FILE
+            Access::RENAME_FILE
         };
         if !access.contains(required) {
             return Err("You are not allowed to do that.".to_string());
@@ -551,7 +546,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         to_dir: &HlPath,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<(), String> {
         if dropbox_blocked(dir, Some(name), access) || dropbox_blocked(to_dir, Some(name), access) {
             return Err("You are not allowed to do that.".to_string());
@@ -562,9 +557,9 @@ impl SharedState {
             .await
             .ok_or("file or folder not found.")?;
         let required = if info.file_type == *b"fldr" {
-            AccessPrivileges::MOVE_FOLDER
+            Access::MOVE_FOLDER
         } else {
-            AccessPrivileges::MOVE_FILE
+            Access::MOVE_FILE
         };
         if !access.contains(required) {
             return Err("You are not allowed to do that.".to_string());
@@ -585,7 +580,7 @@ impl SharedState {
         target_name: &str,
         link_dir: &HlPath,
         link_name: &str,
-        access: AccessPrivileges,
+        access: Access,
     ) -> Result<(), String> {
         if dropbox_blocked(target_dir, Some(target_name), access) {
             return Err("You are not allowed to do that.".to_string());
@@ -862,7 +857,7 @@ mod tests {
                     account_name: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
-                    access: AccessPrivileges::empty(),
+                    access: Access::empty(),
                     access_extra: AccessExtra::default(),
                     remote_addr: "127.0.0.1:0".parse().unwrap(),
                     connected_at: Instant::now(),
@@ -901,7 +896,7 @@ mod tests {
                     account_name: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
-                    access: AccessPrivileges::empty(),
+                    access: Access::empty(),
                     access_extra: AccessExtra::default(),
                     remote_addr: "127.0.0.1:0".parse().unwrap(),
                     connected_at: Instant::now(),
@@ -931,7 +926,7 @@ mod tests {
 
         let requester = FileRequester { login: "alice" };
         let mut entries = state
-            .list_files(requester, &HlPath::default(), AccessPrivileges::all())
+            .list_files(requester, &HlPath::default(), Access::all())
             .await
             .unwrap();
         entries.sort_by(|a, b| a.name.cmp(&b.name));

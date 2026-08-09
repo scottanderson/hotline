@@ -7,7 +7,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
-use hotline_proto::consts::AccessPrivileges;
+use hotline_proto::consts::Access;
 use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
 use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
@@ -41,7 +41,7 @@ pub struct Session {
     /// [`crate::state::UserEntry::account_name`].
     account_name: String,
     /// Privileges granted at login.
-    access: AccessPrivileges,
+    access: Access,
     /// Server-side-only account settings; no client opcode reads or sets them.
     access_extra: AccessExtra,
     state: SessionState,
@@ -71,7 +71,7 @@ impl Session {
             // Empty until on_login succeeds.
             login: String::new(),
             account_name: String::new(),
-            access: AccessPrivileges::empty(),
+            access: Access::empty(),
             access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
@@ -168,11 +168,9 @@ impl Session {
             | TransactionType::Push(ServerOpcode::UserPart) => {
                 self.access_extra.contains(AccessExtra::USER_GETLIST)
             }
-            TransactionType::Push(ServerOpcode::Chat) => {
-                self.access.contains(AccessPrivileges::READ_CHAT)
-            }
+            TransactionType::Push(ServerOpcode::Chat) => self.access.contains(Access::READ_CHAT),
             TransactionType::Push(ServerOpcode::NewsfilePost) => {
-                self.access.contains(AccessPrivileges::NEWS_READ_ART)
+                self.access.contains(Access::NEWS_READ_ART)
             }
             _ => true,
         }
@@ -263,7 +261,7 @@ impl Session {
 
     /// `Err` names the missing privilege if `self.access` doesn't hold
     /// `required`.
-    fn require(&self, required: AccessPrivileges) -> std::result::Result<(), String> {
+    fn require(&self, required: Access) -> std::result::Result<(), String> {
         self.access.contains(required).then_some(()).ok_or_else(|| {
             let name = required.flag_name().unwrap_or("this privilege");
             format!("You are not allowed to do that ({name}).")
@@ -314,7 +312,7 @@ impl Session {
         let modern = tx.client_version().unwrap_or(0) >= 150;
 
         // DONT_SHOW_AGREEMENT skips the real text, not just its display.
-        let show_agreement = !self.access.contains(AccessPrivileges::NO_AGREEMENT);
+        let show_agreement = !self.access.contains(Access::NO_AGREEMENT);
         let have_agreement = !config.agreement.is_empty();
         if show_agreement && have_agreement {
             replies.push(Transaction::push(
@@ -447,8 +445,8 @@ impl Session {
             return;
         }
         // Only force the account's name when this modify revokes USE_ANY_NAME.
-        let losing_use_any_name = self.access.contains(AccessPrivileges::ANY_NAME)
-            && !update.access.contains(AccessPrivileges::ANY_NAME);
+        let losing_use_any_name =
+            self.access.contains(Access::ANY_NAME) && !update.access.contains(Access::ANY_NAME);
         self.access = update.access;
         if losing_use_any_name {
             if let Some(name) = update.name {
@@ -483,7 +481,7 @@ impl Session {
 
     /// This session's own admin + away flags, for `UserChange`/`UserSelfinfo`.
     fn user_flags(&self) -> UserFlags {
-        let is_admin = self.access.contains(AccessPrivileges::DISCON_USER);
+        let is_admin = self.access.contains(Access::DISCON_USER);
         let mut flags = UserFlags::empty();
         flags.set(UserFlags::ADMIN, is_admin);
         flags.set(UserFlags::AWAY, self.is_away);
@@ -492,7 +490,7 @@ impl Session {
 
     /// 105: public or (if `ChatId` is present) private-room chat.
     async fn on_chat(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::SEND_CHAT) {
+        if let Err(reason) = self.require(Access::SEND_CHAT) {
             // Sent only to the denied client; CHAT_SEND has no reply mechanism.
             return vec![Transaction::push(
                 ServerOpcode::Msg,
@@ -553,7 +551,7 @@ impl Session {
     /// 303: another user's info text (name, login, account name, icon,
     /// remote address, connected duration, and a privilege summary).
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::GET_CLIENT_INFO) {
+        if let Err(reason) = self.require(Access::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -563,7 +561,7 @@ impl Session {
             return vec![tx.reply_error("no such user")];
         };
 
-        let privileges = if target.access == AccessPrivileges::all() {
+        let privileges = if target.access == Access::all() {
             "all".to_string()
         } else if target.access.is_empty() {
             "none".to_string()
@@ -571,7 +569,7 @@ impl Session {
             target
                 .access
                 .iter()
-                .flat_map(AccessPrivileges::flag_name)
+                .flat_map(Access::flag_name)
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -580,7 +578,7 @@ impl Session {
             "{name}{admin}\rLogin: {login}\rAccount name: {account_name}\rIcon: {icon}\r\
              Address: {addr}\rConnected: {mins}m {secs}s\rPrivileges: {privileges}",
             name = target.name,
-            admin = if target.access.contains(AccessPrivileges::DISCON_USER) {
+            admin = if target.access.contains(Access::DISCON_USER) {
                 " (admin)"
             } else {
                 ""
@@ -611,7 +609,7 @@ impl Session {
     /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
     /// fuller implementation ban) another user.
     async fn on_user_kick(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DISCON_USER) {
+        if let Err(reason) = self.require(Access::DISCON_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -638,7 +636,7 @@ impl Session {
 
     /// 108: a private instant message to one other user.
     async fn on_private_msg(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::SEND_MESSAGE) {
+        if let Err(reason) = self.require(Access::SEND_MESSAGE) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -666,7 +664,7 @@ impl Session {
 
     /// 355: a message broadcast to every connected user.
     async fn on_msg_broadcast(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::BROADCAST) {
+        if let Err(reason) = self.require(Access::BROADCAST) {
             return vec![tx.reply_error(reason)];
         }
         let Some(message) = tx.field(ClientFieldId::Text) else {
@@ -692,7 +690,7 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILE) {
+        if let Err(reason) = self.require(Access::DOWNLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -738,7 +736,7 @@ impl Session {
     /// the client the total byte count (flattened-object overhead plus
     /// the file's own bytes) to expect on the data connection.
     async fn on_file_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DOWNLOAD_FILE) {
+        if let Err(reason) = self.require(Access::DOWNLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -774,7 +772,7 @@ impl Session {
     /// anywhere; an existing file at the destination is rejected (resume
     /// isn't supported yet).
     async fn on_file_put(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::UPLOAD_FILE) {
+        if let Err(reason) = self.require(Access::UPLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -821,7 +819,7 @@ impl Session {
 
     /// 205: create a folder.
     async fn on_file_mkdir(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::CREATE_FOLDER) {
+        if let Err(reason) = self.require(Access::CREATE_FOLDER) {
             return vec![tx.reply_error(reason)];
         }
         let Some((name, dir)) = self.file_name_and_dir(tx) else {
@@ -907,7 +905,7 @@ impl Session {
 
     /// 209: create an alias pointing at another file.
     async fn on_file_symlink(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::MAKE_ALIAS) {
+        if let Err(reason) = self.require(Access::MAKE_ALIAS) {
             return vec![tx.reply_error(reason)];
         }
         let Some((name, dir)) = self.file_name_and_dir(tx) else {
@@ -932,7 +930,7 @@ impl Session {
 
     /// 101: read the classic (non-threaded) news.
     async fn on_newsfile_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::NEWS_READ_ART) {
+        if let Err(reason) = self.require(Access::NEWS_READ_ART) {
             return vec![tx.reply_error(reason)];
         }
         let news = state.news().await;
@@ -941,7 +939,7 @@ impl Session {
 
     /// 103: post to the classic (non-threaded) news.
     async fn on_newsfile_post(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::POST_NEWS_ART) {
+        if let Err(reason) = self.require(Access::POST_NEWS_ART) {
             return vec![tx.reply_error(reason)];
         }
         let Some(text) = tx.field(ClientFieldId::Text) else {
@@ -960,7 +958,7 @@ impl Session {
 
     /// 112: create a private chat room and invite its target user.
     async fn on_chat_create(&self, tx: &Transaction, state: &SharedState) -> Transaction {
-        if let Err(reason) = self.require(AccessPrivileges::CREATE_CHAT) {
+        if let Err(reason) = self.require(Access::CREATE_CHAT) {
             return tx.reply_error(reason);
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -1177,7 +1175,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_CREATE` (350)
     async fn on_account_create(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::CREATE_USER) {
+        if let Err(reason) = self.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
         self.on_account_create_or_modify(tx, state).await
@@ -1185,7 +1183,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_DELETE` (351)
     async fn on_account_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::DELETE_USER) {
+        if let Err(reason) = self.require(Access::DELETE_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(login) = tx.login() else {
@@ -1199,7 +1197,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_READ` (352)
     async fn on_account_read(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::OPEN_USER) {
+        if let Err(reason) = self.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(login) = tx.field(ClientFieldId::Login).map(Field::as_string) else {
@@ -1219,7 +1217,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_MODIFY` (353)
     async fn on_account_modify(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(AccessPrivileges::MODIFY_USER) {
+        if let Err(reason) = self.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
         self.on_account_create_or_modify(tx, state).await
@@ -1258,7 +1256,7 @@ impl Session {
         let access = tx
             .access()
             .or_else(|| existing.map(|a| a.access))
-            .unwrap_or_else(AccessPrivileges::empty);
+            .unwrap_or_else(Access::empty);
 
         let account = Account {
             password,
@@ -1285,7 +1283,7 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
-    fn test_session(name: &str, access: AccessPrivileges) -> Session {
+    fn test_session(name: &str, access: Access) -> Session {
         Session {
             user_id: 1,
             name: name.to_string(),
@@ -1302,7 +1300,7 @@ mod tests {
 
     #[test]
     fn may_receive_gates_presence_pushes_on_user_getlist_not_other_traffic() {
-        let mut session = test_session("Alice", AccessPrivileges::all());
+        let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::USER_GETLIST);
 
         assert!(!session.may_receive(TransactionType::Push(ServerOpcode::UserChange)));
@@ -1316,21 +1314,21 @@ mod tests {
 
     #[test]
     fn may_receive_gates_chat_on_read_chat() {
-        let mut session = test_session("Alice", AccessPrivileges::all());
-        session.access.remove(AccessPrivileges::READ_CHAT);
+        let mut session = test_session("Alice", Access::all());
+        session.access.remove(Access::READ_CHAT);
         assert!(!session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
 
-        session.access.insert(AccessPrivileges::READ_CHAT);
+        session.access.insert(Access::READ_CHAT);
         assert!(session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
     }
 
     #[test]
     fn may_receive_gates_newsfile_post_on_read_news() {
-        let mut session = test_session("Alice", AccessPrivileges::all());
-        session.access.remove(AccessPrivileges::NEWS_READ_ART);
+        let mut session = test_session("Alice", Access::all());
+        session.access.remove(Access::NEWS_READ_ART);
         assert!(!session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
 
-        session.access.insert(AccessPrivileges::NEWS_READ_ART);
+        session.access.insert(Access::NEWS_READ_ART);
         assert!(session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
     }
 
@@ -1349,7 +1347,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_get_list_denied_without_user_getlist() {
-        let mut session = test_session("Alice", AccessPrivileges::all());
+        let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::USER_GETLIST);
         let state = SharedState::default();
         let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
@@ -1359,7 +1357,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_get_info_summarizes_all_privileges_as_all() {
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
             .insert_user(UserEntry {
@@ -1368,7 +1366,7 @@ mod tests {
                 account_name: "Bobby".to_string(),
                 name: "Bob".to_string(),
                 icon: 42,
-                access: AccessPrivileges::all(),
+                access: Access::all(),
                 access_extra: AccessExtra::default(),
                 remote_addr: "192.0.2.1:5500".parse().unwrap(),
                 connected_at: Instant::now(),
@@ -1392,7 +1390,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_get_info_summarizes_no_privileges_as_none() {
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
             .insert_user(UserEntry {
@@ -1401,7 +1399,7 @@ mod tests {
                 account_name: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
-                access: AccessPrivileges::empty(),
+                access: Access::empty(),
                 access_extra: AccessExtra::default(),
                 remote_addr: "192.0.2.1:5500".parse().unwrap(),
                 connected_at: Instant::now(),
@@ -1423,7 +1421,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_relay_starts_with_cr_for_scrollback_clients() {
-        let session = test_session("Alice", AccessPrivileges::default());
+        let session = test_session("Alice", Access::default());
         let state = SharedState::default();
         let request = Transaction::request(
             ClientOpcode::Chat,
@@ -1447,7 +1445,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_with_name_registers_and_broadcasts_join_immediately() {
-        let mut session = test_session("guest1", AccessPrivileges::default());
+        let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
         let mut observer = state.register_recipient(2).await;
@@ -1490,7 +1488,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_grants_the_matching_account_privileges() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
         state
@@ -1500,7 +1498,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".to_string(),
                     name: "Alice".to_string(),
-                    access: AccessPrivileges::BROADCAST,
+                    access: Access::BROADCAST,
                 },
             )
             .await
@@ -1516,13 +1514,13 @@ mod tests {
         );
         session.on_login(&login, &state, &config).await;
 
-        assert_eq!(session.access, AccessPrivileges::BROADCAST);
+        assert_eq!(session.access, Access::BROADCAST);
         assert_eq!(session.name, "Alice");
     }
 
     #[tokio::test]
     async fn login_grants_the_account_user_getlist_setting() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
         state
@@ -1532,7 +1530,7 @@ mod tests {
                     access_extra: AccessExtra::empty(),
                     password: String::new(),
                     name: "Alice".to_string(),
-                    access: AccessPrivileges::empty(),
+                    access: Access::empty(),
                 },
             )
             .await
@@ -1550,7 +1548,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_with_wrong_password_is_rejected_and_disconnected() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
         state
@@ -1560,7 +1558,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".to_string(),
                     name: "Alice".to_string(),
-                    access: AccessPrivileges::BROADCAST,
+                    access: Access::BROADCAST,
                 },
             )
             .await
@@ -1591,7 +1589,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_with_a_nonempty_password_against_a_blank_stored_one_is_rejected() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
         state
@@ -1601,7 +1599,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Alice".to_string(),
-                    access: AccessPrivileges::BROADCAST,
+                    access: Access::BROADCAST,
                 },
             )
             .await
@@ -1622,7 +1620,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_with_unknown_account_is_rejected_and_disconnected() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
         let mut rx = state.register_recipient(session.user_id).await;
@@ -1640,7 +1638,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_without_a_guest_account_is_rejected() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         state.delete_account("guest").await.unwrap();
         let config = ServerConfig::default();
@@ -1655,7 +1653,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_without_name_defers_join_until_agreed() {
-        let mut session = test_session("guest1", AccessPrivileges::default());
+        let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
@@ -1695,7 +1693,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_150_client_joins_immediately_without_a_name() {
-        let mut session = test_session("guest1", AccessPrivileges::default());
+        let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
@@ -1714,7 +1712,7 @@ mod tests {
 
     #[tokio::test]
     async fn modern_client_gets_no_agreement_push_without_configured_text() {
-        let mut session = test_session("guest1", AccessPrivileges::default());
+        let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig {
             agreement: String::new(),
@@ -1737,7 +1735,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_150_client_gets_no_agreement_push_without_configured_text() {
-        let mut session = test_session("guest1", AccessPrivileges::default());
+        let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig {
             agreement: String::new(),
@@ -1757,7 +1755,7 @@ mod tests {
 
     #[tokio::test]
     async fn dont_show_agreement_skips_the_configured_text_but_still_marks_modern_clients_done() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         state
             .put_account(
@@ -1766,7 +1764,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Skipper".to_string(),
-                    access: AccessPrivileges::NO_AGREEMENT,
+                    access: Access::NO_AGREEMENT,
                 },
             )
             .await
@@ -1799,7 +1797,7 @@ mod tests {
 
     #[tokio::test]
     async fn dont_show_agreement_sends_nothing_to_a_pre_150_client() {
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         state
             .put_account(
@@ -1808,7 +1806,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Skipper".to_string(),
-                    access: AccessPrivileges::NO_AGREEMENT,
+                    access: Access::NO_AGREEMENT,
                 },
             )
             .await
@@ -1837,7 +1835,7 @@ mod tests {
             name: "guest1".to_string(),
             login: String::new(),
             account_name: String::new(),
-            access: AccessPrivileges::empty(),
+            access: Access::empty(),
             access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
@@ -1859,7 +1857,7 @@ mod tests {
 
     #[tokio::test]
     async fn agreed_selfinfo_carries_the_joiners_own_user_list_entry() {
-        let mut session = test_session("guest1", AccessPrivileges::default());
+        let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
 
         let agreed = Transaction::request(
@@ -1889,7 +1887,7 @@ mod tests {
     async fn login_colors_by_privilege_not_by_admin_login_identity() {
         // Color derives from DISCONNECT_USERS alone, even for a non-admin
         // login, and must be correct in the join broadcast itself.
-        let mut session = test_session("guest1", AccessPrivileges::empty());
+        let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         state
             .put_account(
@@ -1898,7 +1896,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: String::new(),
-                    access: AccessPrivileges::DISCON_USER,
+                    access: Access::DISCON_USER,
                 },
             )
             .await
@@ -1930,7 +1928,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_away_broadcasts_the_away_bit_and_clears_it() {
-        let mut session = test_session("Alice", AccessPrivileges::empty());
+        let mut session = test_session("Alice", Access::empty());
         let state = SharedState::default();
         state
             .insert_user(UserEntry {
@@ -1975,7 +1973,7 @@ mod tests {
 
     #[tokio::test]
     async fn newsfile_round_trips_through_post_and_get() {
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
         let post = Transaction::request(
@@ -1995,7 +1993,7 @@ mod tests {
 
     #[tokio::test]
     async fn newsfile_post_publishes_once() {
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut rx = state.register_recipient(1).await;
         let post = Transaction::request(
@@ -2019,7 +2017,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_denied_without_privilege() {
-        let mut session = test_session("Alice", AccessPrivileges::empty());
+        let mut session = test_session("Alice", Access::empty());
         let state = SharedState::default();
         let request = Transaction::request(
             ClientOpcode::UserKick,
@@ -2033,7 +2031,7 @@ mod tests {
 
     #[tokio::test]
     async fn private_message_delivered_only_to_target() {
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
         let mut sender_rx = state.register_recipient(session.user_id).await;
@@ -2066,7 +2064,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_broadcast_reaches_everyone() {
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut rx = state.register_recipient(2).await;
 
@@ -2095,7 +2093,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_broadcast_denied_without_privilege() {
-        let session = test_session("Alice", AccessPrivileges::default());
+        let session = test_session("Alice", Access::default());
         let state = SharedState::default();
 
         let request = Transaction::request(
@@ -2109,7 +2107,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_create_then_read_round_trips() {
-        let session = test_session("Admin", AccessPrivileges::all());
+        let session = test_session("Admin", Access::all());
         let state = SharedState::default();
 
         let create = Transaction::request(
@@ -2119,7 +2117,7 @@ mod tests {
                 Field::obfuscated_string(ClientFieldId::Login, "bob"),
                 Field::obfuscated_string(ClientFieldId::Password, "secret"),
                 Field::string(ClientFieldId::Name, "Bob"),
-                Field::u64(ClientFieldId::Access, AccessPrivileges::SEND_CHAT.bits()),
+                Field::u64(ClientFieldId::Access, Access::SEND_CHAT.bits()),
             ],
         );
         let replies = session.on_account_create(&create, &state).await;
@@ -2140,13 +2138,13 @@ mod tests {
             replies[0]
                 .field(ServerFieldId::Access)
                 .and_then(Field::as_u64),
-            Some(AccessPrivileges::SEND_CHAT.bits())
+            Some(Access::SEND_CHAT.bits())
         );
     }
 
     #[tokio::test]
     async fn account_modify_only_overwrites_fields_present() {
-        let session = test_session("Admin", AccessPrivileges::all());
+        let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
             .put_account(
@@ -2155,7 +2153,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: "secret".to_string(),
                     name: "Bob".to_string(),
-                    access: AccessPrivileges::SEND_CHAT,
+                    access: Access::SEND_CHAT,
                 },
             )
             .await
@@ -2176,12 +2174,12 @@ mod tests {
         let account = state.account("bob").await.unwrap();
         assert_eq!(account.name, "Bobby");
         assert_eq!(account.password, "secret");
-        assert_eq!(account.access, AccessPrivileges::SEND_CHAT);
+        assert_eq!(account.access, Access::SEND_CHAT);
     }
 
     #[tokio::test]
     async fn account_modify_without_a_password_field_at_all_clears_it() {
-        let session = test_session("Admin", AccessPrivileges::all());
+        let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
             .put_account(
@@ -2190,7 +2188,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: "secret".to_string(),
                     name: "Bob".to_string(),
-                    access: AccessPrivileges::SEND_CHAT,
+                    access: Access::SEND_CHAT,
                 },
             )
             .await
@@ -2214,7 +2212,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_read_password_field_round_trips_as_the_unchanged_sentinel() {
-        let session = test_session("Admin", AccessPrivileges::all());
+        let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
             .put_account(
@@ -2223,7 +2221,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: "secret".to_string(),
                     name: "Bob".to_string(),
-                    access: AccessPrivileges::SEND_CHAT,
+                    access: Access::SEND_CHAT,
                 },
             )
             .await
@@ -2246,7 +2244,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_modify_propagates_to_a_live_session_without_reconnect() {
-        let admin = test_session("Admin", AccessPrivileges::all());
+        let admin = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
             .put_account(
@@ -2255,14 +2253,14 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Bob".to_string(),
-                    access: AccessPrivileges::empty(),
+                    access: Access::empty(),
                 },
             )
             .await
             .unwrap();
 
         // Bob is already connected, logged in under the "bob" account.
-        let mut bob = test_session("Bob", AccessPrivileges::empty());
+        let mut bob = test_session("Bob", Access::empty());
         bob.login = "bob".to_string();
         state
             .insert_user(UserEntry {
@@ -2285,7 +2283,7 @@ mod tests {
             1,
             vec![
                 Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::u64(ClientFieldId::Access, AccessPrivileges::BROADCAST.bits()),
+                Field::u64(ClientFieldId::Access, Access::BROADCAST.bits()),
             ],
         );
         admin.on_account_modify(&modify, &state).await;
@@ -2298,7 +2296,7 @@ mod tests {
             .expect("expected an access update");
         bob.apply_access_update(received, &state).await;
 
-        assert_eq!(bob.access, AccessPrivileges::BROADCAST);
+        assert_eq!(bob.access, Access::BROADCAST);
         let notify = bob_rx
             .try_recv()
             .ok()
@@ -2312,7 +2310,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_modify_renames_only_when_use_any_name_is_revoked() {
-        let admin = test_session("Admin", AccessPrivileges::all());
+        let admin = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
             .put_account(
@@ -2321,14 +2319,14 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Bob".to_string(),
-                    access: AccessPrivileges::ANY_NAME,
+                    access: Access::ANY_NAME,
                 },
             )
             .await
             .unwrap();
 
         // Bob is connected with USE_ANY_NAME and has picked a custom name.
-        let mut bob = test_session("Bobby the Great", AccessPrivileges::ANY_NAME);
+        let mut bob = test_session("Bobby the Great", Access::ANY_NAME);
         bob.login = "bob".to_string();
         state
             .insert_user(UserEntry {
@@ -2351,7 +2349,7 @@ mod tests {
             1,
             vec![
                 Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::u64(ClientFieldId::Access, AccessPrivileges::empty().bits()),
+                Field::u64(ClientFieldId::Access, Access::empty().bits()),
             ],
         );
         admin.on_account_modify(&revoke, &state).await;
@@ -2361,7 +2359,7 @@ mod tests {
 
         // Still holds USE_ANY_NAME, so this modify must not touch the name.
         bob.name = "Bobby Returns".to_string();
-        bob.access = AccessPrivileges::ANY_NAME;
+        bob.access = Access::ANY_NAME;
         let regrant = Transaction::request(
             ClientOpcode::AccountModify,
             1,
@@ -2369,7 +2367,7 @@ mod tests {
                 Field::obfuscated_string(ClientFieldId::Login, "bob"),
                 Field::u64(
                     ClientFieldId::Access,
-                    (AccessPrivileges::ANY_NAME | AccessPrivileges::SEND_CHAT).bits(),
+                    (Access::ANY_NAME | Access::SEND_CHAT).bits(),
                 ),
             ],
         );
@@ -2381,7 +2379,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_delete_removes_it() {
-        let session = test_session("Admin", AccessPrivileges::all());
+        let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
             .put_account(
@@ -2390,7 +2388,7 @@ mod tests {
                     access_extra: AccessExtra::default(),
                     password: String::new(),
                     name: "Bob".to_string(),
-                    access: AccessPrivileges::empty(),
+                    access: Access::empty(),
                 },
             )
             .await
@@ -2408,7 +2406,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_crud_denied_without_matching_privilege() {
-        let session = test_session("Alice", AccessPrivileges::empty());
+        let session = test_session("Alice", Access::empty());
         let state = SharedState::default();
         let login_field = Field::obfuscated_string(ClientFieldId::Login, "bob");
 
@@ -2429,7 +2427,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_room_create_invite_and_room_scoped_chat() {
-        let creator = test_session("Alice", AccessPrivileges::all());
+        let creator = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
             .insert_user(UserEntry {
@@ -2437,7 +2435,7 @@ mod tests {
                 login: String::new(),
                 name: "Alice".to_string(),
                 icon: 0,
-                access: AccessPrivileges::all(),
+                access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
@@ -2451,7 +2449,7 @@ mod tests {
                 login: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
-                access: AccessPrivileges::all(),
+                access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
@@ -2483,7 +2481,7 @@ mod tests {
             Some(chat_id)
         );
 
-        let bob = test_session("Bob", AccessPrivileges::all());
+        let bob = test_session("Bob", Access::all());
         let bob = Session { user_id: 2, ..bob };
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
@@ -2542,7 +2540,7 @@ mod tests {
 
     #[tokio::test]
     async fn joining_an_unprotected_room_without_an_invite_is_an_error() {
-        let bob = test_session("Bob", AccessPrivileges::all());
+        let bob = test_session("Bob", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
 
@@ -2564,7 +2562,7 @@ mod tests {
     /// `ChatId` must decode just as well as one using the full 4 bytes.
     #[tokio::test]
     async fn chat_join_accepts_a_short_encoded_chat_id() {
-        let bob = test_session("Bob", AccessPrivileges::all());
+        let bob = test_session("Bob", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
         state.invite(chat_id, bob.user_id).await;
@@ -2584,7 +2582,7 @@ mod tests {
 
     #[tokio::test]
     async fn joining_a_password_protected_room_requires_the_right_password() {
-        let bob = test_session("Bob", AccessPrivileges::all());
+        let bob = test_session("Bob", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
         state
@@ -2621,7 +2619,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pending_invite_bypasses_a_rooms_password() {
-        let bob = test_session("Bob", AccessPrivileges::all());
+        let bob = test_session("Bob", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
         state
@@ -2639,7 +2637,7 @@ mod tests {
 
     #[tokio::test]
     async fn setting_a_private_rooms_subject_requires_membership() {
-        let outsider = test_session("Eve", AccessPrivileges::all());
+        let outsider = test_session("Eve", Access::all());
         let outsider = Session {
             user_id: 2,
             ..outsider
@@ -2662,7 +2660,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_member_can_set_a_private_rooms_password() {
-        let member = test_session("Alice", AccessPrivileges::all());
+        let member = test_session("Alice", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(member.user_id).await;
         let mut rx = state.register_recipient(member.user_id).await;
@@ -2692,7 +2690,7 @@ mod tests {
 
     #[tokio::test]
     async fn setting_the_global_room_subject_requires_set_subject() {
-        let guest = test_session("Guest", AccessPrivileges::empty());
+        let guest = test_session("Guest", Access::empty());
         let state = SharedState::default();
 
         let request = Transaction::request(
@@ -2710,7 +2708,7 @@ mod tests {
 
     #[tokio::test]
     async fn setting_the_global_room_subject_broadcasts_to_everyone() {
-        let mut admin = test_session("Admin", AccessPrivileges::empty());
+        let mut admin = test_session("Admin", Access::empty());
         admin.access_extra.insert(AccessExtra::SET_SUBJECT);
         let state = SharedState::default();
         let mut rx = state.register_recipient(admin.user_id).await;
@@ -2746,7 +2744,7 @@ mod tests {
 
     #[tokio::test]
     async fn inviting_a_disconnected_user_is_an_error() {
-        let alice = test_session("Alice", AccessPrivileges::all());
+        let alice = test_session("Alice", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
 
@@ -2765,7 +2763,7 @@ mod tests {
 
     #[tokio::test]
     async fn inviting_with_a_zero_chat_id_or_user_id_is_an_error() {
-        let alice = test_session("Alice", AccessPrivileges::all());
+        let alice = test_session("Alice", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
 
@@ -2789,7 +2787,7 @@ mod tests {
 
     #[tokio::test]
     async fn inviting_an_existing_member_is_an_error() {
-        let alice = test_session("Alice", AccessPrivileges::all());
+        let alice = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
             .insert_user(UserEntry {
@@ -2797,7 +2795,7 @@ mod tests {
                 login: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
-                access: AccessPrivileges::all(),
+                access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
@@ -2823,7 +2821,7 @@ mod tests {
 
     #[tokio::test]
     async fn inviting_an_already_invited_user_is_an_error() {
-        let alice = test_session("Alice", AccessPrivileges::all());
+        let alice = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
             .insert_user(UserEntry {
@@ -2831,7 +2829,7 @@ mod tests {
                 login: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
-                access: AccessPrivileges::all(),
+                access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
@@ -2864,7 +2862,7 @@ mod tests {
 
         let bob = Session {
             user_id: 2,
-            ..test_session("Bob", AccessPrivileges::all())
+            ..test_session("Bob", Access::all())
         };
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
@@ -2884,7 +2882,7 @@ mod tests {
 
         let bob = Session {
             user_id: 2,
-            ..test_session("Bob", AccessPrivileges::all())
+            ..test_session("Bob", Access::all())
         };
         let decline = Transaction::request(
             ClientOpcode::ChatDecline,
@@ -2911,7 +2909,7 @@ mod tests {
     #[tokio::test]
     async fn file_get_denied_without_download_files() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let session = test_session("Alice", AccessPrivileges::empty());
+        let session = test_session("Alice", Access::empty());
 
         let get = Transaction::request(
             ClientOpcode::FileGet,
@@ -2927,7 +2925,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
             ClientOpcode::FileGet,
@@ -2958,7 +2956,7 @@ mod tests {
     #[tokio::test]
     async fn file_get_missing_file_is_an_error() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
             ClientOpcode::FileGet,
@@ -2974,8 +2972,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         let list = Transaction::request(
@@ -3000,7 +2998,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let list = Transaction::request(
             ClientOpcode::FileList,
@@ -3024,8 +3022,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         let get = Transaction::request(
@@ -3048,8 +3046,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         let delete = Transaction::request(
@@ -3082,8 +3080,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let mut session = test_session("Alice", access);
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
@@ -3109,8 +3107,8 @@ mod tests {
     #[tokio::test]
     async fn file_mkdir_in_a_dropbox_is_denied_without_view_drop_boxes() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
@@ -3134,8 +3132,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
@@ -3163,8 +3161,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         let move_tx = Transaction::request(
@@ -3197,8 +3195,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         // Target is outside any drop box; link destination is inside one.
@@ -3226,8 +3224,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::VIEW_DROP_BOXES);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
         let symlink = Transaction::request(
@@ -3256,8 +3254,8 @@ mod tests {
     #[tokio::test]
     async fn file_put_outside_a_dropbox_is_denied_without_upload_anywhere() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::UPLOAD_ANYWHERE);
+        let mut access = Access::all();
+        access.remove(Access::UPLOAD_ANYWHERE);
         let session = test_session("Alice", access);
 
         let put = Transaction::request(
@@ -3272,8 +3270,8 @@ mod tests {
     #[tokio::test]
     async fn file_put_into_a_dropbox_is_allowed_without_upload_anywhere() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::UPLOAD_ANYWHERE);
+        let mut access = Access::all();
+        access.remove(Access::UPLOAD_ANYWHERE);
         let session = test_session("Alice", access);
 
         let put = Transaction::request(
@@ -3299,7 +3297,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"existing");
         let state = state_with_files(files);
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let put = Transaction::request(
             ClientOpcode::FilePut,
@@ -3315,7 +3313,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"bye");
         let state = state_with_files(files);
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let delete = Transaction::request(
             ClientOpcode::FileDelete,
@@ -3340,8 +3338,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"bye");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::DELETE_FILE);
+        let mut access = Access::all();
+        access.remove(Access::DELETE_FILE);
         let session = test_session("Alice", access);
 
         let delete = Transaction::request(
@@ -3360,7 +3358,7 @@ mod tests {
     #[tokio::test]
     async fn file_delete_missing_file_is_an_error() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let delete = Transaction::request(
             ClientOpcode::FileDelete,
@@ -3378,7 +3376,7 @@ mod tests {
     #[tokio::test]
     async fn file_mkdir_creates_a_folder() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let mkdir = Transaction::request(
             ClientOpcode::FileMkdir,
@@ -3401,8 +3399,8 @@ mod tests {
     #[tokio::test]
     async fn file_mkdir_denied_without_create_folders() {
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::CREATE_FOLDER);
+        let mut access = Access::all();
+        access.remove(Access::CREATE_FOLDER);
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
@@ -3423,7 +3421,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let mut session = test_session("Alice", AccessPrivileges::all());
+        let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
@@ -3444,7 +3442,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
-        let mut session = test_session("Alice", AccessPrivileges::all());
+        let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
@@ -3473,7 +3471,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let setinfo = Transaction::request(
             ClientOpcode::FileSetinfo,
@@ -3507,8 +3505,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::RENAME_FILE);
+        let mut access = Access::all();
+        access.remove(Access::RENAME_FILE);
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
@@ -3532,7 +3530,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let move_tx = Transaction::request(
             ClientOpcode::FileMove,
@@ -3569,8 +3567,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::MOVE_FILE);
+        let mut access = Access::all();
+        access.remove(Access::MOVE_FILE);
         let session = test_session("Alice", access);
 
         let move_tx = Transaction::request(
@@ -3597,8 +3595,8 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let mut access = AccessPrivileges::all();
-        access.remove(AccessPrivileges::MAKE_ALIAS);
+        let mut access = Access::all();
+        access.remove(Access::MAKE_ALIAS);
         let session = test_session("Alice", access);
 
         let symlink = Transaction::request(
@@ -3625,7 +3623,7 @@ mod tests {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
-        let session = test_session("Alice", AccessPrivileges::all());
+        let session = test_session("Alice", Access::all());
 
         let symlink = Transaction::request(
             ClientOpcode::FileSymlink,

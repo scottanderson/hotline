@@ -36,7 +36,7 @@ use crate::field_id::{ClientFieldId, ServerFieldId};
 use crate::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use crate::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
 use crate::wire::{PacketReader, VecWriter};
-use crate::AccessPrivileges;
+use crate::Access;
 
 /// A complete transaction: fixed fields plus its field list. `fields.len()`
 /// *is* the wire's `hc`; there is no separate count to keep in sync.
@@ -200,10 +200,10 @@ impl Transaction {
     }
 
     /// The `HTLC_DATA_ACCESS` field, if present.
-    pub fn access(&self) -> Option<AccessPrivileges> {
+    pub fn access(&self) -> Option<Access> {
         self.field(ClientFieldId::Access)
             .and_then(Field::as_u64)
-            .map(AccessPrivileges::from_bits_truncate)
+            .map(Access::from_bits_truncate)
     }
 
     /// The `HTLC_DATA_CLIENTVERSION` (160) field, if present.

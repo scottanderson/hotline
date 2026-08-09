@@ -6,7 +6,7 @@ use hotline_client::HotlineClient;
 use hotline_proto::field_id::ServerFieldId;
 use hotline_proto::opcode::{ServerOpcode, TransactionType};
 use hotline_proto::types::UserNameWithInfo;
-use hotline_proto::{AccessPrivileges, Field, Transaction};
+use hotline_proto::{Access, Field, Transaction};
 
 /// Where the UI is: still showing the server's agreement, or fully
 /// logged in and chatting.
@@ -48,7 +48,7 @@ pub struct App {
     pub lines: Vec<Line>,
     pub input: String,
     pub should_quit: bool,
-    pub access: AccessPrivileges,
+    pub access: Access,
 }
 
 impl App {
@@ -64,7 +64,7 @@ impl App {
             }],
             input: String::new(),
             should_quit: false,
-            access: AccessPrivileges::empty(),
+            access: Access::empty(),
         }
     }
 

@@ -13,7 +13,7 @@ bitflags::bitflags! {
     /// named, but have no use. Bits 22..=0 are reserved.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    pub struct AccessPrivileges: u64 {
+    pub struct Access: u64 {
         /// Delete a file.
         const DELETE_FILE           = 1 << 63;
         /// Upload a file.
@@ -100,7 +100,7 @@ bitflags::bitflags! {
     }
 }
 
-impl Default for AccessPrivileges {
+impl Default for Access {
     /// A reasonable "guest" default: read/send public chat, browse,
     /// upload, and download files, read and post news, send and receive
     /// private messages. No admin or destructive privileges.
@@ -116,7 +116,7 @@ impl Default for AccessPrivileges {
     }
 }
 
-impl AccessPrivileges {
+impl Access {
     /// The constant name for a single flag, or `None` if `self` isn't
     /// exactly one named flag.
     pub const fn flag_name(self) -> Option<&'static str> {
@@ -169,12 +169,9 @@ mod tests {
 
     #[test]
     fn access_privileges_round_trip_bytes() {
-        let privs = AccessPrivileges::default();
+        let privs = Access::default();
         let bytes = privs.bits().to_be_bytes();
-        assert_eq!(
-            AccessPrivileges::from_bits(u64::from_be_bytes(bytes)),
-            Some(privs)
-        );
+        assert_eq!(Access::from_bits(u64::from_be_bytes(bytes)), Some(privs));
     }
 
     /// A known "everything enabled" wire value decodes to exactly the
@@ -185,60 +182,57 @@ mod tests {
         bytes[0..4].copy_from_slice(&0xfff3cfefu32.to_be_bytes());
         bytes[4..8].copy_from_slice(&0xff800000u32.to_be_bytes());
 
-        let expected = AccessPrivileges::all() - AccessPrivileges::NO_AGREEMENT;
-        assert_eq!(
-            AccessPrivileges::from_bits(u64::from_be_bytes(bytes)),
-            Some(expected)
-        );
+        let expected = Access::all() - Access::NO_AGREEMENT;
+        assert_eq!(Access::from_bits(u64::from_be_bytes(bytes)), Some(expected));
     }
 
     #[test]
     fn reserved_bit_set_is_rejected_not_silently_dropped() {
         // Bit 0 is reserved.
         let bytes = 1u64.to_be_bytes();
-        assert_eq!(AccessPrivileges::from_bits(u64::from_be_bytes(bytes)), None);
+        assert_eq!(Access::from_bits(u64::from_be_bytes(bytes)), None);
     }
 
     #[test]
     fn flag_name_identifies_every_single_flag() {
         for (p, n) in [
-            (AccessPrivileges::DELETE_FILE, "DELETE_FILE"),
-            (AccessPrivileges::UPLOAD_FILE, "UPLOAD_FILE"),
-            (AccessPrivileges::DOWNLOAD_FILE, "DOWNLOAD_FILE"),
-            (AccessPrivileges::RENAME_FILE, "RENAME_FILE"),
-            (AccessPrivileges::MOVE_FILE, "MOVE_FILE"),
-            (AccessPrivileges::CREATE_FOLDER, "CREATE_FOLDER"),
-            (AccessPrivileges::DELETE_FOLDER, "DELETE_FOLDER"),
-            (AccessPrivileges::RENAME_FOLDER, "RENAME_FOLDER"),
-            (AccessPrivileges::MOVE_FOLDER, "MOVE_FOLDER"),
-            (AccessPrivileges::READ_CHAT, "READ_CHAT"),
-            (AccessPrivileges::SEND_CHAT, "SEND_CHAT"),
-            (AccessPrivileges::CREATE_CHAT, "CREATE_CHAT"),
-            (AccessPrivileges::CREATE_USER, "CREATE_USER"),
-            (AccessPrivileges::DELETE_USER, "DELETE_USER"),
-            (AccessPrivileges::OPEN_USER, "OPEN_USER"),
-            (AccessPrivileges::MODIFY_USER, "MODIFY_USER"),
-            (AccessPrivileges::NEWS_READ_ART, "NEWS_READ_ART"),
-            (AccessPrivileges::POST_NEWS_ART, "POST_NEWS_ART"),
-            (AccessPrivileges::DISCON_USER, "DISCON_USER"),
-            (AccessPrivileges::CANNOT_BE_DISCON, "CANNOT_BE_DISCON"),
-            (AccessPrivileges::GET_CLIENT_INFO, "GET_CLIENT_INFO"),
-            (AccessPrivileges::UPLOAD_ANYWHERE, "UPLOAD_ANYWHERE"),
-            (AccessPrivileges::ANY_NAME, "ANY_NAME"),
-            (AccessPrivileges::NO_AGREEMENT, "NO_AGREEMENT"),
-            (AccessPrivileges::SET_FILE_COMMENT, "SET_FILE_COMMENT"),
-            (AccessPrivileges::SET_FOLDER_COMMENT, "SET_FOLDER_COMMENT"),
-            (AccessPrivileges::VIEW_DROP_BOXES, "VIEW_DROP_BOXES"),
-            (AccessPrivileges::MAKE_ALIAS, "MAKE_ALIAS"),
-            (AccessPrivileges::BROADCAST, "BROADCAST"),
-            (AccessPrivileges::NEWS_DELETE_ART, "NEWS_DELETE_ART"),
-            (AccessPrivileges::NEWS_CREATE_CAT, "NEWS_CREATE_CAT"),
-            (AccessPrivileges::NEWS_DELETE_CAT, "NEWS_DELETE_CAT"),
-            (AccessPrivileges::NEWS_CREATE_FLDR, "NEWS_CREATE_FLDR"),
-            (AccessPrivileges::NEWS_DELETE_FLDR, "NEWS_DELETE_FLDR"),
-            (AccessPrivileges::UPLOAD_FOLDER, "UPLOAD_FOLDER"),
-            (AccessPrivileges::DOWNLOAD_FOLDER, "DOWNLOAD_FOLDER"),
-            (AccessPrivileges::SEND_MESSAGE, "SEND_MESSAGE"),
+            (Access::DELETE_FILE, "DELETE_FILE"),
+            (Access::UPLOAD_FILE, "UPLOAD_FILE"),
+            (Access::DOWNLOAD_FILE, "DOWNLOAD_FILE"),
+            (Access::RENAME_FILE, "RENAME_FILE"),
+            (Access::MOVE_FILE, "MOVE_FILE"),
+            (Access::CREATE_FOLDER, "CREATE_FOLDER"),
+            (Access::DELETE_FOLDER, "DELETE_FOLDER"),
+            (Access::RENAME_FOLDER, "RENAME_FOLDER"),
+            (Access::MOVE_FOLDER, "MOVE_FOLDER"),
+            (Access::READ_CHAT, "READ_CHAT"),
+            (Access::SEND_CHAT, "SEND_CHAT"),
+            (Access::CREATE_CHAT, "CREATE_CHAT"),
+            (Access::CREATE_USER, "CREATE_USER"),
+            (Access::DELETE_USER, "DELETE_USER"),
+            (Access::OPEN_USER, "OPEN_USER"),
+            (Access::MODIFY_USER, "MODIFY_USER"),
+            (Access::NEWS_READ_ART, "NEWS_READ_ART"),
+            (Access::POST_NEWS_ART, "POST_NEWS_ART"),
+            (Access::DISCON_USER, "DISCON_USER"),
+            (Access::CANNOT_BE_DISCON, "CANNOT_BE_DISCON"),
+            (Access::GET_CLIENT_INFO, "GET_CLIENT_INFO"),
+            (Access::UPLOAD_ANYWHERE, "UPLOAD_ANYWHERE"),
+            (Access::ANY_NAME, "ANY_NAME"),
+            (Access::NO_AGREEMENT, "NO_AGREEMENT"),
+            (Access::SET_FILE_COMMENT, "SET_FILE_COMMENT"),
+            (Access::SET_FOLDER_COMMENT, "SET_FOLDER_COMMENT"),
+            (Access::VIEW_DROP_BOXES, "VIEW_DROP_BOXES"),
+            (Access::MAKE_ALIAS, "MAKE_ALIAS"),
+            (Access::BROADCAST, "BROADCAST"),
+            (Access::NEWS_DELETE_ART, "NEWS_DELETE_ART"),
+            (Access::NEWS_CREATE_CAT, "NEWS_CREATE_CAT"),
+            (Access::NEWS_DELETE_CAT, "NEWS_DELETE_CAT"),
+            (Access::NEWS_CREATE_FLDR, "NEWS_CREATE_FLDR"),
+            (Access::NEWS_DELETE_FLDR, "NEWS_DELETE_FLDR"),
+            (Access::UPLOAD_FOLDER, "UPLOAD_FOLDER"),
+            (Access::DOWNLOAD_FOLDER, "DOWNLOAD_FOLDER"),
+            (Access::SEND_MESSAGE, "SEND_MESSAGE"),
         ] {
             assert_eq!(p.flag_name(), Some(n));
         }
@@ -246,10 +240,7 @@ mod tests {
 
     #[test]
     fn flag_name_is_none_for_unions_and_empty() {
-        assert_eq!(AccessPrivileges::empty().flag_name(), None);
-        assert_eq!(
-            (AccessPrivileges::SEND_CHAT | AccessPrivileges::READ_CHAT).flag_name(),
-            None
-        );
+        assert_eq!(Access::empty().flag_name(), None);
+        assert_eq!((Access::SEND_CHAT | Access::READ_CHAT).flag_name(), None);
     }
 }

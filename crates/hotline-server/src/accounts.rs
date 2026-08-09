@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use async_trait::async_trait;
-use hotline_proto::consts::AccessPrivileges;
+use hotline_proto::consts::Access;
 
 bitflags::bitflags! {
     /// Per-account settings with no `USER_ACCESS` wire bit at all, only
@@ -113,7 +113,7 @@ pub struct Account {
     /// empty stored password requires an empty submission too.
     pub password: String,
     pub name: String,
-    pub access: AccessPrivileges,
+    pub access: Access,
     /// See [`AccessExtra`].
     pub access_extra: AccessExtra,
 }
@@ -162,7 +162,7 @@ impl Default for InMemoryAccountProvider {
                 Account {
                     password: "admin".to_string(),
                     name: "Admin".to_string(),
-                    access: AccessPrivileges::all(),
+                    access: Access::all(),
                     access_extra: AccessExtra::default(),
                 },
             ),
@@ -171,7 +171,7 @@ impl Default for InMemoryAccountProvider {
                 Account {
                     password: "".to_string(),
                     name: "Guest".to_string(),
-                    access: AccessPrivileges::default(),
+                    access: Access::default(),
                     access_extra: AccessExtra::default(),
                 },
             ),
@@ -207,7 +207,7 @@ mod tests {
         Account {
             password: PASS_ALICE.to_string(),
             name: NAME_ALICE.to_string(),
-            access: AccessPrivileges::BROADCAST,
+            access: Access::BROADCAST,
             access_extra: AccessExtra::default(),
         }
     }
@@ -240,7 +240,7 @@ mod tests {
         let provider = InMemoryAccountProvider::default();
         let admin = provider.get("admin").await.expect("admin account exists");
         assert_eq!(admin.password, "admin");
-        assert_eq!(admin.access, AccessPrivileges::all());
+        assert_eq!(admin.access, Access::all());
     }
 
     #[tokio::test]
@@ -248,7 +248,7 @@ mod tests {
         let provider = InMemoryAccountProvider::default();
         let guest = provider.get("guest").await.expect("guest account exists");
         assert_eq!(guest.password, "");
-        assert_eq!(guest.access, AccessPrivileges::default());
+        assert_eq!(guest.access, Access::default());
     }
 
     #[test]
