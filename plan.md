@@ -24,10 +24,16 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    privileges with no hardcoding, is what's pushed on this opcode both at
    login and at agreement). **Resolved**, with a regression test covering
    this field.
-2. `on_file_getinfo` sends `FileType`/`FileCreator`/`FileDateCreate`/
-   `FileComment` as zeroed placeholders. With HFS disabled (this codebase's
-   own "no real HFS metadata" scope) the reference sends only
-   `FILE_SIZE`/`FILE_NAME`/`FILE_DATE_MODIFY`.
+2. `on_file_getinfo` sends only `FILE_NAME`/`FILE_SIZE`/`FILE_DATE_MODIFY`,
+   omitting `FileType`/`FileCreator`/`FileDateCreate`/`FileComment`
+   entirely. This matches how a server without real HFS metadata (the
+   scope this codebase is in) behaves in practice: those four fields
+   depend on genuine Mac-filesystem type/creator/comment data the
+   reference only has when actually running on HFS, and a widely used
+   non-HFS server implementation (relied on for years by real Windows and
+   Mac clients) sends this exact trimmed set when that data isn't
+   available. **Resolved**, confirmed against non-HFS server behavior
+   rather than the primary reference's HFS-only code path.
 3. `on_file_setinfo` wrongly requires `FileNewName`. The reference only
    errors if *both* rename and comment are absent; since comment storage
    isn't implemented, the correct behavior is a no-op (empty reply) when

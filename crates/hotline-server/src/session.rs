@@ -960,9 +960,9 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 206: fetch a file or folder's metadata. Type/creator/dates are
-    /// always zeroed and the comment is always empty; nothing in this
-    /// server persists real HFS metadata (see `HTXF`'s `INFO` fork).
+    /// 206: fetch a file or folder's metadata. Type/creator/creation date
+    /// and comment are omitted; nothing in this server persists real HFS
+    /// metadata (see `HTXF`'s `INFO` fork).
     async fn on_file_getinfo(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if !self.access_extra.contains(AccessExtra::FILE_GETINFO) {
             return vec![tx.reply_error("You are not allowed to do that.")];
@@ -984,12 +984,8 @@ impl Session {
         .to_vec();
         vec![tx.reply(vec![
             Field::string(ServerFieldId::FileName, info.name),
-            Field::bytes(ServerFieldId::FileType, info.file_type.to_vec()),
-            Field::bytes(ServerFieldId::FileCreator, info.creator.to_vec()),
             Field::u32(ServerFieldId::FileSize, info.size),
-            Field::bytes(ServerFieldId::FileDateCreate, zero_date.clone()),
             Field::bytes(ServerFieldId::FileDateModify, zero_date),
-            Field::string(ServerFieldId::FileComment, ""),
         ])]
     }
 
@@ -4467,6 +4463,12 @@ mod tests {
             reply.field(ServerFieldId::FileSize).and_then(Field::as_u32),
             Some(5)
         );
+        // No real HFS metadata is persisted, so these are omitted rather
+        // than sent zeroed.
+        assert!(reply.field(ServerFieldId::FileType).is_none());
+        assert!(reply.field(ServerFieldId::FileCreator).is_none());
+        assert!(reply.field(ServerFieldId::FileDateCreate).is_none());
+        assert!(reply.field(ServerFieldId::FileComment).is_none());
     }
 
     #[tokio::test]
