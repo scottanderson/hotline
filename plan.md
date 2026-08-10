@@ -112,14 +112,25 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     implement it under their own (different) names — see item 15's
     added note. `opcode.rs`'s doc comments just say it's undocumented
     in `HLProtocol.md`; the actual naming question belongs to item 15.
-13. Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s `From`/
+13. ~~Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s `From`/
     `Into` (via `num_enum`, not const-stable), which cascaded to
     `TransactionType::from_client_wire`/`from_server_wire` and
     `TransactionHeader::decode_from_client`/`decode_from_server`. Nothing
     currently calls these from a `const`/`static` binding, so this costs
     nothing today, but it departs from the crate's otherwise consistent
     `const fn` style (`PacketReader`, `numbers::encode`/`decode`). Low
-    priority.
+    priority.~~ **Investigated, not worth doing.** The one route that
+    would avoid duplicating each variant's numeric value a second time
+    (a macro-generated `const fn from_u32` matching on `Self::Variant as
+    u32` patterns, reusing `opcode_names!`'s existing variant list)
+    doesn't compile: rustc rejects `as` casts to an integer on any enum
+    with a data-carrying variant (`E0605`), and both enums have one
+    (`Unknown(u32)`, the catch-all). The only remaining ways to hand
+    write the conversion are a second, by-hand copy of every numeric
+    literal next to the enum's own discriminants (exactly the
+    drift-prone duplication `num_enum` was adopted to avoid) or an
+    unsafe transmute (same reason, worse). Neither is the small,
+    low-risk change this item was looking for, so left as is.
 14. Clean up `Session::handshake`'s exact match: a single `buf !=
     ClientHandshake::default().encode()` comparison, matching the
     reference's own `memcmp` (no per-field version reasoning, no reply on
