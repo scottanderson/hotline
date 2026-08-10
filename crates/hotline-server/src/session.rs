@@ -301,7 +301,7 @@ impl Session {
             None => return self.reject_login(tx, state, "no such account").await,
         };
 
-        let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 151)];
+        let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 190)];
         if !config.server_name.is_empty() {
             fields.push(Field::string(
                 ServerFieldId::Servername,
@@ -1651,6 +1651,23 @@ mod tests {
             .unwrap()
             .as_string();
         assert_eq!(text, "\r        Alice:  hi");
+    }
+
+    #[tokio::test]
+    async fn login_reply_advertises_server_version_190() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+
+        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert_eq!(
+            replies[0]
+                .field(ServerFieldId::Serverversion)
+                .and_then(Field::as_u16),
+            Some(190)
+        );
     }
 
     #[tokio::test]
