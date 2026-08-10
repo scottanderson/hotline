@@ -5,8 +5,11 @@
 //! `ServerFieldId::Text` and `ClientFieldId::Text` are distinct values
 //! with distinct [`ClientFieldId::name`]/[`ServerFieldId::name`]
 //! results, and a tag that's one-directional (`ErrorText` is
-//! server-only, `Options` is client-only, etc.) simply isn't a valid
-//! value of the type that never sends it.
+//! server-only, `FileNewName` is client-only, etc.) simply isn't a valid
+//! value of the type that never sends it. A same-numbered tag can also
+//! carry different meanings per direction: `Options` (113) is a
+//! persisted-preference bitmap in a client request but tags a bounce
+//! reply's kind (refusal notice vs automatic response) in a server push.
 //!
 //! Variant names track the tail of the original wire constant (e.g.
 //! `HTLS_DATA_SERVERNAME` -> `Servername`) rather than being split into
@@ -104,6 +107,14 @@ pub enum ClientFieldId {
     ///
     /// Original: `HTLC_DATA_DIR_RENAME`.
     FileNewPath = 212,
+    /// Message being quoted/replied to, on a private message.
+    ///
+    /// Original: `HTLC_DATA_QUOTING_MSG`.
+    QuotingMsg = 214,
+    /// Custom automatic-response text, sent when `Options` (113) enables it.
+    ///
+    /// Original: `HTLC_DATA_AUTOMATIC_RESPONSE`.
+    AutomaticResponse = 215,
     /// Number of items in a folder.
     ///
     /// Original: `HTLC_DATA_FILE_NFILES`.
@@ -196,6 +207,8 @@ impl ClientFieldId {
             210 => Self::FileComment,
             211 => Self::FileNewName,
             212 => Self::FileNewPath,
+            214 => Self::QuotingMsg,
+            215 => Self::AutomaticResponse,
             220 => Self::FolderItemCount,
             320 => Self::NewsCatListData,
             321 => Self::NewsArtListData,
@@ -245,6 +258,8 @@ impl ClientFieldId {
             Self::FileComment => "HTLC_DATA_FILE_COMMENT",
             Self::FileNewName => "HTLC_DATA_FILE_RENAME",
             Self::FileNewPath => "HTLC_DATA_DIR_RENAME",
+            Self::QuotingMsg => "HTLC_DATA_QUOTING_MSG",
+            Self::AutomaticResponse => "HTLC_DATA_AUTOMATIC_RESPONSE",
             Self::FolderItemCount => "HTLC_DATA_FILE_NFILES",
             Self::NewsCatListData => "HTLC_DATA_NEWS_DIRLIST",
             Self::NewsArtListData => "HTLC_DATA_NEWS_CATLIST",
@@ -335,6 +350,11 @@ pub enum ServerFieldId {
     ///
     /// Original: `HTLS_DATA_COLOR`.
     Color = 112,
+    /// Tags a private message/chat-invite bounce as a refusal notice or
+    /// an automatic response.
+    ///
+    /// Original: `HTLS_DATA_BAN`.
+    Options = 113,
     /// Private chat room ID.
     ///
     /// Original: `HTLS_DATA_CHAT_ID`.
@@ -411,6 +431,10 @@ pub enum ServerFieldId {
     ///
     /// Original: `HTLS_DATA_FILE_COMMENT`.
     FileComment = 210,
+    /// Message being quoted/replied to, on a private message bounce.
+    ///
+    /// Original: `HTLS_DATA_QUOTING_MSG`.
+    QuotingMsg = 214,
     /// 4-character Mac type code, packed.
     ///
     /// Original: `HTLS_DATA_FILE_ICON`.
@@ -498,6 +522,7 @@ impl ServerFieldId {
             109 => Self::Style,
             110 => Self::Access,
             112 => Self::Color,
+            113 => Self::Options,
             114 => Self::ChatId,
             115 => Self::ChatSubject,
             116 => Self::QueuePosition,
@@ -518,6 +543,7 @@ impl ServerFieldId {
             209 => Self::FileDateModify,
             210 => Self::FileComment,
             213 => Self::FileIcon,
+            214 => Self::QuotingMsg,
             220 => Self::FileCount,
             300 => Self::UserList,
             320 => Self::NewsDirlist,
@@ -558,6 +584,7 @@ impl ServerFieldId {
             Self::Style => "HTLS_DATA_STYLE",
             Self::Access => "HTLS_DATA_ACCESS",
             Self::Color => "HTLS_DATA_COLOR",
+            Self::Options => "HTLS_DATA_BAN",
             Self::ChatId => "HTLS_DATA_CHAT_ID",
             Self::ChatSubject => "HTLS_DATA_CHAT_SUBJECT",
             Self::QueuePosition => "HTLS_DATA_QUEUE_POSITION",
@@ -577,6 +604,7 @@ impl ServerFieldId {
             Self::FileDateCreate => "HTLS_DATA_FILE_DATE_CREATE",
             Self::FileDateModify => "HTLS_DATA_FILE_DATE_MODIFY",
             Self::FileComment => "HTLS_DATA_FILE_COMMENT",
+            Self::QuotingMsg => "HTLS_DATA_QUOTING_MSG",
             Self::FileIcon => "HTLS_DATA_FILE_ICON",
             Self::FileCount => "HTLS_DATA_FILE_NFILES",
             Self::UserList => "HTLS_DATA_USER_LIST",

@@ -50,31 +50,39 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    folder transfers (`HTLC_HDR_FILE_GETFOLDER`/`_PUTFOLDER`, a separate
    `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the transfer connection),
    and resource-fork (`"MACR"`) data.
-7. **Private-message/chat refusal and automatic response are entirely
-   unimplemented.** `UserFlags::REFUSES_PM`/`REFUSES_CHAT` are declared
-   but nothing ever sets them: `on_user_change` (`UserChange`, 304) only
-   reads `Name`/`Icon` from the request, dropping the client's `Options`
-   field (113) entirely, so there's no `Session` state for these
-   preferences (or an "automatic response" message) and no enforcement in
-   `on_private_msg`/`on_chat_invite` — a user who's turned on "refuse
-   private messages" still receives every one. Reference shape: on
-   refusal, or when the target has an automatic response configured, the
-   *sender* gets a server-generated bounce (a canned "so-and-so does not
-   accept..." notice, or the target's custom auto-response text) instead
-   of the message/invite reaching the target; delivery only happens when
-   the target isn't refusing. Needs the `AutomaticResponse` (215) and
-   `QuotingMsg` (214) fields, neither of which exist in `field_id.rs` yet
-   either. Not started, no user-facing precedent confirmed yet for the
-   bounce transaction's exact field shape.
-8. **`ServerFieldId` has no `Options` (113) variant**, discovered while
-   scoping item 7 above: `field_id.rs`'s own module docs cite `Options` as
-   the canonical example of a one-directional, client-only field, but the
-   push variant of the private-message transaction sends `Options` too
-   (to tag a bounce as a refusal notice vs. an automatic response vs. a
-   real message). This is a concrete counterexample to item 15's "no real
-   collision" premise, found by tracing one specific transaction rather
-   than the full field-by-field audit item 15 describes — worth folding
-   into that audit rather than fixing in isolation.
+7. ~~**Private-message/chat refusal and automatic response are entirely
+   unimplemented.**~~ **Resolved and implemented.** `on_user_change`
+   (`UserChange`, 304) now reads `Options` (113) as a persisted-preference
+   bitmap (bit 0 refuse messages, bit 1 refuse chat, bit 2 automatic
+   response) plus `AutomaticResponse` (215) for the custom reply text
+   (defaulting to a canned "not able to respond" string when the bit is
+   set but the field is empty), storing all three on `Session` and
+   mirroring them onto `UserEntry` so other sessions can look them up.
+   `on_private_msg`/`on_chat_invite` share a `Session::refusal_bounce`
+   helper: when the target refuses (and the sender doesn't refuse
+   messages themselves, matching the reference's reuse of that one flag
+   for both message and chat-invite bounces) or has an automatic response
+   configured, the sender gets a `Msg` (104) push back with `Options`
+   tagging it a refusal notice or an automatic response, and delivery to
+   the target is skipped only when the target is actually refusing (an
+   automatic response still lets the real message through). The
+   PM-bounce gate is also conditioned on the client's own `Options` value
+   in the `Msg` (108) request equaling "user message", matching the
+   reference literally — a request that omits `Options` doesn't bounce.
+   `QuotingMsg` (214) round-trips from request to the delivered push when
+   present. Not replicated: an obscure 1.5-era client quirk where a
+   `Msg` (108) request's `Options` can itself carry `myOpt_RefuseMessage`/
+   `myOpt_RefuseChat` to have the server substitute canned text into an
+   otherwise-normal delivery; narrow enough, and unconfirmed against any
+   real client, that it's left as a possible future gap rather than
+   guessed at.
+8. ~~**`ServerFieldId` has no `Options` (113) variant**~~ **Resolved.**
+   Added as part of item 7 above, since the bounce push needs it. The
+   module doc's one-directional-field example was also stale (`Options`
+   is no longer client-only) and has been updated to cite `FileNewName`
+   instead, plus a note that `Options` itself now carries different
+   meanings per direction. Still worth folding into item 15's full
+   field-by-field audit rather than treating as fully settled.
 9. ~~`USER_FLAGS` (112) may have two more meaningful bits...~~ **Resolved
    and implemented.** The reference server computes this field from a
    dedicated function, ORing in two bits beyond the four already

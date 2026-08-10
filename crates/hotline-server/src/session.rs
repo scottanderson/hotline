@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use futures::{SinkExt, StreamExt};
+use num_enum::{FromPrimitive, IntoPrimitive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
@@ -21,6 +22,35 @@ use crate::state::{
     AccessUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection, UserEntry,
     IDLE_THRESHOLD,
 };
+
+bitflags::bitflags! {
+    /// `Options` (113) bit meanings when `HTLC_HDR_USER_CHANGE` (304) sends
+    /// a persisted preference bitmap, distinct from the sequential values
+    /// carried in `HTLC_HDR_MSG` (108)/`HTLS_HDR_MSG` (104) (see [`MsgOption`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct UserChangeOptions: u16 {
+        const REFUSE_PM       = 0x01;
+        const REFUSE_CHAT     = 0x02;
+        const AUTO_RESPONSE   = 0x04;
+    }
+}
+
+/// `Options` (113) values on `HTLC_HDR_MSG` (108)/`HTLS_HDR_MSG` (104):
+/// which kind of instant message this is, or which kind of bounce a
+/// refusal/automatic-response reply carries.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
+#[repr(u16)]
+enum MsgOption {
+    UserMessage = 1,
+    RefuseMessage = 2,
+    RefuseChat = 3,
+    AutomaticResponse = 4,
+
+    /// Not recognized by this build.
+    #[num_enum(catch_all)]
+    Unknown(u16),
+}
 
 /// Which opcodes a session may currently send.
 enum SessionState {
@@ -47,6 +77,12 @@ pub struct Session {
     state: SessionState,
     /// Whether the last broadcast `UserChange` marked this session away.
     is_away: bool,
+    /// Refuses incoming private messages, set via `HTLC_HDR_USER_CHANGE` (304).
+    refuses_pm: bool,
+    /// Refuses incoming private chat invites, set via `HTLC_HDR_USER_CHANGE` (304).
+    refuses_chat: bool,
+    /// Custom automatic-response text sent to private-message senders, `None` when off.
+    automatic_response: Option<String>,
     /// Remote socket address this connection was accepted from.
     remote_addr: SocketAddr,
     /// When this connection was accepted.
@@ -75,6 +111,9 @@ impl Session {
             access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
+            refuses_pm: false,
+            refuses_chat: false,
+            automatic_response: None,
             remote_addr,
             connected_at: Instant::now(),
         };
@@ -228,7 +267,7 @@ impl Session {
             /* 108 */ ClientOpcode::Msg => self.on_private_msg(tx, state).await,
             /* 110 */ ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
             /* 112 */ ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
-            /* 113 */ ClientOpcode::ChatInvite => vec![self.on_chat_invite(tx, state).await],
+            /* 113 */ ClientOpcode::ChatInvite => self.on_chat_invite(tx, state).await,
             /* 114 */ ClientOpcode::ChatDecline => self.on_chat_decline(tx, state).await,
             /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
             /* 116 */ ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
@@ -402,6 +441,21 @@ impl Session {
             self.name = name;
         }
         let icon = tx.icon().unwrap_or(0);
+        let options = UserChangeOptions::from_bits_truncate(
+            tx.field(ClientFieldId::Options)
+                .and_then(Field::as_u16)
+                .unwrap_or(0),
+        );
+        self.refuses_pm = options.contains(UserChangeOptions::REFUSE_PM);
+        self.refuses_chat = options.contains(UserChangeOptions::REFUSE_CHAT);
+        self.automatic_response = options.contains(UserChangeOptions::AUTO_RESPONSE).then(|| {
+            tx.field(ClientFieldId::AutomaticResponse)
+                .map(Field::as_string)
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| {
+                    "I'm not able to respond right now. Please try later!".to_string()
+                })
+        });
         // Later changes are self-inclusive, unlike the join announcement.
         self.announce_user_change(icon, state, false).await;
         Vec::new()
@@ -422,6 +476,9 @@ impl Session {
                 remote_addr: self.remote_addr,
                 connected_at: self.connected_at,
                 last_active: Instant::now(),
+                refuses_pm: self.refuses_pm,
+                refuses_chat: self.refuses_chat,
+                automatic_response: self.automatic_response.clone(),
             })
             .await;
 
@@ -492,6 +549,8 @@ impl Session {
             self.access == Access::all() - Access::NO_AGREEMENT,
         );
         flags.set(UserFlags::NO_PRIVS, self.access.is_empty());
+        flags.set(UserFlags::REFUSES_PM, self.refuses_pm);
+        flags.set(UserFlags::REFUSES_CHAT, self.refuses_chat);
         flags
     }
 
@@ -652,21 +711,83 @@ impl Session {
         let Some(message) = tx.field(ClientFieldId::Text) else {
             return vec![tx.reply_error("missing message")];
         };
+        let options = tx
+            .field(ClientFieldId::Options)
+            .and_then(Field::as_u16)
+            .unwrap_or(0);
+        let is_user_message = MsgOption::from(options) == MsgOption::UserMessage;
 
-        state
-            .send_to(
-                target_id,
-                Transaction::push(
-                    ServerOpcode::Msg,
-                    vec![
-                        Field::u16(ServerFieldId::UserId, self.user_id),
-                        Field::string(ServerFieldId::Name, self.name.clone()),
-                        Field::string(ServerFieldId::Text, message.as_string()),
-                    ],
-                ),
-            )
-            .await;
-        vec![tx.reply(vec![])]
+        let target = state.user(target_id).await;
+        let mut replies = Vec::new();
+        if is_user_message {
+            if let Some(bounce) = target
+                .as_ref()
+                .and_then(|target| self.refusal_bounce(target_id, target, false))
+            {
+                replies.push(bounce);
+            }
+        }
+        if !target.is_some_and(|target| target.refuses_pm) {
+            let mut fields = vec![
+                Field::u16(ServerFieldId::UserId, self.user_id),
+                Field::string(ServerFieldId::Name, self.name.clone()),
+                Field::u16(ServerFieldId::Options, options),
+                Field::string(ServerFieldId::Text, message.as_string()),
+            ];
+            if let Some(quote) = tx.field(ClientFieldId::QuotingMsg) {
+                fields.push(Field::bytes(
+                    ServerFieldId::QuotingMsg,
+                    quote.as_bytes().into_owned(),
+                ));
+            }
+            state
+                .send_to(target_id, Transaction::push(ServerOpcode::Msg, fields))
+                .await;
+        }
+        replies.push(tx.reply(vec![]));
+        replies
+    }
+
+    /// Builds the bounce sent back to this session when `target` refuses
+    /// private messages/chat invites or has an automatic response
+    /// configured, or `None` when delivery should proceed normally. Gated
+    /// on this session's own PM-refusal setting for both message and
+    /// chat-invite bounces, matching the reference's own reuse of that
+    /// one flag.
+    fn refusal_bounce(
+        &self,
+        target_id: u16,
+        target: &UserEntry,
+        is_chat: bool,
+    ) -> Option<Transaction> {
+        let refuses = if is_chat {
+            target.refuses_chat
+        } else {
+            target.refuses_pm
+        };
+        if self.refuses_pm || !(target.automatic_response.is_some() || refuses) {
+            return None;
+        }
+        let (option, text) = match &target.automatic_response {
+            Some(response) => (MsgOption::AutomaticResponse, response.clone()),
+            None if is_chat => (
+                MsgOption::RefuseChat,
+                format!("{} does not accept private chats.", target.name),
+            ),
+            None => (
+                MsgOption::RefuseMessage,
+                format!("{} does not accept private messages.", target.name),
+            ),
+        };
+        Some(Transaction::push(
+            ServerOpcode::Msg,
+            vec![
+                Field::u16(ServerFieldId::UserId, target_id),
+                Field::string(ServerFieldId::Name, target.name.clone()),
+                Field::u16(ServerFieldId::Options, option.into()),
+                Field::string(ServerFieldId::Text, text),
+            ],
+        ))
     }
 
     /// 355: a message broadcast to every connected user.
@@ -1003,7 +1124,7 @@ impl Session {
     }
 
     /// 113: invite another user to a room this session belongs to.
-    async fn on_chat_invite(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_chat_invite(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let chat_id = tx
             .field(ClientFieldId::ChatId)
             .and_then(Field::as_u32)
@@ -1013,29 +1134,38 @@ impl Session {
             .and_then(Field::as_u16)
             .unwrap_or(0);
         if chat_id == 0 || target_id == 0 {
-            return tx.reply_error("missing chat id or user id");
+            return vec![tx.reply_error("missing chat id or user id")];
         }
         if let Err(reason) = state
             .invite_to_chat_room(chat_id, self.user_id, target_id)
             .await
         {
-            return tx.reply_error(reason);
+            return vec![tx.reply_error(reason)];
         }
 
-        state
-            .send_to(
-                target_id,
-                Transaction::push(
-                    ServerOpcode::ChatInvite,
-                    vec![
-                        Field::u32(ServerFieldId::ChatId, chat_id),
-                        Field::u16(ServerFieldId::UserId, self.user_id),
-                        Field::string(ServerFieldId::Name, self.name.clone()),
-                    ],
-                ),
-            )
-            .await;
-        tx.reply(vec![])
+        let mut replies = Vec::new();
+        if let Some(target) = state.user(target_id).await {
+            if let Some(bounce) = self.refusal_bounce(target_id, &target, true) {
+                replies.push(bounce);
+            }
+            if !target.refuses_chat {
+                state
+                    .send_to(
+                        target_id,
+                        Transaction::push(
+                            ServerOpcode::ChatInvite,
+                            vec![
+                                Field::u32(ServerFieldId::ChatId, chat_id),
+                                Field::u16(ServerFieldId::UserId, self.user_id),
+                                Field::string(ServerFieldId::Name, self.name.clone()),
+                            ],
+                        ),
+                    )
+                    .await;
+            }
+        }
+        replies.push(tx.reply(vec![]));
+        replies
     }
 
     /// 115: join a room, accepting an invitation or supplying its password.
@@ -1503,8 +1633,31 @@ mod tests {
             access_extra: AccessExtra::default(),
             state: SessionState::Joined,
             is_away: false,
+            refuses_pm: false,
+            refuses_chat: false,
+            automatic_response: None,
             remote_addr: "127.0.0.1:0".parse().unwrap(),
             connected_at: Instant::now(),
+        }
+    }
+
+    /// A minimal connected [`UserEntry`], for tests exercising
+    /// private-message/chat-invite refusal against another user.
+    fn test_user(user_id: u16, name: &str) -> UserEntry {
+        UserEntry {
+            user_id,
+            login: String::new(),
+            account_name: String::new(),
+            name: name.to_string(),
+            icon: 0,
+            access: Access::all(),
+            access_extra: AccessExtra::default(),
+            remote_addr: "127.0.0.1:0".parse().unwrap(),
+            connected_at: Instant::now(),
+            last_active: Instant::now(),
+            refuses_pm: false,
+            refuses_chat: false,
+            automatic_response: None,
         }
     }
 
@@ -1581,6 +1734,9 @@ mod tests {
                 remote_addr: "192.0.2.1:5500".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         let request = Transaction::request(
@@ -1614,6 +1770,9 @@ mod tests {
                 remote_addr: "192.0.2.1:5500".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         let request = Transaction::request(
@@ -2066,6 +2225,9 @@ mod tests {
             access_extra: AccessExtra::default(),
             state: SessionState::Agreement,
             is_away: false,
+            refuses_pm: false,
+            refuses_chat: false,
+            automatic_response: None,
             remote_addr: "127.0.0.1:0".parse().unwrap(),
             connected_at: Instant::now(),
         };
@@ -2169,6 +2331,9 @@ mod tests {
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         let mut rx = state.register_recipient(session.user_id).await;
@@ -2211,6 +2376,80 @@ mod tests {
         let partial = test_session("Carol", Access::READ_CHAT);
         assert!(!partial.user_flags().contains(UserFlags::ALL_PRIVS));
         assert!(!partial.user_flags().contains(UserFlags::NO_PRIVS));
+    }
+
+    #[tokio::test]
+    async fn user_change_reads_the_refusal_bits_out_of_options() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+
+        let request = Transaction::request(
+            ClientOpcode::UserChange,
+            1,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice".to_string()),
+                Field::u16(ClientFieldId::Icon, 0),
+                Field::u16(
+                    ClientFieldId::Options,
+                    (UserChangeOptions::REFUSE_PM | UserChangeOptions::REFUSE_CHAT).bits(),
+                ),
+            ],
+        );
+        session.on_user_change(&request, &state).await;
+
+        assert!(session.refuses_pm);
+        assert!(session.refuses_chat);
+        assert!(session.automatic_response.is_none());
+        assert!(session.user_flags().contains(UserFlags::REFUSES_PM));
+        assert!(session.user_flags().contains(UserFlags::REFUSES_CHAT));
+    }
+
+    #[tokio::test]
+    async fn user_change_reads_a_custom_automatic_response() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+
+        let request = Transaction::request(
+            ClientOpcode::UserChange,
+            1,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice".to_string()),
+                Field::u16(ClientFieldId::Icon, 0),
+                Field::u16(
+                    ClientFieldId::Options,
+                    UserChangeOptions::AUTO_RESPONSE.bits(),
+                ),
+                Field::string(ClientFieldId::AutomaticResponse, "Back in five."),
+            ],
+        );
+        session.on_user_change(&request, &state).await;
+
+        assert_eq!(session.automatic_response.as_deref(), Some("Back in five."));
+    }
+
+    #[tokio::test]
+    async fn user_change_falls_back_to_a_default_automatic_response_text() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+
+        let request = Transaction::request(
+            ClientOpcode::UserChange,
+            1,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice".to_string()),
+                Field::u16(ClientFieldId::Icon, 0),
+                Field::u16(
+                    ClientFieldId::Options,
+                    UserChangeOptions::AUTO_RESPONSE.bits(),
+                ),
+            ],
+        );
+        session.on_user_change(&request, &state).await;
+
+        assert_eq!(
+            session.automatic_response.as_deref(),
+            Some("I'm not able to respond right now. Please try later!")
+        );
     }
 
     #[tokio::test]
@@ -2302,6 +2541,144 @@ mod tests {
             sender_rx.try_recv().is_err(),
             "must not also deliver to the sender"
         );
+    }
+
+    #[tokio::test]
+    async fn private_message_echoes_options_onto_the_delivered_push() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(42).await;
+
+        let request = Transaction::request(
+            ClientOpcode::Msg,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 42),
+                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(ClientFieldId::Text, "hi there"),
+            ],
+        );
+        let replies = session.on_private_msg(&request, &state).await;
+        assert!(!replies[0].is_error());
+
+        let delivered = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Msg push");
+        assert_eq!(
+            delivered.field(ServerFieldId::Options).unwrap().as_u16(),
+            Some(MsgOption::UserMessage.into())
+        );
+    }
+
+    #[tokio::test]
+    async fn private_message_bounces_and_is_not_delivered_when_target_refuses() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                refuses_pm: true,
+                ..test_user(42, "Bob")
+            })
+            .await;
+        let mut target_rx = state.register_recipient(42).await;
+
+        let request = Transaction::request(
+            ClientOpcode::Msg,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 42),
+                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(ClientFieldId::Text, "hi there"),
+            ],
+        );
+        let replies = session.on_private_msg(&request, &state).await;
+
+        assert_eq!(replies.len(), 2);
+        assert_eq!(
+            replies[0].field(ServerFieldId::Text).unwrap().as_string(),
+            "Bob does not accept private messages."
+        );
+        assert_eq!(
+            replies[0].field(ServerFieldId::Options).unwrap().as_u16(),
+            Some(MsgOption::RefuseMessage.into())
+        );
+        assert!(!replies[1].is_error());
+        assert!(
+            target_rx.try_recv().is_err(),
+            "a refusing target must not receive the message"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_message_delivers_and_bounces_an_automatic_response() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                automatic_response: Some("At lunch, back soon.".to_string()),
+                ..test_user(42, "Bob")
+            })
+            .await;
+        let mut target_rx = state.register_recipient(42).await;
+
+        let request = Transaction::request(
+            ClientOpcode::Msg,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 42),
+                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(ClientFieldId::Text, "hi there"),
+            ],
+        );
+        let replies = session.on_private_msg(&request, &state).await;
+
+        assert_eq!(replies.len(), 2);
+        assert_eq!(
+            replies[0].field(ServerFieldId::Text).unwrap().as_string(),
+            "At lunch, back soon."
+        );
+        assert_eq!(
+            replies[0].field(ServerFieldId::Options).unwrap().as_u16(),
+            Some(MsgOption::AutomaticResponse.into())
+        );
+        let delivered = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("automatic response still lets the message through");
+        assert_eq!(
+            delivered.field(ServerFieldId::Text).unwrap().as_string(),
+            "hi there"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_message_no_bounce_when_sender_also_refuses() {
+        let mut session = test_session("Alice", Access::all());
+        session.refuses_pm = true;
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                refuses_pm: true,
+                ..test_user(42, "Bob")
+            })
+            .await;
+
+        let request = Transaction::request(
+            ClientOpcode::Msg,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 42),
+                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(ClientFieldId::Text, "hi there"),
+            ],
+        );
+        let replies = session.on_private_msg(&request, &state).await;
+
+        assert_eq!(replies.len(), 1);
+        assert!(!replies[0].is_error());
     }
 
     #[tokio::test]
@@ -2550,6 +2927,9 @@ mod tests {
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         let mut bob_rx = state.register_recipient(bob.user_id).await;
@@ -2616,6 +2996,9 @@ mod tests {
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         let mut bob_rx = state.register_recipient(bob.user_id).await;
@@ -2983,6 +3366,9 @@ mod tests {
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         state
@@ -2997,6 +3383,9 @@ mod tests {
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
 
@@ -3300,7 +3689,7 @@ mod tests {
         );
         let reply = alice.on_chat_invite(&invite, &state).await;
 
-        assert!(reply.is_error());
+        assert!(reply[0].is_error());
     }
 
     #[tokio::test]
@@ -3314,7 +3703,7 @@ mod tests {
             1,
             vec![Field::u32(ClientFieldId::ChatId, chat_id)],
         );
-        assert!(alice.on_chat_invite(&missing_uid, &state).await.is_error());
+        assert!(alice.on_chat_invite(&missing_uid, &state).await[0].is_error());
 
         let zero_chat_id = Transaction::request(
             ClientOpcode::ChatInvite,
@@ -3324,7 +3713,7 @@ mod tests {
                 Field::u16(ClientFieldId::Uid, 2),
             ],
         );
-        assert!(alice.on_chat_invite(&zero_chat_id, &state).await.is_error());
+        assert!(alice.on_chat_invite(&zero_chat_id, &state).await[0].is_error());
     }
 
     #[tokio::test]
@@ -3343,6 +3732,9 @@ mod tests {
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         let chat_id = state.create_chat_room(1).await;
@@ -3358,7 +3750,7 @@ mod tests {
         );
         let reply = alice.on_chat_invite(&invite, &state).await;
 
-        assert!(reply.is_error());
+        assert!(reply[0].is_error());
     }
 
     #[tokio::test]
@@ -3377,6 +3769,9 @@ mod tests {
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
             })
             .await;
         let chat_id = state.create_chat_room(1).await;
@@ -3392,7 +3787,46 @@ mod tests {
         );
         let reply = alice.on_chat_invite(&invite, &state).await;
 
-        assert!(reply.is_error());
+        assert!(reply[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn chat_invite_bounces_and_is_not_delivered_when_target_refuses() {
+        let alice = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                refuses_chat: true,
+                ..test_user(2, "Bob")
+            })
+            .await;
+        let mut bob_rx = state.register_recipient(2).await;
+        let chat_id = state.create_chat_room(1).await;
+
+        let invite = Transaction::request(
+            ClientOpcode::ChatInvite,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::u16(ClientFieldId::Uid, 2),
+            ],
+        );
+        let replies = alice.on_chat_invite(&invite, &state).await;
+
+        assert_eq!(replies.len(), 2);
+        assert_eq!(
+            replies[0].field(ServerFieldId::Text).unwrap().as_string(),
+            "Bob does not accept private chats."
+        );
+        assert_eq!(
+            replies[0].field(ServerFieldId::Options).unwrap().as_u16(),
+            Some(MsgOption::RefuseChat.into())
+        );
+        assert!(!replies[1].is_error());
+        assert!(
+            bob_rx.try_recv().is_err(),
+            "a refusing target must not receive the invite"
+        );
     }
 
     #[tokio::test]

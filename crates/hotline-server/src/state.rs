@@ -48,6 +48,16 @@ pub struct UserEntry {
     /// Last time this user sent any request. Compared against
     /// [`IDLE_THRESHOLD`] by [`UserEntry::is_idle`].
     pub last_active: Instant,
+    /// Refuses incoming private messages. Also kept in
+    /// [`crate::session::Session`].
+    pub refuses_pm: bool,
+    /// Refuses incoming private chat invites. Also kept in
+    /// [`crate::session::Session`].
+    pub refuses_chat: bool,
+    /// Custom automatic-response text sent to private-message senders,
+    /// `None` when the feature is off. Also kept in
+    /// [`crate::session::Session`].
+    pub automatic_response: Option<String>,
 }
 
 impl UserEntry {
@@ -73,6 +83,12 @@ impl UserEntry {
         }
         if self.access.is_empty() {
             bits |= UserFlags::NO_PRIVS.bits();
+        }
+        if self.refuses_pm {
+            bits |= UserFlags::REFUSES_PM.bits();
+        }
+        if self.refuses_chat {
+            bits |= UserFlags::REFUSES_CHAT.bits();
         }
         bits
     }
@@ -889,6 +905,9 @@ mod tests {
                     remote_addr: "127.0.0.1:0".parse().unwrap(),
                     connected_at: Instant::now(),
                     last_active: Instant::now(),
+                    refuses_pm: false,
+                    refuses_chat: false,
+                    automatic_response: None,
                 })
                 .await;
         }
@@ -928,6 +947,9 @@ mod tests {
                     remote_addr: "127.0.0.1:0".parse().unwrap(),
                     connected_at: Instant::now(),
                     last_active: Instant::now(),
+                    refuses_pm: false,
+                    refuses_chat: false,
+                    automatic_response: None,
                 })
                 .await;
         }
