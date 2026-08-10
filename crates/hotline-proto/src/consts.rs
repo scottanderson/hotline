@@ -104,13 +104,17 @@ impl Default for Access {
     /// upload, and download files, read and post news, send and receive
     /// private messages. No admin or destructive privileges.
     fn default() -> Self {
-        Self::READ_CHAT
-            | Self::SEND_CHAT
-            | Self::DOWNLOAD_FILE
+        Self::empty()
             | Self::UPLOAD_FILE
+            | Self::DOWNLOAD_FILE
+            | Self::READ_CHAT
+            | Self::SEND_CHAT
+            | Self::CREATE_CHAT
             | Self::NEWS_READ_ART
             | Self::POST_NEWS_ART
             | Self::ANY_NAME
+            | Self::UPLOAD_FOLDER
+            | Self::DOWNLOAD_FOLDER
             | Self::SEND_MESSAGE
     }
 }
