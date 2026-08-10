@@ -40,10 +40,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    entirely and falls through to a success reply.~~ **Resolved.** An
    absent `FileNewName` now replies with an empty success transaction
    instead of an error.
-4. `on_file_mkdir`/`on_file_getinfo` don't support the `FileName`-absent
+4. ~~`on_file_mkdir`/`on_file_getinfo` don't support the `FileName`-absent
    fallback: when only `FilePath` is given, the reference derives the
    target from `FilePath`'s last component. Lower priority (unusual client
-   behavior).
+   behavior).~~ **Resolved.** Added `Session::file_name_and_dir_from_path_tail`,
+   used by `on_file_mkdir`/`on_file_getinfo`: when `FileName` is absent, the
+   target name comes from `FilePath`'s last component and the containing
+   directory from the rest.
 5. **Threaded news.** Current news support is flat/classic only; also
    covers the unhandled `NewsListdir`/`NewsListcategory`/`NewsDelete`/
    `NewsMkdir`/`NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/

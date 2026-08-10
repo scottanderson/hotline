@@ -860,6 +860,18 @@ impl Session {
             .and_then(|field| HlPath::decode(&field.as_bytes()).ok())
     }
 
+    /// Like `file_name_and_dir`, but when `FILE_NAME` (201) is absent,
+    /// derives the target name and containing directory from `FILE_PATH`
+    /// (202)'s last component instead of erroring.
+    fn file_name_and_dir_from_path_tail(&self, tx: &Transaction) -> Option<(String, HlPath)> {
+        if tx.field(ClientFieldId::FileName).is_some() {
+            return self.file_name_and_dir(tx);
+        }
+        let path = self.path_field(tx, ClientFieldId::FilePath)?;
+        let (name, dir) = path.components.split_last()?;
+        Some((name.clone(), HlPath::new(dir.to_vec())))
+    }
+
     /// 202: start a download. Allocates a transfer reference and tells
     /// the client the total byte count (flattened-object overhead plus
     /// the file's own bytes) to expect on the data connection.
@@ -950,7 +962,7 @@ impl Session {
         if let Err(reason) = self.require(Access::CREATE_FOLDER) {
             return vec![tx.reply_error(reason)];
         }
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+        let Some((name, dir)) = self.file_name_and_dir_from_path_tail(tx) else {
             return vec![tx.reply_error("huh?!?")];
         };
         let requester = FileRequester { login: &self.login };
@@ -967,7 +979,7 @@ impl Session {
         if !self.access_extra.contains(AccessExtra::FILE_GETINFO) {
             return vec![tx.reply_error("You are not allowed to do that.")];
         }
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
+        let Some((name, dir)) = self.file_name_and_dir_from_path_tail(tx) else {
             return vec![tx.reply_error("huh?!?")];
         };
         let requester = FileRequester { login: &self.login };
@@ -4475,6 +4487,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_getinfo_derives_name_from_file_path_when_file_name_is_absent() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::FILE_GETINFO);
+
+        let getinfo = Transaction::request(
+            ClientOpcode::FileGetinfo,
+            1,
+            vec![Field::bytes(
+                ClientFieldId::FilePath,
+                HlPath::new(["a.txt"]).encode().unwrap(),
+            )],
+        );
+        let [reply] = session
+            .on_file_getinfo(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert_eq!(
+            reply.field(ServerFieldId::FileName).unwrap().as_string(),
+            "a.txt"
+        );
+    }
+
+    #[tokio::test]
     async fn file_setinfo_renames_a_file() {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
@@ -4555,6 +4595,32 @@ mod tests {
         assert!(
             state
                 .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_mkdir_derives_name_from_file_path_when_file_name_is_absent() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+
+        let mkdir = Transaction::request(
+            ClientOpcode::FileMkdir,
+            1,
+            vec![Field::bytes(
+                ClientFieldId::FilePath,
+                HlPath::new(["NewFolder"]).encode().unwrap(),
+            )],
+        );
+        let [reply] = session
+            .on_file_mkdir(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(
+            state
+                .file_exists(FileRequester { login: "" }, &HlPath::default(), "NewFolder")
                 .await
         );
     }
