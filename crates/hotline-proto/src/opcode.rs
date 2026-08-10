@@ -16,6 +16,8 @@
 //! name once, and `Debug` reads it back via [`ClientOpcode::original_name`]/
 //! [`ServerOpcode::original_name`] rather than storing the string a
 //! second time.
+//!
+//! [`ClientOpcode::Ping`] (500) doesn't appear in `HLProtocol.md`.
 
 use num_enum::{FromPrimitive, IntoPrimitive};
 
@@ -165,7 +167,7 @@ pub enum ClientOpcode {
     /// Delete a threaded news article (411).
     /// Original: `HTLC_HDR_NEWS_DELETETHREAD`.
     NewsDeletethread = 411,
-    /// Idle keep-alive ping (500).
+    /// Idle keep-alive ping (500); not documented in `HLProtocol.md`.
     /// Original: `HTLC_HDR_PING`.
     Ping = 500,
     /// Not recognized by this build. Carries the raw wire value so

@@ -100,10 +100,14 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     through `get_dir_mut`), leaving an empty directory tree behind instead
     of erroring "not found". `hls` always uses `DirectoryFileProvider`, so
     this doesn't affect production, but it's a test-only divergence.
-12. `HTLC_HDR_PING` (500) isn't in the original `HLProtocol.md` doc — a
+12. ~~`HTLC_HDR_PING` (500) isn't in the original `HLProtocol.md` doc — a
     post-original addition, like `AccessPrivileges::VOICE_CHAT`/
-    `READ_CHAT_HISTORY`. `opcode.rs` doesn't flag `Ping` the same way yet.
-    Cosmetic, not confirmed with the user.
+    `READ_CHAT_HISTORY`. `opcode.rs` doesn't flag `Ping` the same way
+    yet.~~ **Superseded by item 15.** The opcode is missing only from
+    `HLProtocol.md`, not from either reference server, which both
+    implement it under their own (different) names — see item 15's
+    added note. `opcode.rs`'s doc comments just say it's undocumented
+    in `HLProtocol.md`; the actual naming question belongs to item 15.
 13. Revisit `const fn` lost from `ClientOpcode`/`ServerOpcode`'s `From`/
     `Into` (via `num_enum`, not const-stable), which cascaded to
     `TransactionType::from_client_wire`/`from_server_wire` and
@@ -137,6 +141,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `ChatOptions`. Newly added fields/opcodes since then use the
     reference's own tail (`UserAlias`, `GetUserList`, `SetUserList`);
     everything older still uses the shortened form until this item lands.
+    Also applies to `Ping` (500): absent from `HLProtocol.md` entirely,
+    so it has no official name to cite there either; the
+    `HTLC_HDR_PING` name currently used for it traces to the secondary
+    reference used for cross-checking (see AGENTS.md), while the
+    primary reference's own header names the same opcode
+    `myTran_KeepConnectionAlive`. Worth resolving which name this item
+    settles on before renaming it.
 16. Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
     `ClientOpcode`/`ServerOpcode` into one `Opcode`. `HLProtocol.md` has no
     client/server split in its numbering — one flat `myField_*` list, one
