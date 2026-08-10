@@ -34,10 +34,12 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    Mac clients) sends this exact trimmed set when that data isn't
    available. **Resolved**, confirmed against non-HFS server behavior
    rather than the primary reference's HFS-only code path.
-3. `on_file_setinfo` wrongly requires `FileNewName`. The reference only
-   errors if *both* rename and comment are absent; since comment storage
-   isn't implemented, the correct behavior is a no-op (empty reply) when
-   `FileNewName` is absent.
+3. ~~`on_file_setinfo` wrongly requires `FileNewName`. The reference never
+   errors on an absent rename or comment; a missing `FileNewName` field
+   reads back as an empty string, which just skips the rename step
+   entirely and falls through to a success reply.~~ **Resolved.** An
+   absent `FileNewName` now replies with an empty success transaction
+   instead of an error.
 4. `on_file_mkdir`/`on_file_getinfo` don't support the `FileName`-absent
    fallback: when only `FilePath` is given, the reference derives the
    target from `FilePath`'s last component. Lower priority (unusual client

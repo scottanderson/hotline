@@ -996,8 +996,11 @@ impl Session {
         let Some((name, dir)) = self.file_name_and_dir(tx) else {
             return vec![tx.reply_error("huh?!?")];
         };
+        // A comment-only request (no rename) is a no-op: comment storage
+        // isn't implemented, and only an absent rename *and* comment is an
+        // error.
         let Some(new_name) = tx.field(ClientFieldId::FileNewName).map(Field::as_string) else {
-            return vec![tx.reply_error("huh?!?")];
+            return vec![tx.reply(vec![])];
         };
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
@@ -4528,6 +4531,32 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_setinfo_without_a_new_name_is_a_no_op() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let setinfo = Transaction::request(
+            ClientOpcode::FileSetinfo,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_file_setinfo(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
     }
 
     #[tokio::test]
