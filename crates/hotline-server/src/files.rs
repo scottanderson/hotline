@@ -151,6 +151,19 @@ impl Dir {
         Some(current)
     }
 
+    /// Like [`Self::get_dir`], but mutable; reports a missing intermediate
+    /// directory as `None` instead of creating it.
+    fn get_dir_mut_existing<'a>(&'a mut self, components: &[String]) -> Option<&'a mut Dir> {
+        let mut current = self;
+        for component in components {
+            current = match current.entries.get_mut(component)? {
+                Entry::Dir(d) => d,
+                Entry::File(_) => return None,
+            };
+        }
+        Some(current)
+    }
+
     fn get_dir_mut<'a>(&'a mut self, components: &[String]) -> &'a mut Dir {
         let mut current = self;
         for component in components {
@@ -338,7 +351,9 @@ impl FileProvider for InMemoryFileProvider {
         _is_dir: bool,
     ) -> io::Result<()> {
         let mut root = self.root.lock().unwrap();
-        let d = root.get_dir_mut(&dir.components);
+        let d = root
+            .get_dir_mut_existing(&dir.components)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         d.entries
             .remove(name)
             .map(|_| ())
@@ -369,7 +384,9 @@ impl FileProvider for InMemoryFileProvider {
         new_name: &str,
     ) -> io::Result<()> {
         let mut root = self.root.lock().unwrap();
-        let d = root.get_dir_mut(&dir.components);
+        let d = root
+            .get_dir_mut_existing(&dir.components)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         if d.entries.contains_key(new_name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
@@ -390,11 +407,21 @@ impl FileProvider for InMemoryFileProvider {
     ) -> io::Result<()> {
         let mut root = self.root.lock().unwrap();
         let entry = root
-            .get_dir_mut(&dir.components)
+            .get_dir_mut_existing(&dir.components)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?
             .entries
             .remove(name)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        let dest = root.get_dir_mut(&to_dir.components);
+        let dest = match root.get_dir_mut_existing(&to_dir.components) {
+            Some(dest) => dest,
+            None => {
+                // Put the entry back where it came from before reporting failure.
+                root.get_dir_mut(&dir.components)
+                    .entries
+                    .insert(name.to_string(), entry);
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
+        };
         if dest.entries.contains_key(name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
@@ -509,6 +536,85 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "a.txt");
+    }
+
+    #[tokio::test]
+    async fn delete_in_a_missing_directory_errors_without_creating_it() {
+        let provider = InMemoryFileProvider::default();
+
+        let err = provider
+            .delete(requester(), &HlPath::new(["Nope"]), "a.txt", false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(provider
+            .list(requester(), &HlPath::new(["Nope"]))
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn rename_in_a_missing_directory_errors_without_creating_it() {
+        let provider = InMemoryFileProvider::default();
+
+        let err = provider
+            .rename(requester(), &HlPath::new(["Nope"]), "a.txt", "b.txt")
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(provider
+            .list(requester(), &HlPath::new(["Nope"]))
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn move_from_a_missing_directory_errors_without_creating_it() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::default(), "a.txt", *b"hi");
+
+        let err = provider
+            .r#move(
+                requester(),
+                &HlPath::new(["Nope"]),
+                "a.txt",
+                &HlPath::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(provider
+            .list(requester(), &HlPath::new(["Nope"]))
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn move_into_a_missing_directory_errors_without_creating_it() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::default(), "a.txt", *b"hi");
+
+        let err = provider
+            .r#move(
+                requester(),
+                &HlPath::default(),
+                "a.txt",
+                &HlPath::new(["Nope"]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(provider
+            .list(requester(), &HlPath::new(["Nope"]))
+            .await
+            .is_none());
+
+        // The entry should still be where it started.
+        assert!(
+            provider
+                .exists(requester(), &HlPath::default(), "a.txt")
+                .await
+        );
     }
 
     #[tokio::test]

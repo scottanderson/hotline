@@ -4505,6 +4505,7 @@ mod tests {
     async fn file_move_relocates_a_file() {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
+        files.seed(&HlPath::new(["Sub"]), ".keep", *b"");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 

@@ -107,11 +107,22 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     returning `ProtoError::Malformed`. 256 isn't a reference-matched value
     (no reference behavior to match here), just a decoder-side safety bound
     picked to be generously beyond any real client's directory depth.
-11. `InMemoryFileProvider::delete`/`rename`/`r#move` auto-vivify missing
+11. ~~`InMemoryFileProvider::delete`/`rename`/`r#move` auto-vivify missing
     intermediate directories as a side effect of a failed lookup (routes
     through `get_dir_mut`), leaving an empty directory tree behind instead
     of erroring "not found". `hls` always uses `DirectoryFileProvider`, so
-    this doesn't affect production, but it's a test-only divergence.
+    this doesn't affect production, but it's a test-only divergence.~~
+    **Resolved.** Added a non-vivifying `Dir::get_dir_mut_existing`
+    alongside the existing vivifying `get_dir_mut` (kept as-is for
+    `mkdir`/`seed`/`create_write`, which should still create missing
+    directories); `delete`/`rename`/`r#move` now use it and return
+    `io::ErrorKind::NotFound` instead of creating the missing directory.
+    `r#move`'s destination directory is checked the same way, matching the
+    reference server's own "destination folder could not be found" error
+    rather than creating it. Also fixed
+    `session::tests::file_move_relocates_a_file`, which had been passing
+    only because of the auto-vivify bug (it moved a file into a folder it
+    never created).
 12. ~~`HTLC_HDR_PING` (500) isn't in the original `HLProtocol.md` doc — a
     post-original addition, like `AccessPrivileges::VOICE_CHAT`/
     `READ_CHAT_HISTORY`. `opcode.rs` doesn't flag `Ping` the same way
