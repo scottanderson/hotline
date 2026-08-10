@@ -131,12 +131,17 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     drift-prone duplication `num_enum` was adopted to avoid) or an
     unsafe transmute (same reason, worse). Neither is the small,
     low-risk change this item was looking for, so left as is.
-14. Clean up `Session::handshake`'s exact match: a single `buf !=
+14. ~~Clean up `Session::handshake`'s exact match: a single `buf !=
     ClientHandshake::default().encode()` comparison, matching the
     reference's own `memcmp` (no per-field version reasoning, no reply on
     mismatch). Works and is reference-accurate, but gives no diagnostic on
     failure. Revisit without regressing the "no reply on mismatch"
-    behavior.
+    behavior.~~ **Already resolved.** `handshake`'s `HandshakeRejected`
+    error propagates through `Session::run`'s `?` to `server.rs`'s
+    `tracing::warn!(%peer, error = %e, "session ended with error")`,
+    which already logs the peer and the specific rejection reason on any
+    session error, including this one. No wire-visible behavior changes:
+    the connection still closes without a reply on mismatch.
 15. Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
     naming used throughout doc comments and `opcode_names!`/field-id
     tables. That convention comes from the reference's own C header, which
