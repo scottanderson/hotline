@@ -62,6 +62,11 @@ pub struct HlPath {
 }
 
 impl HlPath {
+    /// Decoder-side safety bound on component count, well beyond any real
+    /// client's directory depth, to avoid an oversized allocation from a
+    /// malformed `levels` count.
+    const MAX_COMPONENTS: usize = 256;
+
     /// Build a path from components.
     pub fn new(components: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
@@ -89,6 +94,12 @@ impl HlPath {
             });
         }
         let levels = u16::from_be_bytes([buf[0], buf[1]]) as usize;
+        if levels > Self::MAX_COMPONENTS {
+            return Err(ProtoError::Malformed(format!(
+                "path has {levels} components, more than the max of {}",
+                Self::MAX_COMPONENTS
+            )));
+        }
         let mut offset = 2;
         let mut components = Vec::with_capacity(levels);
         for _ in 0..levels {
@@ -294,6 +305,16 @@ mod tests {
     fn path_encode_rejects_an_oversized_component() {
         let path = HlPath::new(["x".repeat(256)]);
         assert!(matches!(path.encode(), Err(ProtoError::StringTooLong(_))));
+    }
+
+    #[test]
+    fn path_decode_rejects_too_many_components() {
+        let mut buf = ((HlPath::MAX_COMPONENTS + 1) as u16).to_be_bytes().to_vec();
+        buf.extend(std::iter::repeat_n(0u8, HlPath::MAX_COMPONENTS + 1));
+        assert!(matches!(
+            HlPath::decode(&buf),
+            Err(ProtoError::Malformed(_))
+        ));
     }
 
     #[test]

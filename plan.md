@@ -90,11 +90,15 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    `Access::all() - Access::NO_AGREEMENT`/`Access::is_empty()` comparisons
    already used elsewhere for the "everything enabled" hardcoded bitmap
    (backlog item 1) and account file `"ALL"` parsing.
-10. Unbounded `FILE_PATH` component count: `HlPath::decode` caps nothing
+10. ~~Unbounded `FILE_PATH` component count: `HlPath::decode` caps nothing
     beyond the wire's own per-component 255-byte length, so one request can
     carry up to 65535 path levels. Pre-existing on `FILE_LIST`/`_GET`/
     `_PUT`; `FILE_MOVE`/`FILE_SYMLINK` each decode two such paths. Worth a
-    depth/size limit eventually, not urgent.
+    depth/size limit eventually, not urgent.~~ **Resolved.** `HlPath::decode`
+    now rejects a declared component count over 256 before allocating,
+    returning `ProtoError::Malformed`. 256 isn't a reference-matched value
+    (no reference behavior to match here), just a decoder-side safety bound
+    picked to be generously beyond any real client's directory depth.
 11. `InMemoryFileProvider::delete`/`rename`/`r#move` auto-vivify missing
     intermediate directories as a side effect of a failed lookup (routes
     through `get_dir_mut`), leaving an empty directory tree behind instead
