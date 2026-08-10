@@ -2273,6 +2273,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agreed_selfinfo_sends_the_session_real_access_bitmap() {
+        let mut session = test_session("guest1", Access::DOWNLOAD_FILE);
+        let state = SharedState::default();
+
+        let agreed = Transaction::request(
+            ClientOpcode::Agreed,
+            1,
+            vec![
+                Field::string(ClientFieldId::Name, "Alice"),
+                Field::u16(ClientFieldId::Icon, 42),
+            ],
+        );
+        let replies = session.on_agreed(&agreed, &state).await;
+
+        let selfinfo = replies
+            .iter()
+            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::UserSelfinfo))
+            .expect("on_agreed should push UserSelfinfo");
+        assert_eq!(
+            selfinfo
+                .field(ServerFieldId::Access)
+                .and_then(Field::as_u64),
+            Some(Access::DOWNLOAD_FILE.bits())
+        );
+    }
+
+    #[tokio::test]
     async fn login_colors_by_privilege_not_by_admin_login_identity() {
         // Color derives from DISCONNECT_USERS alone, even for a non-admin
         // login, and must be correct in the join broadcast itself.

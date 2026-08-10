@@ -10,10 +10,6 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   visible to `GETLIST` immediately at accept, before `Login` even arrives
   (blank name/icon until set). This server only becomes visible at `Login`
   time. Low priority.
-- **`UserSelfinfo`'s access field.** The reference always sends a hardcoded
-  "everything enabled" fake access bitmap in this push; enforcement is
-  entirely server side. This server sends the real computed access instead,
-  which real clients render wrong (see backlog item 1).
 - **`reply_error()` text doesn't match the reference's error strings.** The
   reference uses short, sometimes cryptic strings (`"who?!?"`, `"Uh, no."`);
   this server uses friendlier text. Not changed yet — decide with the user
@@ -21,13 +17,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
 
 ## Backlog, in priority order
 
-1. **Fix `UserSelfinfo`'s access field to match the reference's hardcoded
-   bitmap.** Confirmed real-client bug: sending the real computed
-   `AccessPrivileges` (`self.access.bits()` in `Session::complete_join`)
-   instead of the reference's hardcoded "everything enabled" value means
-   real clients show wrong permissions for themselves. Enforcement is
-   server side regardless of this field, so sending the hardcoded value
-   should be safe.
+1. **`UserSelfinfo`'s access field sends the session's real privileges.**
+   `Session::complete_join`'s push sends `self.access.bits()`, the same
+   bitmap set at login/agreement time; the reference does the same
+   (`inClient->access`, assigned from the account's real stored
+   privileges with no hardcoding, is what's pushed on this opcode both at
+   login and at agreement). **Resolved**, with a regression test covering
+   this field.
 2. `on_file_getinfo` sends `FileType`/`FileCreator`/`FileDateCreate`/
    `FileComment` as zeroed placeholders. With HFS disabled (this codebase's
    own "no real HFS metadata" scope) the reference sends only
@@ -96,8 +92,7 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
    `Session::user_flags` and `UserEntry::flags`
    (`crates/hotline-server/src/session.rs`, `state.rs`) using the same
    `Access::all() - Access::NO_AGREEMENT`/`Access::is_empty()` comparisons
-   already used elsewhere for the "everything enabled" hardcoded bitmap
-   (backlog item 1) and account file `"ALL"` parsing.
+   already used elsewhere for account file `"ALL"` parsing.
 10. ~~Unbounded `FILE_PATH` component count: `HlPath::decode` caps nothing
     beyond the wire's own per-component 255-byte length, so one request can
     carry up to 65535 path levels. Pre-existing on `FILE_LIST`/`_GET`/
@@ -218,9 +213,7 @@ the real Hotline 1.2.3 client), the accounts subsystem (named-account
 login, account CRUD opcodes, the seeded `admin`/`admin` and passwordless
 `guest` both providers start with), idle-to-away status broadcast, and
 chat room invite/password gating have only been unit-tested plus one
-manual `hlc` smoke test — not yet exercised against a real client. The
-`UserSelfinfo` access-field bug (backlog item 1) *was* found by real-client
-testing, so that pass is worth repeating as more surface lands.
+manual `hlc` smoke test — not yet exercised against a real client.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
