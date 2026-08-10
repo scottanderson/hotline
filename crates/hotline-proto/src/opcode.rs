@@ -120,6 +120,12 @@ pub enum ClientOpcode {
     /// Announce this client's nick/icon/options (304).
     /// Original: `HTLC_HDR_USER_CHANGE`.
     UserChange = 304,
+    /// Fetch every account at once, for bulk editing (348).
+    /// Original: `HTLC_HDR_GET_USER_LIST`.
+    GetUserList = 348,
+    /// Save a bulk-edited account list (349).
+    /// Original: `HTLC_HDR_SET_USER_LIST`.
+    SetUserList = 349,
     /// Create an account (350).
     /// Original: `HTLC_HDR_ACCOUNT_CREATE`.
     AccountCreate = 350,
@@ -195,6 +201,8 @@ opcode_names!(
     (HTLC_HDR_USER_GETLIST, UserGetlist),
     (HTLC_HDR_USER_GETINFO, UserGetinfo),
     (HTLC_HDR_USER_CHANGE, UserChange),
+    (HTLC_HDR_GET_USER_LIST, GetUserList),
+    (HTLC_HDR_SET_USER_LIST, SetUserList),
     (HTLC_HDR_ACCOUNT_CREATE, AccountCreate),
     (HTLC_HDR_ACCOUNT_DELETE, AccountDelete),
     (HTLC_HDR_ACCOUNT_READ, AccountRead),
@@ -408,6 +416,8 @@ mod tests {
             ("101 HTLC_HDR_NEWSFILE_GET", NewsfileGet),
             ("207 HTLC_HDR_FILE_SETINFO", FileSetinfo),
             ("300 HTLC_HDR_USER_GETLIST", UserGetlist),
+            ("348 HTLC_HDR_GET_USER_LIST", GetUserList),
+            ("349 HTLC_HDR_SET_USER_LIST", SetUserList),
             ("371 HTLC_HDR_NEWS_LISTCATEGORY", NewsListcategory),
             ("500 HTLC_HDR_PING", Ping),
             ("57005 (unrecognized)", Unknown(0xDEAD)),

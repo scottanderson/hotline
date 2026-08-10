@@ -128,6 +128,15 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `opcode.rs`, `field_id.rs`, every "Original: `HTLC_HDR_X`" comment, and
     AGENTS.md's own style rule mandating `HTLC_HDR_*` (which would need to
     change too). Not started — wide, mechanical, non-trivial rename.
+    Confirmed concretely while adding `HTLC_HDR_GET_USER_LIST`/
+    `HTLC_HDR_SET_USER_LIST` (348/349): most existing 100-116 range field
+    variants (`Login`, `Password`, `Access`, `Uid`, `Icon`, ...) are
+    shortened Rust-ish names, not the reference's own tail (`UserLogin`,
+    `UserPassword`, `UserAccess`, `UserID`, `UserIconID`, ...); field 109
+    is `Style`/`HTLC_DATA_STYLE` here but the reference calls it
+    `ChatOptions`. Newly added fields/opcodes since then use the
+    reference's own tail (`UserAlias`, `GetUserList`, `SetUserList`);
+    everything older still uses the shortened form until this item lands.
 16. Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
     `ClientOpcode`/`ServerOpcode` into one `Opcode`. `HLProtocol.md` has no
     client/server split in its numbering — one flat `myField_*` list, one

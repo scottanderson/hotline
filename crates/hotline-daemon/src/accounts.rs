@@ -99,6 +99,15 @@ impl AccountProvider for FileAccountProvider {
             Err(e) => Err(e.to_string()),
         }
     }
+
+    async fn list(&self) -> Vec<(String, Account)> {
+        self.cache
+            .read()
+            .await
+            .iter()
+            .map(|(login, account)| (login.clone(), account.clone()))
+            .collect()
+    }
 }
 
 #[cfg(test)]

@@ -276,6 +276,18 @@ impl SharedState {
         self.users.read().await.contains_key(&user_id)
     }
 
+    /// Every currently connected user ID logged in under `login`, e.g. to
+    /// disconnect them after their account is deleted or renamed away.
+    pub async fn user_ids_for_login(&self, login: &str) -> Vec<u16> {
+        self.users
+            .read()
+            .await
+            .values()
+            .filter(|entry| entry.login == login)
+            .map(|entry| entry.user_id)
+            .collect()
+    }
+
     /// `Err("no such user")` unless `user_id` is currently connected.
     pub async fn require_connected_user(&self, user_id: u16) -> Result<(), &'static str> {
         self.has_user(user_id)
@@ -844,6 +856,14 @@ impl SharedState {
             Ok(false) => Err("no such account".to_string()),
             Err(reason) => Err(reason),
         }
+    }
+
+    /// Every account, login and details together, sorted by login for a
+    /// deterministic listing order (`HTLC_HDR_GET_USER_LIST`, 348).
+    pub async fn list_accounts(&self) -> Vec<(String, Account)> {
+        let mut accounts = self.accounts.list().await;
+        accounts.sort_by(|(a, _), (b, _)| a.cmp(b));
+        accounts
     }
 }
 

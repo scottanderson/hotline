@@ -211,41 +211,74 @@ impl Transaction {
         self.field(ClientFieldId::Version).and_then(Field::as_u16)
     }
 
-    /// Encode the full transaction: 20-byte fixed prefix, field count,
-    /// then the field chunks themselves.
+    /// Encode the full transaction: 20-byte fixed prefix, then
+    /// [`Transaction::encode_field_list`]'s output as the body.
     ///
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
     pub fn encode(&self) -> crate::error::Result<Vec<u8>> {
-        let hc = self.fields.len();
+        let body = Self::encode_field_list(&self.fields)?;
+        let len = u32::try_from(body.len()).map_err(|_| ProtoError::TooLong {
+            what: "fields len",
+            len: body.len(),
+        })?;
+
+        Ok(
+            VecWriter::with_capacity(TransactionHeader::LEN + body.len())
+                .u32(self.r#type.as_u32())
+                .u32(self.trans)
+                .u32(self.flag)
+                .u32(len)
+                .u32(len)
+                .bytes(&body)
+                .finish(),
+        )
+    }
+
+    /// Encode `fields` as an `hc`-prefixed field list: a transaction's
+    /// own body shape, and also the shape of one nested account record
+    /// inside `HTLC_HDR_GET_USER_LIST` (348) / `HTLC_HDR_SET_USER_LIST`
+    /// (349).
+    ///
+    /// Fails if `fields.len()` or any field's data exceeds a `u16`
+    /// (65535), reachable with attacker-controlled input.
+    pub fn encode_field_list(fields: &[Field]) -> crate::error::Result<Vec<u8>> {
+        let hc = fields.len();
         let hc = u16::try_from(hc).map_err(|_| ProtoError::TooLong {
             what: "field count",
             len: hc,
         })?;
 
-        let fields: Vec<u8> = self
-            .fields
+        let encoded: Vec<u8> = fields
             .iter()
             .map(Field::encode)
             .collect::<Result<Vec<_>>>()?
             .concat();
 
-        let len = fields.len() + 2;
-        let capacity = TransactionHeader::LEN + len;
-        let len = u32::try_from(len).map_err(|_| ProtoError::TooLong {
-            what: "fields len",
-            len,
-        })?;
-
-        Ok(VecWriter::with_capacity(capacity)
-            .u32(self.r#type.as_u32())
-            .u32(self.trans)
-            .u32(self.flag)
-            .u32(len)
-            .u32(len)
+        Ok(VecWriter::with_capacity(2 + encoded.len())
             .u16(hc)
-            .bytes(&fields)
+            .bytes(&encoded)
             .finish())
+    }
+
+    /// Decode the `hc`-prefixed field list [`Transaction::encode_field_list`] produces.
+    pub fn decode_field_list(body: &[u8]) -> Result<Vec<Field>> {
+        if body.len() < 2 {
+            return Err(ProtoError::UnexpectedEof {
+                needed: 2,
+                available: body.len(),
+            });
+        }
+        let hc = u16::from_be_bytes([body[0], body[1]]);
+
+        let mut offset = 2;
+        let mut fields = Vec::with_capacity(hc as usize);
+        for _ in 0..hc {
+            let (field, consumed) = Field::decode(&body[offset..])?;
+            offset += consumed;
+            fields.push(field);
+        }
+        Ok(fields)
     }
 
     /// Decode a complete, single-part transaction (prefix + body) from
@@ -341,22 +374,7 @@ impl TransactionHeader {
     /// [`TransactionHeader::remaining_len`] bytes, the field count
     /// followed by the fields.
     pub fn finish_decode(self, body: &[u8]) -> Result<Transaction> {
-        if body.len() < 2 {
-            return Err(ProtoError::UnexpectedEof {
-                needed: 2,
-                available: body.len(),
-            });
-        }
-        let hc = u16::from_be_bytes([body[0], body[1]]);
-
-        let mut offset = 2;
-        let mut fields = Vec::with_capacity(hc as usize);
-        for _ in 0..hc {
-            let (field, consumed) = Field::decode(&body[offset..])?;
-            offset += consumed;
-            fields.push(field);
-        }
-
+        let fields = Transaction::decode_field_list(body)?;
         Ok(Transaction {
             r#type: self.r#type,
             trans: self.trans,

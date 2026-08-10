@@ -246,6 +246,8 @@ impl Session {
             /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
             /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
+            /* 348 */ ClientOpcode::GetUserList => self.on_get_user_list(tx, state).await,
+            /* 349 */ ClientOpcode::SetUserList => self.on_set_user_list(tx, state).await,
             /* 350 */ ClientOpcode::AccountCreate => self.on_account_create(tx, state).await,
             /* 351 */ ClientOpcode::AccountDelete => self.on_account_delete(tx, state).await,
             /* 352 */ ClientOpcode::AccountRead => self.on_account_read(tx, state).await,
@@ -1197,7 +1199,28 @@ impl Session {
         if let Err(reason) = state.delete_account(&login).await {
             return vec![tx.reply_error(reason)];
         }
+        Self::disconnect_account_sessions(&login, state).await;
         vec![tx.reply(vec![])]
+    }
+
+    /// Disconnect every session currently logged in under `login`, with
+    /// the reference's own message text for an account deleted out from
+    /// under it.
+    async fn disconnect_account_sessions(login: &str, state: &SharedState) {
+        for target in state.user_ids_for_login(login).await {
+            state
+                .send_to(
+                    target,
+                    Transaction::push(
+                        ServerOpcode::Politequit,
+                        vec![Field::string(
+                            ServerFieldId::Text,
+                            "You are logged in with an account which was deleted.",
+                        )],
+                    ),
+                )
+                .await;
+        }
     }
 
     /// `HTLC_HDR_ACCOUNT_READ` (352)
@@ -1214,8 +1237,7 @@ impl Session {
         vec![tx.reply(vec![
             Field::string(ServerFieldId::Name, account.name),
             Field::obfuscated_string(ServerFieldId::Login, login),
-            // Never echoes the real password back.
-            Field::string(ServerFieldId::Password, "\0"),
+            Self::redacted_password_field(&account.password),
             Field::u64(ServerFieldId::Access, account.access.bits()),
         ])]
     }
@@ -1280,6 +1302,189 @@ impl Session {
             Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
         };
         vec![reply]
+    }
+
+    /// The password field as sent back for `HTLC_HDR_ACCOUNT_READ` (352)
+    /// and each record of `HTLC_HDR_GET_USER_LIST` (348): empty if unset,
+    /// a single `x` otherwise, so the real password is never echoed.
+    fn redacted_password_field(password: &str) -> Field {
+        Field::string(
+            ServerFieldId::Password,
+            if password.is_empty() { "" } else { "x" },
+        )
+    }
+
+    /// `HTLC_HDR_GET_USER_LIST` (348): every account at once, for the
+    /// bulk account editor. Each account is one `Text` (101) field
+    /// wrapping its own nested `Name`/`Login`/`Password`/`Access` field
+    /// list, the same `hc`-prefixed shape a transaction body uses.
+    async fn on_get_user_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.require(Access::OPEN_USER) {
+            return vec![tx.reply_error(reason)];
+        }
+        let fields = state
+            .list_accounts()
+            .await
+            .into_iter()
+            .filter_map(|(login, account)| {
+                Transaction::encode_field_list(&[
+                    Field::string(ServerFieldId::Name, account.name),
+                    Field::obfuscated_string(ServerFieldId::Login, login),
+                    Self::redacted_password_field(&account.password),
+                    Field::u64(ServerFieldId::Access, account.access.bits()),
+                ])
+                .ok()
+            })
+            .map(|record| Field::bytes(ServerFieldId::Text, record))
+            .collect();
+        vec![tx.reply(fields)]
+    }
+
+    /// `HTLC_HDR_SET_USER_LIST` (349): save a bulk-edited account list.
+    /// Each `Text` (101) field is one nested account record in the same
+    /// shape `HTLC_HDR_GET_USER_LIST` sent; see
+    /// [`Session::apply_user_list_record`] for the per-record rules.
+    /// Processes every record even after a soft (storage) failure, but
+    /// stops and reports immediately on a hard (permission) failure,
+    /// matching the reference.
+    async fn on_set_user_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        let mut save_error = false;
+        for field in tx.fields(ClientFieldId::Text) {
+            let Ok(record) = Transaction::decode_field_list(&field.as_bytes()) else {
+                save_error = true;
+                continue;
+            };
+            match self.apply_user_list_record(&record, state).await {
+                Ok(true) => {}
+                Ok(false) => save_error = true,
+                Err(reason) => return vec![tx.reply_error(reason)],
+            }
+        }
+        if save_error {
+            return vec![tx.reply_error("Error saving list of accounts.")];
+        }
+        vec![tx.reply(vec![])]
+    }
+
+    /// Apply one `HTLC_HDR_SET_USER_LIST` record: `Text` (101), if
+    /// present, is the account's login before this edit (deobfuscated,
+    /// scrambled the same way as `Login`), absent for a brand new record.
+    /// An empty name and login means delete; otherwise this is a rename
+    /// (login changed), a plain modify, or a create, depending on whether
+    /// the old login was given and whether the new login already exists.
+    ///
+    /// `Ok(true)` if applied, `Ok(false)` for a soft (storage) failure
+    /// that shouldn't stop the rest of the list from applying, `Err` for
+    /// a hard (permission) failure that aborts the whole request.
+    async fn apply_user_list_record(
+        &self,
+        record: &[Field],
+        state: &SharedState,
+    ) -> std::result::Result<bool, String> {
+        let field = |id: ClientFieldId| record.iter().find(|f| f.id == u16::from(id));
+        let old_login = field(ClientFieldId::Text)
+            .map(Field::as_deobfuscated_string)
+            .filter(|s| !s.is_empty());
+        let name = field(ClientFieldId::Name)
+            .map(Field::as_string)
+            .unwrap_or_default();
+        let login = field(ClientFieldId::Login)
+            .map(Field::as_deobfuscated_string)
+            .unwrap_or_default();
+
+        if name.is_empty() && login.is_empty() {
+            let Some(old_login) = old_login else {
+                return Ok(false);
+            };
+            self.require(Access::DELETE_USER)?;
+            return match state.delete_account(&old_login).await {
+                Ok(()) => {
+                    Self::disconnect_account_sessions(&old_login, state).await;
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            };
+        }
+
+        let password = match field(ClientFieldId::Password) {
+            Some(f) if f.as_bytes().as_ref() == [0u8] => {
+                let Some(old_login) = &old_login else {
+                    return Ok(false);
+                };
+                match state.account(old_login).await {
+                    Some(existing) => existing.password,
+                    None => return Ok(false),
+                }
+            }
+            Some(f) => f.as_deobfuscated_string(),
+            None => String::new(),
+        };
+        let access = field(ClientFieldId::Access)
+            .and_then(Field::as_u64)
+            .map(Access::from_bits_truncate)
+            .unwrap_or_else(Access::empty);
+
+        if let Some(old_login) = old_login {
+            // Modify (and rename, if the login changed).
+            self.require(Access::MODIFY_USER)?;
+            let existing = state.account(&old_login).await;
+            if !old_login.eq_ignore_ascii_case(&login) {
+                let _ = state.delete_account(&old_login).await;
+            }
+            let access_extra = existing
+                .map(|a| a.access_extra)
+                .unwrap_or_else(AccessExtra::default);
+            let account = Account {
+                password,
+                name: name.clone(),
+                access,
+                access_extra,
+            };
+            return match state.put_account(login.clone(), account).await {
+                Ok(()) => {
+                    let name = (!name.is_empty()).then_some(name);
+                    state.push_access_update(login, access, name).await;
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            };
+        }
+
+        // No old login: a brand new record, unless its login collides
+        // with an existing account, which is a non-fatal notice, not an
+        // error (matches the reference).
+        if state.account(&login).await.is_some() {
+            state
+                .send_to(
+                    self.user_id,
+                    Transaction::push(
+                        ServerOpcode::Msg,
+                        vec![Field::string(
+                            ServerFieldId::Text,
+                            format!(
+                                "Cannot create account \"{login}\" because there is already an account with that login."
+                            ),
+                        )],
+                    ),
+                )
+                .await;
+            return Ok(true);
+        }
+
+        self.require(Access::CREATE_USER)?;
+        if !self.access.contains(access - Access::NO_AGREEMENT) {
+            return Err("Cannot create account with more access than yourself.".to_string());
+        }
+        let account = Account {
+            password,
+            name,
+            access,
+            access_extra: AccessExtra::default(),
+        };
+        match state.put_account(login, account).await {
+            Ok(()) => Ok(true),
+            Err(_) => Ok(false),
+        }
     }
 }
 
@@ -2231,7 +2436,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_read_password_field_round_trips_as_the_unchanged_sentinel() {
+    async fn account_read_never_echoes_the_real_password() {
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -2246,20 +2451,54 @@ mod tests {
             )
             .await
             .unwrap();
+        state
+            .put_account(
+                "carol".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: String::new(),
+                    name: "Carol".to_string(),
+                    access: Access::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
 
-        let read = Transaction::request(
-            ClientOpcode::AccountRead,
-            1,
-            vec![Field::obfuscated_string(ClientFieldId::Login, "bob")],
-        );
-        let [reply] = session
-            .on_account_read(&read, &state)
+        let read = |login: &str| {
+            Transaction::request(
+                ClientOpcode::AccountRead,
+                1,
+                vec![Field::obfuscated_string(ClientFieldId::Login, login)],
+            )
+        };
+
+        let [with_password] = session
+            .on_account_read(&read("bob"), &state)
             .await
             .try_into()
             .unwrap();
+        assert_eq!(
+            with_password
+                .field(ServerFieldId::Password)
+                .unwrap()
+                .as_bytes()
+                .as_ref(),
+            b"x"
+        );
 
-        let password_field = reply.field(ServerFieldId::Password).unwrap();
-        assert_eq!(password_field.as_bytes().as_ref(), [0u8]);
+        let [without_password] = session
+            .on_account_read(&read("carol"), &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            without_password
+                .field(ServerFieldId::Password)
+                .unwrap()
+                .as_bytes()
+                .as_ref(),
+            b""
+        );
     }
 
     #[tokio::test]
@@ -2443,6 +2682,272 @@ mod tests {
 
         let delete = Transaction::request(ClientOpcode::AccountDelete, 4, vec![login_field]);
         assert!(session.on_account_delete(&delete, &state).await[0].is_error());
+    }
+
+    /// One `HTLC_HDR_SET_USER_LIST` record: `old_login` is the account's
+    /// login before this edit, `None` for a brand new record.
+    fn user_list_record(
+        old_login: Option<&str>,
+        name: &str,
+        login: &str,
+        password: Field,
+        access: Access,
+    ) -> Field {
+        let mut fields = Vec::new();
+        if let Some(old_login) = old_login {
+            fields.push(Field::obfuscated_string(ClientFieldId::Text, old_login));
+        }
+        if !name.is_empty() {
+            fields.push(Field::string(ClientFieldId::Name, name));
+        }
+        if !login.is_empty() {
+            fields.push(Field::obfuscated_string(ClientFieldId::Login, login));
+        }
+        fields.push(password);
+        fields.push(Field::u64(ClientFieldId::Access, access.bits()));
+        Field::bytes(
+            ClientFieldId::Text,
+            Transaction::encode_field_list(&fields).unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn get_user_list_denied_without_open_user() {
+        let session = test_session("Alice", Access::empty());
+        let state = SharedState::default();
+        let request = Transaction::request(ClientOpcode::GetUserList, 1, vec![]);
+        assert!(session.on_get_user_list(&request, &state).await[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn get_user_list_returns_every_account_with_a_redacted_password() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "secret".to_string(),
+                    name: "Bob".to_string(),
+                    access: Access::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+
+        let request = Transaction::request(ClientOpcode::GetUserList, 1, vec![]);
+        let [reply] = session
+            .on_get_user_list(&request, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        // The seeded admin/guest accounts plus the one just added.
+        let records: Vec<_> = reply.fields(ServerFieldId::Text).collect();
+        assert_eq!(records.len(), 3);
+
+        let bob = records
+            .iter()
+            .map(|f| Transaction::decode_field_list(&f.as_bytes()).unwrap())
+            .find(|fields| {
+                fields
+                    .iter()
+                    .any(|f| f.id == u16::from(ServerFieldId::Name) && f.as_string() == "Bob")
+            })
+            .expect("bob's record");
+        let login = bob
+            .iter()
+            .find(|f| f.id == u16::from(ServerFieldId::Login))
+            .unwrap()
+            .as_deobfuscated_string();
+        assert_eq!(login, "bob");
+        let password = bob
+            .iter()
+            .find(|f| f.id == u16::from(ServerFieldId::Password))
+            .unwrap();
+        assert_eq!(password.as_bytes().as_ref(), b"x");
+    }
+
+    #[tokio::test]
+    async fn set_user_list_creates_a_new_account() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+
+        let record = user_list_record(
+            None,
+            "Bob",
+            "bob",
+            Field::obfuscated_string(ClientFieldId::Password, "secret"),
+            Access::SEND_CHAT,
+        );
+        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let replies = session.on_set_user_list(&request, &state).await;
+        assert!(!replies[0].is_error());
+
+        let account = state.account("bob").await.unwrap();
+        assert_eq!(account.name, "Bob");
+        assert_eq!(account.password, "secret");
+        assert_eq!(account.access, Access::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn set_user_list_cannot_create_with_more_access_than_self() {
+        let session = test_session("Admin", Access::SEND_CHAT);
+        let state = SharedState::default();
+
+        let record = user_list_record(
+            None,
+            "Bob",
+            "bob",
+            Field::obfuscated_string(ClientFieldId::Password, "secret"),
+            Access::all(),
+        );
+        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let replies = session.on_set_user_list(&request, &state).await;
+        assert!(replies[0].is_error());
+        assert!(state.account("bob").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_creating_over_an_existing_login_is_a_notice_not_an_error() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "original".to_string(),
+                    name: "Bob".to_string(),
+                    access: Access::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+        let mut rx = state.register_recipient(1).await;
+
+        let record = user_list_record(
+            None,
+            "Bob Two",
+            "bob",
+            Field::obfuscated_string(ClientFieldId::Password, "new"),
+            Access::SEND_CHAT,
+        );
+        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let replies = session.on_set_user_list(&request, &state).await;
+        assert!(!replies[0].is_error());
+        // Untouched: the collision is a notice, not an applied overwrite.
+        assert_eq!(state.account("bob").await.unwrap().password, "original");
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_renames_and_reuses_the_password_on_the_unchanged_sentinel() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "secret".to_string(),
+                    name: "Bob".to_string(),
+                    access: Access::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+
+        let record = user_list_record(
+            Some("bob"),
+            "Bobby",
+            "bobby",
+            Field::bytes(ClientFieldId::Password, vec![0u8]),
+            Access::SEND_CHAT,
+        );
+        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let replies = session.on_set_user_list(&request, &state).await;
+        assert!(!replies[0].is_error());
+
+        assert!(state.account("bob").await.is_none());
+        let renamed = state.account("bobby").await.unwrap();
+        assert_eq!(renamed.name, "Bobby");
+        assert_eq!(renamed.password, "secret");
+    }
+
+    #[tokio::test]
+    async fn set_user_list_delete_disconnects_the_online_session() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: String::new(),
+                    name: "Bob".to_string(),
+                    access: Access::empty(),
+                },
+            )
+            .await
+            .unwrap();
+        state
+            .insert_user(UserEntry {
+                user_id: 1,
+                login: "bob".to_string(),
+                name: "Bob".to_string(),
+                icon: 0,
+                access: Access::empty(),
+                access_extra: AccessExtra::default(),
+                account_name: "Bob".to_string(),
+                remote_addr: "127.0.0.1:0".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
+            })
+            .await;
+        let mut rx = state.register_recipient(1).await;
+
+        let record = user_list_record(
+            Some("bob"),
+            "",
+            "",
+            Field::bytes(ClientFieldId::Password, vec![]),
+            Access::empty(),
+        );
+        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let replies = session.on_set_user_list(&request, &state).await;
+        assert!(!replies[0].is_error());
+        assert!(state.account("bob").await.is_none());
+
+        let kick = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Politequit push");
+        assert_eq!(
+            kick.r#type(),
+            TransactionType::Push(ServerOpcode::Politequit)
+        );
+    }
+
+    #[tokio::test]
+    async fn set_user_list_denied_without_matching_privilege() {
+        let session = test_session("Alice", Access::empty());
+        let state = SharedState::default();
+
+        let create = user_list_record(
+            None,
+            "Bob",
+            "bob",
+            Field::obfuscated_string(ClientFieldId::Password, "secret"),
+            Access::empty(),
+        );
+        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![create]);
+        assert!(session.on_set_user_list(&request, &state).await[0].is_error());
     }
 
     #[tokio::test]

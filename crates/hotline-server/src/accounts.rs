@@ -130,6 +130,9 @@ pub trait AccountProvider: Send + Sync {
     async fn put(&self, login: String, account: Account) -> Result<(), String>;
     /// Delete an account. `false` if it didn't exist.
     async fn delete(&self, login: &str) -> Result<bool, String>;
+    /// Every account, login and details together, for bulk listing
+    /// (`HTLC_HDR_GET_USER_LIST`, 348).
+    async fn list(&self) -> Vec<(String, Account)>;
 }
 
 /// An [`AccountProvider`] that keeps accounts in memory only; nothing
@@ -194,6 +197,15 @@ impl AccountProvider for InMemoryAccountProvider {
 
     async fn delete(&self, login: &str) -> Result<bool, String> {
         Ok(self.accounts.write().unwrap().remove(login).is_some())
+    }
+
+    async fn list(&self) -> Vec<(String, Account)> {
+        self.accounts
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(login, account)| (login.clone(), account.clone()))
+            .collect()
     }
 }
 

@@ -56,6 +56,10 @@ pub enum ClientFieldId {
     ///
     /// Original: `HTLC_DATA_ACCESS`.
     Access = 110,
+    /// A user's alias; unused in practice, always sent empty.
+    ///
+    /// Original: `HTLC_DATA_USER_ALIAS`.
+    UserAlias = 111,
     /// Contextual options bitmap; also reused as a kick-to-ban flag.
     ///
     /// Original: `HTLC_DATA_BAN`.
@@ -180,6 +184,7 @@ impl ClientFieldId {
             108 => Self::TransferSize,
             109 => Self::Style,
             110 => Self::Access,
+            111 => Self::UserAlias,
             113 => Self::Options,
             114 => Self::ChatId,
             115 => Self::ChatSubject,
@@ -228,6 +233,7 @@ impl ClientFieldId {
             Self::TransferSize => "HTLC_DATA_HTXF_SIZE",
             Self::Style => "HTLC_DATA_STYLE",
             Self::Access => "HTLC_DATA_ACCESS",
+            Self::UserAlias => "HTLC_DATA_USER_ALIAS",
             Self::Options => "HTLC_DATA_BAN",
             Self::ChatId => "HTLC_DATA_CHAT_ID",
             Self::ChatSubject => "HTLC_DATA_CHAT_SUBJECT",
