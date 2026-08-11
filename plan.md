@@ -216,6 +216,127 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     is only read once. Worth a small proof of concept on one struct's
     fields before deciding whether it's worth the lifetime plumbing
     workspace-wide. Not started.
+18. **Private chat rooms have no password/invitation gate in the primary
+    reference at all, but do in the secondary one.** `SMyChat` (the
+    primary reference's chat-room struct) has no password field and no
+    invited-set; `ProcessTran_JoinChat` performs no check beyond "does
+    this chat ID still exist" before adding the joiner — the invite push
+    is purely a client-side UX nicety there, and any client that learns a
+    live chat ID can join directly. The secondary reference does
+    implement both: a per-room password plus an invited-file-descriptor
+    set that a join either matches against or bypasses, which is what
+    this server's `join_chat_room` (`state.rs`) actually ports (AGENTS.md's
+    Status section description of chat being "gated on invitation like
+    the reference" was written against that implementation, before the
+    primary reference's source was available to check against). Also
+    still true regardless of which reference this settles on:
+    `on_chat_create` only invites a single `Uid` where the primary
+    reference loops over every `UserID` field in the request, and fails
+    the whole room creation if that one target isn't connected, where
+    the primary reference just skips undeliverable invites and creates
+    the room regardless. Needs a decision on which reference's chat-room
+    semantics this server should track going forward, now that both are
+    known to disagree here.
+19. `on_chat_subject` adds an `AccessExtra::SET_SUBJECT` check, a
+    membership requirement, a room-password mechanism, and always sends a
+    reply; the reference's `ProcessTran_SetChatSubject` has none of
+    these — no access check, no reply ever sent, and no password field
+    exists on this transaction at all.
+20. `on_chat_invite` always sends a reply (empty or error);
+    `ProcessTran_InviteToChat` never replies at all. Separately,
+    `invite_to_chat_room` (`state.rs`) requires the inviter to already be
+    a room member and rejects a repeat invite to an already-invited
+    target — both checks the reference doesn't perform (it only skips a
+    target already in the room's client list).
+21. `on_chat_part` always sends an empty reply; `ProcessTran_LeaveChat`
+    never replies (`inTsn` is unused in the reference). Member
+    notification and delete-when-empty already match.
+22. `on_chat_decline` never broadcasts the decline to the room; the
+    reference sends a `"<<< "Name" declined invitation to chat >>>"` chat
+    message to the room's remaining members. `on_chat_decline` also
+    always sends an empty reply where the reference sends none.
+23. `on_chat` doesn't support the emote/action message style. The
+    reference reads `Style` (109, `myField_ChatOptions`) and formats the
+    message as `"*** {name} ..."` instead of the normal
+    `"{name}: ..."` prefix when it's set to 1; this server always uses
+    the normal prefix regardless of `Style`.
+24. `on_msg_broadcast` sends the broadcast to every connected user
+    including the sender (`state.publish`); the reference explicitly
+    excludes the sender (`client->userID != inClient->userID`) from the
+    fan-out. Should use the sender-excluding `announce` path instead.
+25. `on_get_file_name_list` requires `Access::DOWNLOAD_FILE`;
+    `ProcessTran_GetFileNameList` performs no access check at all to list
+    a folder — it only checks `ViewDropBoxes` to decide whether to filter
+    the listing, never to refuse it outright. Any logged-in client can
+    list files in the reference regardless of download privilege.
+26. `on_file_delete`/`on_file_move`/`on_file_symlink` all route through
+    `dropbox_blocked`, requiring `VIEW_DROP_BOXES` to touch anything under
+    a folder named "drop box". The reference's `ProcessTran_DeleteFile`/
+    `ProcessTran_MoveFile`/`ProcessTran_MakeFileAlias` only check the
+    type-specific privilege (delete/move/alias); drop-box visibility is
+    only ever checked by `GetFileNameList` (listing) and `DownloadFile`
+    (download), not by these three.
+27. `on_file_put`'s drop-box/upload-folder match
+    (`state.rs::is_dropbox_path`) treats any ancestor path component
+    containing "upload"/"drop box" as sufficient. The reference only
+    inspects the immediate destination folder's own name
+    (`GetPathTargetName`), so `Uploads/Subfolder/` would be rejected
+    there but is accepted here.
+28. `on_file_get`'s reply omits `FileSize` (207); the reference sends
+    both `TransferSize` (the flattened-object envelope size) and
+    `FileSize` (the raw file size) on this transaction.
+    `ClientFieldId::FileXferOptions` also isn't read at all — the
+    reference's `opts == 2` ("data fork only") request shape has no
+    equivalent here, every `FILE_GET` is treated as a full flattened
+    transfer. `FILE_PUT`'s resume option (`opts == 1`) and
+    `FILE_GET`/`FILE_PUT`'s `FileResumeData` field are already covered by
+    item 6's HTXF follow-ups.
+29. `on_newsfile_post` has no size cap; the reference rejects a post over
+    8192 bytes with `"Your news post was not accepted because it was too
+    big."` before appending it to the board.
+30. Login names aren't case-folded anywhere in `accounts.rs`/`session.rs`.
+    The reference lowercases the login on every account create/delete/
+    modify and on login lookup itself, so two accounts differing only by
+    case can't coexist there and a login always matches regardless of
+    case. This server currently allows both.
+31. `on_login`'s immediate-join gate (skipping the `Agreed` step for
+    old clients) checks only that a name was sent; the reference also
+    requires a non-zero icon (`psUserName[0] && nIconID`) before doing
+    so.
+32. `on_login`'s agreement-push logic collapses two distinct reference
+    cases into one: when `NO_AGREEMENT` isn't set and no agreement text
+    is configured, the reference still sends an empty `ShowAgreement`
+    push (three-way branch: hardcoded "no agreement" flag, real text, or
+    an empty prompt); this server sends the hardcoded "no agreement" flag
+    in both the `NO_AGREEMENT`-set and no-text-configured cases, and skips
+    the push entirely for pre-150 clients in the latter.
+33. `ServerFieldId` has no `CommunityBannerID` variant, so `on_login`'s
+    reply can never include it; the reference always sends this field
+    (typically zero) on login. Low priority, cosmetic given the reference
+    default is usually unset.
+34. `on_login` only sends `ServerName` when configured non-empty; the
+    reference always sends the field (as an empty pstring when unset).
+35. `on_user_get_list` requires `AccessExtra::USER_GETLIST`;
+    `ProcessTran_GetUserNameList` performs no access check at all.
+    Invisible for default accounts (the bit is on by default) but denies
+    an account explicitly stripped of it where the reference would still
+    serve the list.
+36. `on_user_kick`'s plain kick (no ban option) always pushes a
+    `Politequit` notice to the target before disconnecting; the
+    reference's plain kick sends nothing, it just tears down the
+    transport. The temp/perm ban options (`Options` 1/2) are already
+    flagged as unimplemented in `on_user_kick`'s own doc comment. A
+    missing `Uid` field is also handled differently: the reference
+    defaults to 0, finds no such client, and still replies success; this
+    server replies with an explicit "missing user id" error.
+37. `on_user_get_info`'s reply is a different report entirely, not just a
+    different format: it sends connected duration and a privilege
+    summary, and an extra `UserId` field the reference never includes.
+    The reference's `ProcessTran_GetClientInfoText` instead reports
+    active file-transfer state (upload/download file and folder lists,
+    waiting downloads) plus nickname/account/address, with no
+    duration/privilege summary at all, and only two fields (`Data`,
+    `UserName`).
 
 ## Needs manual verification against the real client
 
