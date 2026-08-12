@@ -334,6 +334,7 @@ impl Session {
 
         let fields = vec![
             Field::u16(ServerFieldId::Serverversion, 190),
+            Field::u16(ServerFieldId::Bannerid, 0),
             Field::string(ServerFieldId::Servername, config.server_name.clone()),
         ];
         let mut replies = vec![tx.reply(fields)];
@@ -1881,6 +1882,23 @@ mod tests {
                 .field(ServerFieldId::Serverversion)
                 .and_then(Field::as_u16),
             Some(190)
+        );
+    }
+
+    #[tokio::test]
+    async fn login_reply_sends_community_banner_id_zero() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+
+        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert_eq!(
+            replies[0]
+                .field(ServerFieldId::Bannerid)
+                .and_then(Field::as_u16),
+            Some(0)
         );
     }
 
