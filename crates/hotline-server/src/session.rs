@@ -8,7 +8,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
-use hotline_proto::consts::Access;
+use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
 use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
@@ -300,15 +300,6 @@ impl Session {
         }
     }
 
-    /// `Err` names the missing privilege if `self.access` doesn't hold
-    /// `required`.
-    fn require(&self, required: Access) -> std::result::Result<(), String> {
-        self.access.contains(required).then_some(()).ok_or_else(|| {
-            let name = required.flag_name().unwrap_or("this privilege");
-            format!("You are not allowed to do that ({name}).")
-        })
-    }
-
     async fn on_login(
         &mut self,
         tx: &Transaction,
@@ -556,7 +547,7 @@ impl Session {
 
     /// 105: public or (if `ChatId` is present) private-room chat.
     async fn on_chat(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::SEND_CHAT) {
+        if let Err(reason) = self.access.require(Access::SEND_CHAT) {
             // Sent only to the denied client; CHAT_SEND has no reply mechanism.
             return vec![Transaction::push(
                 ServerOpcode::Msg,
@@ -596,8 +587,8 @@ impl Session {
 
     /// 300
     async fn on_user_get_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if !self.access_extra.contains(AccessExtra::USER_GETLIST) {
-            return vec![tx.reply_error("You are not allowed to do that.")];
+        if let Err(reason) = self.access_extra.require(AccessExtra::USER_GETLIST) {
+            return vec![tx.reply_error(reason)];
         }
         let fields = state
             .users()
@@ -617,7 +608,7 @@ impl Session {
     /// 303: another user's info text (name, login, account name, icon,
     /// remote address, connected duration, and a privilege summary).
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::GET_CLIENT_INFO) {
+        if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -634,8 +625,8 @@ impl Session {
         } else {
             target
                 .access
-                .iter()
-                .flat_map(Access::flag_name)
+                .iter_names()
+                .map(|(name, _)| name)
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -675,7 +666,7 @@ impl Session {
     /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
     /// fuller implementation ban) another user.
     async fn on_user_kick(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::DISCON_USER) {
+        if let Err(reason) = self.access.require(Access::DISCON_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -702,7 +693,7 @@ impl Session {
 
     /// 108: a private instant message to one other user.
     async fn on_private_msg(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::SEND_MESSAGE) {
+        if let Err(reason) = self.access.require(Access::SEND_MESSAGE) {
             return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -792,7 +783,7 @@ impl Session {
 
     /// 355: a message broadcast to every connected user.
     async fn on_msg_broadcast(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::BROADCAST) {
+        if let Err(reason) = self.access.require(Access::BROADCAST) {
             return vec![tx.reply_error(reason)];
         }
         let Some(message) = tx.field(ClientFieldId::Text) else {
@@ -818,7 +809,7 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::DOWNLOAD_FILE) {
+        if let Err(reason) = self.access_extra.require(AccessExtra::FILE_LIST) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -876,7 +867,7 @@ impl Session {
     /// the client the total byte count (flattened-object overhead plus
     /// the file's own bytes) to expect on the data connection.
     async fn on_file_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::DOWNLOAD_FILE) {
+        if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -912,7 +903,7 @@ impl Session {
     /// anywhere; an existing file at the destination is rejected (resume
     /// isn't supported yet).
     async fn on_file_put(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::UPLOAD_FILE) {
+        if let Err(reason) = self.access.require(Access::UPLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
@@ -959,7 +950,7 @@ impl Session {
 
     /// 205: create a folder.
     async fn on_file_mkdir(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::CREATE_FOLDER) {
+        if let Err(reason) = self.access.require(Access::CREATE_FOLDER) {
             return vec![tx.reply_error(reason)];
         }
         let Some((name, dir)) = self.file_name_and_dir_from_path_tail(tx) else {
@@ -976,8 +967,8 @@ impl Session {
     /// and comment are omitted; nothing in this server persists real HFS
     /// metadata (see `HTXF`'s `INFO` fork).
     async fn on_file_getinfo(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if !self.access_extra.contains(AccessExtra::FILE_GETINFO) {
-            return vec![tx.reply_error("You are not allowed to do that.")];
+        if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
+            return vec![tx.reply_error(reason)];
         }
         let Some((name, dir)) = self.file_name_and_dir_from_path_tail(tx) else {
             return vec![tx.reply_error("huh?!?")];
@@ -1044,7 +1035,7 @@ impl Session {
 
     /// 209: create an alias pointing at another file.
     async fn on_file_symlink(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::MAKE_ALIAS) {
+        if let Err(reason) = self.access.require(Access::MAKE_ALIAS) {
             return vec![tx.reply_error(reason)];
         }
         let Some((name, dir)) = self.file_name_and_dir(tx) else {
@@ -1069,7 +1060,7 @@ impl Session {
 
     /// 101: read the classic (non-threaded) news.
     async fn on_newsfile_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::NEWS_READ_ART) {
+        if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
             return vec![tx.reply_error(reason)];
         }
         let news = state.news().await;
@@ -1078,7 +1069,7 @@ impl Session {
 
     /// 103: post to the classic (non-threaded) news.
     async fn on_newsfile_post(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::POST_NEWS_ART) {
+        if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
             return vec![tx.reply_error(reason)];
         }
         let Some(text) = tx.field(ClientFieldId::Text) else {
@@ -1097,7 +1088,7 @@ impl Session {
 
     /// 112: create a private chat room and invite its target user.
     async fn on_chat_create(&self, tx: &Transaction, state: &SharedState) -> Transaction {
-        if let Err(reason) = self.require(Access::CREATE_CHAT) {
+        if let Err(reason) = self.access.require(Access::CREATE_CHAT) {
             return tx.reply_error(reason);
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
@@ -1323,7 +1314,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_CREATE` (350)
     async fn on_account_create(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::CREATE_USER) {
+        if let Err(reason) = self.access.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
         self.on_account_create_or_modify(tx, state).await
@@ -1331,7 +1322,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_DELETE` (351)
     async fn on_account_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::DELETE_USER) {
+        if let Err(reason) = self.access.require(Access::DELETE_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(login) = tx.login() else {
@@ -1366,7 +1357,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_READ` (352)
     async fn on_account_read(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::OPEN_USER) {
+        if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
         let Some(login) = tx.field(ClientFieldId::Login).map(Field::as_string) else {
@@ -1385,7 +1376,7 @@ impl Session {
 
     /// `HTLC_HDR_ACCOUNT_MODIFY` (353)
     async fn on_account_modify(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::MODIFY_USER) {
+        if let Err(reason) = self.access.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
         self.on_account_create_or_modify(tx, state).await
@@ -1460,7 +1451,7 @@ impl Session {
     /// wrapping its own nested `Name`/`Login`/`Password`/`Access` field
     /// list, the same `hc`-prefixed shape a transaction body uses.
     async fn on_get_user_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.require(Access::OPEN_USER) {
+        if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
         let fields = state
@@ -1537,7 +1528,7 @@ impl Session {
             let Some(old_login) = old_login else {
                 return Ok(false);
             };
-            self.require(Access::DELETE_USER)?;
+            self.access.require(Access::DELETE_USER)?;
             return match state.delete_account(&old_login).await {
                 Ok(()) => {
                     Self::disconnect_account_sessions(&old_login, state).await;
@@ -1567,7 +1558,7 @@ impl Session {
 
         if let Some(old_login) = old_login {
             // Modify (and rename, if the login changed).
-            self.require(Access::MODIFY_USER)?;
+            self.access.require(Access::MODIFY_USER)?;
             let existing = state.account(&old_login).await;
             if !old_login.eq_ignore_ascii_case(&login) {
                 let _ = state.delete_account(&old_login).await;
@@ -1612,7 +1603,7 @@ impl Session {
             return Ok(true);
         }
 
-        self.require(Access::CREATE_USER)?;
+        self.access.require(Access::CREATE_USER)?;
         if !self.access.contains(access - Access::NO_AGREEMENT) {
             return Err("Cannot create account with more access than yourself.".to_string());
         }
@@ -1797,6 +1788,38 @@ mod tests {
         assert!(text.contains("Login: (guest)"));
         assert!(text.contains("Account name: (none)"));
         assert!(text.contains("Privileges: none"));
+    }
+
+    #[tokio::test]
+    async fn user_get_info_summarizes_some_privileges_by_name() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: "bob".to_string(),
+                account_name: "Bobby".to_string(),
+                name: "Bob".to_string(),
+                icon: 42,
+                access: Access::READ_CHAT | Access::SEND_CHAT,
+                access_extra: AccessExtra::default(),
+                remote_addr: "192.0.2.1:5500".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
+            })
+            .await;
+        let request = Transaction::request(
+            ClientOpcode::UserGetinfo,
+            1,
+            vec![Field::u16(ClientFieldId::Uid, 2)],
+        );
+
+        let reply = &session.on_user_get_info(&request, &state).await[0];
+        let text = reply.field(ServerFieldId::Text).unwrap().as_string();
+        assert!(text.contains("Privileges: READ_CHAT, SEND_CHAT"));
     }
 
     #[tokio::test]
@@ -4424,6 +4447,23 @@ mod tests {
         );
         let [reply] = session
             .on_file_mkdir(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_list_denied_without_access_extra() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.remove(AccessExtra::FILE_LIST);
+
+        let list = Transaction::request(ClientOpcode::FileList, 1, vec![]);
+        let [reply] = session
+            .on_get_file_name_list(&list, &state)
             .await
             .try_into()
             .unwrap();

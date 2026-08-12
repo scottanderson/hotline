@@ -17,7 +17,7 @@ pub mod transaction;
 pub mod types;
 pub mod wire;
 
-pub use consts::Access;
+pub use consts::{Access, RequireFlags};
 pub use error::{ProtoError, Result};
 pub use field::{Field, FieldValue};
 pub use field_id::{ClientFieldId, ServerFieldId};

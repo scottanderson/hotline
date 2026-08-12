@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use hotline_proto::consts::Access;
 
 bitflags::bitflags! {
-    /// Per-account settings with no `USER_ACCESS` wire bit at all, only
-    /// resolved server-side at login.
+    /// Per-account settings with no wire representation.
+    /// Only resolved server-side.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct AccessExtra: u32 {
         /// Open or create a private chat.

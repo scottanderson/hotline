@@ -119,52 +119,31 @@ impl Default for Access {
     }
 }
 
-impl Access {
-    /// The constant name for a single flag, or `None` if `self` isn't
-    /// exactly one named flag.
-    pub const fn flag_name(self) -> Option<&'static str> {
-        match self {
-            Self::DELETE_FILE => Some("DELETE_FILE"),
-            Self::UPLOAD_FILE => Some("UPLOAD_FILE"),
-            Self::DOWNLOAD_FILE => Some("DOWNLOAD_FILE"),
-            Self::RENAME_FILE => Some("RENAME_FILE"),
-            Self::MOVE_FILE => Some("MOVE_FILE"),
-            Self::CREATE_FOLDER => Some("CREATE_FOLDER"),
-            Self::DELETE_FOLDER => Some("DELETE_FOLDER"),
-            Self::RENAME_FOLDER => Some("RENAME_FOLDER"),
-            Self::MOVE_FOLDER => Some("MOVE_FOLDER"),
-            Self::READ_CHAT => Some("READ_CHAT"),
-            Self::SEND_CHAT => Some("SEND_CHAT"),
-            Self::CREATE_CHAT => Some("CREATE_CHAT"),
-            Self::CREATE_USER => Some("CREATE_USER"),
-            Self::DELETE_USER => Some("DELETE_USER"),
-            Self::OPEN_USER => Some("OPEN_USER"),
-            Self::MODIFY_USER => Some("MODIFY_USER"),
-            Self::NEWS_READ_ART => Some("NEWS_READ_ART"),
-            Self::POST_NEWS_ART => Some("POST_NEWS_ART"),
-            Self::DISCON_USER => Some("DISCON_USER"),
-            Self::CANNOT_BE_DISCON => Some("CANNOT_BE_DISCON"),
-            Self::GET_CLIENT_INFO => Some("GET_CLIENT_INFO"),
-            Self::UPLOAD_ANYWHERE => Some("UPLOAD_ANYWHERE"),
-            Self::ANY_NAME => Some("ANY_NAME"),
-            Self::NO_AGREEMENT => Some("NO_AGREEMENT"),
-            Self::SET_FILE_COMMENT => Some("SET_FILE_COMMENT"),
-            Self::SET_FOLDER_COMMENT => Some("SET_FOLDER_COMMENT"),
-            Self::VIEW_DROP_BOXES => Some("VIEW_DROP_BOXES"),
-            Self::MAKE_ALIAS => Some("MAKE_ALIAS"),
-            Self::BROADCAST => Some("BROADCAST"),
-            Self::NEWS_DELETE_ART => Some("NEWS_DELETE_ART"),
-            Self::NEWS_CREATE_CAT => Some("NEWS_CREATE_CAT"),
-            Self::NEWS_DELETE_CAT => Some("NEWS_DELETE_CAT"),
-            Self::NEWS_CREATE_FLDR => Some("NEWS_CREATE_FLDR"),
-            Self::NEWS_DELETE_FLDR => Some("NEWS_DELETE_FLDR"),
-            Self::UPLOAD_FOLDER => Some("UPLOAD_FOLDER"),
-            Self::DOWNLOAD_FOLDER => Some("DOWNLOAD_FOLDER"),
-            Self::SEND_MESSAGE => Some("SEND_MESSAGE"),
-            _ => None,
+/// Extension trait for any `bitflags` type: a privilege check that names
+/// the missing flags via the macro's own generated metadata rather than a
+/// hand-maintained table.
+pub trait RequireFlags: bitflags::Flags + Copy {
+    /// `Err` names every flag `required` has that `self` doesn't, joined
+    /// by `", "`.
+    fn require(self, required: Self) -> Result<(), String> {
+        let missing = required.difference(self);
+        if missing.is_empty() {
+            return Ok(());
         }
+        let names = missing
+            .iter_names()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let names = match names.is_empty() {
+            true => "this privilege",
+            false => &names,
+        };
+        Err(format!("You are not allowed to do that ({names})."))
     }
 }
+
+impl<T: bitflags::Flags + Copy> RequireFlags for T {}
 
 #[cfg(test)]
 mod tests {
@@ -197,53 +176,28 @@ mod tests {
     }
 
     #[test]
-    fn flag_name_identifies_every_single_flag() {
-        for (p, n) in [
-            (Access::DELETE_FILE, "DELETE_FILE"),
-            (Access::UPLOAD_FILE, "UPLOAD_FILE"),
-            (Access::DOWNLOAD_FILE, "DOWNLOAD_FILE"),
-            (Access::RENAME_FILE, "RENAME_FILE"),
-            (Access::MOVE_FILE, "MOVE_FILE"),
-            (Access::CREATE_FOLDER, "CREATE_FOLDER"),
-            (Access::DELETE_FOLDER, "DELETE_FOLDER"),
-            (Access::RENAME_FOLDER, "RENAME_FOLDER"),
-            (Access::MOVE_FOLDER, "MOVE_FOLDER"),
-            (Access::READ_CHAT, "READ_CHAT"),
-            (Access::SEND_CHAT, "SEND_CHAT"),
-            (Access::CREATE_CHAT, "CREATE_CHAT"),
-            (Access::CREATE_USER, "CREATE_USER"),
-            (Access::DELETE_USER, "DELETE_USER"),
-            (Access::OPEN_USER, "OPEN_USER"),
-            (Access::MODIFY_USER, "MODIFY_USER"),
-            (Access::NEWS_READ_ART, "NEWS_READ_ART"),
-            (Access::POST_NEWS_ART, "POST_NEWS_ART"),
-            (Access::DISCON_USER, "DISCON_USER"),
-            (Access::CANNOT_BE_DISCON, "CANNOT_BE_DISCON"),
-            (Access::GET_CLIENT_INFO, "GET_CLIENT_INFO"),
-            (Access::UPLOAD_ANYWHERE, "UPLOAD_ANYWHERE"),
-            (Access::ANY_NAME, "ANY_NAME"),
-            (Access::NO_AGREEMENT, "NO_AGREEMENT"),
-            (Access::SET_FILE_COMMENT, "SET_FILE_COMMENT"),
-            (Access::SET_FOLDER_COMMENT, "SET_FOLDER_COMMENT"),
-            (Access::VIEW_DROP_BOXES, "VIEW_DROP_BOXES"),
-            (Access::MAKE_ALIAS, "MAKE_ALIAS"),
-            (Access::BROADCAST, "BROADCAST"),
-            (Access::NEWS_DELETE_ART, "NEWS_DELETE_ART"),
-            (Access::NEWS_CREATE_CAT, "NEWS_CREATE_CAT"),
-            (Access::NEWS_DELETE_CAT, "NEWS_DELETE_CAT"),
-            (Access::NEWS_CREATE_FLDR, "NEWS_CREATE_FLDR"),
-            (Access::NEWS_DELETE_FLDR, "NEWS_DELETE_FLDR"),
-            (Access::UPLOAD_FOLDER, "UPLOAD_FOLDER"),
-            (Access::DOWNLOAD_FOLDER, "DOWNLOAD_FOLDER"),
-            (Access::SEND_MESSAGE, "SEND_MESSAGE"),
-        ] {
-            assert_eq!(p.flag_name(), Some(n));
-        }
+    fn require_succeeds_when_every_required_flag_is_held() {
+        let held = Access::READ_CHAT | Access::SEND_CHAT;
+        assert!(held.require(Access::READ_CHAT).is_ok());
+        assert!(held.require(held).is_ok());
     }
 
     #[test]
-    fn flag_name_is_none_for_unions_and_empty() {
-        assert_eq!(Access::empty().flag_name(), None);
-        assert_eq!((Access::SEND_CHAT | Access::READ_CHAT).flag_name(), None);
+    fn require_names_the_single_missing_flag() {
+        let held = Access::READ_CHAT;
+        let err = held.require(Access::SEND_CHAT).unwrap_err();
+        assert_eq!(err, "You are not allowed to do that (SEND_CHAT).");
+    }
+
+    #[test]
+    fn require_names_every_missing_flag_joined_by_comma() {
+        let held = Access::empty();
+        let err = held
+            .require(Access::READ_CHAT | Access::SEND_CHAT)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "You are not allowed to do that (READ_CHAT, SEND_CHAT)."
+        );
     }
 }

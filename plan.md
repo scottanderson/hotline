@@ -264,11 +264,14 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     including the sender (`state.publish`); the reference explicitly
     excludes the sender (`client->userID != inClient->userID`) from the
     fan-out. Should use the sender-excluding `announce` path instead.
-25. `on_get_file_name_list` requires `Access::DOWNLOAD_FILE`;
-    `ProcessTran_GetFileNameList` performs no access check at all to list
-    a folder — it only checks `ViewDropBoxes` to decide whether to filter
-    the listing, never to refuse it outright. Any logged-in client can
-    list files in the reference regardless of download privilege.
+25. ~~`on_get_file_name_list` requires `Access::DOWNLOAD_FILE`, a bit
+    unrelated to listing in either reference.~~ **Resolved.** The
+    secondary reference gates this same opcode
+    (`HTLC_HDR_FILE_LIST`) on a dedicated `access_extra.file_list` bit;
+    this server already defined `AccessExtra::FILE_LIST` for exactly this
+    purpose (sibling of `FILE_GETINFO`/`FILE_HASH`) but never referenced
+    it anywhere. `on_get_file_name_list` now checks `AccessExtra::FILE_LIST`
+    instead, matching the existing `FILE_GETINFO`/`USER_GETLIST` pattern.
 26. `on_file_delete`/`on_file_move`/`on_file_symlink` all route through
     `dropbox_blocked`, requiring `VIEW_DROP_BOXES` to touch anything under
     a folder named "drop box". The reference's `ProcessTran_DeleteFile`/
@@ -316,11 +319,14 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     default is usually unset.
 34. `on_login` only sends `ServerName` when configured non-empty; the
     reference always sends the field (as an empty pstring when unset).
-35. `on_user_get_list` requires `AccessExtra::USER_GETLIST`;
-    `ProcessTran_GetUserNameList` performs no access check at all.
-    Invisible for default accounts (the bit is on by default) but denies
-    an account explicitly stripped of it where the reference would still
-    serve the list.
+35. **Not a bug, a primary/secondary divergence like item 18.**
+    `on_user_get_list` requires `AccessExtra::USER_GETLIST`; the primary
+    reference's `ProcessTran_GetUserNameList` performs no access check at
+    all, but the secondary reference gates the same opcode
+    (`HTLC_HDR_USER_GETLIST`) on `access_extra.user_getlist`, exactly
+    what this server ports. Invisible for default accounts (the bit is on
+    by default) but denies an account explicitly stripped of it where the
+    primary reference would still serve the list.
 36. `on_user_kick`'s plain kick (no ban option) always pushes a
     `Politequit` notice to the target before disconnecting; the
     reference's plain kick sends nothing, it just tears down the

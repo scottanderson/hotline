@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, RwLock};
 
-use hotline_proto::consts::Access;
+use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags};
 use hotline_proto::Transaction;
 
@@ -514,9 +514,7 @@ impl SharedState {
         } else {
             Access::DELETE_FILE
         };
-        if !access.contains(required) {
-            return Err("You are not allowed to do that.".to_string());
-        }
+        access.require(required)?;
         self.files
             .delete(requester, dir, name, is_dir)
             .await
@@ -558,14 +556,12 @@ impl SharedState {
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
-        let required = if info.file_type == *b"fldr" {
+        let is_folder = info.file_type == *b"fldr";
+        access.require(if is_folder {
             Access::RENAME_FOLDER
         } else {
             Access::RENAME_FILE
-        };
-        if !access.contains(required) {
-            return Err("You are not allowed to do that.".to_string());
-        }
+        })?;
         self.files
             .rename(requester, dir, name, new_name)
             .await
@@ -596,9 +592,7 @@ impl SharedState {
         } else {
             Access::MOVE_FILE
         };
-        if !access.contains(required) {
-            return Err("You are not allowed to do that.".to_string());
-        }
+        access.require(required)?;
         self.files
             .r#move(requester, dir, name, to_dir)
             .await
