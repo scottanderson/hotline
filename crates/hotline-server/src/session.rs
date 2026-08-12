@@ -791,14 +791,17 @@ impl Session {
         };
 
         state
-            .publish(Transaction::push(
-                ServerOpcode::MsgBroadcast,
-                vec![
-                    Field::u16(ServerFieldId::UserId, self.user_id),
-                    Field::string(ServerFieldId::Text, message.as_string()),
-                    Field::string(ServerFieldId::Name, self.name.clone()),
-                ],
-            ))
+            .announce(
+                self.user_id,
+                Transaction::push(
+                    ServerOpcode::MsgBroadcast,
+                    vec![
+                        Field::u16(ServerFieldId::UserId, self.user_id),
+                        Field::string(ServerFieldId::Text, message.as_string()),
+                        Field::string(ServerFieldId::Name, self.name.clone()),
+                    ],
+                ),
+            )
             .await;
         vec![tx.reply(vec![])]
     }
@@ -2767,9 +2770,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_broadcast_reaches_everyone() {
+    async fn message_broadcast_reaches_everyone_except_sender() {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
+        let mut sender_rx = state.register_recipient(session.user_id).await;
         let mut rx = state.register_recipient(2).await;
 
         let request = Transaction::request(
@@ -2793,6 +2797,8 @@ mod tests {
             sent.field(ServerFieldId::Text).unwrap().as_string(),
             "server going down"
         );
+
+        assert!(sender_rx.try_recv().is_err());
     }
 
     #[tokio::test]

@@ -264,10 +264,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     message as `"*** {name} ..."` instead of the normal
     `"{name}: ..."` prefix when it's set to 1; this server always uses
     the normal prefix regardless of `Style`.
-24. `on_msg_broadcast` sends the broadcast to every connected user
+24. ~~`on_msg_broadcast` sends the broadcast to every connected user
     including the sender (`state.publish`); the reference explicitly
     excludes the sender (`client->userID != inClient->userID`) from the
-    fan-out. Should use the sender-excluding `announce` path instead.
+    fan-out. Should use the sender-excluding `announce` path instead.~~
+    **Resolved.** `on_msg_broadcast` now calls `state.announce(self.user_id, ...)`
+    instead of `state.publish(...)`, so the sender no longer receives
+    their own broadcast.
 25. ~~`on_get_file_name_list` requires `Access::DOWNLOAD_FILE`, a bit
     unrelated to listing in either reference.~~ **Resolved.** The
     secondary reference gates this same opcode
