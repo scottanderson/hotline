@@ -259,11 +259,14 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     reference sends a `"<<< "Name" declined invitation to chat >>>"` chat
     message to the room's remaining members. `on_chat_decline` also
     always sends an empty reply where the reference sends none.
-23. `on_chat` doesn't support the emote/action message style. The
+23. ~~`on_chat` doesn't support the emote/action message style. The
     reference reads `Style` (109, `myField_ChatOptions`) and formats the
     message as `"*** {name} ..."` instead of the normal
     `"{name}: ..."` prefix when it's set to 1; this server always uses
-    the normal prefix regardless of `Style`.
+    the normal prefix regardless of `Style`.~~ **Resolved.** `on_chat`
+    now reads `ClientFieldId::Style` and formats the relayed message as
+    `"*** {name} {text}"` when it's 1, keeping the normal
+    `"\r{name:>13}:  {text}"` prefix otherwise.
 24. ~~`on_msg_broadcast` sends the broadcast to every connected user
     including the sender (`state.publish`); the reference explicitly
     excludes the sender (`client->userID != inClient->userID`) from the

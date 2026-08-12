@@ -558,12 +558,15 @@ impl Session {
             return Vec::new();
         };
         let chat_id = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32);
+        let style = tx.field(ClientFieldId::Style).and_then(Field::as_u16);
 
-        // Default chat_format: "\r%13.13s:  %s".
-        let mut fields = vec![Field::string(
-            ServerFieldId::Text,
-            format!("\r{:>13}:  {}", self.name, message.as_string()),
-        )];
+        // Default chat_format: "\r%13.13s:  %s"; style 1 is the emote/action format.
+        let text = if style == Some(1) {
+            format!("\r *** {} {}", self.name, message.as_string())
+        } else {
+            format!("\r{:>13}:  {}", self.name, message.as_string())
+        };
+        let mut fields = vec![Field::string(ServerFieldId::Text, text)];
         if let Some(chat_id) = chat_id {
             fields.push(Field::u32(ServerFieldId::ChatId, chat_id));
         }
@@ -1852,6 +1855,60 @@ mod tests {
             ClientOpcode::Chat,
             1,
             vec![Field::string(ClientFieldId::Text, "hi")],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        assert!(session.on_chat(&request, &state).await.is_empty());
+
+        let text = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push")
+            .field(ServerFieldId::Text)
+            .unwrap()
+            .as_string();
+        assert_eq!(text, "\r        Alice:  hi");
+    }
+
+    #[tokio::test]
+    async fn chat_relay_uses_emote_format_for_style_1() {
+        let session = test_session("Alice", Access::default());
+        let state = SharedState::default();
+        let request = Transaction::request(
+            ClientOpcode::Chat,
+            1,
+            vec![
+                Field::string(ClientFieldId::Text, "waves"),
+                Field::u16(ClientFieldId::Style, 1),
+            ],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        assert!(session.on_chat(&request, &state).await.is_empty());
+
+        let text = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push")
+            .field(ServerFieldId::Text)
+            .unwrap()
+            .as_string();
+        assert_eq!(text, "\r *** Alice waves");
+    }
+
+    #[tokio::test]
+    async fn chat_relay_keeps_normal_format_for_non_emote_style() {
+        let session = test_session("Alice", Access::default());
+        let state = SharedState::default();
+        let request = Transaction::request(
+            ClientOpcode::Chat,
+            1,
+            vec![
+                Field::string(ClientFieldId::Text, "hi"),
+                Field::u16(ClientFieldId::Style, 0),
+            ],
         );
 
         let mut rx = state.register_recipient(1).await;
