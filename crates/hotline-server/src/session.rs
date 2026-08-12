@@ -832,35 +832,51 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// A request's `FILE_NAME` (201) and `FILE_PATH` (202) fields.
-    /// `None` if the name is missing or the path field is malformed.
-    fn file_name_and_dir(&self, tx: &Transaction) -> Option<(String, HlPath)> {
-        let name = tx.field(ClientFieldId::FileName)?.as_string();
-        let dir = match tx.file_path(ClientFieldId::FilePath) {
-            Some(Ok(dir)) => dir,
-            Some(Err(_)) => return None,
-            None => HlPath::default(),
-        };
-        Some((name, dir))
+    /// Decode a `FILE_PATH`-shaped field (`FilePath` or `FileNewPath`).
+    fn path_field(
+        &self,
+        tx: &Transaction,
+        id: ClientFieldId,
+    ) -> std::result::Result<HlPath, &'static str> {
+        match tx.field(id) {
+            Some(field) => HlPath::decode(&field.as_bytes()).map_err(|_| "malformed file path"),
+            None => Err("missing file path"),
+        }
     }
 
-    /// Decode a `FILE_PATH`-shaped field (`FilePath` or `FileNewPath`).
-    /// `None` if the field is missing or malformed.
-    fn path_field(&self, tx: &Transaction, id: ClientFieldId) -> Option<HlPath> {
-        tx.field(id)
-            .and_then(|field| HlPath::decode(&field.as_bytes()).ok())
+    /// A request's `FILE_NAME` (201) and `FILE_PATH` (202) fields.
+    fn file_name_and_dir(
+        &self,
+        tx: &Transaction,
+    ) -> std::result::Result<(String, HlPath), &'static str> {
+        let name = tx
+            .field(ClientFieldId::FileName)
+            .ok_or("missing file name")?
+            .as_string();
+        let dir = match tx.file_path(ClientFieldId::FilePath) {
+            Some(Ok(dir)) => dir,
+            Some(Err(_)) => return Err("malformed file path"),
+            None => HlPath::default(),
+        };
+        Ok((name, dir))
     }
 
     /// Like `file_name_and_dir`, but when `FILE_NAME` (201) is absent,
     /// derives the target name and containing directory from `FILE_PATH`
     /// (202)'s last component instead of erroring.
-    fn file_name_and_dir_from_path_tail(&self, tx: &Transaction) -> Option<(String, HlPath)> {
+    fn file_name_and_dir_from_path_tail(
+        &self,
+        tx: &Transaction,
+    ) -> std::result::Result<(String, HlPath), &'static str> {
         if tx.field(ClientFieldId::FileName).is_some() {
             return self.file_name_and_dir(tx);
         }
         let path = self.path_field(tx, ClientFieldId::FilePath)?;
-        let (name, dir) = path.components.split_last()?;
-        Some((name.clone(), HlPath::new(dir.to_vec())))
+        let (name, dir) = path
+            .components
+            .split_last()
+            .ok_or("missing file name or path")?;
+        Ok((name.clone(), HlPath::new(dir.to_vec())))
     }
 
     /// 202: start a download. Allocates a transfer reference and tells
@@ -871,8 +887,9 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
 
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
         let data_size = match state.file_size(requester, &dir, &name, self.access).await {
@@ -907,8 +924,9 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
 
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
@@ -938,8 +956,9 @@ impl Session {
 
     /// 204: delete a file, or a folder and everything under it.
     async fn on_file_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state.delete_file(requester, &dir, &name, self.access).await {
@@ -953,8 +972,9 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_FOLDER) {
             return vec![tx.reply_error(reason)];
         }
-        let Some((name, dir)) = self.file_name_and_dir_from_path_tail(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir_from_path_tail(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state.mkdir(requester, &dir, &name, self.access).await {
@@ -970,8 +990,9 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
             return vec![tx.reply_error(reason)];
         }
-        let Some((name, dir)) = self.file_name_and_dir_from_path_tail(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir_from_path_tail(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
         let info = match state.file_info(requester, &dir, &name, self.access).await {
@@ -996,8 +1017,9 @@ impl Session {
     /// wire but not stored, matching `FILE_GETINFO`'s always-empty
     /// comment.
     async fn on_file_setinfo(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         // A comment-only request (no rename) is a no-op: comment storage
         // isn't implemented, and only an absent rename *and* comment is an
@@ -1017,11 +1039,13 @@ impl Session {
 
     /// 208: move a file or folder into another folder.
     async fn on_file_move(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let Some(to_dir) = self.path_field(tx, ClientFieldId::FileNewPath) else {
-            return vec![tx.reply_error("huh?!?")];
+        let to_dir = match self.path_field(tx, ClientFieldId::FileNewPath) {
+            Ok(dir) => dir,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
@@ -1038,11 +1062,13 @@ impl Session {
         if let Err(reason) = self.access.require(Access::MAKE_ALIAS) {
             return vec![tx.reply_error(reason)];
         }
-        let Some((name, dir)) = self.file_name_and_dir(tx) else {
-            return vec![tx.reply_error("huh?!?")];
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let Some(link_dir) = self.path_field(tx, ClientFieldId::FileNewPath) else {
-            return vec![tx.reply_error("huh?!?")];
+        let link_dir = match self.path_field(tx, ClientFieldId::FileNewPath) {
+            Ok(dir) => dir,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let link_name = tx
             .field(ClientFieldId::FileNewName)
