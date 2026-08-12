@@ -1102,6 +1102,9 @@ impl Session {
         let Some(text) = tx.field(ClientFieldId::Text) else {
             return vec![tx.reply_error("missing post text")];
         };
+        if text.as_bytes().len() > 8192 {
+            return vec![tx.reply_error("Your news post was not accepted because it was too big.")];
+        }
         let entry = state.post_news(&self.name, &text.as_string()).await;
 
         state
@@ -2582,6 +2585,30 @@ mod tests {
             TransactionType::Push(ServerOpcode::NewsfilePost)
         );
         assert!(rx.try_recv().is_err(), "published only once");
+    }
+
+    #[tokio::test]
+    async fn newsfile_post_rejects_oversized_text() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut rx = state.register_recipient(1).await;
+        let post = Transaction::request(
+            ClientOpcode::NewsfilePost,
+            1,
+            vec![Field::string(ClientFieldId::Text, "a".repeat(8193))],
+        );
+        let replies = session.on_newsfile_post(&post, &state).await;
+
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].is_error());
+        assert_eq!(
+            replies[0]
+                .field(ServerFieldId::ErrorText)
+                .map(Field::as_string),
+            Some("Your news post was not accepted because it was too big.".to_string())
+        );
+        assert!(state.news().await.is_empty(), "oversized post not stored");
+        assert!(rx.try_recv().is_err(), "oversized post not published");
     }
 
     #[tokio::test]

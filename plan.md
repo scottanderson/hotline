@@ -301,9 +301,12 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     transfer. `FILE_PUT`'s resume option (`opts == 1`) and
     `FILE_GET`/`FILE_PUT`'s `FileResumeData` field are already covered by
     item 6's HTXF follow-ups.
-29. `on_newsfile_post` has no size cap; the reference rejects a post over
+29. ~~`on_newsfile_post` has no size cap; the reference rejects a post over
     8192 bytes with `"Your news post was not accepted because it was too
-    big."` before appending it to the board.
+    big."` before appending it to the board.~~ **Resolved.**
+    `on_newsfile_post` now rejects text over 8192 bytes with that exact
+    error before calling `state.post_news`, so an oversized post is never
+    appended or published.
 30. Login names aren't case-folded anywhere in `accounts.rs`/`session.rs`.
     The reference lowercases the login on every account create/delete/
     modify and on login lookup itself, so two accounts differing only by
