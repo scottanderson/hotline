@@ -332,13 +332,10 @@ impl Session {
             None => return self.reject_login(tx, state, "no such account").await,
         };
 
-        let mut fields = vec![Field::u16(ServerFieldId::Serverversion, 190)];
-        if !config.server_name.is_empty() {
-            fields.push(Field::string(
-                ServerFieldId::Servername,
-                config.server_name.clone(),
-            ));
-        }
+        let fields = vec![
+            Field::u16(ServerFieldId::Serverversion, 190),
+            Field::string(ServerFieldId::Servername, config.server_name.clone()),
+        ];
         let mut replies = vec![tx.reply(fields)];
 
         // No HTLC_DATA_CLIENTVERSION (160) counts as pre-150.
@@ -1884,6 +1881,26 @@ mod tests {
                 .field(ServerFieldId::Serverversion)
                 .and_then(Field::as_u16),
             Some(190)
+        );
+    }
+
+    #[tokio::test]
+    async fn login_reply_sends_empty_server_name_when_unconfigured() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let config = ServerConfig {
+            server_name: String::new(),
+            ..ServerConfig::default()
+        };
+
+        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert_eq!(
+            replies[0]
+                .field(ServerFieldId::Servername)
+                .map(Field::as_string),
+            Some(String::new())
         );
     }
 

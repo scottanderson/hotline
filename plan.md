@@ -329,8 +329,10 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     reply can never include it; the reference always sends this field
     (typically zero) on login. Low priority, cosmetic given the reference
     default is usually unset.
-34. `on_login` only sends `ServerName` when configured non-empty; the
-    reference always sends the field (as an empty pstring when unset).
+34. ~~`on_login` only sends `ServerName` when configured non-empty; the
+    reference always sends the field (as an empty pstring when unset).~~
+    **Resolved.** `on_login` now always pushes `ServerFieldId::Servername`,
+    empty when unconfigured.
 35. **Not a bug, a primary/secondary divergence like item 18.**
     `on_user_get_list` requires `AccessExtra::USER_GETLIST`; the primary
     reference's `ProcessTran_GetUserNameList` performs no access check at
