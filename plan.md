@@ -292,13 +292,15 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     inspects the immediate destination folder's own name
     (`GetPathTargetName`), so `Uploads/Subfolder/` would be rejected
     there but is accepted here.
-28. `on_file_get`'s reply omits `FileSize` (207); the reference sends
+28. ~~`on_file_get`'s reply omits `FileSize` (207); the reference sends
     both `TransferSize` (the flattened-object envelope size) and
-    `FileSize` (the raw file size) on this transaction.
-    `ClientFieldId::FileXferOptions` also isn't read at all — the
-    reference's `opts == 2` ("data fork only") request shape has no
-    equivalent here, every `FILE_GET` is treated as a full flattened
-    transfer. `FILE_PUT`'s resume option (`opts == 1`) and
+    `FileSize` (the raw file size) on this transaction.~~ **Resolved.**
+    `on_file_get`'s reply now also sends `FileSize`, the raw file size,
+    alongside `TransferId`/`TransferSize`. `ClientFieldId::FileXferOptions`
+    still isn't read at all — the reference's `opts == 2` ("data fork
+    only") request shape has no equivalent here, every `FILE_GET` is
+    treated as a full flattened transfer. `FILE_PUT`'s resume option
+    (`opts == 1`) and
     `FILE_GET`/`FILE_PUT`'s `FileResumeData` field are already covered by
     item 6's HTXF follow-ups.
 29. ~~`on_newsfile_post` has no size cap; the reference rejects a post over

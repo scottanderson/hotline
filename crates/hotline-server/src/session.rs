@@ -913,6 +913,7 @@ impl Session {
         vec![tx.reply(vec![
             Field::u32(ServerFieldId::TransferId, reference),
             Field::u32(ServerFieldId::TransferSize, total_size as u32),
+            Field::u32(ServerFieldId::FileSize, data_size as u32),
         ])]
     }
 
@@ -4077,6 +4078,12 @@ mod tests {
             total_size,
             5 + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32
         );
+        let file_size = reply
+            .field(ServerFieldId::FileSize)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert_eq!(file_size, 5);
+        assert_ne!(file_size, total_size);
 
         let transfer = state.take_transfer(reference).await.unwrap();
         assert_eq!(transfer.direction, TransferDirection::Get);
