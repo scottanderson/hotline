@@ -279,13 +279,16 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     purpose (sibling of `FILE_GETINFO`/`FILE_HASH`) but never referenced
     it anywhere. `on_get_file_name_list` now checks `AccessExtra::FILE_LIST`
     instead, matching the existing `FILE_GETINFO`/`USER_GETLIST` pattern.
-26. `on_file_delete`/`on_file_move`/`on_file_symlink` all route through
+26. ~~`on_file_delete`/`on_file_move`/`on_file_symlink` all route through
     `dropbox_blocked`, requiring `VIEW_DROP_BOXES` to touch anything under
     a folder named "drop box". The reference's `ProcessTran_DeleteFile`/
     `ProcessTran_MoveFile`/`ProcessTran_MakeFileAlias` only check the
     type-specific privilege (delete/move/alias); drop-box visibility is
     only ever checked by `GetFileNameList` (listing) and `DownloadFile`
-    (download), not by these three.
+    (download), not by these three.~~ **Resolved.** `delete_file`/
+    `move_file`/`symlink_file` no longer call `dropbox_blocked`; only the
+    type-specific privilege check remains. `mkdir`/`rename_file` still
+    gate on drop-box visibility, unaffected by this change.
 27. `on_file_put`'s drop-box/upload-folder match
     (`state.rs::is_dropbox_path`) treats any ancestor path component
     containing "upload"/"drop box" as sufficient. The reference only

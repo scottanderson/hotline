@@ -507,7 +507,7 @@ impl SharedState {
     }
 
     /// Delete a file, or a folder and everything under it, after
-    /// checking the matching privilege and drop box visibility.
+    /// checking the matching privilege.
     pub async fn delete_file(
         &self,
         requester: FileRequester<'_>,
@@ -515,9 +515,6 @@ impl SharedState {
         name: &str,
         access: Access,
     ) -> Result<(), String> {
-        if dropbox_blocked(dir, Some(name), access) {
-            return Err("You are not allowed to do that.".to_string());
-        }
         let info = self
             .files
             .info(requester, dir, name)
@@ -584,8 +581,7 @@ impl SharedState {
     }
 
     /// Move a file or folder into another directory, keeping its name,
-    /// after checking the matching privilege and drop box visibility at
-    /// both ends.
+    /// after checking the matching privilege.
     pub async fn move_file(
         &self,
         requester: FileRequester<'_>,
@@ -594,9 +590,6 @@ impl SharedState {
         to_dir: &HlPath,
         access: Access,
     ) -> Result<(), String> {
-        if dropbox_blocked(dir, Some(name), access) || dropbox_blocked(to_dir, Some(name), access) {
-            return Err("You are not allowed to do that.".to_string());
-        }
         let info = self
             .files
             .info(requester, dir, name)
@@ -615,8 +608,7 @@ impl SharedState {
     }
 
     /// Create an alias at `link_dir`/`link_name` pointing at
-    /// `target_dir`/`target_name`. Only the target is checked for drop
-    /// box visibility, not the link destination.
+    /// `target_dir`/`target_name`.
     pub async fn symlink_file(
         &self,
         requester: FileRequester<'_>,
@@ -624,11 +616,7 @@ impl SharedState {
         target_name: &str,
         link_dir: &HlPath,
         link_name: &str,
-        access: Access,
     ) -> Result<(), String> {
-        if dropbox_blocked(target_dir, Some(target_name), access) {
-            return Err("You are not allowed to do that.".to_string());
-        }
         self.files
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await

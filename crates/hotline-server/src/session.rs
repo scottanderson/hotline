@@ -1068,7 +1068,7 @@ impl Session {
             .unwrap_or_else(|| name.clone());
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
-            .symlink_file(requester, &dir, &name, &link_dir, &link_name, self.access)
+            .symlink_file(requester, &dir, &name, &link_dir, &link_name)
             .await
         {
             return vec![tx.reply_error(reason)];
@@ -4287,7 +4287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_delete_in_a_dropbox_is_denied_without_view_drop_boxes() {
+    async fn file_delete_in_a_dropbox_succeeds_without_view_drop_boxes() {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -4311,10 +4311,10 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert!(!reply.is_error());
         let requester = FileRequester { login: "" };
         assert!(
-            state
+            !state
                 .file_exists(requester, &HlPath::new(["Drop Box"]), "secret.txt")
                 .await
         );
@@ -4402,9 +4402,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_move_into_a_dropbox_is_denied_without_view_drop_boxes() {
+    async fn file_move_into_a_dropbox_succeeds_without_view_drop_boxes() {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
+        files.seed(&HlPath::new(["Drop Box"]), "placeholder.txt", *b"hi");
         let state = state_with_files(files);
         let mut access = Access::all();
         access.remove(Access::VIEW_DROP_BOXES);
@@ -4426,46 +4427,17 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert!(!reply.is_error());
         let requester = FileRequester { login: "" };
         assert!(
             state
-                .file_exists(requester, &HlPath::default(), "a.txt")
+                .file_exists(requester, &HlPath::new(["Drop Box"]), "a.txt")
                 .await
         );
     }
 
     #[tokio::test]
-    async fn file_symlink_only_checks_the_target_not_the_link_destination() {
-        let files = crate::files::InMemoryFileProvider::default();
-        files.seed(&HlPath::default(), "a.txt", *b"hi");
-        let state = state_with_files(files);
-        let mut access = Access::all();
-        access.remove(Access::VIEW_DROP_BOXES);
-        let session = test_session("Alice", access);
-
-        // Target is outside any drop box; link destination is inside one.
-        let symlink = Transaction::request(
-            ClientOpcode::FileSymlink,
-            1,
-            vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::bytes(
-                    ClientFieldId::FileNewPath,
-                    HlPath::new(["Drop Box"]).encode().unwrap(),
-                ),
-            ],
-        );
-        let [reply] = session
-            .on_file_symlink(&symlink, &state)
-            .await
-            .try_into()
-            .unwrap();
-        assert!(!reply.is_error());
-    }
-
-    #[tokio::test]
-    async fn file_symlink_of_a_dropbox_target_is_denied_without_view_drop_boxes() {
+    async fn file_symlink_of_a_dropbox_target_succeeds_without_view_drop_boxes() {
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -4493,7 +4465,7 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert!(!reply.is_error());
     }
 
     #[tokio::test]
