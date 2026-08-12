@@ -157,6 +157,7 @@ impl Session {
                         Some(RecipientMessage::AccessUpdate(update)) => {
                             session.apply_access_update(update, &state).await;
                         }
+                        Some(RecipientMessage::Disconnect) => break,
                         None => break,
                     }
                 }
@@ -664,30 +665,21 @@ impl Session {
     }
 
     /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
-    /// fuller implementation ban) another user.
+    /// fuller implementation ban) another user. A missing target id
+    /// defaults to 0, which no session holds, so the kick is just a no-op.
     async fn on_user_kick(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DISCON_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
-            return vec![tx.reply_error("missing user id")];
-        };
+        let target_id = tx
+            .field(ClientFieldId::Uid)
+            .and_then(Field::as_u16)
+            .unwrap_or(0);
         if let Err(reason) = state.authorize_kick(target_id).await {
             return vec![tx.reply_error(reason)];
         }
 
-        state
-            .send_to(
-                target_id,
-                Transaction::push(
-                    ServerOpcode::Politequit,
-                    vec![Field::string(
-                        ServerFieldId::Text,
-                        format!("You have been disconnected by {}.", self.name),
-                    )],
-                ),
-            )
-            .await;
+        state.disconnect(target_id).await;
         vec![tx.reply(vec![])]
     }
 
@@ -1737,6 +1729,7 @@ mod tests {
                 RecipientMessage::Push(tx) => {
                     assert_eq!(tx.r#type(), TransactionType::Push(ServerOpcode::UserChange));
                 }
+                RecipientMessage::Disconnect => panic!("unexpected disconnect"),
             }
         }
     }
@@ -2624,6 +2617,35 @@ mod tests {
         let replies = session.on_user_kick(&request, &state).await;
         assert_eq!(replies.len(), 1);
         assert!(replies[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn kick_disconnects_target_with_no_wire_notice() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(2).await;
+        let request = Transaction::request(
+            ClientOpcode::UserKick,
+            1,
+            vec![Field::u16(ClientFieldId::Uid, 2)],
+        );
+        let replies = session.on_user_kick(&request, &state).await;
+        assert_eq!(replies.len(), 1);
+        assert!(!replies[0].is_error());
+
+        let msg = target_rx.try_recv().expect("expected a recipient message");
+        assert!(msg.is_disconnect(), "plain kick must send no wire notice");
+        assert!(target_rx.try_recv().is_err(), "only one message sent");
+    }
+
+    #[tokio::test]
+    async fn kick_with_missing_uid_replies_success() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let request = Transaction::request(ClientOpcode::UserKick, 1, vec![]);
+        let replies = session.on_user_kick(&request, &state).await;
+        assert_eq!(replies.len(), 1);
+        assert!(!replies[0].is_error());
     }
 
     #[tokio::test]

@@ -339,14 +339,19 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     what this server ports. Invisible for default accounts (the bit is on
     by default) but denies an account explicitly stripped of it where the
     primary reference would still serve the list.
-36. `on_user_kick`'s plain kick (no ban option) always pushes a
+36. ~~`on_user_kick`'s plain kick (no ban option) always pushes a
     `Politequit` notice to the target before disconnecting; the
     reference's plain kick sends nothing, it just tears down the
     transport. The temp/perm ban options (`Options` 1/2) are already
     flagged as unimplemented in `on_user_kick`'s own doc comment. A
     missing `Uid` field is also handled differently: the reference
     defaults to 0, finds no such client, and still replies success; this
-    server replies with an explicit "missing user id" error.
+    server replies with an explicit "missing user id" error.~~
+    **Resolved.** Plain kick now sends `RecipientMessage::Disconnect`
+    (a new silent-close signal, handled in `Session::run`'s select loop)
+    instead of pushing `Politequit`. A missing `Uid` now defaults to
+    target id 0 and still replies success. The temp/perm ban options
+    remain unimplemented.
 37. `on_user_get_info`'s reply is a different report entirely, not just a
     different format: it sends connected duration and a privilege
     summary, and an extra `UserId` field the reference never includes.

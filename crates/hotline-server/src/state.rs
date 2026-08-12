@@ -183,6 +183,8 @@ pub enum RecipientMessage {
     Push(Transaction),
     /// A live privilege change for this session's login to apply.
     AccessUpdate(AccessUpdate),
+    /// Close this connection with no wire-visible notice.
+    Disconnect,
 }
 
 impl RecipientMessage {
@@ -200,6 +202,11 @@ impl RecipientMessage {
             Self::AccessUpdate(access_update) => Some(access_update),
             _ => None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_disconnect(&self) -> bool {
+        matches!(self, Self::Disconnect)
     }
 }
 
@@ -365,6 +372,14 @@ impl SharedState {
     pub async fn send_to(&self, target_user_id: u16, tx: Transaction) {
         if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
             let _ = sender.try_send(RecipientMessage::Push(tx));
+        }
+    }
+
+    /// Disconnect exactly one connected user with no wire-visible notice.
+    /// A no-op if that user isn't connected.
+    pub async fn disconnect(&self, target_user_id: u16) {
+        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
+            let _ = sender.try_send(RecipientMessage::Disconnect);
         }
     }
 
