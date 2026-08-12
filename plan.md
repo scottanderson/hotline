@@ -314,10 +314,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     modify and on login lookup itself, so two accounts differing only by
     case can't coexist there and a login always matches regardless of
     case. This server currently allows both.
-31. `on_login`'s immediate-join gate (skipping the `Agreed` step for
+31. ~~`on_login`'s immediate-join gate (skipping the `Agreed` step for
     old clients) checks only that a name was sent; the reference also
     requires a non-zero icon (`psUserName[0] && nIconID`) before doing
-    so.
+    so.~~ **Resolved.** `on_login` now joins immediately on
+    `(tx.name().is_some() && icon != 0) || !modern`, so a modern client
+    with a name but a zero or absent icon waits for `Agreed`; the
+    pre-150 fallback is unaffected.
 32. `on_login`'s agreement-push logic collapses two distinct reference
     cases into one: when `NO_AGREEMENT` isn't set and no agreement text
     is configured, the reference still sends an empty `ShowAgreement`

@@ -356,9 +356,9 @@ impl Session {
             ));
         }
 
-        // A name in Login, or a pre-150 client, joins right away.
-        if tx.name().is_some() || !modern {
-            let icon = tx.icon().unwrap_or(0);
+        // A name plus non-zero icon in Login, or a pre-150 client, joins right away.
+        let icon = tx.icon().unwrap_or(0);
+        if (tx.name().is_some() && icon != 0) || !modern {
             let selfinfo = self.complete_join(tx.name(), icon, state).await;
             replies.push(selfinfo);
         }
@@ -2167,6 +2167,57 @@ mod tests {
         assert!(
             bystander.try_recv().is_ok(),
             "pre-150 clients join immediately even without a name"
+        );
+        assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn modern_client_with_a_name_but_no_icon_defers_join_until_agreed() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        let mut bystander = state.register_recipient(2).await;
+
+        session.state = SessionState::Agreement;
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Version, 151),
+                Field::string(ClientFieldId::Name, "Alice"),
+            ],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert!(
+            bystander.try_recv().is_err(),
+            "a modern client with no (or zero) icon must not join until Agreed"
+        );
+        assert!(matches!(session.state, SessionState::Agreement));
+    }
+
+    #[tokio::test]
+    async fn modern_client_with_a_name_and_icon_joins_immediately() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        let mut bystander = state.register_recipient(2).await;
+
+        session.state = SessionState::Agreement;
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Version, 151),
+                Field::string(ClientFieldId::Name, "Alice"),
+                Field::u16(ClientFieldId::Icon, 42),
+            ],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert!(
+            bystander.try_recv().is_ok(),
+            "a modern client with a name and a non-zero icon joins immediately"
         );
         assert!(matches!(session.state, SessionState::Joined));
     }
