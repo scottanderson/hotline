@@ -248,9 +248,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     a room member and rejects a repeat invite to an already-invited
     target — both checks the reference doesn't perform (it only skips a
     target already in the room's client list).
-21. `on_chat_part` always sends an empty reply; `ProcessTran_LeaveChat`
+21. ~~`on_chat_part` always sends an empty reply; `ProcessTran_LeaveChat`
     never replies (`inTsn` is unused in the reference). Member
-    notification and delete-when-empty already match.
+    notification and delete-when-empty already match.~~
+    **Resolved.** `on_chat_part` now returns `Vec<Transaction>` and sends
+    no reply on the success path, matching the dispatch table's
+    established "empty vec means no reply" convention. Member
+    notification and delete-when-empty are unchanged.
 22. `on_chat_decline` never broadcasts the decline to the room; the
     reference sends a `"<<< "Name" declined invitation to chat >>>"` chat
     message to the room's remaining members. `on_chat_decline` also

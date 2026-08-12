@@ -270,7 +270,7 @@ impl Session {
             /* 113 */ ClientOpcode::ChatInvite => self.on_chat_invite(tx, state).await,
             /* 114 */ ClientOpcode::ChatDecline => self.on_chat_decline(tx, state).await,
             /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
-            /* 116 */ ClientOpcode::ChatPart => vec![self.on_chat_part(tx, state).await],
+            /* 116 */ ClientOpcode::ChatPart => self.on_chat_part(tx, state).await,
             /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,
             /* 121 */ ClientOpcode::Agreed => vec![tx.reply_error("already logged in")],
             /* 200 */ ClientOpcode::FileList => self.on_get_file_name_list(tx, state).await,
@@ -1243,9 +1243,9 @@ impl Session {
     }
 
     /// 116: leave a chat room.
-    async fn on_chat_part(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+    async fn on_chat_part(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
-            return tx.reply_error("missing chat id");
+            return vec![tx.reply_error("missing chat id")];
         };
         let remaining = state.chat_room_members(chat_id).await.unwrap_or_default();
         state.leave_chat_room(chat_id, self.user_id).await;
@@ -1260,7 +1260,7 @@ impl Session {
         for member in remaining.into_iter().filter(|&m| m != self.user_id) {
             state.send_to(member, notify.clone()).await;
         }
-        tx.reply(vec![])
+        vec![]
     }
 
     /// 114: decline a chat invitation.
@@ -3552,6 +3552,42 @@ mod tests {
             creator_rx.try_recv().is_err(),
             "must not also broadcast room chat publicly"
         );
+    }
+
+    #[tokio::test]
+    async fn chat_part_sends_no_reply_but_still_notifies_remaining_members() {
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state.add_chat_member(chat_id, 2).await;
+
+        let mut creator_rx = state.register_recipient(1).await;
+        let bob = test_session("Bob", Access::all());
+        let bob = Session { user_id: 2, ..bob };
+        let part = Transaction::request(
+            ClientOpcode::ChatPart,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        let replies = bob.on_chat_part(&part, &state).await;
+
+        assert!(replies.is_empty(), "leaving a chat room gets no reply");
+
+        let notify = creator_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ChatUserPart push");
+        assert_eq!(
+            notify.field(ServerFieldId::ChatId).unwrap().as_u32(),
+            Some(chat_id)
+        );
+        assert_eq!(
+            notify.field(ServerFieldId::UserId).unwrap().as_u16(),
+            Some(2)
+        );
+
+        let members = state.chat_room_members(chat_id).await.unwrap();
+        assert_eq!(members, vec![1]);
     }
 
     #[tokio::test]
