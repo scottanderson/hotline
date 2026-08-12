@@ -833,14 +833,16 @@ impl Session {
     }
 
     /// Decode a `FILE_PATH`-shaped field (`FilePath` or `FileNewPath`).
+    /// An absent field is the root directory.
     fn path_field(
         &self,
         tx: &Transaction,
         id: ClientFieldId,
     ) -> std::result::Result<HlPath, &'static str> {
-        match tx.field(id) {
-            Some(field) => HlPath::decode(&field.as_bytes()).map_err(|_| "malformed file path"),
-            None => Err("missing file path"),
+        match tx.field(id).map(|field| HlPath::decode(&field.as_bytes())) {
+            Some(Ok(path)) => Ok(path),
+            Some(Err(_)) => Err("malformed file path"),
+            None => Ok(HlPath::default()),
         }
     }
 
@@ -853,11 +855,7 @@ impl Session {
             .field(ClientFieldId::FileName)
             .ok_or("missing file name")?
             .as_string();
-        let dir = match tx.file_path(ClientFieldId::FilePath) {
-            Some(Ok(dir)) => dir,
-            Some(Err(_)) => return Err("malformed file path"),
-            None => HlPath::default(),
-        };
+        let dir = self.path_field(tx, ClientFieldId::FilePath)?;
         Ok((name, dir))
     }
 
@@ -4725,6 +4723,44 @@ mod tests {
         assert!(
             state
                 .file_exists(requester, &HlPath::new(["Sub"]), "a.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn file_move_to_root_treats_an_absent_new_path_as_root() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Sub"]), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let move_tx = Transaction::request(
+            ClientOpcode::FileMove,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    HlPath::new(["Sub"]).encode().unwrap(),
+                ),
+                // No FileNewPath field: the destination is the root directory.
+            ],
+        );
+        let [reply] = session
+            .on_file_move(&move_tx, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::new(["Sub"]), "a.txt")
+                .await
+        );
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "a.txt")
                 .await
         );
     }
