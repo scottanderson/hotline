@@ -410,14 +410,14 @@ recommendation either way.
     reference always sends the field (as an empty pstring when unset).~~
     **Resolved.** `on_login` now always pushes `ServerFieldId::Servername`,
     empty when unconfigured.
-35. **Not a bug, a primary/secondary divergence like item 18.**
-    `on_user_get_list` requires `AccessExtra::USER_GETLIST`; the primary
-    reference's `ProcessTran_GetUserNameList` performs no access check at
-    all, but the secondary reference gates the same opcode
-    (`HTLC_HDR_USER_GETLIST`) on `access_extra.user_getlist`, exactly
-    what this server ports. Invisible for default accounts (the bit is on
-    by default) but denies an account explicitly stripped of it where the
-    primary reference would still serve the list.
+35. ~~Not a bug, a primary/secondary divergence like item 18.~~
+    **Resolved: kept the existing gated behavior.** `on_user_get_list`
+    requires `AccessExtra::USER_GETLIST`; one reference performs no
+    access check here at all, the other gates the opcode on this exact
+    bit. Decided to keep the gate: it's consistent with every other
+    opt-in behavior already modeled as an `AccessExtra` bit in this
+    server, and it's invisible for default accounts since the bit is on
+    by default. No code change.
 36. ~~`on_user_kick`'s plain kick (no ban option) always pushes a
     `Politequit` notice to the target before disconnecting; the
     reference's plain kick sends nothing, it just tears down the
