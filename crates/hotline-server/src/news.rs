@@ -115,29 +115,40 @@ impl NewsBundle {
     }
 
     /// Create a new bundle named `name` under `components`.
-    /// `Err` if `components` isn't a bundle, or `name` already exists.
+    /// `Err` if `components` isn't a bundle, `name` already exists, or
+    /// `name` is too long for the `HTLS_DATA_NEWS_DIRLIST_EXTENDED` (323)
+    /// listing entry it will need to encode into (a 1-byte length prefix).
     pub fn mkdir(&mut self, components: &[String], name: &str) -> Result<(), &'static str> {
-        let parent = self.bundle_mut(components).ok_or("no such news bundle")?;
-        if parent.entries.contains_key(name) {
-            return Err("an item with that name already exists");
-        }
+        let parent = self.check_new_name(components, name)?;
         parent
             .entries
             .insert(name.to_string(), NewsNode::Bundle(NewsBundle::default()));
         Ok(())
     }
 
-    /// Create a new category named `name` under `components`.
-    /// `Err` if `components` isn't a bundle, or `name` already exists.
+    /// Create a new category named `name` under `components`. See
+    /// [`Self::mkdir`] for the error cases.
     pub fn mkcategory(&mut self, components: &[String], name: &str) -> Result<(), &'static str> {
-        let parent = self.bundle_mut(components).ok_or("no such news bundle")?;
-        if parent.entries.contains_key(name) {
-            return Err("an item with that name already exists");
-        }
+        let parent = self.check_new_name(components, name)?;
         parent
             .entries
             .insert(name.to_string(), NewsNode::Category(NewsCategory::new()));
         Ok(())
+    }
+
+    fn check_new_name(
+        &mut self,
+        components: &[String],
+        name: &str,
+    ) -> Result<&mut NewsBundle, &'static str> {
+        if name.len() > 255 {
+            return Err("name too long");
+        }
+        let parent = self.bundle_mut(components).ok_or("no such news bundle")?;
+        if parent.entries.contains_key(name) {
+            return Err("an item with that name already exists");
+        }
+        Ok(parent)
     }
 
     /// Remove the bundle or category named by `components` (its last
@@ -176,6 +187,15 @@ impl NewsBundle {
         flavor: String,
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
+        // Each is wire-encoded with a 1-byte length prefix in the
+        // article listing (`HTLC_DATA_NEWS_CATLIST`, 321). Openline
+        // actually caps title/flavor at a much smaller fixed buffer and
+        // truncates silently rather than rejecting; this server accepts
+        // up to the wire format's real 255-byte limit and errors past
+        // it, a deliberate, more permissive divergence.
+        if title.len() > 255 || poster.len() > 255 || flavor.len() > 255 {
+            return Err("post data too long");
+        }
         let category = self
             .category_mut(components)
             .ok_or("no such news category")?;

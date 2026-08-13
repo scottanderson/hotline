@@ -14,6 +14,14 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   reference uses short, sometimes cryptic strings (`"who?!?"`, `"Uh, no."`);
   this server uses friendlier text. Not changed yet — decide with the user
   whether exact-string parity matters for any known client first.
+- **Posted news article title/poster/flavor length cap.** Openline caps
+  these at a small fixed buffer and truncates silently past it; this
+  server accepts up to the wire format's real 255-byte `pstring` limit
+  and errors past that instead. More permissive by design; not changed.
+- **Posted news article flavor default.** Openline stores an empty
+  string when a post omits `HTLC_DATA_NEWS_MIMETYPE`; this server
+  defaults to `"text/plain"`. A real client always sends this field, so
+  this only affects a hand-crafted request; not changed.
 
 ## Decision point: primary vs. secondary reference for chat/login divergences
 
@@ -59,26 +67,26 @@ recommendation either way.
    used by `on_file_mkdir`/`on_file_getinfo`: when `FileName` is absent, the
    target name comes from `FilePath`'s last component and the containing
    directory from the rest.
-5. **Threaded news.** Current news support is flat/classic only; also
+5. ~~**Threaded news.** Current news support is flat/classic only; also
    covers the unhandled `NewsListdir`/`NewsListcategory`/`NewsDelete`/
    `NewsMkdir`/`NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/
-   `NewsDeletethread` opcodes (370-411). **In progress:** the storage layer
-   (`crate::news`'s bundle/category tree, `SharedState`'s `news_*` accessors,
-   and the `NewsCategoryListEntry`/`NewsArticleListData` wire types) is in
-   place and confirmed against the reference's own listing/threading/delete-
-   promotion behavior. No opcode handlers are wired up in `session.rs` yet.
-   Two follow ups noted while confirming the storage layer against the
-   reference:
-   - `NewsArticle` stores a single MIME flavor and hardcodes the wire
-     flavor count to 1; the reference supports up to 32 flavors per
-     article. Fine as a starting simplification, revisit if multi-flavor
-     posting is ever needed.
-   - `SharedState::news_delete` gates `NEWS_DELETE_FLDR`/`NEWS_DELETE_CAT`
-     itself, unlike `news_post_article`/`news_delete_article`, which take
-     no `Access` and expect the future handler to gate `NEWS_POST_ART`/
-     `NEWS_DELETE_ART` there (this project's usual convention). Reconcile
-     when wiring up the handlers, probably by moving `news_delete`'s check
-     into its handler too.
+   `NewsDeletethread` opcodes (370-411).~~ **Resolved and implemented.**
+   `crate::news` holds an in-memory tree of bundles (folders) and
+   categories, each category a thread of articles addressed by
+   parent/reply linkage; sibling order (for `NEWS_PREVTHREADID`/
+   `NEWS_NEXTTHREADID`) is derived from position in the parent's
+   children list rather than stored as explicit links. All eight
+   opcodes are wired up in `session.rs`, gated on the matching
+   bundle/category/article `NEWS_*` privilege. A non-recursive
+   `NewsDeletethread` promotes the deleted article's first reply into
+   its place, taking on its remaining replies as its own, matching the
+   reference's behavior for that case. Category add/delete serial
+   numbers mirror a reference quirk: the add serial increments on every
+   post, the delete serial never changes from its initial value.
+   `NewsArticle` still stores a single MIME flavor and hardcodes the wire
+   flavor count to 1; the reference supports up to 32 flavors per
+   article. Fine as a starting simplification, revisit if multi-flavor
+   posting is ever needed.
 6. **HTXF follow ups, deferred out of the initial file-transfer work.**
    Four largely independent pieces:
    - ~~Resume support (client-sent `RFLT` blob).~~ **Resolved for
