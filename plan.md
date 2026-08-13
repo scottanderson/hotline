@@ -372,15 +372,24 @@ recommendation either way.
     `on_newsfile_post` now rejects text over 8192 bytes with that exact
     error before calling `state.post_news`, so an oversized post is never
     appended or published.
-30. **Not a bug, a primary/secondary divergence like item 18.** Login
-    names aren't case-folded anywhere in `accounts.rs`/`session.rs`. The
-    primary reference lowercases the login on every account create/
-    delete/modify and on login lookup itself, so two accounts differing
-    only by case can't coexist there and a login always matches
-    regardless of case. The secondary reference matches this server
-    instead: accounts are stored as literal filesystem directory names
-    with no case-folding anywhere, so lookups are case-sensitive and two
-    logins differing only by case can coexist.
+30. ~~Not a bug, a primary/secondary divergence like item 18.~~
+    **Resolved: case-fold logins to lowercase.** One reference lowercases
+    the login on delete, modify, and login lookup, but not on create or
+    read; that inconsistency only ever worked because its accounts are
+    folders on a filesystem that's case-insensitive by default, so a
+    mixed-case login created there still resolves to the same folder
+    later regardless of case. Ported literally onto this server's
+    case-sensitive `HashMap`/JSON-file backends, that same inconsistency
+    would let an account get created with a mixed-case login and then
+    become permanently unreachable by delete, modify, or login. Chose to
+    fold consistently on every login-touching operation instead (the
+    other reference's own accounts, in contrast, are case-sensitive
+    everywhere with no folding at all). A submitted login is lowercased
+    once, at every point one enters the system (`on_login`,
+    `on_account_delete`, `on_account_read`, `on_account_create_or_modify`,
+    `apply_user_list_record`), so account storage keys and
+    `SharedState`'s live per-session `login` are always
+    the same canonical form.
 31. ~~`on_login`'s immediate-join gate (skipping the `Agreed` step for
     old clients) checks only that a name was sent; the reference also
     requires a non-zero icon (`psUserName[0] && nIconID`) before doing

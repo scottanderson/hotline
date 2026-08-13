@@ -321,8 +321,8 @@ impl Session {
             .unwrap_or("guest");
         let password = password.as_deref().unwrap_or_default();
 
-        let account = state.account(login).await;
-        self.login = login.to_string();
+        self.login = login.to_lowercase();
+        let account = state.account(&self.login).await;
         self.client_version = tx.client_version();
         self.access = match account {
             Some(account) if account.password == password => {
@@ -1370,6 +1370,7 @@ impl Session {
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
+        let login = login.to_lowercase();
         if let Err(reason) = state.delete_account(&login).await {
             return vec![tx.reply_error(reason)];
         }
@@ -1405,6 +1406,7 @@ impl Session {
         let Some(login) = tx.field(ClientFieldId::Login).map(Field::as_string) else {
             return vec![tx.reply_error("missing login")];
         };
+        let login = login.to_lowercase();
         let Some(account) = state.account(&login).await else {
             return vec![tx.reply_error("no such account")];
         };
@@ -1435,6 +1437,7 @@ impl Session {
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
+        let login = login.to_lowercase();
         let existing = state.account(&login).await;
         // Absent PASSWORD clears it; raw byte 0x00 means unchanged.
         let password = match tx.field(ClientFieldId::Password) {
@@ -1558,13 +1561,15 @@ impl Session {
         let field = |id: ClientFieldId| record.iter().find(|f| f.id == u16::from(id));
         let old_login = field(ClientFieldId::Text)
             .map(Field::as_deobfuscated_string)
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase());
         let name = field(ClientFieldId::Name)
             .map(Field::as_string)
             .unwrap_or_default();
         let login = field(ClientFieldId::Login)
             .map(Field::as_deobfuscated_string)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_lowercase();
 
         if name.is_empty() && login.is_empty() {
             let Some(old_login) = old_login else {
@@ -2052,6 +2057,38 @@ mod tests {
 
         assert_eq!(session.access, Access::BROADCAST);
         assert_eq!(session.name, "Alice");
+    }
+
+    #[tokio::test]
+    async fn login_matches_the_account_regardless_of_case() {
+        let mut session = test_session("guest1", Access::empty());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        state
+            .put_account(
+                "alice".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "hunter2".to_string(),
+                    name: "Alice".to_string(),
+                    access: Access::BROADCAST,
+                },
+            )
+            .await
+            .unwrap();
+
+        let login = Transaction::request(
+            ClientOpcode::Login,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "ALICE"),
+                Field::obfuscated_string(ClientFieldId::Password, "hunter2"),
+            ],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert_eq!(session.access, Access::BROADCAST);
+        assert_eq!(session.login, "alice");
     }
 
     #[tokio::test]
@@ -3045,6 +3082,53 @@ mod tests {
                 .and_then(Field::as_u64),
             Some(Access::SEND_CHAT.bits())
         );
+    }
+
+    #[tokio::test]
+    async fn account_create_folds_the_login_to_lowercase() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+
+        let create = Transaction::request(
+            ClientOpcode::AccountCreate,
+            1,
+            vec![
+                Field::obfuscated_string(ClientFieldId::Login, "Bob"),
+                Field::obfuscated_string(ClientFieldId::Password, "secret"),
+                Field::string(ClientFieldId::Name, "Bob"),
+                Field::u64(ClientFieldId::Access, Access::SEND_CHAT.bits()),
+            ],
+        );
+        assert!(!session.on_account_create(&create, &state).await[0].is_error());
+
+        assert!(state.account("bob").await.is_some());
+        assert!(state.account("Bob").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn account_delete_matches_the_login_regardless_of_case() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "secret".to_string(),
+                    name: "Bob".to_string(),
+                    access: Access::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+
+        let delete = Transaction::request(
+            ClientOpcode::AccountDelete,
+            1,
+            vec![Field::obfuscated_string(ClientFieldId::Login, "BOB")],
+        );
+        assert!(!session.on_account_delete(&delete, &state).await[0].is_error());
+        assert!(state.account("bob").await.is_none());
     }
 
     #[tokio::test]
