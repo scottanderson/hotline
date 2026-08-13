@@ -68,7 +68,10 @@ recommendation either way.
    the transfer queue (`HTLS_DATA_QUEUE_POSITION`, `HTLS_HDR_QUEUE_UPDATE`),
    folder transfers (`HTLC_HDR_FILE_GETFOLDER`/`_PUTFOLDER`, a separate
    `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the transfer connection),
-   and resource-fork (`"MACR"`) data.
+   and resource-fork (`"MACR"`) data. A live per-transfer-progress tracker
+   from this item is also what item 37's `on_user_get_info` file-transfer
+   sections are waiting on; until it exists, those five sections always
+   read `"None."`, with no in-progress transfers ever reported.
 7. ~~**Private-message/chat refusal and automatic response are entirely
    unimplemented.**~~ **Resolved and implemented.** `on_user_change`
    (`UserChange`, 304) now reads `Options` (113) as a persisted-preference
@@ -428,14 +431,36 @@ recommendation either way.
     instead of pushing `Politequit`. A missing `Uid` now defaults to
     target id 0 and still replies success. The temp/perm ban options
     remain unimplemented.
-37. `on_user_get_info`'s reply is a different report entirely, not just a
-    different format: it sends connected duration and a privilege
-    summary, and an extra `UserId` field the reference never includes.
-    The reference's `ProcessTran_GetClientInfoText` instead reports
-    active file-transfer state (upload/download file and folder lists,
-    waiting downloads) plus nickname/account/address, with no
-    duration/privilege summary at all, and only two fields (`Data`,
-    `UserName`).
+37. ~~`on_user_get_info`'s reply was a different report entirely, not just
+    a different format: it sent connected duration and a privilege
+    summary, and an extra `UserId` field the reference never includes.~~
+    **Resolved for the parts this server can report.** `on_user_get_info`
+    now follows the primary reference's own labels and section order
+    (`Nickname`/`Name`/`Account`/`Address`, then File Downloads/Folder
+    Downloads/File Uploads/Folder Uploads/Waiting Downloads, each
+    `"None."` when empty) and sends only the two fields the reference
+    does (`Data`/`Text`, `UserName`/`Name`), dropping the extra `UserId`
+    field and the privilege summary neither reference includes. An
+    `Online` duration line is kept alongside `Address` — not in the
+    primary reference, but the secondary reference reports the same
+    fact (`online`/`idle` duration) and it costs nothing extra since
+    `connected_at` is already tracked. `Icon` and `Version` lines were
+    added the same way: neither reference reports icon/client-version in
+    this exact shape, but both are locally useful and now tracked
+    end to end (`UserEntry::client_version`/`Session::client_version`,
+    an `Option<u16>` set from `HTLC_DATA_CLIENTVERSION` (160) at login),
+    so they're included alongside `Online` rather than left out. The
+    `Version` line itself is omitted entirely rather than printed as
+    empty/zero when a client never sent one. Still not carried over
+    from the secondary reference: per-connection color/cipher/
+    compression reporting, since none of those are tracked on
+    `UserEntry`/`Session` today and adding just for this report would
+    mean threading more new fields through all ~20 existing `UserEntry`
+    construction sites for a cosmetic addition. **Not done:** the five
+    file-transfer sections always read `"None."` — populating them with
+    real upload/download progress needs a live per-transfer-progress
+    tracker this server doesn't have yet (item 6's territory, not
+    something to invent standalone here).
 
 ## Needs manual verification against the real client
 

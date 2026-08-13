@@ -35,6 +35,9 @@ pub struct UserEntry {
     pub name: String,
     /// Icon ID.
     pub icon: u16,
+    /// Client-reported protocol version (`HTLC_DATA_CLIENTVERSION`, field
+    /// 160), `None` if the login request never sent one.
+    pub client_version: Option<u16>,
     /// Remote socket address this connection was accepted from.
     pub remote_addr: SocketAddr,
     /// When this connection was accepted.
@@ -897,6 +900,7 @@ mod tests {
                     account_name: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
+                    client_version: None,
                     access: Access::empty(),
                     access_extra: AccessExtra::default(),
                     remote_addr: "127.0.0.1:0".parse().unwrap(),
@@ -939,6 +943,7 @@ mod tests {
                     account_name: String::new(),
                     name: format!("user{id}"),
                     icon: 0,
+                    client_version: None,
                     access: Access::empty(),
                     access_extra: AccessExtra::default(),
                     remote_addr: "127.0.0.1:0".parse().unwrap(),

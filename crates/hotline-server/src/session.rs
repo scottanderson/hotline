@@ -74,6 +74,9 @@ pub struct Session {
     access: Access,
     /// Server-side-only account settings; no client opcode reads or sets them.
     access_extra: AccessExtra,
+    /// Client-reported protocol version (`HTLC_DATA_CLIENTVERSION`, field
+    /// 160) from login, `None` if it never sent one.
+    client_version: Option<u16>,
     state: SessionState,
     /// Whether the last broadcast `UserChange` marked this session away.
     is_away: bool,
@@ -109,6 +112,7 @@ impl Session {
             account_name: String::new(),
             access: Access::empty(),
             access_extra: AccessExtra::default(),
+            client_version: None,
             state: SessionState::Agreement,
             is_away: false,
             refuses_pm: false,
@@ -319,6 +323,7 @@ impl Session {
 
         let account = state.account(login).await;
         self.login = login.to_string();
+        self.client_version = tx.client_version();
         self.access = match account {
             Some(account) if account.password == password => {
                 self.account_name = account.name.clone();
@@ -340,7 +345,7 @@ impl Session {
         let mut replies = vec![tx.reply(fields)];
 
         // No HTLC_DATA_CLIENTVERSION (160) counts as pre-150.
-        let modern = tx.client_version().unwrap_or(0) >= 150;
+        let modern = self.client_version.unwrap_or(0) >= 150;
 
         // DONT_SHOW_AGREEMENT skips the real text, not just its display.
         let show_agreement = !self.access.contains(Access::NO_AGREEMENT);
@@ -461,6 +466,7 @@ impl Session {
                 account_name: self.account_name.clone(),
                 name: self.name.clone(),
                 icon,
+                client_version: self.client_version,
                 access: self.access,
                 access_extra: self.access_extra,
                 remote_addr: self.remote_addr,
@@ -607,8 +613,9 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// 303: another user's info text (name, login, account name, icon,
-    /// remote address, connected duration, and a privilege summary).
+    /// 303: renders as a single scrollable text block in the client's "Get
+    /// Info" window, so its shape follows the reference's own labels and
+    /// section order rather than this server's own report design.
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
@@ -620,48 +627,44 @@ impl Session {
             return vec![tx.reply_error("no such user")];
         };
 
-        let privileges = if target.access == Access::all() {
-            "all".to_string()
-        } else if target.access.is_empty() {
-            "none".to_string()
-        } else {
-            target
-                .access
-                .iter_names()
-                .map(|(name, _)| name)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
         let online = target.connected_at.elapsed();
+        let version_line = target
+            .client_version
+            .map(|version| format!("Version:    {version}\r"))
+            .unwrap_or_default();
         let text = format!(
-            "{name}{admin}\rLogin: {login}\rAccount name: {account_name}\rIcon: {icon}\r\
-             Address: {addr}\rConnected: {mins}m {secs}s\rPrivileges: {privileges}",
+            "Nickname:   {name}\r\
+             Name:       {account_name}\r\
+             Account:    {login}\r\
+             Icon:       {icon}\r\
+             {version_line}\
+             Address:    {addr}\r\
+             Online:     {mins}m {secs}s\r\r\
+             -------- File Downloads ---------\r\rNone.\r\r\
+             ------- Folder Downloads --------\r\rNone.\r\r\
+             --------- File Uploads ----------\r\rNone.\r\r\
+             -------- Folder Uploads ---------\r\rNone.\r\r\
+             ------- Waiting Downloads -------\r\rNone.\r",
             name = target.name,
-            admin = if target.access.contains(Access::DISCON_USER) {
-                " (admin)"
+            account_name = if target.account_name.is_empty() {
+                "(none)"
             } else {
-                ""
+                &target.account_name
             },
             login = if target.login.is_empty() {
                 "(guest)"
             } else {
                 &target.login
             },
-            account_name = if target.account_name.is_empty() {
-                "(none)"
-            } else {
-                &target.account_name
-            },
-            icon = target.icon,
             addr = target.remote_addr,
+            icon = target.icon,
             mins = online.as_secs() / 60,
             secs = online.as_secs() % 60,
         );
 
         vec![tx.reply(vec![
-            Field::string(ServerFieldId::Name, target.name),
-            Field::u16(ServerFieldId::UserId, target.user_id),
             Field::string(ServerFieldId::Text, text),
+            Field::string(ServerFieldId::Name, target.name),
         ])]
     }
 
@@ -1672,6 +1675,7 @@ mod tests {
             account_name: String::new(),
             access,
             access_extra: AccessExtra::default(),
+            client_version: None,
             state: SessionState::Joined,
             is_away: false,
             refuses_pm: false,
@@ -1691,6 +1695,7 @@ mod tests {
             account_name: String::new(),
             name: name.to_string(),
             icon: 0,
+            client_version: None,
             access: Access::all(),
             access_extra: AccessExtra::default(),
             remote_addr: "127.0.0.1:0".parse().unwrap(),
@@ -1761,7 +1766,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_get_info_summarizes_all_privileges_as_all() {
+    async fn user_get_info_reports_the_reference_shaped_text_block() {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -1771,6 +1776,7 @@ mod tests {
                 account_name: "Bobby".to_string(),
                 name: "Bob".to_string(),
                 icon: 42,
+                client_version: Some(185),
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
                 remote_addr: "192.0.2.1:5500".parse().unwrap(),
@@ -1788,16 +1794,26 @@ mod tests {
         );
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
+        assert_eq!(reply.field(ServerFieldId::Name).unwrap().as_string(), "Bob");
+        assert!(reply.field(ServerFieldId::UserId).is_none());
         let text = reply.field(ServerFieldId::Text).unwrap().as_string();
-        assert!(text.contains("Login: bob"));
-        assert!(text.contains("Account name: Bobby"));
-        assert!(text.contains("Icon: 42"));
-        assert!(text.contains("Address: 192.0.2.1:5500"));
-        assert!(text.contains("Privileges: all"));
+        assert!(text.contains("Nickname:   Bob"));
+        assert!(text.contains("Name:       Bobby"));
+        assert!(text.contains("Account:    bob"));
+        assert!(text.contains("Address:    192.0.2.1:5500"));
+        assert!(text.contains("Icon:       42"));
+        assert!(text.contains("Version:    185"));
+        assert!(text.contains(
+            "-------- File Downloads ---------\r\rNone.\r\r\
+             ------- Folder Downloads --------\r\rNone.\r\r\
+             --------- File Uploads ----------\r\rNone.\r\r\
+             -------- Folder Uploads ---------\r\rNone.\r\r\
+             ------- Waiting Downloads -------\r\rNone.\r"
+        ));
     }
 
     #[tokio::test]
-    async fn user_get_info_summarizes_no_privileges_as_none() {
+    async fn user_get_info_defaults_login_and_account_name_when_empty() {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -1807,6 +1823,7 @@ mod tests {
                 account_name: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
+                client_version: None,
                 access: Access::empty(),
                 access_extra: AccessExtra::default(),
                 remote_addr: "192.0.2.1:5500".parse().unwrap(),
@@ -1825,41 +1842,9 @@ mod tests {
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
         let text = reply.field(ServerFieldId::Text).unwrap().as_string();
-        assert!(text.contains("Login: (guest)"));
-        assert!(text.contains("Account name: (none)"));
-        assert!(text.contains("Privileges: none"));
-    }
-
-    #[tokio::test]
-    async fn user_get_info_summarizes_some_privileges_by_name() {
-        let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
-        state
-            .insert_user(UserEntry {
-                user_id: 2,
-                login: "bob".to_string(),
-                account_name: "Bobby".to_string(),
-                name: "Bob".to_string(),
-                icon: 42,
-                access: Access::READ_CHAT | Access::SEND_CHAT,
-                access_extra: AccessExtra::default(),
-                remote_addr: "192.0.2.1:5500".parse().unwrap(),
-                connected_at: Instant::now(),
-                last_active: Instant::now(),
-                refuses_pm: false,
-                refuses_chat: false,
-                automatic_response: None,
-            })
-            .await;
-        let request = Transaction::request(
-            ClientOpcode::UserGetinfo,
-            1,
-            vec![Field::u16(ClientFieldId::Uid, 2)],
-        );
-
-        let reply = &session.on_user_get_info(&request, &state).await[0];
-        let text = reply.field(ServerFieldId::Text).unwrap().as_string();
-        assert!(text.contains("Privileges: READ_CHAT, SEND_CHAT"));
+        assert!(text.contains("Account:    (guest)"));
+        assert!(text.contains("Name:       (none)"));
+        assert!(!text.contains("Version:"));
     }
 
     #[tokio::test]
@@ -2439,6 +2424,7 @@ mod tests {
             account_name: String::new(),
             access: Access::empty(),
             access_extra: AccessExtra::default(),
+            client_version: None,
             state: SessionState::Agreement,
             is_away: false,
             refuses_pm: false,
@@ -2568,6 +2554,7 @@ mod tests {
                 login: String::new(),
                 name: session.name.clone(),
                 icon: 0,
+                client_version: None,
                 access: session.access,
                 access_extra: AccessExtra::USER_GETLIST,
                 account_name: String::new(),
@@ -3220,6 +3207,7 @@ mod tests {
                 login: bob.login.clone(),
                 name: bob.name.clone(),
                 icon: 0,
+                client_version: None,
                 access: bob.access,
                 access_extra: bob.access_extra,
                 account_name: String::new(),
@@ -3289,6 +3277,7 @@ mod tests {
                 login: bob.login.clone(),
                 name: bob.name.clone(),
                 icon: 0,
+                client_version: None,
                 access: bob.access,
                 access_extra: bob.access_extra,
                 account_name: String::new(),
@@ -3597,6 +3586,7 @@ mod tests {
                 login: "bob".to_string(),
                 name: "Bob".to_string(),
                 icon: 0,
+                client_version: None,
                 access: Access::empty(),
                 access_extra: AccessExtra::default(),
                 account_name: "Bob".to_string(),
@@ -3659,6 +3649,7 @@ mod tests {
                 login: String::new(),
                 name: "Alice".to_string(),
                 icon: 0,
+                client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
@@ -3676,6 +3667,7 @@ mod tests {
                 login: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
+                client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
@@ -4061,6 +4053,7 @@ mod tests {
                 login: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
+                client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
@@ -4098,6 +4091,7 @@ mod tests {
                 login: String::new(),
                 name: "Bob".to_string(),
                 icon: 0,
+                client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
                 account_name: String::new(),
