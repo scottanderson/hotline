@@ -255,17 +255,25 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     no reply on the success path, matching the dispatch table's
     established "empty vec means no reply" convention. Member
     notification and delete-when-empty are unchanged.
-22. `on_chat_decline` never broadcasts the decline to the room; the
-    reference sends a `"<<< "Name" declined invitation to chat >>>"` chat
-    message to the room's remaining members. `on_chat_decline` also
-    always sends an empty reply where the reference sends none.
+22. ~~`on_chat_decline` never broadcast the decline to the room, and
+    always sent an empty reply where neither reference does.~~
+    **Resolved as a superset of both references.** `on_chat_decline` now
+    sends no reply on the success path (matching the dispatch table's
+    established "empty vec means no reply" convention; a stray reply had
+    no visible effect on a real client either way, since it
+    fire-and-forgets the decline and never waits on one) and broadcasts a
+    `"<<< "Name" declined invitation to chat >>>"` `Chat` push to the
+    room's remaining members, matching the primary reference's
+    `ProcessTran_RejectChatInvite`. The secondary reference does neither
+    the broadcast nor the reply; adding the broadcast doesn't conflict
+    with that; it's silent on it rather than doing something different.
 23. ~~`on_chat` doesn't support the emote/action message style. The
     reference reads `Style` (109, `myField_ChatOptions`) and formats the
     message as `"*** {name} ..."` instead of the normal
     `"{name}: ..."` prefix when it's set to 1; this server always uses
     the normal prefix regardless of `Style`.~~ **Resolved.** `on_chat`
     now reads `ClientFieldId::Style` and formats the relayed message as
-    `"*** {name} {text}"` when it's 1, keeping the normal
+    `"\r*** {name} {text}"` when it's 1, keeping the normal
     `"\r{name:>13}:  {text}"` prefix otherwise.
 24. ~~`on_msg_broadcast` sends the broadcast to every connected user
     including the sender (`state.publish`); the reference explicitly

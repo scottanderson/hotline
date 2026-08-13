@@ -1267,8 +1267,23 @@ impl Session {
     async fn on_chat_decline(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) {
             state.invite_declined(chat_id, self.user_id).await;
+            if let Some(members) = state.chat_room_members(chat_id).await {
+                let notify = Transaction::push(
+                    ServerOpcode::Chat,
+                    vec![
+                        Field::string(
+                            ServerFieldId::Text,
+                            format!("\r<<< \"{}\" declined invitation to chat >>>", self.name),
+                        ),
+                        Field::u32(ServerFieldId::ChatId, chat_id),
+                    ],
+                );
+                for member in members {
+                    state.send_to(member, notify.clone()).await;
+                }
+            }
         }
-        vec![tx.reply(vec![])]
+        vec![]
     }
 
     /// 120: set a chat room's subject and/or its join password.
@@ -4185,14 +4200,45 @@ mod tests {
             1,
             vec![Field::u32(ClientFieldId::ChatId, chat_id)],
         );
-        let [reply] = bob
-            .on_chat_decline(&decline, &state)
-            .await
-            .try_into()
-            .unwrap();
+        let replies = bob.on_chat_decline(&decline, &state).await;
 
-        assert!(!reply.is_error());
+        assert!(replies.is_empty());
         assert!(!state.is_invited(chat_id, 2).await);
+    }
+
+    #[tokio::test]
+    async fn declining_notifies_the_room() {
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        state.invite(chat_id, 2).await;
+
+        let mut alice_rx = state.register_recipient(1).await;
+        let bob = Session {
+            user_id: 2,
+            ..test_session("Bob", Access::all())
+        };
+        let decline = Transaction::request(
+            ClientOpcode::ChatDecline,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+        );
+        let replies = bob.on_chat_decline(&decline, &state).await;
+        assert!(replies.is_empty());
+
+        let notify = alice_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push notifying the room");
+        assert_eq!(notify.r#type(), TransactionType::Push(ServerOpcode::Chat));
+        assert_eq!(
+            notify.field(ServerFieldId::Text).unwrap().as_string(),
+            "\r<<< \"Bob\" declined invitation to chat >>>"
+        );
+        assert_eq!(
+            notify.field(ServerFieldId::ChatId).unwrap().as_u32(),
+            Some(chat_id)
+        );
     }
 
     fn state_with_files(files: crate::files::InMemoryFileProvider) -> SharedState {
