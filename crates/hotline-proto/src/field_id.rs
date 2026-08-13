@@ -167,6 +167,10 @@ pub enum ClientFieldId {
     ///
     /// Original: `HTLC_DATA_NEWS_POST`.
     NewsArtData = 333,
+    /// News article flags, set on post.
+    ///
+    /// Original: `HTLC_DATA_NEWS_FLAGS`.
+    NewsArtFlags = 334,
     /// Parent article ID.
     ///
     /// Original: `HTLC_DATA_NEWS_PARENTTHREADID`.
@@ -222,6 +226,7 @@ impl ClientFieldId {
             331 => Self::NewsArtPrevArt,
             332 => Self::NewsArtNextArt,
             333 => Self::NewsArtData,
+            334 => Self::NewsArtFlags,
             335 => Self::NewsArtParentArt,
             336 => Self::NewsArt1stChildArt,
             337 => Self::NewsArtRecurseDel,
@@ -273,6 +278,7 @@ impl ClientFieldId {
             Self::NewsArtPrevArt => "HTLC_DATA_NEWS_PREVTHREADID",
             Self::NewsArtNextArt => "HTLC_DATA_NEWS_NEXTTHREADID",
             Self::NewsArtData => "HTLC_DATA_NEWS_POST",
+            Self::NewsArtFlags => "HTLC_DATA_NEWS_FLAGS",
             Self::NewsArtParentArt => "HTLC_DATA_NEWS_PARENTTHREADID",
             Self::NewsArt1stChildArt => "HTLC_DATA_NEWS_NEXTSUBTHREADID",
             Self::NewsArtRecurseDel => "HTLC_DATA_NEWS_DELETEREPLIES",

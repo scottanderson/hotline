@@ -199,6 +199,54 @@ impl Transaction {
         self.field(ClientFieldId::Icon).and_then(Field::as_u16)
     }
 
+    /// The `HTLC_DATA_NEWS_DIR` (325) field, decoded.
+    pub fn news_path(&self) -> Option<Result<HlPath>> {
+        self.file_path(ClientFieldId::NewsPath)
+    }
+
+    /// The `HTLC_DATA_NEWS_THREADID` (326) field, if present.
+    pub fn news_article_id(&self) -> Option<u32> {
+        self.field(ClientFieldId::NewsArtId).and_then(Field::as_u32)
+    }
+
+    /// The `HTLC_DATA_NEWS_CATNAME` (322) field, if present.
+    pub fn news_category_name(&self) -> Option<String> {
+        self.field(ClientFieldId::NewsCatName).map(Field::as_string)
+    }
+
+    /// The `HTLC_DATA_NEWS_SUBJECT` (328) field, if present.
+    pub fn news_article_title(&self) -> Option<String> {
+        self.field(ClientFieldId::NewsArtTitle)
+            .map(Field::as_string)
+    }
+
+    /// The `HTLC_DATA_NEWS_MIMETYPE` (327) field, if present.
+    pub fn news_article_flavor(&self) -> Option<String> {
+        self.field(ClientFieldId::NewsArtDataFlavor)
+            .map(Field::as_string)
+    }
+
+    /// The `HTLC_DATA_NEWS_FLAGS` (334) field, if present.
+    pub fn news_article_flags(&self) -> Option<u32> {
+        self.field(ClientFieldId::NewsArtFlags)
+            .and_then(Field::as_u32)
+    }
+
+    /// The `HTLC_DATA_NEWS_DELETEREPLIES` (337) field: whether a delete
+    /// should recurse into child articles.
+    pub fn news_article_recurse_delete(&self) -> bool {
+        self.field(ClientFieldId::NewsArtRecurseDel)
+            .and_then(Field::as_u32)
+            .unwrap_or(0)
+            != 0
+    }
+
+    /// The `HTLC_DATA_NEWS_POST` (333) field's raw bytes, if present.
+    pub fn news_article_data(&self) -> Option<Vec<u8>> {
+        self.field(ClientFieldId::NewsArtData)
+            .map(|f| f.as_bytes().into_owned())
+    }
+
     /// The `HTLC_DATA_ACCESS` field, if present.
     pub fn access(&self) -> Option<Access> {
         self.field(ClientFieldId::Access)

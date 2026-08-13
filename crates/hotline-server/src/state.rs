@@ -11,11 +11,15 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 
 use hotline_proto::consts::{Access, RequireFlags};
-use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags};
+use hotline_proto::types::{
+    FileNameWithInfo, HlDate, HlPath, NewsArticleListData, NewsArticleSummary,
+    NewsCategoryListEntry, UserFlags,
+};
 use hotline_proto::Transaction;
 
 use crate::accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 use crate::files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
+use crate::news::{NewsBundle, NewsItemKind, NewsListKind};
 
 /// How long without any request before a user is considered idle.
 pub const IDLE_THRESHOLD: Duration = Duration::from_secs(10 * 60);
@@ -172,6 +176,21 @@ pub struct PendingTransfer {
     pub client_ip: IpAddr,
 }
 
+/// One threaded news article's full data, for a `HTLC_HDR_NEWS_GETTHREAD`
+/// (400) reply.
+#[derive(Debug, Clone)]
+pub struct NewsArticleDetail {
+    pub title: String,
+    pub poster: String,
+    pub date: HlDate,
+    pub prev_id: u32,
+    pub next_id: u32,
+    pub parent_id: u32,
+    pub first_child_id: u32,
+    pub flavor: String,
+    pub data: Vec<u8>,
+}
+
 /// A live privilege change for every session logged in under `login`.
 #[derive(Debug, Clone)]
 pub struct AccessUpdate {
@@ -229,6 +248,8 @@ pub struct SharedState {
     files: Arc<dyn FileProvider>,
     /// Classic (pre-threaded) news: one flat, newest-first text blob.
     news: Arc<RwLock<String>>,
+    /// Threaded news: a tree of bundles and categories, see [`crate::news`].
+    news_tree: Arc<RwLock<NewsBundle>>,
     /// Chat ID `0` is always present: the main room every connected
     /// user is implicitly in. Other entries are private rooms.
     chat_rooms: Arc<RwLock<HashMap<u32, ChatRoom>>>,
@@ -259,6 +280,7 @@ impl SharedState {
             recipients: Arc::new(RwLock::new(HashMap::new())),
             files,
             news: Arc::new(RwLock::new(String::new())),
+            news_tree: Arc::new(RwLock::new(NewsBundle::default())),
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
             accounts,
@@ -661,6 +683,153 @@ impl SharedState {
         let entry = format!("{DIVIDER}\rFrom {poster}\r\r{text}\r\r");
         self.news.write().await.insert_str(0, &entry);
         entry
+    }
+
+    /// List a threaded news bundle's own contents at `path`. `Err` if it
+    /// doesn't resolve to a bundle.
+    pub async fn news_list_dir(
+        &self,
+        path: &HlPath,
+    ) -> Result<Vec<NewsCategoryListEntry>, &'static str> {
+        let tree = self.news_tree.read().await;
+        let entries = tree
+            .list_dir(&path.components)
+            .ok_or("news bundle not found")?;
+        Ok(entries
+            .into_iter()
+            .map(|(name, kind)| match kind {
+                NewsListKind::Bundle { count } => NewsCategoryListEntry::Bundle { count, name },
+                NewsListKind::Category(summary) => NewsCategoryListEntry::Category {
+                    count: summary.count,
+                    guid: summary.guid,
+                    add_sn: summary.add_sn,
+                    del_sn: summary.del_sn,
+                    name,
+                },
+            })
+            .collect())
+    }
+
+    /// List a threaded news category's articles at `path`. `Err` if it
+    /// doesn't resolve to a category.
+    pub async fn news_list_articles(
+        &self,
+        path: &HlPath,
+    ) -> Result<NewsArticleListData, &'static str> {
+        let tree = self.news_tree.read().await;
+        let articles = tree
+            .list_articles(&path.components)
+            .ok_or("news category not found")?;
+        Ok(NewsArticleListData {
+            articles: articles
+                .into_iter()
+                .map(|(id, article)| NewsArticleSummary {
+                    id,
+                    date: article.date,
+                    parent_id: article.parent_id,
+                    flags: article.flags,
+                    title: article.title.clone(),
+                    poster: article.poster.clone(),
+                    flavor: article.flavor.clone(),
+                    flavor_size: article.data.len() as u16,
+                })
+                .collect(),
+        })
+    }
+
+    /// One article's full data at `path`. `Err` if the category or the
+    /// article itself doesn't exist.
+    pub async fn news_article(
+        &self,
+        path: &HlPath,
+        id: u32,
+    ) -> Result<NewsArticleDetail, &'static str> {
+        let tree = self.news_tree.read().await;
+        let view = tree
+            .article(&path.components, id)
+            .ok_or("news article not found")?;
+        Ok(NewsArticleDetail {
+            title: view.article.title.clone(),
+            poster: view.article.poster.clone(),
+            date: view.article.date,
+            prev_id: view.prev_id,
+            next_id: view.next_id,
+            parent_id: view.article.parent_id,
+            first_child_id: view.article.children.first().copied().unwrap_or(0),
+            flavor: view.article.flavor.clone(),
+            data: view.article.data.clone(),
+        })
+    }
+
+    /// Create a news bundle (folder) named `name` under `path`.
+    pub async fn news_mkdir(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
+        self.news_tree.write().await.mkdir(&path.components, name)
+    }
+
+    /// Create a news category named `name` under `path`.
+    pub async fn news_mkcategory(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
+        self.news_tree
+            .write()
+            .await
+            .mkcategory(&path.components, name)
+    }
+
+    /// Delete the news bundle or category named by `path` (its last
+    /// component is the item's own name), after checking the matching
+    /// bundle/category privilege. `Err` for the root or a path that
+    /// doesn't resolve.
+    pub async fn news_delete(&self, path: &HlPath, access: Access) -> Result<(), String> {
+        if path.components.is_empty() {
+            return Err("news item not found".to_string());
+        }
+        let mut tree = self.news_tree.write().await;
+        let kind = tree
+            .item_kind(&path.components)
+            .ok_or("news item not found")?;
+        let required = match kind {
+            NewsItemKind::Bundle => Access::NEWS_DELETE_FLDR,
+            NewsItemKind::Category => Access::NEWS_DELETE_CAT,
+        };
+        access.require(required)?;
+        tree.delete(&path.components).map_err(|e| e.to_string())
+    }
+
+    /// Post a new article into the news category at `path`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn news_post_article(
+        &self,
+        path: &HlPath,
+        parent_id: u32,
+        title: String,
+        poster: String,
+        flags: u32,
+        flavor: String,
+        data: Vec<u8>,
+    ) -> Result<u32, &'static str> {
+        self.news_tree.write().await.post_article(
+            &path.components,
+            parent_id,
+            title,
+            poster,
+            flags,
+            flavor,
+            data,
+        )
+    }
+
+    /// Delete an article from the news category at `path`. If
+    /// `recursive`, every reply under it is deleted too; otherwise its
+    /// first reply is promoted into its place.
+    pub async fn news_delete_article(
+        &self,
+        path: &HlPath,
+        id: u32,
+        recursive: bool,
+    ) -> Result<(), &'static str> {
+        self.news_tree
+            .write()
+            .await
+            .delete_article(&path.components, id, recursive)
     }
 
     /// Create a new private chat room with `creator` as its only member,

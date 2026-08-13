@@ -265,6 +265,119 @@ impl UserNameWithInfo {
     }
 }
 
+/// One entry of a `NEWS_CATEGORY_LIST_DATA_15` (323) news bundle/category
+/// listing: a plain folder, or a leaf category holding a thread of
+/// articles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewsCategoryListEntry {
+    /// A folder containing other bundles/categories.
+    Bundle {
+        /// Number of items directly inside this bundle.
+        count: u16,
+        /// Bundle name.
+        name: String,
+    },
+    /// A leaf category holding a thread of articles.
+    Category {
+        /// Number of articles currently in this category's thread.
+        count: u16,
+        /// The category's persistent identifier.
+        guid: [u8; 16],
+        /// Incremented each time an article is added to this category.
+        add_sn: u32,
+        /// This category's deletion serial number.
+        del_sn: u32,
+        /// Category name.
+        name: String,
+    },
+}
+
+impl NewsCategoryListEntry {
+    /// Encode to the packed wire representation.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        Ok(match self {
+            Self::Bundle { count, name } => {
+                VecWriter::new().u16(2).u16(*count).pstring(name)?.finish()
+            }
+            Self::Category {
+                count,
+                guid,
+                add_sn,
+                del_sn,
+                name,
+            } => VecWriter::new()
+                .u16(3)
+                .u16(*count)
+                .bytes(guid)
+                .u32(*add_sn)
+                .u32(*del_sn)
+                .pstring(name)?
+                .finish(),
+        })
+    }
+}
+
+/// One article summary inside a `NEWS_ARTICLE_LIST_DATA` (321) field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsArticleSummary {
+    /// Article ID.
+    pub id: u32,
+    /// Post date.
+    pub date: HlDate,
+    /// Parent article ID in the thread, `0` for a top-level article.
+    pub parent_id: u32,
+    /// Article flags, as set on post.
+    pub flags: u32,
+    /// Article title.
+    pub title: String,
+    /// Article poster name.
+    pub poster: String,
+    /// This article's stored MIME type, e.g. `"text/plain"`.
+    pub flavor: String,
+    /// This article's data size in bytes for `flavor`.
+    pub flavor_size: u16,
+}
+
+impl NewsArticleSummary {
+    /// Encode to the packed wire representation.
+    fn encode(&self) -> Result<Vec<u8>> {
+        Ok(VecWriter::new()
+            .u32(self.id)
+            .bytes(&self.date.encode())
+            .u32(self.parent_id)
+            .u32(self.flags)
+            .u16(1) // flavor count: this server stores one flavor per article
+            .pstring(&self.title)?
+            .pstring(&self.poster)?
+            .pstring(&self.flavor)?
+            .u16(self.flavor_size)
+            .finish())
+    }
+}
+
+/// The whole `NEWS_ARTICLE_LIST_DATA` (321) field: one category's thread,
+/// flattened into listing order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NewsArticleListData {
+    /// Every article in the category, in listing order.
+    pub articles: Vec<NewsArticleSummary>,
+}
+
+impl NewsArticleListData {
+    /// Encode to the packed wire representation.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut w = VecWriter::new()
+            .u32(0) // category ID, unused by the client
+            .u32(self.articles.len() as u32)
+            .pstring("")? // name, unused by the client
+            .pstring("")?; // description, unused by the client
+        for article in &self.articles {
+            w = w.bytes(&article.encode()?);
+        }
+        Ok(w.finish())
+    }
+}
+
 bitflags::bitflags! {
     /// Bit meanings for [`UserNameWithInfo::flags`] / the `USER_FLAGS` field.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

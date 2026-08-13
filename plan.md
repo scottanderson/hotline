@@ -62,7 +62,23 @@ recommendation either way.
 5. **Threaded news.** Current news support is flat/classic only; also
    covers the unhandled `NewsListdir`/`NewsListcategory`/`NewsDelete`/
    `NewsMkdir`/`NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/
-   `NewsDeletethread` opcodes (370-411).
+   `NewsDeletethread` opcodes (370-411). **In progress:** the storage layer
+   (`crate::news`'s bundle/category tree, `SharedState`'s `news_*` accessors,
+   and the `NewsCategoryListEntry`/`NewsArticleListData` wire types) is in
+   place and confirmed against the reference's own listing/threading/delete-
+   promotion behavior. No opcode handlers are wired up in `session.rs` yet.
+   Two follow ups noted while confirming the storage layer against the
+   reference:
+   - `NewsArticle` stores a single MIME flavor and hardcodes the wire
+     flavor count to 1; the reference supports up to 32 flavors per
+     article. Fine as a starting simplification, revisit if multi-flavor
+     posting is ever needed.
+   - `SharedState::news_delete` gates `NEWS_DELETE_FLDR`/`NEWS_DELETE_CAT`
+     itself, unlike `news_post_article`/`news_delete_article`, which take
+     no `Access` and expect the future handler to gate `NEWS_POST_ART`/
+     `NEWS_DELETE_ART` there (this project's usual convention). Reconcile
+     when wiring up the handlers, probably by moving `news_delete`'s check
+     into its handler too.
 6. **HTXF follow ups, deferred out of the initial file-transfer work.**
    Four largely independent pieces:
    - ~~Resume support (client-sent `RFLT` blob).~~ **Resolved for
