@@ -220,6 +220,71 @@ impl ForkHeader {
     }
 }
 
+/// Byte length of [`decode_resume_data`]'s fixed prefix, before its
+/// per-fork entries: `format(4) | version(2) | reserved(34) |
+/// fork_count(2)`.
+const RESUME_DATA_PREFIX_LEN: usize = 42;
+
+/// Byte length of one fork entry in [`decode_resume_data`]'s fork list:
+/// `fork_type(4) | data_size(4) | reserved(4) | reserved(4)`.
+const RESUME_DATA_ENTRY_LEN: usize = 16;
+
+/// Decode a `FileResumeData` blob (`HTLC_DATA_RFLT`, 203): how many bytes
+/// of the `DATA` fork the sender already has, so a resumed transfer only
+/// sends the remainder. Ignores any other fork entry, e.g. a resource
+/// fork position this server doesn't track.
+pub fn decode_resume_data(buf: &[u8]) -> Result<u32> {
+    if buf.len() < RESUME_DATA_PREFIX_LEN {
+        return Err(ProtoError::UnexpectedEof {
+            needed: RESUME_DATA_PREFIX_LEN,
+            available: buf.len(),
+        });
+    }
+    let prefix: [u8; RESUME_DATA_PREFIX_LEN] = buf[..RESUME_DATA_PREFIX_LEN].try_into().unwrap();
+    let mut r = PacketReader::new(prefix);
+    let magic = r.take::<4>();
+    let version = r.u16();
+    let _reserved = r.take::<34>();
+    let fork_count = r.u16();
+    r.finish();
+    if magic != *b"RFLT" {
+        return Err(ProtoError::BadMagic {
+            expected: *b"RFLT",
+            got: magic,
+        });
+    }
+    if version != 1 {
+        return Err(ProtoError::Malformed(format!(
+            "unsupported RFLT version: {version}"
+        )));
+    }
+
+    let mut offset = RESUME_DATA_PREFIX_LEN;
+    for _ in 0..fork_count {
+        if buf.len() < offset + RESUME_DATA_ENTRY_LEN {
+            return Err(ProtoError::UnexpectedEof {
+                needed: offset + RESUME_DATA_ENTRY_LEN,
+                available: buf.len(),
+            });
+        }
+        let entry: [u8; RESUME_DATA_ENTRY_LEN] = buf[offset..offset + RESUME_DATA_ENTRY_LEN]
+            .try_into()
+            .unwrap();
+        let mut er = PacketReader::new(entry);
+        let fork_type = er.take::<4>();
+        let data_size = er.u32();
+        let _reserved = er.take::<8>();
+        er.finish();
+        if &fork_type == b"DATA" {
+            return Ok(data_size);
+        }
+        offset += RESUME_DATA_ENTRY_LEN;
+    }
+    Err(ProtoError::Malformed(
+        "RFLT resume data has no DATA fork entry".to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,5 +359,49 @@ mod tests {
         let data = ForkHeader::decode(&header[data_fork_offset..]).unwrap();
         assert_eq!(&data.fork_type, b"DATA");
         assert_eq!(data.data_size, 42);
+    }
+
+    fn build_resume_data(entries: &[([u8; 4], u32)]) -> Vec<u8> {
+        let mut w = VecWriter::with_capacity(RESUME_DATA_PREFIX_LEN + entries.len() * 16);
+        w = w
+            .bytes(b"RFLT")
+            .u16(1)
+            .bytes(&[0; 34])
+            .u16(entries.len() as u16);
+        for (fork_type, data_size) in entries {
+            w = w.bytes(fork_type).u32(*data_size).u32(0).u32(0);
+        }
+        w.finish()
+    }
+
+    #[test]
+    fn decode_resume_data_finds_the_data_fork_entry() {
+        let buf = build_resume_data(&[(*b"DATA", 1234)]);
+        assert_eq!(decode_resume_data(&buf).unwrap(), 1234);
+    }
+
+    #[test]
+    fn decode_resume_data_skips_a_leading_non_data_entry() {
+        let buf = build_resume_data(&[(*b"MACR", 99), (*b"DATA", 555)]);
+        assert_eq!(decode_resume_data(&buf).unwrap(), 555);
+    }
+
+    #[test]
+    fn decode_resume_data_rejects_bad_magic() {
+        let mut buf = build_resume_data(&[(*b"DATA", 1)]);
+        buf[0] = b'X';
+        assert!(matches!(
+            decode_resume_data(&buf),
+            Err(ProtoError::BadMagic { .. })
+        ));
+    }
+
+    #[test]
+    fn decode_resume_data_rejects_missing_data_fork_entry() {
+        let buf = build_resume_data(&[(*b"MACR", 99)]);
+        assert!(matches!(
+            decode_resume_data(&buf),
+            Err(ProtoError::Malformed(_))
+        ));
     }
 }

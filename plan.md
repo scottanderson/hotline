@@ -63,15 +63,56 @@ recommendation either way.
    covers the unhandled `NewsListdir`/`NewsListcategory`/`NewsDelete`/
    `NewsMkdir`/`NewsMkcategory`/`NewsGetthread`/`NewsPostthread`/
    `NewsDeletethread` opcodes (370-411).
-6. **HTXF follow ups, deferred out of the initial file-transfer work:**
-   resume support (client-sent `RFLT` blob with `data_pos`/`rsrc_pos`),
-   the transfer queue (`HTLS_DATA_QUEUE_POSITION`, `HTLS_HDR_QUEUE_UPDATE`),
-   folder transfers (`HTLC_HDR_FILE_GETFOLDER`/`_PUTFOLDER`, a separate
-   `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the transfer connection),
-   and resource-fork (`"MACR"`) data. A live per-transfer-progress tracker
-   from this item is also what item 37's `on_user_get_info` file-transfer
-   sections are waiting on; until it exists, those five sections always
-   read `"None."`, with no in-progress transfers ever reported.
+6. **HTXF follow ups, deferred out of the initial file-transfer work.**
+   Four largely independent pieces:
+   - ~~Resume support (client-sent `RFLT` blob).~~ **Resolved for
+     downloads.** `FILE_GET` (202) now reads `HTLC_DATA_RFLT` (203) when
+     present: `hotline_proto::htxf::decode_resume_data` finds the `DATA`
+     fork entry's already-transferred byte count (any other fork entry,
+     e.g. a resource-fork position, is ignored, matching the single-fork
+     model below), the offset is clamped to the file's size rather than
+     rejected (an offset past EOF just yields zero bytes left to send,
+     matching the reference's own clamp), and `PendingTransfer` carries it
+     through to the data connection: the flattened-object header is
+     always resent in full, but its `DATA` fork now declares only the
+     remaining size, and the reader skips the already-sent leading bytes
+     before copying the rest. **Upload resume (`FILE_PUT`'s `opts == 1`,
+     replying with a fresh `RFLT` via `HTLS_DATA_RFLT`) is not
+     implemented and is a blocker, not just deferred work:** the
+     reference only allows resuming into a file it recognizes as one of
+     its own interrupted uploads, checked via a type/creator marker
+     persisted on the partial file itself; this server's `FileProvider`
+     trait has no equivalent (its own `info`/`size` calls have no way to
+     distinguish "an interrupted upload this server started" from "an
+     unrelated file that happens to have this name"), so implementing
+     upload resume without that check would let a client "resume" into
+     any existing file by name and append or overwrite its bytes. Closing
+     the gap needs either a breaking addition to `FileProvider` (a
+     marker-aware create/open call) or a server-side bookkeeping table
+     that doesn't survive a restart, either of which is a real design
+     decision, not a guess.
+   - Transfer queue (`HTLS_DATA_QUEUE_POSITION`, `HTLS_HDR_QUEUE_UPDATE`
+     equivalents (`WaitingCount` (116), the `DownloadInfo` push)): not
+     implemented. Needs a concurrent-download cap in `ServerConfig` and a
+     waiting list in `SharedState`; not started. A live per-transfer-
+     progress tracker from this piece is also what item 37's
+     `on_user_get_info` file-transfer sections are waiting on; until it
+     exists, those five sections always read `"None."`, with no
+     in-progress transfers ever reported.
+   - Folder transfers (`HTLC_HDR_FILE_GETFOLDER`/`_PUTFOLDER`, a separate
+     `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the transfer
+     connection): not implemented, not started.
+   - ~~Resource-fork (`"MACR"`) data.~~ **Resolved, no code change
+     needed.** The upload receive path (`receive_file` in `server.rs`)
+     already discards any fork it doesn't recognize by tag rather than
+     assuming exactly `INFO`+`DATA`, so a client sending a third
+     (resource-fork) fork on upload is already handled the same way the
+     data-fork-only reference storage backend handles it: the bytes are
+     read off the wire and dropped. Nothing in this server's `FileProvider`
+     model has a place to keep resource-fork bytes, and the equivalent
+     reference backend never emits one on download either, so there is no
+     remaining gap to close here without a `FileProvider` extension no
+     documented behavior actually calls for.
 7. ~~**Private-message/chat refusal and automatic response are entirely
    unimplemented.**~~ **Resolved and implemented.** `on_user_change`
    (`UserChange`, 304) now reads `Options` (113) as a persisted-preference

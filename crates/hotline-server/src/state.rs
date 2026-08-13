@@ -163,6 +163,10 @@ pub struct PendingTransfer {
     /// Download: the file's size in bytes. Upload: the size the client
     /// declared it will send.
     pub size: u64,
+    /// Download only: bytes into the file to start sending from, when the
+    /// client already has a leading portion from an earlier attempt.
+    /// Always `0` for an upload or a non-resumed download.
+    pub resume_offset: u64,
     /// The control connection's remote address; the data connection must
     /// arrive from the same IP or the transfer is refused.
     pub client_ip: IpAddr,
@@ -998,6 +1002,7 @@ mod tests {
             dir: HlPath::default(),
             name: "x".to_string(),
             size: 0,
+            resume_offset: 0,
             client_ip: "127.0.0.1".parse().unwrap(),
         };
 

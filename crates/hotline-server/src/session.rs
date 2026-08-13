@@ -878,7 +878,10 @@ impl Session {
 
     /// 202: start a download. Allocates a transfer reference and tells
     /// the client the total byte count (flattened-object overhead plus
-    /// the file's own bytes) to expect on the data connection.
+    /// the file's own bytes) to expect on the data connection. A client
+    /// resuming an interrupted download sends `HTLC_DATA_RFLT` (203) with
+    /// the byte count it already has; that portion of the data fork is
+    /// skipped, though the flattened-object header is always resent.
     async fn on_file_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
             return vec![tx.reply_error(reason)];
@@ -894,7 +897,16 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
 
-        let total_size = data_size + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64;
+        let resume_offset = match tx.field(ClientFieldId::ResumeFileTransfer) {
+            Some(field) => match hotline_proto::htxf::decode_resume_data(&field.as_bytes()) {
+                Ok(already_have) => (already_have as u64).min(data_size),
+                Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
+            },
+            None => 0,
+        };
+        let remaining = data_size - resume_offset;
+
+        let total_size = remaining + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64;
         let reference = state
             .register_transfer(PendingTransfer {
                 direction: TransferDirection::Get,
@@ -902,6 +914,7 @@ impl Session {
                 dir,
                 name,
                 size: data_size,
+                resume_offset,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
@@ -945,6 +958,7 @@ impl Session {
                 dir,
                 name,
                 size: size as u64,
+                resume_offset: 0,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
@@ -4377,6 +4391,109 @@ mod tests {
         let transfer = state.take_transfer(reference).await.unwrap();
         assert_eq!(transfer.direction, TransferDirection::Get);
         assert_eq!(transfer.size, 5);
+        assert_eq!(transfer.resume_offset, 0);
+    }
+
+    /// Builds a `FileResumeData` (`HTLC_DATA_RFLT`) blob claiming
+    /// `already_have` bytes of the `DATA` fork, matching the wire shape
+    /// [`hotline_proto::htxf::decode_resume_data`] parses.
+    fn resume_data(already_have: u32) -> [u8; 58] {
+        hotline_proto::wire::PacketWriter::new()
+            .bytes(b"RFLT")
+            .u16(1)
+            .bytes(&[0; 34])
+            .u16(1)
+            .bytes(b"DATA")
+            .u32(already_have)
+            .u32(0)
+            .u32(0)
+            .finish()
+    }
+
+    #[tokio::test]
+    async fn file_get_with_resume_data_shrinks_the_transfer_and_records_the_offset() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello world");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = Transaction::request(
+            ClientOpcode::FileGet,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(ClientFieldId::ResumeFileTransfer, resume_data(6)),
+            ],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+
+        assert!(!reply.is_error());
+        let total_size = reply
+            .field(ServerFieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert_eq!(
+            total_size,
+            5 + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32
+        );
+        let file_size = reply
+            .field(ServerFieldId::FileSize)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert_eq!(file_size, 11);
+
+        let reference = reply
+            .field(ServerFieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+        let transfer = state.take_transfer(reference).await.unwrap();
+        assert_eq!(transfer.size, 11);
+        assert_eq!(transfer.resume_offset, 6);
+    }
+
+    #[tokio::test]
+    async fn file_get_with_resume_data_past_eof_clamps_to_zero_remaining() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = Transaction::request(
+            ClientOpcode::FileGet,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(ClientFieldId::ResumeFileTransfer, resume_data(999)),
+            ],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+
+        assert!(!reply.is_error());
+        let total_size = reply
+            .field(ServerFieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert_eq!(total_size, hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32);
+    }
+
+    #[tokio::test]
+    async fn file_get_with_malformed_resume_data_is_an_error() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = Transaction::request(
+            ClientOpcode::FileGet,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::bytes(ClientFieldId::ResumeFileTransfer, vec![1, 2, 3]),
+            ],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+
+        assert!(reply.is_error());
     }
 
     #[tokio::test]

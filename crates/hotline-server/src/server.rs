@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use hotline_proto::htxf::{self, ForkHeader, HtxfHeader};
@@ -135,7 +135,9 @@ async fn handle_htxf_connection(
 }
 
 /// Send a `FILE_GET` download: the flattened-file-object header, then
-/// the file's raw bytes.
+/// the file's raw bytes. `transfer.resume_offset` skips that many leading
+/// bytes of the data fork, reducing the header's declared size to match,
+/// for a client resuming an interrupted download.
 async fn send_file(
     stream: &mut TcpStream,
     transfer: &PendingTransfer,
@@ -147,10 +149,26 @@ async fn send_file(
     let mut reader = state
         .open_file_for_read(requester, &transfer.dir, &transfer.name)
         .await?;
+    let remaining = transfer.size - transfer.resume_offset;
     stream
-        .write_all(&htxf::flat_file_header(transfer.size as u32))
+        .write_all(&htxf::flat_file_header(remaining as u32))
         .await?;
+    if transfer.resume_offset > 0 {
+        skip_bytes(&mut reader, transfer.resume_offset).await?;
+    }
     tokio::io::copy(&mut reader, stream).await?;
+    Ok(())
+}
+
+/// Discard the first `n` bytes read from `reader`, for starting a resumed
+/// download partway through the file.
+async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result<()> {
+    let mut buf = [0u8; 8192];
+    while n > 0 {
+        let want = n.min(buf.len() as u64) as usize;
+        reader.read_exact(&mut buf[..want]).await?;
+        n -= want as u64;
+    }
     Ok(())
 }
 

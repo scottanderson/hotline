@@ -88,8 +88,8 @@ impl Field {
     /// Build a field from raw bytes, e.g. a packed record
     /// (`FILE_NAME_WITH_INFO`, `USER_NAME_WITH_INFO`) that has its own
     /// internal encoding.
-    pub fn bytes(id: impl Into<u16>, data: Vec<u8>) -> Self {
-        Self::new(id, FieldValue::Bytes(data))
+    pub fn bytes(id: impl Into<u16>, data: impl Into<Vec<u8>>) -> Self {
+        Self::new(id, FieldValue::Bytes(data.into()))
     }
 
     /// Build a 16-bit integer field (`UID`, `ICON`, `CHAT_SUBJECT` length
