@@ -237,17 +237,29 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     the room regardless. Needs a decision on which reference's chat-room
     semantics this server should track going forward, now that both are
     known to disagree here.
-19. `on_chat_subject` adds an `AccessExtra::SET_SUBJECT` check, a
-    membership requirement, a room-password mechanism, and always sends a
-    reply; the reference's `ProcessTran_SetChatSubject` has none of
-    these — no access check, no reply ever sent, and no password field
-    exists on this transaction at all.
-20. `on_chat_invite` always sends a reply (empty or error);
-    `ProcessTran_InviteToChat` never replies at all. Separately,
+19. **Not a bug, a primary/secondary divergence like item 18.**
+    `on_chat_subject` adds an `AccessExtra::SET_SUBJECT` check, a
+    membership requirement, and a room-password mechanism; the primary
+    reference's `ProcessTran_SetChatSubject` has none of these — no
+    access check, no password field on this transaction at all. The
+    secondary reference's `rcv_chat_subject` has the identical shape to
+    this server's: the same `set_subject`-for-global/membership-for-room
+    check, and a real per-room password field. One gap either way: this
+    server always sends an empty reply on success where the secondary
+    reference sends none there either (it only replies, with an error
+    `Msg` push, on failure) — harmless either way, since a stray reply to
+    this transaction has no visible effect on a real client, but worth
+    matching if this item is revisited.
+20. **Not a bug, a primary/secondary divergence like item 18.**
+    `on_chat_invite` always sends a reply (empty or error), and
     `invite_to_chat_room` (`state.rs`) requires the inviter to already be
     a room member and rejects a repeat invite to an already-invited
-    target — both checks the reference doesn't perform (it only skips a
-    target already in the room's client list).
+    target. The primary reference's `ProcessTran_InviteToChat` never
+    replies and only skips a target already in the room's client list;
+    the secondary reference's `rcv_chat_invite` matches this server
+    instead — it requires the inviter to already be in the room, rejects
+    a target already there, and always sends a `TASK` reply (success or
+    error).
 21. ~~`on_chat_part` always sends an empty reply; `ProcessTran_LeaveChat`
     never replies (`inTsn` is unused in the reference). Member
     notification and delete-when-empty already match.~~
@@ -300,12 +312,15 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `move_file`/`symlink_file` no longer call `dropbox_blocked`; only the
     type-specific privilege check remains. `mkdir`/`rename_file` still
     gate on drop-box visibility, unaffected by this change.
-27. `on_file_put`'s drop-box/upload-folder match
+27. **Not a bug, a primary/secondary divergence like item 18.**
+    `on_file_put`'s drop-box/upload-folder match
     (`state.rs::is_dropbox_path`) treats any ancestor path component
-    containing "upload"/"drop box" as sufficient. The reference only
-    inspects the immediate destination folder's own name
+    containing "upload"/"drop box" as sufficient. The primary reference
+    only inspects the immediate destination folder's own name
     (`GetPathTargetName`), so `Uploads/Subfolder/` would be rejected
-    there but is accepted here.
+    there but accepted here. The secondary reference matches this server
+    instead: its upload gate runs `strcasestr()` over the whole resolved
+    destination path, the same substring-anywhere behavior.
 28. ~~`on_file_get`'s reply omits `FileSize` (207); the reference sends
     both `TransferSize` (the flattened-object envelope size) and
     `FileSize` (the raw file size) on this transaction.~~ **Resolved.**
@@ -323,11 +338,15 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `on_newsfile_post` now rejects text over 8192 bytes with that exact
     error before calling `state.post_news`, so an oversized post is never
     appended or published.
-30. Login names aren't case-folded anywhere in `accounts.rs`/`session.rs`.
-    The reference lowercases the login on every account create/delete/
-    modify and on login lookup itself, so two accounts differing only by
-    case can't coexist there and a login always matches regardless of
-    case. This server currently allows both.
+30. **Not a bug, a primary/secondary divergence like item 18.** Login
+    names aren't case-folded anywhere in `accounts.rs`/`session.rs`. The
+    primary reference lowercases the login on every account create/
+    delete/modify and on login lookup itself, so two accounts differing
+    only by case can't coexist there and a login always matches
+    regardless of case. The secondary reference matches this server
+    instead: accounts are stored as literal filesystem directory names
+    with no case-folding anywhere, so lookups are case-sensitive and two
+    logins differing only by case can coexist.
 31. ~~`on_login`'s immediate-join gate (skipping the `Agreed` step for
     old clients) checks only that a name was sent; the reference also
     requires a non-zero icon (`psUserName[0] && nIconID`) before doing
@@ -335,13 +354,18 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `(tx.name().is_some() && icon != 0) || !modern`, so a modern client
     with a name but a zero or absent icon waits for `Agreed`; the
     pre-150 fallback is unaffected.
-32. `on_login`'s agreement-push logic collapses two distinct reference
-    cases into one: when `NO_AGREEMENT` isn't set and no agreement text
-    is configured, the reference still sends an empty `ShowAgreement`
-    push (three-way branch: hardcoded "no agreement" flag, real text, or
-    an empty prompt); this server sends the hardcoded "no agreement" flag
-    in both the `NO_AGREEMENT`-set and no-text-configured cases, and skips
-    the push entirely for pre-150 clients in the latter.
+32. **Not a bug, a primary/secondary divergence like item 18.**
+    `on_login`'s agreement-push logic collapses two distinct primary
+    reference cases into one: when `NO_AGREEMENT` isn't set and no
+    agreement text is configured, the primary reference still sends an
+    empty `ShowAgreement` push (three-way branch: hardcoded "no
+    agreement" flag, real text, or an empty prompt); this server sends
+    the hardcoded "no agreement" flag in both the `NO_AGREEMENT`-set and
+    no-text-configured cases, and skips the push entirely for pre-150
+    clients in the latter. The secondary reference matches this server
+    instead: it's a two-way branch too (real agreement text sent from a
+    file, or the hardcoded no-agreement flag for a modern client), with
+    no empty-prompt case.
 33. ~~`ServerFieldId` has no `CommunityBannerID` variant, so `on_login`'s
     reply can never include it; the reference always sends this field
     (typically zero) on login. Low priority, cosmetic given the reference
