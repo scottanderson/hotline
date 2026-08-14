@@ -15,6 +15,18 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   this server uses friendlier text. Not changed yet — decide with the user
   whether exact-string parity matters for any known client first.
 
+## Decision point: primary vs. secondary reference for chat/login divergences
+
+Items 18, 19, 20, 27, 30, 32, and 35 below are all the same shape: the two
+reference implementations disagree, and this server currently matches the
+*secondary* reference in every one of these cases (chat room password/
+invite gating, chat subject checks, chat invite reply behavior, dropbox
+path substring matching, login case folding, agreement push branching,
+and the `USER_GETLIST` access check). None of them has been switched to
+the primary reference's behavior. This note just records the current
+state as a single decision point to revisit later; it isn't a
+recommendation either way.
+
 ## Backlog, in priority order
 
 1. **`UserSelfinfo`'s access field sends the session's real privileges.**
@@ -209,13 +221,32 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
     `ServerOpcode::X` reference across the workspace. Re-confirm the "no
     real collision" premise (now known to have at least one exception)
     before starting.
-17. Consider `Cow<'_, str>` in place of `String` on the workspace's many
+17. ~~Consider `Cow<'_, str>` in place of `String` on the workspace's many
     string fields to cut needless clones, e.g. `UserEntry`/`Session`
     duplicating `name`/`login`/`automatic_response`, or the field decode
     paths that copy wire bytes into an owned `String` even when the value
     is only read once. Worth a small proof of concept on one struct's
     fields before deciding whether it's worth the lifetime plumbing
-    workspace-wide. Not started.
+    workspace-wide.~~ **Investigated, not worth doing.** Tried it on
+    `UserEntry` (`login`/`account_name`/`name` to `Cow<'a, str>`, with `'a`
+    forced to `'static` since `UserEntry` lives in `SharedState.users:
+    Arc<RwLock<HashMap<u16, UserEntry>>>`, cloned into `tokio::spawn`'d
+    sessions). Every construction site
+    (`Session::announce_user_change`'s `UserEntry { login:
+    self.login.clone(), .. }`, and the rest of `insert_user`'s call
+    sites) still had to call `.clone()` on `Session`'s own `String`
+    fields before wrapping the result in `Cow::Owned` via `.into()`,
+    identical clone cost to today plus the wrapping noise: `Session` and
+    `UserEntry` are separately owned, independently lived structs (one
+    survives the whole connection task, the other sits in a shared map
+    consumed by unrelated tasks), so there's no common ancestor scope a
+    `Cow::Borrowed` could actually borrow from. `SharedState::users()`'s
+    existing `self.users.read().await.values().cloned().collect()` has
+    the same shape: it must clone every entry out from behind the
+    `RwLockReadGuard` before returning owned data past the guard's
+    lifetime, which `Cow` can't avoid either. No real call site was
+    found where `Cow::Borrowed` would have avoided a clone that happens
+    today; reverted.
 18. **Private chat rooms have no password/invitation gate in the primary
     reference at all, but do in the secondary one.** `SMyChat` (the
     primary reference's chat-room struct) has no password field and no
