@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use async_trait::async_trait;
-use hotline_proto::consts::Access;
+use hotline_proto::consts::{Access, RequireFlags};
 
 bitflags::bitflags! {
     /// Per-account settings with no wire representation.
@@ -88,6 +88,41 @@ bitflags::bitflags! {
         /// Skip the file transfer queue.
         /// Config key: `ignore_queue`.
         const IGNORE_QUEUE       = 1 << 23;
+    }
+}
+
+impl RequireFlags for AccessExtra {
+    fn actions(&self) -> String {
+        self.iter_names()
+            .map(|(name, this)| match this {
+                AccessExtra::CHAT_PRIVATE => "open or create a private chat",
+                AccessExtra::MSG => "send a private message",
+                AccessExtra::USER_GETLIST => "view the user list",
+                AccessExtra::FILE_LIST => "list files",
+                AccessExtra::FILE_GETINFO => "view a file's information",
+                AccessExtra::FILE_HASH => "view a file's hash",
+                AccessExtra::CAN_LOGIN => "log in",
+                AccessExtra::USER_VISIBILITY => "hide from the user list",
+                AccessExtra::USER_COLOR => "set a custom name color",
+                AccessExtra::CAN_SPAM => "bypass flood limits",
+                AccessExtra::SET_SUBJECT => "set the chat subject",
+                AccessExtra::DEBUG => "use debug commands",
+                AccessExtra::USER_ACCESS => "view another user's access",
+                AccessExtra::ACCESS_VOLATILE => "make console access changes permanent",
+                AccessExtra::USER_0WN => "use the /0wn command",
+                AccessExtra::IS_0WN3D => "be targeted by /0wn",
+                AccessExtra::MANAGE_USERS => "manage other users",
+                AccessExtra::INFO_GET_ADDRESS => "view another user's address",
+                AccessExtra::INFO_GET_LOGIN => "view another user's login",
+                AccessExtra::NAME_LOCK => "override your locked name",
+                AccessExtra::CAN_AGREE => "agree to the server agreement",
+                AccessExtra::CAN_PING => "send a ping request",
+                AccessExtra::BANNER_GET => "download the server banner",
+                AccessExtra::IGNORE_QUEUE => "skip the transfer queue",
+                _ => name,
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

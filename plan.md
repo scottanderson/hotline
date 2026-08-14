@@ -542,13 +542,39 @@ recommendation either way.
     bytes/type/URL or handles a banner-fetch request. Needs the
     fetch opcode identified and a real banner source (configured image or
     URL) before this is more than a stub.
-39. `on_chat`'s `SEND_CHAT` privilege check goes through the generic
+39. ~~`on_chat`'s `SEND_CHAT` privilege check goes through the generic
     `Access::require`, which renders as "You are not allowed to do that
     (SEND_CHAT)."; the reference sends the fixed string "You are not
-    allowed to participate in chat." for this specific denial. Needs a
-    dedicated error path for this one check rather than the generic
-    multi-flag renderer, matching the reference's exact text.
-40. **Neither classic nor threaded news is persisted anywhere.**
+    allowed to participate in chat." for this specific denial.~~
+    **Resolved.** `RequireFlags::require` now renders each missing flag
+    through a per-flag `actions()` table (`Access`/`AccessExtra` each
+    provide their own) instead of a raw flag-name dump, so `SEND_CHAT`'s
+    denial reads "You are not allowed to participate in chat." with no
+    dedicated code path needed at the `on_chat` call site. Every `Access`
+    entry with a known reference denial string (all single-flag checks
+    currently wired in `session.rs`/`state.rs`) now matches that string
+    verbatim, plurals and all; `Access::SET_FILE_COMMENT`/
+    `SET_FOLDER_COMMENT` are the one known exception, since the
+    reference's own text for those two ("You are not allowed set comments
+    for files.") drops "to", which reads as its own typo rather than
+    something worth reproducing. `AccessExtra`'s table has no reference
+    text to match against, since those flags have no wire representation.
+40. **`Access::DOWNLOAD_FILE`/`DOWNLOAD_FOLDER`/`UPLOAD_FOLDER`/
+    `SET_FILE_COMMENT`/`SET_FOLDER_COMMENT` have known reference denial
+    strings in `Access::actions` (item 39) but no `require()` call site
+    reaches any of them yet.** `on_file_get` (202) checks
+    `AccessExtra::FILE_GETINFO` instead of `Access::DOWNLOAD_FILE`, which
+    means download is currently ungated by that privilege entirely, a
+    real permission gap rather than just an unimplemented feature. Folder
+    transfer (`UPLOAD_FOLDER`/`DOWNLOAD_FOLDER`) isn't implemented at all
+    (`HtxfType::FileTransfer` is the only transfer type this server
+    sends/accepts). `on_file_setinfo` accepts but never persists
+    `FILE_COMMENT`, so there's nothing yet for `SET_FILE_COMMENT`/
+    `SET_FOLDER_COMMENT` to gate either. Wiring `on_file_get` to
+    `Access::DOWNLOAD_FILE`/`DOWNLOAD_FOLDER` is a small fix; folder
+    transfer and persisted file comments are larger features this
+    backlog doesn't otherwise track yet.
+41. **Neither classic nor threaded news is persisted anywhere.**
     `SharedState::news` (classic, a flat `String`) and `SharedState::news_tree`
     (threaded, a `NewsBundle`, `crate::news`) are both plain in-memory
     fields with no backing store, so every post/category/bundle is lost
@@ -558,7 +584,7 @@ recommendation either way.
     flags this ("no persistence and no per-login scoping") for the
     threaded side. Needs a `NewsProvider`-shaped trait (or similar) before
     this is durable across restarts.
-41. **All wire text is decoded as lossy UTF-8, not the classic client's
+42. **All wire text is decoded as lossy UTF-8, not the classic client's
     actual encoding.** `Field::as_string` (`crates/hotline-proto/src/field.rs`)
     and the name-decoding paths in `types.rs` (`FileNameWithInfo`,
     `UserNameWithInfo`, ...) all go through `String::from_utf8_lossy`;
