@@ -548,6 +548,29 @@ recommendation either way.
     allowed to participate in chat." for this specific denial. Needs a
     dedicated error path for this one check rather than the generic
     multi-flag renderer, matching the reference's exact text.
+40. **Neither classic nor threaded news is persisted anywhere.**
+    `SharedState::news` (classic, a flat `String`) and `SharedState::news_tree`
+    (threaded, a `NewsBundle`, `crate::news`) are both plain in-memory
+    fields with no backing store, so every post/category/bundle is lost
+    on restart. Unlike accounts (`AccountProvider`) and files
+    (`FileProvider`), news has no pluggable storage trait for the
+    embedding application to supply; `news.rs`'s own module doc already
+    flags this ("no persistence and no per-login scoping") for the
+    threaded side. Needs a `NewsProvider`-shaped trait (or similar) before
+    this is durable across restarts.
+41. **All wire text is decoded as lossy UTF-8, not the classic client's
+    actual encoding.** `Field::as_string` (`crates/hotline-proto/src/field.rs`)
+    and the name-decoding paths in `types.rs` (`FileNameWithInfo`,
+    `UserNameWithInfo`, ...) all go through `String::from_utf8_lossy`;
+    `Field::as_string`'s own doc comment already flags this ("a legacy
+    client's own encoding won't round-trip correctly here"). Real Mac
+    clients send names/messages/news text in Mac OS Roman (`MacRoman`),
+    not UTF-8, so any byte outside 7-bit ASCII (curly quotes, accented
+    letters, the bullet/degree/etc. characters in that range) currently
+    comes out as U+FFFD replacement characters instead of the correct
+    Unicode codepoint. Needs a real MacRoman-to-UTF-8 (and back, for
+    encoding outgoing fields) table-based transcoding, or at minimum
+    stop silently mangling non-ASCII bytes via lossy UTF-8 decoding.
 
 ## Needs manual verification against the real client
 
