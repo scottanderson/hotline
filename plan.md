@@ -461,6 +461,19 @@ recommendation either way.
     real upload/download progress needs a live per-transfer-progress
     tracker this server doesn't have yet (item 6's territory, not
     something to invent standalone here).
+38. **Banner support is incomplete.** `ServerFieldId` has the wire fields
+    (`Banner` (151), `BannerType` (152), `BannerUrl` (153), `Bannerid`
+    (161)) and `AccessExtra::BANNER_GET` exists, but `on_login` only ever
+    sends `Bannerid` hardcoded to 0, and nothing serves actual banner
+    bytes/type/URL or handles a banner-fetch request. Needs the
+    fetch opcode identified and a real banner source (configured image or
+    URL) before this is more than a stub.
+39. `on_chat`'s `SEND_CHAT` privilege check goes through the generic
+    `Access::require`, which renders as "You are not allowed to do that
+    (SEND_CHAT)."; the reference sends the fixed string "You are not
+    allowed to participate in chat." for this specific denial. Needs a
+    dedicated error path for this one check rather than the generic
+    multi-flag renderer, matching the reference's exact text.
 
 ## Needs manual verification against the real client
 
