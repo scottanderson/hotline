@@ -597,6 +597,41 @@ recommendation either way.
     Unicode codepoint. Needs a real MacRoman-to-UTF-8 (and back, for
     encoding outgoing fields) table-based transcoding, or at minimum
     stop silently mangling non-ASCII bytes via lossy UTF-8 decoding.
+43. **No pluggable ban/mute list.** `on_user_kick`'s `Options` kick-to-ban
+    bit is a no-op (see item 36's follow-up): a real ban needs somewhere
+    durable to record "this login/address is banned until `T`" and a
+    login-time check against it, and different deployments will want
+    different backing stores (a flat file, a database, ...) the same way
+    account and file storage are pluggable. Needs a `BanProvider`-shaped
+    trait (list/check/add/remove) supplied to `Server::new`, plus the
+    `on_login`/`on_user_kick` wiring to use it.
+44. **No pluggable flood/spam policy.** `AccessExtra::CAN_SPAM` exists
+    (an account exempt from flood limits) but nothing in this server
+    tracks request rate at all, so there's no limit to be exempt from.
+    The secondary reference's own flood control is a handful of
+    deployment-specific tunables (points per transaction type, decay
+    time, ban duration); rather than hardcoding one policy, a
+    `FloodPolicy`-shaped trait (called once per inbound transaction,
+    deciding allow/throttle/kick) would let the embedding application
+    supply its own thresholds or none at all.
+45. **No pluggable admin/console-command layer.** Several `AccessExtra`
+    fields exist purely to gate the secondary reference's in-chat admin
+    commands (`/access`, `/0wn`, `/color`, `/users`, `/mon`, a debug
+    command) - `USER_COLOR`, `USER_ACCESS`, `USER_0WN`, `IS_0WN3D`,
+    `MANAGE_USERS`, `DEBUG`, and `ACCESS_VOLATILE` (whether a command-
+    driven access change persists to the account) - and none of them do
+    anything today because `on_chat` has no command parser at all, just
+    a plain broadcast. If this server ever adds one, the command set
+    itself is a natural fit for a provider (a `ChatCommandProvider` or
+    similar, mapping a leading-slash token to a handler), the same shape
+    as `AccountProvider`/`FileProvider`: `hotline-server` would define
+    the trait and dispatch, the embedding application would supply which
+    commands actually exist.
+46. **Banner content has no provider seam either**, once item 38's banner
+    support is built. The secondary reference reads banner bytes/type/URL
+    from static server config; a `BannerProvider` (parallel to
+    `FileProvider`) would let the embedding application serve a banner
+    generated per-login or per-request instead of one fixed image.
 
 ## Needs manual verification against the real client
 
