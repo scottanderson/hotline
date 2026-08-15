@@ -702,7 +702,9 @@ impl Session {
     /// 108: a private instant message to one other user.
     async fn on_private_msg(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::SEND_MESSAGE) {
-            return vec![tx.reply_error(reason)];
+            if !self.access_extra.contains(AccessExtra::MSG) {
+                return vec![tx.reply_error(reason)];
+            }
         }
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
@@ -1381,6 +1383,9 @@ impl Session {
 
     /// 113: invite another user to a room this session belongs to.
     async fn on_chat_invite(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+            return vec![tx.reply_error(reason)];
+        }
         let chat_id = tx
             .field(ClientFieldId::ChatId)
             .and_then(Field::as_u32)
@@ -1426,6 +1431,9 @@ impl Session {
 
     /// 115: join a room, accepting an invitation or supplying its password.
     async fn on_chat_join(&self, tx: &Transaction, state: &SharedState) -> Transaction {
+        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+            return tx.reply_error(reason);
+        }
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
@@ -1474,6 +1482,9 @@ impl Session {
 
     /// 116: leave a chat room.
     async fn on_chat_part(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+            return vec![tx.reply_error(reason)];
+        }
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
@@ -1495,6 +1506,9 @@ impl Session {
 
     /// 114: decline a chat invitation.
     async fn on_chat_decline(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+            return vec![tx.reply_error(reason)];
+        }
         if let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) {
             state.invite_declined(chat_id, self.user_id).await;
             if let Some(members) = state.chat_room_members(chat_id).await {
@@ -1518,6 +1532,9 @@ impl Session {
 
     /// 120: set a chat room's subject and/or its join password.
     async fn on_chat_subject(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+            return vec![tx.reply_error(reason)];
+        }
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
@@ -3225,6 +3242,92 @@ mod tests {
 
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn msg_allowed_via_access_extra_msg_without_send_message() {
+        let mut session = test_session("Alice", Access::empty());
+        session.access_extra.insert(AccessExtra::MSG);
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(42).await;
+
+        let request = Transaction::request(
+            ClientOpcode::Msg,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 42),
+                Field::string(ClientFieldId::Text, "hi there"),
+            ],
+        );
+        let replies = session.on_private_msg(&request, &state).await;
+        assert!(!replies[0].is_error());
+        assert!(target_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn msg_denied_without_send_message_or_access_extra_msg() {
+        let mut session = test_session("Alice", Access::empty());
+        session.access_extra.remove(AccessExtra::MSG);
+        let state = SharedState::default();
+
+        let request = Transaction::request(
+            ClientOpcode::Msg,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 42),
+                Field::string(ClientFieldId::Text, "hi there"),
+            ],
+        );
+        let replies = session.on_private_msg(&request, &state).await;
+        assert!(replies[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn chat_membership_opcodes_denied_without_chat_private() {
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.remove(AccessExtra::CHAT_PRIVATE);
+        let state = SharedState::default();
+
+        let invite = Transaction::request(
+            ClientOpcode::ChatInvite,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, 1),
+                Field::u16(ClientFieldId::Uid, 2),
+            ],
+        );
+        assert!(session.on_chat_invite(&invite, &state).await[0].is_error());
+
+        let join = Transaction::request(
+            ClientOpcode::ChatJoin,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, 1)],
+        );
+        assert!(session.on_chat_join(&join, &state).await.is_error());
+
+        let part = Transaction::request(
+            ClientOpcode::ChatPart,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, 1)],
+        );
+        assert!(session.on_chat_part(&part, &state).await[0].is_error());
+
+        let decline = Transaction::request(
+            ClientOpcode::ChatDecline,
+            1,
+            vec![Field::u32(ClientFieldId::ChatId, 1)],
+        );
+        assert!(session.on_chat_decline(&decline, &state).await[0].is_error());
+
+        let subject = Transaction::request(
+            ClientOpcode::ChatSubject,
+            1,
+            vec![
+                Field::u32(ClientFieldId::ChatId, 1),
+                Field::string(ClientFieldId::ChatSubject, "Topic"),
+            ],
+        );
+        assert!(session.on_chat_subject(&subject, &state).await[0].is_error());
     }
 
     #[tokio::test]

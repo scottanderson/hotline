@@ -25,12 +25,14 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
 
 ## Decision point: primary vs. secondary reference for chat/login divergences
 
-Items 18, 19, 20, 27, 30, 32, and 35 below are all the same shape: the two
-reference implementations disagree, and this server currently matches the
-*secondary* reference in every one of these cases (chat room password/
-invite gating, chat subject checks, chat invite reply behavior, dropbox
-path substring matching, login case folding, agreement push branching,
-and the `USER_GETLIST` access check). None of them has been switched to
+Items 18, 19, 20, 27, 30, 32, 35, 47, and 48 below are all the same shape:
+the two reference implementations disagree, and this server currently
+matches the *secondary* reference in every one of these cases (chat room
+password/invite gating, chat subject checks, chat invite reply behavior,
+dropbox path substring matching, login case folding, agreement push
+branching, the `USER_GETLIST` access check, `AccessExtra::CHAT_PRIVATE`
+gating chat-room membership opcodes, and `AccessExtra::MSG` as an
+alternative to `Access::SEND_MESSAGE`). None of them has been switched to
 the primary reference's behavior. This note just records the current
 state as a single decision point to revisit later; it isn't a
 recommendation either way.
@@ -632,6 +634,26 @@ recommendation either way.
     from static server config; a `BannerProvider` (parallel to
     `FileProvider`) would let the embedding application serve a banner
     generated per-login or per-request instead of one fixed image.
+47. ~~`on_chat_invite`/`_join`/`_part`/`_decline`/`_subject` never checked
+    `AccessExtra::CHAT_PRIVATE` at all, though the field and its account-
+    default (on) already existed.~~ **Resolved.** Each of those five
+    handlers now requires `AccessExtra::CHAT_PRIVATE` up front, matching
+    the secondary reference's dispatcher, which gates entry to every one
+    of those opcode handlers on this same bit before the handler itself
+    ever runs — including `ChatSubject` for the global room, where the
+    reference's dispatch-level check doesn't distinguish room 0 from a
+    private one. Not a bug, a primary/secondary divergence like item 18:
+    the primary reference has no equivalent bit or check at all for any
+    of these five opcodes.
+48. ~~`on_private_msg` only checked `Access::SEND_MESSAGE`, with no
+    `AccessExtra::MSG` fallback.~~ **Resolved.** `on_private_msg` now
+    allows `AccessExtra::MSG` as an alternative to `Access::SEND_MESSAGE`,
+    matching the secondary reference's own compatibility allowance for
+    client versions whose account-editor dialog can't set `send_msgs` at
+    all — a client bug the reference works around from the server side,
+    not a redundant permission. Not a bug, a primary/secondary divergence
+    like item 18: the primary reference has no such fallback since it has
+    no `AccessExtra` concept at all.
 
 ## Needs manual verification against the real client
 
