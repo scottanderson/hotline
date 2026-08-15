@@ -1528,9 +1528,8 @@ impl Session {
         }
 
         let is_global = chat_id == 0;
-        let has_set_subject = self.access_extra.contains(AccessExtra::SET_SUBJECT);
         if let Err(reason) = state
-            .authorize_chat_subject_change(chat_id, self.user_id, is_global, has_set_subject)
+            .authorize_chat_subject_change(chat_id, self.user_id, is_global, self.access_extra)
             .await
         {
             return vec![tx.reply_error(reason)];

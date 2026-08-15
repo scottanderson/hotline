@@ -2,6 +2,7 @@
 //! rooms, classic news, and the one per-recipient channel sessions use to
 //! reach each other.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
@@ -486,13 +487,12 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<(), &'static str> {
-        let upload_anywhere = access.contains(Access::UPLOAD_ANYWHERE);
-        if !upload_anywhere && !is_dropbox_path(dir) {
-            return Err("You are not allowed to do that.");
+    ) -> Result<(), Cow<'static, str>> {
+        if !is_dropbox_path(dir) {
+            access.require(Access::UPLOAD_ANYWHERE)?;
         }
         if self.files.exists(requester, dir, name).await {
-            return Err("file already exists.");
+            Err("file already exists.")?;
         }
         Ok(())
     }
@@ -1007,24 +1007,23 @@ impl SharedState {
     }
 
     /// Whether `user_id` may change a chat room's subject/password: the
-    /// global room (`chat_id == 0`) needs `has_set_subject`; any other
-    /// room just needs `user_id` to already be a member.
+    /// global room (`chat_id == 0`) needs `AccessExtra::SET_SUBJECT`; any
+    /// other room just needs `user_id` to already be a member.
     pub async fn authorize_chat_subject_change(
         &self,
         chat_id: u32,
         user_id: u16,
         is_global: bool,
-        has_set_subject: bool,
-    ) -> Result<(), &'static str> {
+        access_extra: AccessExtra,
+    ) -> Result<(), Cow<'static, str>> {
         if is_global {
-            return has_set_subject
-                .then_some(())
-                .ok_or("You are not allowed to do that.");
+            access_extra.require(AccessExtra::SET_SUBJECT)?;
+            return Ok(());
         }
         match self.chat_room_members(chat_id).await {
             Some(members) if members.contains(&user_id) => Ok(()),
-            Some(_) => Err("you are not in that chat room"),
-            None => Err("no such chat room"),
+            Some(_) => Err("you are not in that chat room")?,
+            None => Err("no such chat room")?,
         }
     }
 

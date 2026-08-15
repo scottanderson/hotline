@@ -162,6 +162,7 @@ impl RequireFlags for Access {
                 Access::POST_NEWS_ART => "post articles",
                 Access::DISCON_USER => "disconnect users",
                 Access::GET_CLIENT_INFO => "get client information",
+                Access::UPLOAD_ANYWHERE => "upload anywhere",
                 Access::SET_FILE_COMMENT => "set comments for files",
                 Access::SET_FOLDER_COMMENT => "set comments for folders",
                 Access::MAKE_ALIAS => "make aliases",
