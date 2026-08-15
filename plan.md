@@ -564,17 +564,19 @@ recommendation either way.
 40. **`Access::DOWNLOAD_FILE`/`DOWNLOAD_FOLDER`/`UPLOAD_FOLDER`/
     `SET_FILE_COMMENT`/`SET_FOLDER_COMMENT` have known reference denial
     strings in `Access::actions` (item 39) but no `require()` call site
-    reaches any of them yet.** `on_file_get` (202) checks
+    reaches any of them yet.** ~~`on_file_get` (202) checks
     `AccessExtra::FILE_GETINFO` instead of `Access::DOWNLOAD_FILE`, which
     means download is currently ungated by that privilege entirely, a
-    real permission gap rather than just an unimplemented feature. Folder
+    real permission gap rather than just an unimplemented feature.~~
+    **Resolved for `on_file_get`.** `on_file_get` now checks
+    `Access::DOWNLOAD_FILE` instead of `AccessExtra::FILE_GETINFO` (the
+    latter was a copy/paste from the separate metadata-only
+    `on_file_getinfo` handler, left untouched). Still open: folder
     transfer (`UPLOAD_FOLDER`/`DOWNLOAD_FOLDER`) isn't implemented at all
     (`HtxfType::FileTransfer` is the only transfer type this server
-    sends/accepts). `on_file_setinfo` accepts but never persists
+    sends/accepts), and `on_file_setinfo` accepts but never persists
     `FILE_COMMENT`, so there's nothing yet for `SET_FILE_COMMENT`/
-    `SET_FOLDER_COMMENT` to gate either. Wiring `on_file_get` to
-    `Access::DOWNLOAD_FILE`/`DOWNLOAD_FOLDER` is a small fix; folder
-    transfer and persisted file comments are larger features this
+    `SET_FOLDER_COMMENT` to gate either — both larger features this
     backlog doesn't otherwise track yet.
 41. **Neither classic nor threaded news is persisted anywhere.**
     `SharedState::news` (classic, a flat `String`) and `SharedState::news_tree`

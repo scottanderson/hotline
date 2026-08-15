@@ -897,7 +897,7 @@ impl Session {
     /// the byte count it already has; that portion of the data fork is
     /// skipped, though the flattened-object header is always resent.
     async fn on_file_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
+        if let Err(reason) = self.access.require(Access::DOWNLOAD_FILE) {
             return vec![tx.reply_error(reason)];
         }
 
