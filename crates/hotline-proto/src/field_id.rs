@@ -437,14 +437,14 @@ pub enum ServerFieldId {
     ///
     /// Original: `HTLS_DATA_FILE_COMMENT`.
     FileComment = 210,
-    /// Message being quoted/replied to, on a private message bounce.
-    ///
-    /// Original: `HTLS_DATA_QUOTING_MSG`.
-    QuotingMsg = 214,
     /// 4-character Mac type code, packed.
     ///
     /// Original: `HTLS_DATA_FILE_ICON`.
     FileIcon = 213,
+    /// Message being quoted/replied to, on a private message bounce.
+    ///
+    /// Original: `HTLS_DATA_QUOTING_MSG`.
+    QuotingMsg = 214,
     /// Number of items in a folder.
     ///
     /// Original: `HTLS_DATA_FILE_NFILES`.
@@ -610,8 +610,8 @@ impl ServerFieldId {
             Self::FileDateCreate => "HTLS_DATA_FILE_DATE_CREATE",
             Self::FileDateModify => "HTLS_DATA_FILE_DATE_MODIFY",
             Self::FileComment => "HTLS_DATA_FILE_COMMENT",
-            Self::QuotingMsg => "HTLS_DATA_QUOTING_MSG",
             Self::FileIcon => "HTLS_DATA_FILE_ICON",
+            Self::QuotingMsg => "HTLS_DATA_QUOTING_MSG",
             Self::FileCount => "HTLS_DATA_FILE_NFILES",
             Self::UserList => "HTLS_DATA_USER_LIST",
             Self::NewsDirlist => "HTLS_DATA_NEWS_DIRLIST",
