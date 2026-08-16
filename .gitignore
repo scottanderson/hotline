@@ -1,6 +1,7 @@
 /target
 /accounts
 /files
+comments.json
 news.json
 news.txt
 **/*.rs.bk

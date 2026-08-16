@@ -1,25 +1,57 @@
 //! A directory-backed [`FileProvider`], the same directory tree for
 //! every login. `hotline-server` deliberately doesn't own file storage
 //! (see its module docs); this is the concrete backend `hls` plugs in.
+//!
+//! File and folder comments aren't native filesystem metadata, so they
+//! persist as a single JSON file elsewhere on disk (not under the served
+//! root, so it never shows up in a client's own file listing), mapping
+//! each path to its comment.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 use hotline_server::{BoxedReader, BoxedWriter, FileProvider, FileRequester};
+use tokio::sync::RwLock;
 
 /// Serves one directory on disk, the same for every login.
-pub struct DirectoryFileProvider {
+pub struct FileFileProvider {
     root: PathBuf,
+    comments_path: PathBuf,
+    comments: RwLock<HashMap<String, String>>,
 }
 
-impl DirectoryFileProvider {
-    /// Open (creating if missing) a directory to serve.
-    pub async fn open(root: impl Into<PathBuf>) -> io::Result<Self> {
+impl FileFileProvider {
+    /// Open (creating if missing) `root` to serve, with comments persisted
+    /// to `comments_file` (also created if missing), a path outside `root`.
+    pub async fn open(
+        root: impl Into<PathBuf>,
+        comments_file: impl Into<PathBuf>,
+    ) -> io::Result<Self> {
         let root = root.into();
         tokio::fs::create_dir_all(&root).await?;
-        Ok(Self { root })
+        let comments_path = comments_file.into();
+        let comments = match tokio::fs::read(&comments_path).await {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) => return Err(e),
+        };
+        Ok(Self {
+            root,
+            comments_path,
+            comments: RwLock::new(comments),
+        })
+    }
+
+    /// The key a comment is stored under: `dir`'s components joined with
+    /// `name`, so folder and file comments share one flat map.
+    fn comment_key(dir: &HlPath, name: &str) -> String {
+        let mut parts = dir.components.clone();
+        parts.push(name.to_string());
+        parts.join("/")
     }
 
     /// Resolve a directory path under `root`, rejecting any component
@@ -48,7 +80,7 @@ impl DirectoryFileProvider {
 }
 
 #[async_trait]
-impl FileProvider for DirectoryFileProvider {
+impl FileProvider for FileFileProvider {
     async fn list(
         &self,
         _requester: FileRequester<'_>,
@@ -238,6 +270,38 @@ impl FileProvider for DirectoryFileProvider {
             Err(io::Error::from(io::ErrorKind::Unsupported))
         }
     }
+
+    async fn comment(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<String> {
+        self.comments
+            .read()
+            .await
+            .get(&Self::comment_key(dir, name))
+            .cloned()
+    }
+
+    async fn set_comment(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        comment: &str,
+    ) -> io::Result<()> {
+        let key = Self::comment_key(dir, name);
+        let mut comments = self.comments.write().await;
+        if comment.is_empty() {
+            comments.remove(&key);
+        } else {
+            comments.insert(key, comment.to_string());
+        }
+        let bytes = serde_json::to_vec_pretty(&*comments)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        tokio::fs::write(&self.comments_path, bytes).await
+    }
 }
 
 #[cfg(test)]
@@ -256,7 +320,9 @@ mod tests {
             .unwrap();
         tokio::fs::create_dir(dir.path().join("sub")).await.unwrap();
 
-        let provider = DirectoryFileProvider::open(dir.path()).await.unwrap();
+        let provider = FileFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
         let mut entries = provider
             .list(requester(), &HlPath::default())
             .await
@@ -273,7 +339,9 @@ mod tests {
     #[tokio::test]
     async fn rejects_traversal_out_of_the_root() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = DirectoryFileProvider::open(dir.path()).await.unwrap();
+        let provider = FileFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
 
         assert!(provider.resolve_file(&HlPath::new([".."]), "etc").is_none());
         assert!(provider.resolve_file(&HlPath::default(), "..").is_none());
@@ -288,7 +356,9 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let dir = tempfile::tempdir().unwrap();
-        let provider = DirectoryFileProvider::open(dir.path()).await.unwrap();
+        let provider = FileFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
 
         let mut writer = provider
             .create_write(requester(), &HlPath::default(), "a.txt")
@@ -319,12 +389,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_comment_round_trips_and_survives_reopening() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments_dir = tempfile::tempdir().unwrap();
+        let comments_path = comments_dir.path().join("comments.json");
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        {
+            let provider = FileFileProvider::open(dir.path(), &comments_path)
+                .await
+                .unwrap();
+            assert_eq!(
+                provider
+                    .comment(requester(), &HlPath::default(), "a.txt")
+                    .await,
+                None
+            );
+            provider
+                .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+                .await
+                .unwrap();
+            assert_eq!(
+                provider
+                    .comment(requester(), &HlPath::default(), "a.txt")
+                    .await,
+                Some("a note".to_string())
+            );
+        }
+
+        let reopened = FileFileProvider::open(dir.path(), &comments_path)
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .comment(requester(), &HlPath::default(), "a.txt")
+                .await,
+            Some("a note".to_string())
+        );
+
+        reopened
+            .set_comment(requester(), &HlPath::default(), "a.txt", "")
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .comment(requester(), &HlPath::default(), "a.txt")
+                .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn comments_file_never_appears_in_a_directory_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments_dir = tempfile::tempdir().unwrap();
+        let provider =
+            FileFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
+                .await
+                .unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+            .await
+            .unwrap();
+
+        let entries = provider
+            .list(requester(), &HlPath::default())
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a.txt");
+    }
+
+    #[tokio::test]
     async fn delete_trusts_the_passed_is_dir_instead_of_restatting() {
         let dir = tempfile::tempdir().unwrap();
         tokio::fs::create_dir(dir.path().join("actually_a_folder"))
             .await
             .unwrap();
-        let provider = DirectoryFileProvider::open(dir.path()).await.unwrap();
+        let provider = FileFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
 
         // Authorized as a file (is_dir = false); must not fall back to
         // deleting the real directory on disk.

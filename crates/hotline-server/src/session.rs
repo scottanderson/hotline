@@ -1010,8 +1010,8 @@ impl Session {
     }
 
     /// 206: fetch a file or folder's metadata. Type/creator/creation date
-    /// and comment are omitted; nothing in this server persists real HFS
-    /// metadata (see `HTXF`'s `INFO` fork).
+    /// are omitted; nothing in this server persists real HFS metadata for
+    /// them (see `HTXF`'s `INFO` fork). Comment is sent when one is stored.
     async fn on_file_getinfo(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
             return vec![tx.reply_error(reason)];
@@ -1025,6 +1025,13 @@ impl Session {
             Ok(info) => info,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let comment = match state
+            .file_comment(requester, &dir, &name, self.access)
+            .await
+        {
+            Ok(comment) => comment,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let zero_date = HlDate {
             year: 0,
             milliseconds: 0,
@@ -1032,33 +1039,48 @@ impl Session {
         }
         .encode()
         .to_vec();
-        vec![tx.reply(vec![
+        let mut fields = vec![
             Field::string(ServerFieldId::FileName, info.name),
             Field::u32(ServerFieldId::FileSize, info.size),
             Field::bytes(ServerFieldId::FileDateModify, zero_date),
-        ])]
+        ];
+        if let Some(comment) = comment {
+            fields.push(Field::string(ServerFieldId::FileComment, comment));
+        }
+        vec![tx.reply(fields)]
     }
 
-    /// 207: rename a file or folder. `FILE_COMMENT` is accepted on the
-    /// wire but not stored, matching `FILE_GETINFO`'s always-empty
-    /// comment.
+    /// 207: rename a file or folder, and/or set its `FILE_COMMENT`. A
+    /// rename, if present, applies before the comment, so a comment sent
+    /// alongside a rename lands on the renamed entry.
     async fn on_file_setinfo(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let (name, dir) = match self.file_name_and_dir(tx) {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        // A comment-only request (no rename) is a no-op: comment storage
-        // isn't implemented, and only an absent rename *and* comment is an
-        // error.
-        let Some(new_name) = tx.field(ClientFieldId::FileNewName).map(Field::as_string) else {
+        let new_name = tx.field(ClientFieldId::FileNewName).map(Field::as_string);
+        let comment = tx.field(ClientFieldId::FileComment).map(Field::as_string);
+        if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
-        };
+        }
         let requester = FileRequester { login: &self.login };
-        if let Err(reason) = state
-            .rename_file(requester, &dir, &name, &new_name, self.access)
-            .await
-        {
-            return vec![tx.reply_error(reason)];
+        let mut name = name;
+        if let Some(new_name) = &new_name {
+            if let Err(reason) = state
+                .rename_file(requester, &dir, &name, new_name, self.access)
+                .await
+            {
+                return vec![tx.reply_error(reason)];
+            }
+            name = new_name.clone();
+        }
+        if let Some(comment) = &comment {
+            if let Err(reason) = state
+                .set_file_comment(requester, &dir, &name, comment, self.access)
+                .await
+            {
+                return vec![tx.reply_error(reason)];
+            }
         }
         vec![tx.reply(vec![])]
     }
@@ -5431,6 +5453,97 @@ mod tests {
                 .file_exists(requester, &HlPath::default(), "a.txt")
                 .await
         );
+    }
+
+    #[tokio::test]
+    async fn file_setinfo_sets_a_comment_returned_by_getinfo() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::FILE_GETINFO);
+
+        let setinfo = Transaction::request(
+            ClientOpcode::FileSetinfo,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(ClientFieldId::FileComment, "a note"),
+            ],
+        );
+        let [reply] = session
+            .on_file_setinfo(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+
+        let getinfo = Transaction::request(
+            ClientOpcode::FileGetinfo,
+            1,
+            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_file_getinfo(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            reply
+                .field(ServerFieldId::FileComment)
+                .map(Field::as_string),
+            Some("a note".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn file_setinfo_comment_denied_without_set_file_comment() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::SET_FILE_COMMENT);
+        let session = test_session("Alice", access);
+
+        let setinfo = Transaction::request(
+            ClientOpcode::FileSetinfo,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(ClientFieldId::FileComment, "a note"),
+            ],
+        );
+        let [reply] = session
+            .on_file_setinfo(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_setinfo_folder_comment_denied_without_set_folder_comment() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Folder"]), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::SET_FOLDER_COMMENT);
+        let session = test_session("Alice", access);
+
+        let setinfo = Transaction::request(
+            ClientOpcode::FileSetinfo,
+            1,
+            vec![
+                Field::string(ClientFieldId::FileName, "Folder"),
+                Field::string(ClientFieldId::FileComment, "a note"),
+            ],
+        );
+        let [reply] = session
+            .on_file_setinfo(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
     }
 
     #[tokio::test]

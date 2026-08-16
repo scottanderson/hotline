@@ -126,6 +126,25 @@ pub trait FileProvider: Send + Sync {
         link_dir: &HlPath,
         link_name: &str,
     ) -> io::Result<()>;
+
+    /// A file or folder's stored comment, or `None` if it's never had
+    /// one set.
+    async fn comment(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<String>;
+
+    /// Set a file or folder's comment, replacing any prior one. An
+    /// empty string clears it rather than storing an empty comment.
+    async fn set_comment(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        comment: &str,
+    ) -> io::Result<()>;
 }
 
 #[derive(Clone)]
@@ -189,6 +208,7 @@ impl Dir {
 #[derive(Default)]
 pub struct InMemoryFileProvider {
     root: Arc<Mutex<Dir>>,
+    comments: Mutex<HashMap<(Vec<String>, String), String>>,
 }
 
 impl InMemoryFileProvider {
@@ -454,6 +474,35 @@ impl FileProvider for InMemoryFileProvider {
         dest.entries.insert(link_name.to_string(), entry);
         Ok(())
     }
+
+    async fn comment(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<String> {
+        let comments = self.comments.lock().unwrap();
+        comments
+            .get(&(dir.components.clone(), name.to_string()))
+            .cloned()
+    }
+
+    async fn set_comment(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        comment: &str,
+    ) -> io::Result<()> {
+        let mut comments = self.comments.lock().unwrap();
+        let key = (dir.components.clone(), name.to_string());
+        if comment.is_empty() {
+            comments.remove(&key);
+        } else {
+            comments.insert(key, comment.to_string());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -614,6 +663,41 @@ mod tests {
             provider
                 .exists(requester(), &HlPath::default(), "a.txt")
                 .await
+        );
+    }
+
+    #[tokio::test]
+    async fn set_comment_round_trips_and_empty_string_clears_it() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::default(), "a.txt", *b"hi");
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "a.txt")
+                .await,
+            None
+        );
+
+        provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+            .await
+            .unwrap();
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "a.txt")
+                .await,
+            Some("a note".to_string())
+        );
+
+        provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "")
+            .await
+            .unwrap();
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "a.txt")
+                .await,
+            None
         );
     }
 

@@ -8,7 +8,7 @@ use clap::Parser;
 use hotline_server::{Server, ServerConfig};
 
 use accounts::FileAccountProvider;
-use files::DirectoryFileProvider;
+use files::FileFileProvider;
 use news::FileNewsProvider;
 
 /// A minimal Hotline server.
@@ -40,6 +40,12 @@ struct Args {
     #[arg(long, default_value = "files")]
     files_dir: String,
 
+    /// File to persist file/folder comments to, as JSON (created if
+    /// missing). Kept outside `files_dir` so it never shows up in a
+    /// client's own file listing.
+    #[arg(long, default_value = "comments.json")]
+    comments_file: String,
+
     /// File to persist classic (flat) news to, as plain text (created if
     /// missing).
     #[arg(long, default_value = "news.txt")]
@@ -62,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let accounts = Arc::new(FileAccountProvider::open(args.accounts_dir).await?);
-    let files = Arc::new(DirectoryFileProvider::open(args.files_dir).await?);
+    let files = Arc::new(FileFileProvider::open(args.files_dir, args.comments_file).await?);
     let news = Arc::new(FileNewsProvider::open(args.news_file, args.news_tree_file).await?);
     Server::new(config, accounts, files, news).run().await?;
     Ok(())

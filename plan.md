@@ -568,16 +568,29 @@ recommendation either way.
     `AccessExtra::FILE_GETINFO` instead of `Access::DOWNLOAD_FILE`, which
     means download is currently ungated by that privilege entirely, a
     real permission gap rather than just an unimplemented feature.~~
-    **Resolved for `on_file_get`.** `on_file_get` now checks
-    `Access::DOWNLOAD_FILE` instead of `AccessExtra::FILE_GETINFO` (the
-    latter was a copy/paste from the separate metadata-only
-    `on_file_getinfo` handler, left untouched). Still open: folder
-    transfer (`UPLOAD_FOLDER`/`DOWNLOAD_FOLDER`) isn't implemented at all
+    **Resolved for `on_file_get`, and now also for file/folder comments.**
+    `on_file_get` now checks `Access::DOWNLOAD_FILE` instead of
+    `AccessExtra::FILE_GETINFO` (the latter was a copy/paste from the
+    separate metadata-only `on_file_getinfo` handler, left untouched).
+    `FileProvider` gained `comment`/`set_comment`, implemented by both
+    `InMemoryFileProvider` (an in-memory map keyed by path) and
+    `FileFileProvider` (a `.comments.json` sidecar file at the served
+    root, since a comment isn't native filesystem metadata); `on_file_setinfo`
+    now persists a `FILE_COMMENT` field through `SharedState::set_file_comment`,
+    gated on `Access::SET_FOLDER_COMMENT` for a folder target and
+    `Access::SET_FILE_COMMENT` for a file, and `on_file_getinfo` returns a
+    stored comment when one exists. Still open: folder transfer
+    (`UPLOAD_FOLDER`/`DOWNLOAD_FOLDER`) isn't implemented at all
     (`HtxfType::FileTransfer` is the only transfer type this server
-    sends/accepts), and `on_file_setinfo` accepts but never persists
-    `FILE_COMMENT`, so there's nothing yet for `SET_FILE_COMMENT`/
-    `SET_FOLDER_COMMENT` to gate either — both larger features this
-    backlog doesn't otherwise track yet.
+    sends/accepts) — a larger feature this backlog doesn't otherwise track
+    yet. `file_comment`/`set_file_comment`'s drop-box denial used to
+    return a hardcoded `"You are not allowed to do that."` instead of
+    going through `RequireFlags::require`; `VIEW_DROP_BOXES` now has an
+    `actions()` entry ("view drop boxes") like every other flag, and a
+    `dropbox_access` helper wraps the existing `dropbox_blocked` check
+    with `access.require(Access::VIEW_DROP_BOXES)` so the denial reads
+    "You are not allowed to view drop boxes." through the same mechanism
+    item 39 wired up for every other single-flag denial.
 41. ~~Neither classic nor threaded news is persisted anywhere.~~
     **Resolved.** Added `NewsProvider` (`crate::news`), following the same
     plug-in shape as `AccountProvider`/`FileProvider`: `hotline-server`

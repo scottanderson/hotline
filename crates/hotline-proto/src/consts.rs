@@ -175,6 +175,7 @@ impl RequireFlags for Access {
                 Access::UPLOAD_FOLDER => "upload folders",
                 Access::DOWNLOAD_FOLDER => "download folders",
                 Access::SEND_MESSAGE => "send private messages",
+                Access::VIEW_DROP_BOXES => "view drop boxes",
                 _ => name,
             })
             .collect::<Vec<_>>()

@@ -126,6 +126,16 @@ fn dropbox_blocked(dir: &HlPath, name: Option<&str>, access: Access) -> bool {
         .any(|c| c.to_ascii_lowercase().contains("drop box"))
 }
 
+/// `Err` if `dropbox_blocked` for `dir`/`name`, worded via
+/// [`RequireFlags::require`] so it names `VIEW_DROP_BOXES` like any other
+/// missing-privilege error.
+fn dropbox_access(dir: &HlPath, name: Option<&str>, access: Access) -> Result<(), String> {
+    if dropbox_blocked(dir, name, access) {
+        access.require(Access::VIEW_DROP_BOXES)?;
+    }
+    Ok(())
+}
+
 /// A private chat room: its member user IDs, in join order, plus a
 /// subject line.
 #[derive(Debug, Clone, Default)]
@@ -657,6 +667,47 @@ impl SharedState {
     ) -> Result<(), String> {
         self.files
             .symlink(requester, target_dir, target_name, link_dir, link_name)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// A file or folder's stored comment, or `None` if it's never had
+    /// one set. `Err` if missing or drop-box-blocked.
+    pub async fn file_comment(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        access: Access,
+    ) -> Result<Option<String>, String> {
+        dropbox_access(dir, Some(name), access)?;
+        Ok(self.files.comment(requester, dir, name).await)
+    }
+
+    /// Set a file or folder's comment, after checking the matching
+    /// privilege and drop box visibility.
+    pub async fn set_file_comment(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        comment: &str,
+        access: Access,
+    ) -> Result<(), String> {
+        dropbox_access(dir, Some(name), access)?;
+        let info = self
+            .files
+            .info(requester, dir, name)
+            .await
+            .ok_or("file or folder not found.")?;
+        let required = if info.file_type == *b"fldr" {
+            Access::SET_FOLDER_COMMENT
+        } else {
+            Access::SET_FILE_COMMENT
+        };
+        access.require(required)?;
+        self.files
+            .set_comment(requester, dir, name, comment)
             .await
             .map_err(|e| e.to_string())
     }
