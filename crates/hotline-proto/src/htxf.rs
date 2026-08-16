@@ -229,7 +229,7 @@ const RESUME_DATA_PREFIX_LEN: usize = 42;
 /// `fork_type(4) | data_size(4) | reserved(4) | reserved(4)`.
 const RESUME_DATA_ENTRY_LEN: usize = 16;
 
-/// Decode a `FileResumeData` blob (`HTLC_DATA_RFLT`, 203): how many bytes
+/// Decode a `FileResumeData` blob (`myField_FileResumeData`, 203): how many bytes
 /// of the `DATA` fork the sender already has, so a resumed transfer only
 /// sends the remainder. Ignores any other fork entry, e.g. a resource
 /// fork position this server doesn't track.

@@ -131,7 +131,7 @@ impl Encoder<Transaction> for TransactionCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hotline_proto::field_id::ClientFieldId;
+    use hotline_proto::field_id::FieldId;
     use hotline_proto::opcode::{ClientOpcode, ServerOpcode};
     use hotline_proto::Field;
 
@@ -165,15 +165,12 @@ mod tests {
         let tx = Transaction::request(
             ClientOpcode::Chat,
             1,
-            vec![Field::string(ClientFieldId::Text, konnichiwa)],
+            vec![Field::string(FieldId::Text, konnichiwa)],
         );
         server.encode(tx, &mut buf).unwrap();
         let decoded = server.decode(&mut buf).unwrap().unwrap();
         assert_ne!(
-            decoded
-                .field(ClientFieldId::Text)
-                .unwrap()
-                .as_string(encoding),
+            decoded.field(FieldId::Text).unwrap().as_string(encoding),
             konnichiwa
         );
 
@@ -183,12 +180,12 @@ mod tests {
         let tx = Transaction::request(
             ClientOpcode::Chat,
             2,
-            vec![Field::string(ClientFieldId::Text, konnichiwa)],
+            vec![Field::string(FieldId::Text, konnichiwa)],
         );
         server.encode(tx, &mut buf).unwrap();
         let decoded = server.decode(&mut buf).unwrap().unwrap();
         assert_eq!(
-            decoded.field(ClientFieldId::Text).unwrap().as_string(sjis),
+            decoded.field(FieldId::Text).unwrap().as_string(sjis),
             konnichiwa
         );
     }
@@ -199,7 +196,7 @@ mod tests {
         let tx = Transaction::request(
             ClientOpcode::Chat,
             1,
-            vec![Field::string(ClientFieldId::Text, "hello")],
+            vec![Field::string(FieldId::Text, "hello")],
         );
 
         let mut buf = BytesMut::new();
@@ -210,10 +207,7 @@ mod tests {
         // decode produces FieldValue::Bytes, so compare interpreted values
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded
-                .field(ClientFieldId::Text)
-                .unwrap()
-                .as_string(encoding),
+            decoded.field(FieldId::Text).unwrap().as_string(encoding),
             "hello"
         );
         assert!(buf.is_empty(), "decode should consume exactly one frame");
@@ -248,9 +242,9 @@ mod tests {
             ClientOpcode::Login,
             7,
             vec![
-                Field::string(ClientFieldId::Name, "RustHL"),
+                Field::string(FieldId::Name, "RustHL"),
                 Field::string(
-                    ClientFieldId::Text,
+                    FieldId::Text,
                     "a slightly longer field to cross a few byte boundaries",
                 ),
             ],
@@ -258,17 +252,11 @@ mod tests {
         let decoded = feed_byte_by_byte(&tx);
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded
-                .field(ClientFieldId::Name)
-                .unwrap()
-                .as_string(encoding),
+            decoded.field(FieldId::Name).unwrap().as_string(encoding),
             "RustHL"
         );
         assert_eq!(
-            decoded
-                .field(ClientFieldId::Text)
-                .unwrap()
-                .as_string(encoding),
+            decoded.field(FieldId::Text).unwrap().as_string(encoding),
             "a slightly longer field to cross a few byte boundaries"
         );
     }
@@ -280,7 +268,7 @@ mod tests {
         let second = Transaction::request(
             ClientOpcode::Chat,
             2,
-            vec![Field::string(ClientFieldId::Text, "second frame")],
+            vec![Field::string(FieldId::Text, "second frame")],
         );
 
         let mut buf = BytesMut::new();
@@ -295,7 +283,7 @@ mod tests {
         assert_eq!(decoded_second.trans(), second.trans());
         assert_eq!(
             decoded_second
-                .field(ClientFieldId::Text)
+                .field(FieldId::Text)
                 .unwrap()
                 .as_string(encoding),
             "second frame"

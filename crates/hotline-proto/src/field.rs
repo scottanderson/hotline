@@ -1,9 +1,9 @@
 //! `Field`: the `(id, size, data)` records that make up a transaction's
 //! parameter list.
 //!
-//! Field tags live in [`crate::field_id`] as [`crate::field_id::ClientFieldId`]/
-//! [`crate::field_id::ServerFieldId`]; `Field` itself stores a raw `u16`
-//! id, since direction is a property of the transaction, not the field.
+//! Field tags live in [`crate::field_id`] as [`crate::field_id::FieldId`];
+//! `Field` itself stores a raw `u16` id, since direction is a property of
+//! the transaction, not the field.
 //!
 //! The payload is [`FieldValue`], not a bare `Vec<u8>`, so `Debug` shows
 //! the actual typed value. A field just decoded off the wire is
@@ -56,10 +56,9 @@ impl FieldValue {
 /// A single transaction parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
-    /// Field tag. Pass a [`crate::field_id::ClientFieldId`] or
-    /// [`crate::field_id::ServerFieldId`] constant to any constructor
-    /// here (both convert via `Into<u16>`); stored as a plain `u16`
-    /// since that's what's actually on the wire and what decoding
+    /// Field tag. Pass a [`crate::field_id::FieldId`] constant to any
+    /// constructor here (it converts via `Into<u16>`); stored as a plain
+    /// `u16` since that's what's actually on the wire and what decoding
     /// produces before direction is known.
     pub id: u16,
     /// The typed payload. See [`FieldValue`].
@@ -313,12 +312,12 @@ fn xor_ff(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_id::{ClientFieldId, ServerFieldId};
+    use crate::field_id::FieldId;
 
     #[test]
     fn field_round_trips() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::string(ClientFieldId::Name, "RustHL");
+        let f = Field::string(FieldId::Name, "RustHL");
         let encoded = f.encode(encoding).unwrap();
         let (decoded, consumed) = Field::decode(&encoded).unwrap();
         assert_eq!(consumed, encoded.len());
@@ -329,7 +328,7 @@ mod tests {
     fn mac_roman_mappable_text_round_trips() {
         let encoding = text_encoding::DEFAULT;
         // e-acute exists in Mac OS Roman, so it round-trips exactly.
-        let f = Field::string(ClientFieldId::Text, "h\u{e9}llo");
+        let f = Field::string(FieldId::Text, "h\u{e9}llo");
         let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
         assert_eq!(decoded.as_string(encoding), "h\u{e9}llo");
     }
@@ -338,7 +337,7 @@ mod tests {
     fn text_outside_mac_roman_falls_back_to_question_mark() {
         let encoding = text_encoding::DEFAULT;
         // An emoji has no Mac OS Roman encoding, so it's lossy.
-        let f = Field::string(ClientFieldId::Text, "hello \u{1f389}");
+        let f = Field::string(FieldId::Text, "hello \u{1f389}");
         let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
         assert_eq!(decoded.as_string(encoding), "hello ?");
     }
@@ -346,7 +345,7 @@ mod tests {
     #[test]
     fn encode_rejects_data_over_65535_bytes_instead_of_truncating() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::bytes(ClientFieldId::Text, vec![0u8; 65536]);
+        let f = Field::bytes(FieldId::Text, vec![0u8; 65536]);
         assert!(matches!(
             f.encode(encoding),
             Err(ProtoError::TooLong {
@@ -358,44 +357,44 @@ mod tests {
 
     #[test]
     fn u16_field_round_trips() {
-        let f = Field::u16(ClientFieldId::Uid, 42);
+        let f = Field::u16(FieldId::UserId, 42);
         assert_eq!(f.value, FieldValue::U16(42));
         assert_eq!(f.as_u16(), Some(42));
     }
 
     #[test]
     fn u64_field_round_trips() {
-        let f = Field::u64(ClientFieldId::Access, u64::MAX);
+        let f = Field::u64(FieldId::Access, u64::MAX);
         assert_eq!(f.as_u64(), Some(u64::MAX));
     }
 
     #[test]
     fn u32_field_picks_smallest_unsigned_width() {
         let encoding = text_encoding::DEFAULT;
-        let small = Field::u32(ServerFieldId::ChatId, 7);
+        let small = Field::u32(FieldId::ChatId, 7);
         assert_eq!(small.encode(encoding).unwrap().len(), 4 + 2);
         assert_eq!(small.as_u32(), Some(7));
 
-        let large = Field::u32(ServerFieldId::FileSize, u32::MAX);
+        let large = Field::u32(FieldId::FileSize, u32::MAX);
         assert_eq!(large.encode(encoding).unwrap().len(), 4 + 4);
         assert_eq!(large.as_u32(), Some(u32::MAX));
     }
 
     #[test]
     fn as_u32_accepts_either_a_2_or_4_byte_payload() {
-        let short = Field::u32(ServerFieldId::ChatId, 7);
+        let short = Field::u32(FieldId::ChatId, 7);
         assert_eq!(short.as_u32(), Some(7));
 
         // A field just decoded off the wire is raw bytes regardless of
         // which width the sender picked.
-        let long = Field::bytes(ServerFieldId::ChatId, vec![0, 0, 0, 7]);
+        let long = Field::bytes(FieldId::ChatId, vec![0, 0, 0, 7]);
         assert_eq!(long.as_u32(), Some(7));
     }
 
     #[test]
     fn obfuscated_string_round_trips() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::obfuscated_string(ClientFieldId::Login, "guest");
+        let f = Field::obfuscated_string(FieldId::Login, "guest");
         // On the wire it must NOT be the plaintext bytes.
         assert_ne!(f.encode(encoding).unwrap()[4..], *b"guest");
         assert_eq!(f.as_deobfuscated_string(encoding), "guest");
@@ -404,7 +403,7 @@ mod tests {
     #[test]
     fn decoded_field_debug_shows_raw_bytes_not_a_guess() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::string(ClientFieldId::Name, "x");
+        let f = Field::string(FieldId::Name, "x");
         let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
         let debug = format!("{decoded:?}");
         // Decode can't know this was text - it's honestly Bytes until
@@ -414,14 +413,13 @@ mod tests {
 
     #[test]
     fn locally_built_field_debug_shows_its_real_type() {
-        let f = Field::u16(ClientFieldId::Uid, 42);
+        let f = Field::u16(FieldId::UserId, 42);
         let debug = format!("{f:?}");
         assert!(debug.contains("U16(42)"));
     }
 
     #[test]
-    fn client_and_server_field_ids_never_collide_in_name() {
-        assert_eq!(ClientFieldId::Name.name(), "HTLC_DATA_NAME");
-        assert_eq!(ServerFieldId::Name.name(), "HTLS_DATA_NAME");
+    fn field_id_name_lookup() {
+        assert_eq!(FieldId::Name.name(), "myField_UserName");
     }
 }

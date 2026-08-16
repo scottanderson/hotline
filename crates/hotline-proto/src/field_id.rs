@@ -1,222 +1,317 @@
-//! Field tags, split by direction: [`ClientFieldId`] for fields a client
-//! sends, [`ServerFieldId`] for fields a server sends.
+//! Field tags: [`FieldId`] covers every field either direction sends.
 //!
-//! Each type only has variants for tags that direction actually uses, so
-//! `ServerFieldId::Text` and `ClientFieldId::Text` are distinct values
-//! with distinct [`ClientFieldId::name`]/[`ServerFieldId::name`]
-//! results, and a tag that's one-directional (`ErrorText` is
-//! server-only, `FileNewName` is client-only, etc.) simply isn't a valid
-//! value of the type that never sends it. A same-numbered tag can also
-//! carry different meanings per direction: `Options` (113) is a
-//! persisted-preference bitmap in a client request but tags a bounce
-//! reply's kind (refusal notice vs automatic response) in a server push.
+//! `HLProtocol.md` numbers fields with one flat `myField_*` list, no
+//! client/server split, and a field-by-field audit against it found no
+//! case where the same numeric tag means something structurally
+//! different depending on direction, so one type covers both (a raw
+//! [`Field`](crate::field::Field) doesn't know its own direction either;
+//! see [`crate::transaction`]'s module docs). The one exception is
+//! semantic, not structural: `Options` (113) is a persisted-preference
+//! bitmap in a client request but tags a bounce reply's kind (refusal
+//! notice vs automatic response) in a server push; nothing in [`FieldId`]
+//! itself encodes that, callers interpret the raw bits per transaction.
 //!
 //! Variant names track the tail of the original wire constant (e.g.
-//! `HTLS_DATA_SERVERNAME` -> `Servername`) rather than being split into
+//! `myField_ServerName` -> `Servername`) rather than being split into
 //! idiomatic multi-word Rust names, so a variant is always one grep away
 //! from its source.
 
-/// Field tags as they appear in a **client**-directed message. A
-/// distinct type from [`ServerFieldId`], even where the same numeric tag
-/// is used in both directions (e.g. `Name` is `102` on both sides).
+/// A field tag, as sent by either a client or a server.
 #[repr(u16)]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ClientFieldId {
+pub enum FieldId {
+    /// Error message text, server-only.
+    ///
+    /// Original: `myField_ErrorText`.
+    ErrorText = 100,
     /// Generic payload: chat text, an instant message body, a news post, or the server agreement, depending on the enclosing transaction.
     ///
-    /// Original: `HTLC_DATA_TEXT`.
+    /// Original: `myField_Data`.
     Text = 101,
     /// A user's display name.
     ///
-    /// Original: `HTLC_DATA_NAME`.
+    /// Original: `myField_UserName`.
     Name = 102,
     /// Socket/user ID.
     ///
-    /// Original: `HTLC_DATA_UID`.
-    Uid = 103,
+    /// Original: `myField_UserID`.
+    UserId = 103,
     /// Icon ID.
     ///
-    /// Original: `HTLC_DATA_ICON`.
+    /// Original: `myField_UserIconID`.
     Icon = 104,
     /// Account login (XOR-obfuscated on the wire).
     ///
-    /// Original: `HTLC_DATA_LOGIN`.
+    /// Original: `myField_UserLogin`.
     Login = 105,
     /// Account password (XOR-obfuscated on the wire).
     ///
-    /// Original: `HTLC_DATA_PASSWORD`.
+    /// Original: `myField_UserPassword`.
     Password = 106,
+    /// File transfer reference number, assigned by the server.
+    ///
+    /// Original: `myField_RefNum`.
+    TransferId = 107,
     /// File transfer size in bytes.
     ///
-    /// Original: `HTLC_DATA_HTXF_SIZE`.
+    /// Original: `myField_TransferSize`.
     TransferSize = 108,
     /// Chat message style/formatting bitmap.
     ///
-    /// Original: `HTLC_DATA_STYLE`.
+    /// Original: `myField_ChatOptions`.
     Style = 109,
     /// 64-bit access privilege bitmap. See `AccessPrivileges`.
     ///
-    /// Original: `HTLC_DATA_ACCESS`.
+    /// Original: `myField_UserAccess`.
     Access = 110,
-    /// A user's alias; unused in practice, always sent empty.
+    /// A user's alias; unused in practice, always sent empty, client-only.
     ///
-    /// Original: `HTLC_DATA_USER_ALIAS`.
+    /// Original: `myField_UserAlias`.
     UserAlias = 111,
-    /// Contextual options bitmap; also reused as a kick-to-ban flag.
+    /// User status bitmap (away, admin, etc) / legacy color, server-only.
     ///
-    /// Original: `HTLC_DATA_BAN`.
+    /// Original: `myField_UserFlags`.
+    Color = 112,
+    /// Contextual options bitmap: a persisted-preference bitmap in a
+    /// client request, or a private message/chat-invite bounce's kind
+    /// (refusal notice vs automatic response) in a server push. Also
+    /// reused as a kick-to-ban flag.
+    ///
+    /// Original: `myField_Options`.
     Options = 113,
     /// Private chat room ID.
     ///
-    /// Original: `HTLC_DATA_CHAT_ID`.
+    /// Original: `myField_ChatID`.
     ChatId = 114,
     /// Chat room subject string.
     ///
-    /// Original: `HTLC_DATA_CHAT_SUBJECT`.
+    /// Original: `myField_ChatSubject`.
     ChatSubject = 115,
+    /// Position in the download queue, server-only.
+    ///
+    /// Original: `myField_WaitingCount`.
+    QueuePosition = 116,
+    /// Raw banner image bytes, server-only.
+    ///
+    /// Original: `myField_ServerBanner`.
+    Banner = 151,
+    /// Banner format tag (URL/JPEG/GIF/BMP/PICT), server-only.
+    ///
+    /// Original: `myField_ServerBannerType`.
+    BannerType = 152,
+    /// Banner URL, when the type is URL, server-only.
+    ///
+    /// Original: `myField_ServerBannerUrl`.
+    BannerUrl = 153,
+    /// Set when the server has no agreement to show, server-only.
+    ///
+    /// Original: `myField_NoServerAgreement`.
+    Noagreement = 154,
     /// Protocol version: the client's own version when client-sent, the server's version when server-sent.
     ///
-    /// Original: `HTLC_DATA_CLIENTVERSION`.
+    /// Original: `myField_Vers`.
     Version = 160,
+    /// Banner ID used to fetch the banner over HTTP, server-only.
+    ///
+    /// Original: `myField_CommunityBannerID`.
+    Bannerid = 161,
+    /// Server's display name, server-only.
+    ///
+    /// Original: `myField_ServerName`.
+    Servername = 162,
+    /// A packed file-listing entry, server-only.
+    ///
+    /// Original: `myField_FileNameWithInfo`.
+    FileList = 200,
     /// A file or folder's name.
     ///
-    /// Original: `HTLC_DATA_FILE_NAME`.
+    /// Original: `myField_FileName`.
     FileName = 201,
-    /// A directory path.
+    /// A directory path, client-only.
     ///
-    /// Original: `HTLC_DATA_DIR`.
+    /// Original: `myField_FilePath`.
     FilePath = 202,
     /// Resume-transfer descriptor.
     ///
-    /// Original: `HTLC_DATA_RFLT`.
+    /// Original: `myField_FileResumeData`.
     ResumeFileTransfer = 203,
-    /// File transfer options; also used for image preview requests.
+    /// File transfer options; also used for image preview requests, client-only.
     ///
-    /// Original: `HTLC_DATA_FILE_PREVIEW`.
+    /// Original: `myField_FileXferOptions`.
     FileXferOptions = 204,
+    /// Mac file type as a 4-character string, server-only.
+    ///
+    /// Original: `myField_FileTypeString`.
+    FileType = 205,
+    /// Mac file creator as a 4-character string, server-only.
+    ///
+    /// Original: `myField_FileCreatorString`.
+    FileCreator = 206,
+    /// File size in bytes, server-only.
+    ///
+    /// Original: `myField_FileSize`.
+    FileSize = 207,
+    /// File creation date, server-only.
+    ///
+    /// Original: `myField_FileCreateDate`.
+    FileDateCreate = 208,
+    /// File modification date, server-only.
+    ///
+    /// Original: `myField_FileModifyDate`.
+    FileDateModify = 209,
     /// File/folder comment text.
     ///
-    /// Original: `HTLC_DATA_FILE_COMMENT`.
+    /// Original: `myField_FileComment`.
     FileComment = 210,
-    /// Requested new name for a rename.
+    /// Requested new name for a rename, client-only.
     ///
-    /// Original: `HTLC_DATA_FILE_RENAME`.
+    /// Original: `myField_FileNewName`.
     FileNewName = 211,
-    /// Requested destination path for a move/alias.
+    /// Requested destination path for a move/alias, client-only.
     ///
-    /// Original: `HTLC_DATA_DIR_RENAME`.
+    /// Original: `myField_FileNewPath`.
     FileNewPath = 212,
-    /// Message being quoted/replied to, on a private message.
+    /// 4-character Mac type code, packed, server-only.
     ///
-    /// Original: `HTLC_DATA_QUOTING_MSG`.
+    /// Original: `myField_FileType`.
+    FileIcon = 213,
+    /// Message being quoted/replied to, on a private message (bounce).
+    ///
+    /// Original: `myField_QuotingMsg`.
     QuotingMsg = 214,
-    /// Custom automatic-response text, sent when `Options` (113) enables it.
+    /// Custom automatic-response text, sent when `Options` (113) enables it, client-only.
     ///
-    /// Original: `HTLC_DATA_AUTOMATIC_RESPONSE`.
+    /// Original: `myField_AutomaticResponse`.
     AutomaticResponse = 215,
     /// Number of items in a folder.
     ///
-    /// Original: `HTLC_DATA_FILE_NFILES`.
+    /// Original: `myField_FldrItemCount`.
     FolderItemCount = 220,
+    /// A packed user-list entry, server-only.
+    ///
+    /// Original: `myField_UserNameWithInfo`.
+    UserList = 300,
     /// Packed news category/folder listing entry (pre-1.5).
     ///
-    /// Original: `HTLC_DATA_NEWS_DIRLIST`.
+    /// Original: `myField_NewsCatListData`.
     NewsCatListData = 320,
     /// Packed news article listing entry.
     ///
-    /// Original: `HTLC_DATA_NEWS_CATLIST`.
+    /// Original: `myField_NewsArtListData`.
     NewsArtListData = 321,
-    /// A news category's name.
+    /// A news category's name, client-only.
     ///
-    /// Original: `HTLC_DATA_NEWS_CATNAME`.
+    /// Original: `myField_NewsCatName`.
     NewsCatName = 322,
+    /// Packed news category/folder listing entry (1.5+), server-only.
+    ///
+    /// Original: `myField_NewsCatListData15`.
+    NewsDirlistExtended = 323,
     /// A news folder/category path.
     ///
-    /// Original: `HTLC_DATA_NEWS_DIR`.
+    /// Original: `myField_NewsPath`.
     NewsPath = 325,
     /// News article/thread ID.
     ///
-    /// Original: `HTLC_DATA_NEWS_THREADID`.
+    /// Original: `myField_NewsArtID`.
     NewsArtId = 326,
     /// News article MIME type, e.g. "text/plain".
     ///
-    /// Original: `HTLC_DATA_NEWS_MIMETYPE`.
+    /// Original: `myField_NewsArtDataFlav`.
     NewsArtDataFlavor = 327,
     /// News article subject/title.
     ///
-    /// Original: `HTLC_DATA_NEWS_SUBJECT`.
+    /// Original: `myField_NewsArtTitle`.
     NewsArtTitle = 328,
     /// News article author name.
     ///
-    /// Original: `HTLC_DATA_NEWS_POSTER`.
+    /// Original: `myField_NewsArtPoster`.
     NewsArtPoster = 329,
     /// News article post date.
     ///
-    /// Original: `HTLC_DATA_NEWS_DATE`.
+    /// Original: `myField_NewsArtDate`.
     NewsArtDate = 330,
     /// Previous article ID in thread order.
     ///
-    /// Original: `HTLC_DATA_NEWS_PREVTHREADID`.
+    /// Original: `myField_NewsArtPrevArt`.
     NewsArtPrevArt = 331,
     /// Next article ID in thread order.
     ///
-    /// Original: `HTLC_DATA_NEWS_NEXTTHREADID`.
+    /// Original: `myField_NewsArtNextArt`.
     NewsArtNextArt = 332,
     /// News article body text.
     ///
-    /// Original: `HTLC_DATA_NEWS_POST`.
+    /// Original: `myField_NewsArtData`.
     NewsArtData = 333,
-    /// News article flags, set on post.
+    /// News article flags, set on post, client-only.
     ///
-    /// Original: `HTLC_DATA_NEWS_FLAGS`.
+    /// Original: `myField_NewsArtFlags`.
     NewsArtFlags = 334,
     /// Parent article ID.
     ///
-    /// Original: `HTLC_DATA_NEWS_PARENTTHREADID`.
+    /// Original: `myField_NewsArtParentArt`.
     NewsArtParentArt = 335,
     /// First child article ID.
     ///
-    /// Original: `HTLC_DATA_NEWS_NEXTSUBTHREADID`.
+    /// Original: `myField_NewsArt1stChildArt`.
     NewsArt1stChildArt = 336,
-    /// Whether deleting this article recursively deletes replies.
+    /// Whether deleting this article recursively deletes replies, client-only.
     ///
-    /// Original: `HTLC_DATA_NEWS_DELETEREPLIES`.
+    /// Original: `myField_NewsArtRecurseDel`.
     NewsArtRecurseDel = 337,
 }
 
-impl ClientFieldId {
-    /// Look up the variant for a raw wire value, if any client field
-    /// uses it.
+impl FieldId {
+    /// Look up the variant for a raw wire value, if any field uses it.
     pub const fn from_u16(id: u16) -> Option<Self> {
         Some(match id {
+            100 => Self::ErrorText,
             101 => Self::Text,
             102 => Self::Name,
-            103 => Self::Uid,
+            103 => Self::UserId,
             104 => Self::Icon,
             105 => Self::Login,
             106 => Self::Password,
+            107 => Self::TransferId,
             108 => Self::TransferSize,
             109 => Self::Style,
             110 => Self::Access,
             111 => Self::UserAlias,
+            112 => Self::Color,
             113 => Self::Options,
             114 => Self::ChatId,
             115 => Self::ChatSubject,
+            116 => Self::QueuePosition,
+            151 => Self::Banner,
+            152 => Self::BannerType,
+            153 => Self::BannerUrl,
+            154 => Self::Noagreement,
             160 => Self::Version,
+            161 => Self::Bannerid,
+            162 => Self::Servername,
+            200 => Self::FileList,
             201 => Self::FileName,
             202 => Self::FilePath,
             203 => Self::ResumeFileTransfer,
             204 => Self::FileXferOptions,
+            205 => Self::FileType,
+            206 => Self::FileCreator,
+            207 => Self::FileSize,
+            208 => Self::FileDateCreate,
+            209 => Self::FileDateModify,
             210 => Self::FileComment,
             211 => Self::FileNewName,
             212 => Self::FileNewPath,
+            213 => Self::FileIcon,
             214 => Self::QuotingMsg,
             215 => Self::AutomaticResponse,
             220 => Self::FolderItemCount,
+            300 => Self::UserList,
             320 => Self::NewsCatListData,
             321 => Self::NewsArtListData,
             322 => Self::NewsCatName,
+            323 => Self::NewsDirlistExtended,
             325 => Self::NewsPath,
             326 => Self::NewsArtId,
             327 => Self::NewsArtDataFlavor,
@@ -242,46 +337,65 @@ impl ClientFieldId {
     /// The original constant name.
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Text => "HTLC_DATA_TEXT",
-            Self::Name => "HTLC_DATA_NAME",
-            Self::Uid => "HTLC_DATA_UID",
-            Self::Icon => "HTLC_DATA_ICON",
-            Self::Login => "HTLC_DATA_LOGIN",
-            Self::Password => "HTLC_DATA_PASSWORD",
-            Self::TransferSize => "HTLC_DATA_HTXF_SIZE",
-            Self::Style => "HTLC_DATA_STYLE",
-            Self::Access => "HTLC_DATA_ACCESS",
-            Self::UserAlias => "HTLC_DATA_USER_ALIAS",
-            Self::Options => "HTLC_DATA_BAN",
-            Self::ChatId => "HTLC_DATA_CHAT_ID",
-            Self::ChatSubject => "HTLC_DATA_CHAT_SUBJECT",
-            Self::Version => "HTLC_DATA_CLIENTVERSION",
-            Self::FileName => "HTLC_DATA_FILE_NAME",
-            Self::FilePath => "HTLC_DATA_DIR",
-            Self::ResumeFileTransfer => "HTLC_DATA_RFLT",
-            Self::FileXferOptions => "HTLC_DATA_FILE_PREVIEW",
-            Self::FileComment => "HTLC_DATA_FILE_COMMENT",
-            Self::FileNewName => "HTLC_DATA_FILE_RENAME",
-            Self::FileNewPath => "HTLC_DATA_DIR_RENAME",
-            Self::QuotingMsg => "HTLC_DATA_QUOTING_MSG",
-            Self::AutomaticResponse => "HTLC_DATA_AUTOMATIC_RESPONSE",
-            Self::FolderItemCount => "HTLC_DATA_FILE_NFILES",
-            Self::NewsCatListData => "HTLC_DATA_NEWS_DIRLIST",
-            Self::NewsArtListData => "HTLC_DATA_NEWS_CATLIST",
-            Self::NewsCatName => "HTLC_DATA_NEWS_CATNAME",
-            Self::NewsPath => "HTLC_DATA_NEWS_DIR",
-            Self::NewsArtId => "HTLC_DATA_NEWS_THREADID",
-            Self::NewsArtDataFlavor => "HTLC_DATA_NEWS_MIMETYPE",
-            Self::NewsArtTitle => "HTLC_DATA_NEWS_SUBJECT",
-            Self::NewsArtPoster => "HTLC_DATA_NEWS_POSTER",
-            Self::NewsArtDate => "HTLC_DATA_NEWS_DATE",
-            Self::NewsArtPrevArt => "HTLC_DATA_NEWS_PREVTHREADID",
-            Self::NewsArtNextArt => "HTLC_DATA_NEWS_NEXTTHREADID",
-            Self::NewsArtData => "HTLC_DATA_NEWS_POST",
-            Self::NewsArtFlags => "HTLC_DATA_NEWS_FLAGS",
-            Self::NewsArtParentArt => "HTLC_DATA_NEWS_PARENTTHREADID",
-            Self::NewsArt1stChildArt => "HTLC_DATA_NEWS_NEXTSUBTHREADID",
-            Self::NewsArtRecurseDel => "HTLC_DATA_NEWS_DELETEREPLIES",
+            Self::ErrorText => "myField_ErrorText",
+            Self::Text => "myField_Data",
+            Self::Name => "myField_UserName",
+            Self::UserId => "myField_UserID",
+            Self::Icon => "myField_UserIconID",
+            Self::Login => "myField_UserLogin",
+            Self::Password => "myField_UserPassword",
+            Self::TransferId => "myField_RefNum",
+            Self::TransferSize => "myField_TransferSize",
+            Self::Style => "myField_ChatOptions",
+            Self::Access => "myField_UserAccess",
+            Self::UserAlias => "myField_UserAlias",
+            Self::Color => "myField_UserFlags",
+            Self::Options => "myField_Options",
+            Self::ChatId => "myField_ChatID",
+            Self::ChatSubject => "myField_ChatSubject",
+            Self::QueuePosition => "myField_WaitingCount",
+            Self::Banner => "myField_ServerBanner",
+            Self::BannerType => "myField_ServerBannerType",
+            Self::BannerUrl => "myField_ServerBannerUrl",
+            Self::Noagreement => "myField_NoServerAgreement",
+            Self::Version => "myField_Vers",
+            Self::Bannerid => "myField_CommunityBannerID",
+            Self::Servername => "myField_ServerName",
+            Self::FileList => "myField_FileNameWithInfo",
+            Self::FileName => "myField_FileName",
+            Self::FilePath => "myField_FilePath",
+            Self::ResumeFileTransfer => "myField_FileResumeData",
+            Self::FileXferOptions => "myField_FileXferOptions",
+            Self::FileType => "myField_FileTypeString",
+            Self::FileCreator => "myField_FileCreatorString",
+            Self::FileSize => "myField_FileSize",
+            Self::FileDateCreate => "myField_FileCreateDate",
+            Self::FileDateModify => "myField_FileModifyDate",
+            Self::FileComment => "myField_FileComment",
+            Self::FileNewName => "myField_FileNewName",
+            Self::FileNewPath => "myField_FileNewPath",
+            Self::FileIcon => "myField_FileType",
+            Self::QuotingMsg => "myField_QuotingMsg",
+            Self::AutomaticResponse => "myField_AutomaticResponse",
+            Self::FolderItemCount => "myField_FldrItemCount",
+            Self::UserList => "myField_UserNameWithInfo",
+            Self::NewsCatListData => "myField_NewsCatListData",
+            Self::NewsArtListData => "myField_NewsArtListData",
+            Self::NewsCatName => "myField_NewsCatName",
+            Self::NewsDirlistExtended => "myField_NewsCatListData15",
+            Self::NewsPath => "myField_NewsPath",
+            Self::NewsArtId => "myField_NewsArtID",
+            Self::NewsArtDataFlavor => "myField_NewsArtDataFlav",
+            Self::NewsArtTitle => "myField_NewsArtTitle",
+            Self::NewsArtPoster => "myField_NewsArtPoster",
+            Self::NewsArtDate => "myField_NewsArtDate",
+            Self::NewsArtPrevArt => "myField_NewsArtPrevArt",
+            Self::NewsArtNextArt => "myField_NewsArtNextArt",
+            Self::NewsArtData => "myField_NewsArtData",
+            Self::NewsArtFlags => "myField_NewsArtFlags",
+            Self::NewsArtParentArt => "myField_NewsArtParentArt",
+            Self::NewsArt1stChildArt => "myField_NewsArt1stChildArt",
+            Self::NewsArtRecurseDel => "myField_NewsArtRecurseDel",
         }
     }
 
@@ -294,354 +408,8 @@ impl ClientFieldId {
     }
 }
 
-impl From<ClientFieldId> for u16 {
-    fn from(id: ClientFieldId) -> u16 {
-        id.as_u16()
-    }
-}
-
-/// Field tags as they appear in a **server**-directed message.
-///
-/// See [`ClientFieldId`] for why this is a separate type rather than a
-/// shared one.
-#[repr(u16)]
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ServerFieldId {
-    /// Error message text.
-    ///
-    /// Original: `HTLS_DATA_TASKERROR`.
-    ErrorText = 100,
-    /// Generic payload: chat text, an instant message body, a news post, or the server agreement, depending on the enclosing transaction.
-    ///
-    /// Original: `HTLS_DATA_TEXT`.
-    Text = 101,
-    /// A user's display name.
-    ///
-    /// Original: `HTLS_DATA_NAME`.
-    Name = 102,
-    /// Socket/user ID.
-    ///
-    /// Original: `HTLS_DATA_UID`.
-    UserId = 103,
-    /// Icon ID.
-    ///
-    /// Original: `HTLS_DATA_ICON`.
-    Icon = 104,
-    /// Account login (XOR-obfuscated on the wire).
-    ///
-    /// Original: `HTLS_DATA_LOGIN`.
-    Login = 105,
-    /// Account password (XOR-obfuscated on the wire).
-    ///
-    /// Original: `HTLS_DATA_PASSWORD`.
-    Password = 106,
-    /// File transfer reference number, assigned by the server.
-    ///
-    /// Original: `HTLS_DATA_HTXF_REF`.
-    TransferId = 107,
-    /// File transfer size in bytes.
-    ///
-    /// Original: `HTLS_DATA_HTXF_SIZE`.
-    TransferSize = 108,
-    /// Chat message style/formatting bitmap.
-    ///
-    /// Original: `HTLS_DATA_STYLE`.
-    Style = 109,
-    /// 64-bit access privilege bitmap. See `AccessPrivileges`.
-    ///
-    /// Original: `HTLS_DATA_ACCESS`.
-    Access = 110,
-    /// User status bitmap (away, admin, etc) / legacy color.
-    ///
-    /// Original: `HTLS_DATA_COLOR`.
-    Color = 112,
-    /// Tags a private message/chat-invite bounce as a refusal notice or
-    /// an automatic response.
-    ///
-    /// Original: `HTLS_DATA_BAN`.
-    Options = 113,
-    /// Private chat room ID.
-    ///
-    /// Original: `HTLS_DATA_CHAT_ID`.
-    ChatId = 114,
-    /// Chat room subject string.
-    ///
-    /// Original: `HTLS_DATA_CHAT_SUBJECT`.
-    ChatSubject = 115,
-    /// Position in the download queue.
-    ///
-    /// Original: `HTLS_DATA_QUEUE_POSITION`.
-    QueuePosition = 116,
-    /// Raw banner image bytes.
-    ///
-    /// Original: `HTLS_DATA_BANNER`.
-    Banner = 151,
-    /// Banner format tag (URL/JPEG/GIF/BMP/PICT).
-    ///
-    /// Original: `HTLS_DATA_BANNER_TYPE`.
-    BannerType = 152,
-    /// Banner URL, when the type is URL.
-    ///
-    /// Original: `HTLS_DATA_BANNER_URL`.
-    BannerUrl = 153,
-    /// Set when the server has no agreement to show.
-    ///
-    /// Original: `HTLS_DATA_NOAGREEMENT`.
-    Noagreement = 154,
-    /// Protocol version: the client's own version when client-sent, the server's version when server-sent.
-    ///
-    /// Original: `HTLS_DATA_SERVERVERSION`.
-    Serverversion = 160,
-    /// Banner ID used to fetch the banner over HTTP.
-    ///
-    /// Original: `HTLS_DATA_BANNERID`.
-    Bannerid = 161,
-    /// Server's display name.
-    ///
-    /// Original: `HTLS_DATA_SERVERNAME`.
-    Servername = 162,
-    /// A packed file-listing entry.
-    ///
-    /// Original: `HTLS_DATA_FILE_LIST`.
-    FileList = 200,
-    /// A file or folder's name.
-    ///
-    /// Original: `HTLS_DATA_FILE_NAME`.
-    FileName = 201,
-    /// Resume-transfer descriptor.
-    ///
-    /// Original: `HTLS_DATA_RFLT`.
-    ResumeFileTransfer = 203,
-    /// Mac file type as a 4-character string.
-    ///
-    /// Original: `HTLS_DATA_FILE_TYPE`.
-    FileType = 205,
-    /// Mac file creator as a 4-character string.
-    ///
-    /// Original: `HTLS_DATA_FILE_CREATOR`.
-    FileCreator = 206,
-    /// File size in bytes.
-    ///
-    /// Original: `HTLS_DATA_FILE_SIZE`.
-    FileSize = 207,
-    /// File creation date.
-    ///
-    /// Original: `HTLS_DATA_FILE_DATE_CREATE`.
-    FileDateCreate = 208,
-    /// File modification date.
-    ///
-    /// Original: `HTLS_DATA_FILE_DATE_MODIFY`.
-    FileDateModify = 209,
-    /// File/folder comment text.
-    ///
-    /// Original: `HTLS_DATA_FILE_COMMENT`.
-    FileComment = 210,
-    /// 4-character Mac type code, packed.
-    ///
-    /// Original: `HTLS_DATA_FILE_ICON`.
-    FileIcon = 213,
-    /// Message being quoted/replied to, on a private message bounce.
-    ///
-    /// Original: `HTLS_DATA_QUOTING_MSG`.
-    QuotingMsg = 214,
-    /// Number of items in a folder.
-    ///
-    /// Original: `HTLS_DATA_FILE_NFILES`.
-    FileCount = 220,
-    /// A packed user-list entry.
-    ///
-    /// Original: `HTLS_DATA_USER_LIST`.
-    UserList = 300,
-    /// Packed news category/folder listing entry (pre-1.5).
-    ///
-    /// Original: `HTLS_DATA_NEWS_DIRLIST`.
-    NewsDirlist = 320,
-    /// Packed news article listing entry.
-    ///
-    /// Original: `HTLS_DATA_NEWS_CATLIST`.
-    NewsCatlist = 321,
-    /// Packed news category/folder listing entry (1.5+).
-    ///
-    /// Original: `HTLS_DATA_NEWS_DIRLIST_EXTENDED`.
-    NewsDirlistExtended = 323,
-    /// A news folder/category path.
-    ///
-    /// Original: `HTLS_DATA_NEWS_DIR`.
-    NewsDir = 325,
-    /// News article/thread ID.
-    ///
-    /// Original: `HTLS_DATA_NEWS_THREADID`.
-    NewsThreadid = 326,
-    /// News article MIME type, e.g. "text/plain".
-    ///
-    /// Original: `HTLS_DATA_NEWS_MIMETYPE`.
-    NewsMimetype = 327,
-    /// News article subject/title.
-    ///
-    /// Original: `HTLS_DATA_NEWS_SUBJECT`.
-    NewsSubject = 328,
-    /// News article author name.
-    ///
-    /// Original: `HTLS_DATA_NEWS_POSTER`.
-    NewsPoster = 329,
-    /// News article post date.
-    ///
-    /// Original: `HTLS_DATA_NEWS_DATE`.
-    NewsDate = 330,
-    /// Previous article ID in thread order.
-    ///
-    /// Original: `HTLS_DATA_NEWS_PREVTHREADID`.
-    NewsPrevthreadid = 331,
-    /// Next article ID in thread order.
-    ///
-    /// Original: `HTLS_DATA_NEWS_NEXTTHREADID`.
-    NewsNextthreadid = 332,
-    /// News article body text.
-    ///
-    /// Original: `HTLS_DATA_NEWS_POST`.
-    NewsPost = 333,
-    /// Parent article ID.
-    ///
-    /// Original: `HTLS_DATA_NEWS_PARENTTHREADID`.
-    NewsParentthreadid = 335,
-    /// First child article ID.
-    ///
-    /// Original: `HTLS_DATA_NEWS_NEXTSUBTHREADID`.
-    NewsNextsubthreadid = 336,
-}
-
-impl ServerFieldId {
-    /// Look up the variant for a raw wire value, if any server field
-    /// uses it.
-    pub const fn from_u16(id: u16) -> Option<Self> {
-        Some(match id {
-            100 => Self::ErrorText,
-            101 => Self::Text,
-            102 => Self::Name,
-            103 => Self::UserId,
-            104 => Self::Icon,
-            105 => Self::Login,
-            106 => Self::Password,
-            107 => Self::TransferId,
-            108 => Self::TransferSize,
-            109 => Self::Style,
-            110 => Self::Access,
-            112 => Self::Color,
-            113 => Self::Options,
-            114 => Self::ChatId,
-            115 => Self::ChatSubject,
-            116 => Self::QueuePosition,
-            151 => Self::Banner,
-            152 => Self::BannerType,
-            153 => Self::BannerUrl,
-            154 => Self::Noagreement,
-            160 => Self::Serverversion,
-            161 => Self::Bannerid,
-            162 => Self::Servername,
-            200 => Self::FileList,
-            201 => Self::FileName,
-            203 => Self::ResumeFileTransfer,
-            205 => Self::FileType,
-            206 => Self::FileCreator,
-            207 => Self::FileSize,
-            208 => Self::FileDateCreate,
-            209 => Self::FileDateModify,
-            210 => Self::FileComment,
-            213 => Self::FileIcon,
-            214 => Self::QuotingMsg,
-            220 => Self::FileCount,
-            300 => Self::UserList,
-            320 => Self::NewsDirlist,
-            321 => Self::NewsCatlist,
-            323 => Self::NewsDirlistExtended,
-            325 => Self::NewsDir,
-            326 => Self::NewsThreadid,
-            327 => Self::NewsMimetype,
-            328 => Self::NewsSubject,
-            329 => Self::NewsPoster,
-            330 => Self::NewsDate,
-            331 => Self::NewsPrevthreadid,
-            332 => Self::NewsNextthreadid,
-            333 => Self::NewsPost,
-            335 => Self::NewsParentthreadid,
-            336 => Self::NewsNextsubthreadid,
-            _ => return None,
-        })
-    }
-
-    /// The wire value.
-    pub const fn as_u16(self) -> u16 {
-        self as u16
-    }
-
-    /// The original constant name.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::ErrorText => "HTLS_DATA_TASKERROR",
-            Self::Text => "HTLS_DATA_TEXT",
-            Self::Name => "HTLS_DATA_NAME",
-            Self::UserId => "HTLS_DATA_UID",
-            Self::Icon => "HTLS_DATA_ICON",
-            Self::Login => "HTLS_DATA_LOGIN",
-            Self::Password => "HTLS_DATA_PASSWORD",
-            Self::TransferId => "HTLS_DATA_HTXF_REF",
-            Self::TransferSize => "HTLS_DATA_HTXF_SIZE",
-            Self::Style => "HTLS_DATA_STYLE",
-            Self::Access => "HTLS_DATA_ACCESS",
-            Self::Color => "HTLS_DATA_COLOR",
-            Self::Options => "HTLS_DATA_BAN",
-            Self::ChatId => "HTLS_DATA_CHAT_ID",
-            Self::ChatSubject => "HTLS_DATA_CHAT_SUBJECT",
-            Self::QueuePosition => "HTLS_DATA_QUEUE_POSITION",
-            Self::Banner => "HTLS_DATA_BANNER",
-            Self::BannerType => "HTLS_DATA_BANNER_TYPE",
-            Self::BannerUrl => "HTLS_DATA_BANNER_URL",
-            Self::Noagreement => "HTLS_DATA_NOAGREEMENT",
-            Self::Serverversion => "HTLS_DATA_SERVERVERSION",
-            Self::Bannerid => "HTLS_DATA_BANNERID",
-            Self::Servername => "HTLS_DATA_SERVERNAME",
-            Self::FileList => "HTLS_DATA_FILE_LIST",
-            Self::FileName => "HTLS_DATA_FILE_NAME",
-            Self::ResumeFileTransfer => "HTLS_DATA_RFLT",
-            Self::FileType => "HTLS_DATA_FILE_TYPE",
-            Self::FileCreator => "HTLS_DATA_FILE_CREATOR",
-            Self::FileSize => "HTLS_DATA_FILE_SIZE",
-            Self::FileDateCreate => "HTLS_DATA_FILE_DATE_CREATE",
-            Self::FileDateModify => "HTLS_DATA_FILE_DATE_MODIFY",
-            Self::FileComment => "HTLS_DATA_FILE_COMMENT",
-            Self::FileIcon => "HTLS_DATA_FILE_ICON",
-            Self::QuotingMsg => "HTLS_DATA_QUOTING_MSG",
-            Self::FileCount => "HTLS_DATA_FILE_NFILES",
-            Self::UserList => "HTLS_DATA_USER_LIST",
-            Self::NewsDirlist => "HTLS_DATA_NEWS_DIRLIST",
-            Self::NewsCatlist => "HTLS_DATA_NEWS_CATLIST",
-            Self::NewsDirlistExtended => "HTLS_DATA_NEWS_DIRLIST_EXTENDED",
-            Self::NewsDir => "HTLS_DATA_NEWS_DIR",
-            Self::NewsThreadid => "HTLS_DATA_NEWS_THREADID",
-            Self::NewsMimetype => "HTLS_DATA_NEWS_MIMETYPE",
-            Self::NewsSubject => "HTLS_DATA_NEWS_SUBJECT",
-            Self::NewsPoster => "HTLS_DATA_NEWS_POSTER",
-            Self::NewsDate => "HTLS_DATA_NEWS_DATE",
-            Self::NewsPrevthreadid => "HTLS_DATA_NEWS_PREVTHREADID",
-            Self::NewsNextthreadid => "HTLS_DATA_NEWS_NEXTTHREADID",
-            Self::NewsPost => "HTLS_DATA_NEWS_POST",
-            Self::NewsParentthreadid => "HTLS_DATA_NEWS_PARENTTHREADID",
-            Self::NewsNextsubthreadid => "HTLS_DATA_NEWS_NEXTSUBTHREADID",
-        }
-    }
-
-    /// The original constant name for a raw wire value, known or not.
-    pub const fn name_for_raw(id: u16) -> &'static str {
-        match Self::from_u16(id) {
-            Some(known) => known.name(),
-            None => "(unrecognized field id)",
-        }
-    }
-}
-
-impl From<ServerFieldId> for u16 {
-    fn from(id: ServerFieldId) -> u16 {
+impl From<FieldId> for u16 {
+    fn from(id: FieldId) -> u16 {
         id.as_u16()
     }
 }
@@ -651,29 +419,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_and_server_field_ids_never_collide_in_name() {
-        assert_ne!(ClientFieldId::Name.name(), ServerFieldId::Name.name());
-    }
-
-    #[test]
     fn from_u16_round_trips() {
-        assert_eq!(ClientFieldId::from_u16(102), Some(ClientFieldId::Name));
-        assert_eq!(u16::from(ClientFieldId::Name), 102);
-        assert_eq!(ClientFieldId::from_u16(65535), None);
+        assert_eq!(FieldId::from_u16(102), Some(FieldId::Name));
+        assert_eq!(u16::from(FieldId::Name), 102);
+        assert_eq!(FieldId::from_u16(65535), None);
     }
 
     #[test]
     fn name_for_raw_handles_unknown_values() {
-        assert_eq!(
-            ClientFieldId::name_for_raw(65535),
-            "(unrecognized field id)"
-        );
-        assert_eq!(ClientFieldId::name_for_raw(102), "HTLC_DATA_NAME");
+        assert_eq!(FieldId::name_for_raw(65535), "(unrecognized field id)");
+        assert_eq!(FieldId::name_for_raw(102), "myField_UserName");
     }
 
     #[test]
     fn file_icon_213_does_not_collide_with_file_type_205() {
-        assert_eq!(ServerFieldId::from_u16(213), Some(ServerFieldId::FileIcon));
-        assert_eq!(ServerFieldId::from_u16(205), Some(ServerFieldId::FileType));
+        assert_eq!(FieldId::from_u16(213), Some(FieldId::FileIcon));
+        assert_eq!(FieldId::from_u16(205), Some(FieldId::FileType));
     }
 }

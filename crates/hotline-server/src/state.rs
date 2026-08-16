@@ -43,7 +43,7 @@ pub struct UserEntry {
     pub name: String,
     /// Icon ID.
     pub icon: u16,
-    /// Client-reported protocol version (`HTLC_DATA_CLIENTVERSION`, field
+    /// Client-reported protocol version (`myField_Vers`, field
     /// 160), `None` if the login request never sent one.
     pub client_version: Option<u16>,
     /// Remote socket address this connection was accepted from.

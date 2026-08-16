@@ -21,7 +21,7 @@ pub mod wire;
 pub use consts::{Access, RequireFlags};
 pub use error::{ProtoError, Result};
 pub use field::{Field, FieldList, FieldValue};
-pub use field_id::{ClientFieldId, ServerFieldId};
+pub use field_id::FieldId;
 pub use handshake::{ClientHandshake, ServerHandshake, SUB_PROTOCOL_HOTLINE};
 pub use htxf::{ForkHeader, HtxfHeader, HtxfType};
 pub use opcode::{ClientOpcode, ServerOpcode, TransactionType};

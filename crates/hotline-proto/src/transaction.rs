@@ -32,7 +32,7 @@ use std::{debug_assert_matches, fmt};
 
 use crate::error::{ProtoError, Result};
 use crate::field::{Field, FieldList};
-use crate::field_id::{ClientFieldId, ServerFieldId};
+use crate::field_id::FieldId;
 use crate::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use crate::text_encoding::Encoding;
 use crate::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
@@ -98,14 +98,14 @@ impl Transaction {
 
     /// Build an error reply to this (request) transaction: the error flag
     /// set and an `ERROR_TEXT` field carrying `message`. `ERROR_TEXT`
-    /// (`HTLS_DATA_TASKERROR`) is server-only, only a server ever sends
+    /// (`myField_ErrorText`) is server-only, only a server ever sends
     /// one of these.
     pub fn reply_error(&self, message: impl Into<String>) -> Self {
         Self::assemble(
             TransactionType::Reply,
             self.trans,
             1,
-            vec![Field::string(ServerFieldId::ErrorText, message)],
+            vec![Field::string(FieldId::ErrorText, message)],
         )
     }
 
@@ -170,112 +170,107 @@ impl Transaction {
 
     /// The first `USER_LIST` (300) field, decoded (`None` if absent, `Some(Err(_))` if malformed).
     pub fn user_list_entry(&self, encoding: &'static Encoding) -> Option<Result<UserNameWithInfo>> {
-        self.field(ServerFieldId::UserList)
+        self.field(FieldId::UserList)
             .map(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding))
     }
 
     /// Every `USER_LIST` (300) field, decoded; fails on the first that doesn't decode.
     pub fn user_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<UserNameWithInfo>> {
-        self.fields(ServerFieldId::UserList)
+        self.fields(FieldId::UserList)
             .map(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding))
             .collect()
     }
 
     /// Every `FILE_LIST` (200) field, decoded; fails on the first that doesn't decode.
     pub fn file_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<FileNameWithInfo>> {
-        self.fields(ServerFieldId::FileList)
+        self.fields(FieldId::FileList)
             .map(|f| FileNameWithInfo::decode(&f.as_bytes(encoding), encoding))
             .collect()
     }
 
     /// A `FILE_PATH`-shaped field (`FilePath`/`FileNewPath`), decoded.
-    pub fn file_path(
-        &self,
-        id: ClientFieldId,
-        encoding: &'static Encoding,
-    ) -> Option<Result<HlPath>> {
+    pub fn file_path(&self, id: FieldId, encoding: &'static Encoding) -> Option<Result<HlPath>> {
         self.field(id)
             .map(|f| HlPath::decode(&f.as_bytes(encoding), encoding))
     }
 
     /// The `LOGIN` field, deobfuscated, if present.
     pub fn login(&self, encoding: &'static Encoding) -> Option<String> {
-        self.field(ClientFieldId::Login)
+        self.field(FieldId::Login)
             .map(|f| f.as_deobfuscated_string(encoding))
     }
 
     /// The `PASSWORD` field, deobfuscated, if present.
     pub fn password(&self, encoding: &'static Encoding) -> Option<String> {
-        self.field(ClientFieldId::Password)
+        self.field(FieldId::Password)
             .map(|f| f.as_deobfuscated_string(encoding))
     }
 
     /// The `NAME` field, if present.
     pub fn name(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(ClientFieldId::Name, encoding)
+        self.string(FieldId::Name, encoding)
     }
 
     /// The `ICON` field, if present.
     pub fn icon(&self) -> Option<u16> {
-        self.field(ClientFieldId::Icon).and_then(Field::as_u16)
+        self.field(FieldId::Icon).and_then(Field::as_u16)
     }
 
-    /// The `HTLC_DATA_NEWS_DIR` (325) field, decoded.
+    /// The `myField_NewsPath` (325) field, decoded.
     pub fn news_path(&self, encoding: &'static Encoding) -> Option<Result<HlPath>> {
-        self.file_path(ClientFieldId::NewsPath, encoding)
+        self.file_path(FieldId::NewsPath, encoding)
     }
 
-    /// The `HTLC_DATA_NEWS_THREADID` (326) field, if present.
+    /// The `myField_NewsArtID` (326) field, if present.
     pub fn news_article_id(&self) -> Option<u32> {
-        self.field(ClientFieldId::NewsArtId).and_then(Field::as_u32)
+        self.field(FieldId::NewsArtId).and_then(Field::as_u32)
     }
 
-    /// The `HTLC_DATA_NEWS_CATNAME` (322) field, if present.
+    /// The `myField_NewsCatName` (322) field, if present.
     pub fn news_category_name(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(ClientFieldId::NewsCatName, encoding)
+        self.string(FieldId::NewsCatName, encoding)
     }
 
-    /// The `HTLC_DATA_NEWS_SUBJECT` (328) field, if present.
+    /// The `myField_NewsArtTitle` (328) field, if present.
     pub fn news_article_title(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(ClientFieldId::NewsArtTitle, encoding)
+        self.string(FieldId::NewsArtTitle, encoding)
     }
 
-    /// The `HTLC_DATA_NEWS_MIMETYPE` (327) field, if present.
+    /// The `myField_NewsArtDataFlav` (327) field, if present.
     pub fn news_article_flavor(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(ClientFieldId::NewsArtDataFlavor, encoding)
+        self.string(FieldId::NewsArtDataFlavor, encoding)
     }
 
-    /// The `HTLC_DATA_NEWS_FLAGS` (334) field, if present.
+    /// The `myField_NewsArtFlags` (334) field, if present.
     pub fn news_article_flags(&self) -> Option<u32> {
-        self.field(ClientFieldId::NewsArtFlags)
-            .and_then(Field::as_u32)
+        self.field(FieldId::NewsArtFlags).and_then(Field::as_u32)
     }
 
-    /// The `HTLC_DATA_NEWS_DELETEREPLIES` (337) field: whether a delete
+    /// The `myField_NewsArtRecurseDel` (337) field: whether a delete
     /// should recurse into child articles.
     pub fn news_article_recurse_delete(&self) -> bool {
-        self.field(ClientFieldId::NewsArtRecurseDel)
+        self.field(FieldId::NewsArtRecurseDel)
             .and_then(Field::as_u32)
             .unwrap_or(0)
             != 0
     }
 
-    /// The `HTLC_DATA_NEWS_POST` (333) field's raw bytes, if present.
+    /// The `myField_NewsArtData` (333) field's raw bytes, if present.
     pub fn news_article_data(&self, encoding: &'static Encoding) -> Option<Vec<u8>> {
-        self.field(ClientFieldId::NewsArtData)
+        self.field(FieldId::NewsArtData)
             .map(|f| f.as_bytes(encoding).into_owned())
     }
 
-    /// The `HTLC_DATA_ACCESS` field, if present.
+    /// The `myField_UserAccess` field, if present.
     pub fn access(&self) -> Option<Access> {
-        self.field(ClientFieldId::Access)
+        self.field(FieldId::Access)
             .and_then(Field::as_u64)
             .map(Access::from_bits_truncate)
     }
 
-    /// The `HTLC_DATA_CLIENTVERSION` (160) field, if present.
+    /// The `myField_Vers` (160) field, if present.
     pub fn client_version(&self) -> Option<u16> {
-        self.field(ClientFieldId::Version).and_then(Field::as_u16)
+        self.field(FieldId::Version).and_then(Field::as_u16)
     }
 
     /// Encode the full transaction: 20-byte fixed prefix, then
@@ -463,49 +458,24 @@ impl TransactionHeader {
 }
 
 impl fmt::Debug for Transaction {
-    /// Looks each field's name up in the correct one of
-    /// [`crate::field_id::ClientFieldId`]/[`crate::field_id::ServerFieldId`],
-    /// per [`Transaction::r#type`]'s direction.
+    /// Looks each field's name up via [`crate::field_id::FieldId`].
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let r#type = self.r#type();
         let mut out = f.debug_struct("Transaction");
-        out.field("type", &r#type);
+        out.field("type", &self.r#type());
         if self.trans != 0 {
             out.field("trans", &self.trans);
         }
         if self.flag != 0 {
             out.field("flag", &self.flag);
         }
-        match r#type {
-            TransactionType::Request(_) => out.field(
-                "fields",
-                &self
-                    .fields
-                    .iter()
-                    .map(|field| {
-                        (
-                            field.id,
-                            ClientFieldId::name_for_raw(field.id),
-                            &field.value,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            TransactionType::Reply | TransactionType::Push(_) => out.field(
-                "fields",
-                &self
-                    .fields
-                    .iter()
-                    .map(|field| {
-                        (
-                            field.id,
-                            ServerFieldId::name_for_raw(field.id),
-                            &field.value,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        }
+        out.field(
+            "fields",
+            &self
+                .fields
+                .iter()
+                .map(|field| (field.id, FieldId::name_for_raw(field.id), &field.value))
+                .collect::<Vec<_>>(),
+        )
         .finish()
     }
 }
@@ -513,7 +483,7 @@ impl fmt::Debug for Transaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_id::{ClientFieldId, ServerFieldId};
+    use crate::field_id::FieldId;
     use crate::opcode::ClientOpcode;
     use crate::text_encoding;
 
@@ -534,7 +504,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         for n in [0, 1, 5] {
             let fields = (0..n)
-                .map(|i| Field::string(ClientFieldId::Text, format!("msg{i}")))
+                .map(|i| Field::string(FieldId::Text, format!("msg{i}")))
                 .collect::<Vec<_>>();
             let tx = Transaction::request(ClientOpcode::Chat, 1, fields);
             let decoded = Transaction::decode_from_client(&tx.encode(encoding).unwrap()).unwrap();
@@ -549,9 +519,9 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "guest"),
-                Field::obfuscated_string(ClientFieldId::Password, ""),
-                Field::u16(ClientFieldId::Version, 151),
+                Field::obfuscated_string(FieldId::Login, "guest"),
+                Field::obfuscated_string(FieldId::Password, ""),
+                Field::u16(FieldId::Version, 151),
             ],
         );
         let bytes = tx.encode(encoding).unwrap();
@@ -570,7 +540,7 @@ mod tests {
         assert_eq!(decoded.fields.len(), tx.fields.len());
         assert_eq!(
             decoded
-                .field(ClientFieldId::Login)
+                .field(FieldId::Login)
                 .map(|f| f.as_deobfuscated_string(encoding))
                 .as_deref(),
             Some("guest")
@@ -583,7 +553,7 @@ mod tests {
         let tx = Transaction::request(
             ClientOpcode::Chat,
             7,
-            vec![Field::string(ClientFieldId::Text, "hello")],
+            vec![Field::string(FieldId::Text, "hello")],
         );
         let bytes = tx.encode(encoding).unwrap();
 
@@ -614,9 +584,7 @@ mod tests {
         assert!(tx.is_error());
         assert!(tx.is_reply());
         assert_eq!(
-            tx.field(ServerFieldId::ErrorText)
-                .unwrap()
-                .as_string(encoding),
+            tx.field(FieldId::ErrorText).unwrap().as_string(encoding),
             "nope"
         );
     }
@@ -633,7 +601,7 @@ mod tests {
 
         let tx = Transaction::push(
             ServerOpcode::Chat,
-            vec![Field::string(ServerFieldId::Text, relay)],
+            vec![Field::string(FieldId::Text, relay)],
         );
         assert!(matches!(
             tx.encode(encoding),
@@ -650,7 +618,7 @@ mod tests {
         let tx = Transaction::request(
             ClientOpcode::Chat,
             1,
-            vec![Field::string(ClientFieldId::Text, "hi")],
+            vec![Field::string(FieldId::Text, "hi")],
         );
         let bytes = tx.encode(encoding).unwrap();
         let prefix: [u8; TransactionHeader::LEN] =
@@ -661,19 +629,19 @@ mod tests {
     }
 
     #[test]
-    fn transaction_debug_uses_the_correct_direction_table() {
+    fn transaction_debug_shows_known_field_names_regardless_of_direction() {
         let request = Transaction::request(
             ClientOpcode::Chat,
             1,
-            vec![Field::string(ClientFieldId::Text, "hi")],
+            vec![Field::string(FieldId::FileNewName, "new.txt")],
         );
         let request_debug = format!("{request:?}");
-        assert!(request_debug.contains("HTLC_DATA_TEXT"));
-        assert!(!request_debug.contains("HTLS_DATA"));
+        assert!(request_debug.contains("myField_FileNewName"));
+        assert!(!request_debug.contains("(unrecognized field id)"));
 
-        let reply = request.reply(vec![Field::string(ServerFieldId::Text, "hi")]);
+        let reply = request.reply_error("boom");
         let reply_debug = format!("{reply:?}");
-        assert!(reply_debug.contains("HTLS_DATA"));
-        assert!(!reply_debug.contains("HTLC_DATA"));
+        assert!(reply_debug.contains("myField_ErrorText"));
+        assert!(!reply_debug.contains("(unrecognized field id)"));
     }
 }

@@ -9,7 +9,7 @@ use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
 use hotline_proto::consts::{Access, RequireFlags};
-use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
+use hotline_proto::field_id::FieldId;
 use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
 use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
@@ -99,7 +99,7 @@ pub struct Session {
     access: Access,
     /// Server-side-only account settings; no client opcode reads or sets them.
     access_extra: AccessExtra,
-    /// Client-reported protocol version (`HTLC_DATA_CLIENTVERSION`, field
+    /// Client-reported protocol version (`myField_Vers`, field
     /// 160) from login, `None` if it never sent one.
     client_version: Option<u16>,
     state: SessionState,
@@ -206,8 +206,8 @@ impl Session {
             let notify = Transaction::push(
                 ServerOpcode::ChatUserPart,
                 vec![
-                    Field::u32(ServerFieldId::ChatId, chat_id),
-                    Field::u16(ServerFieldId::UserId, session.user_id),
+                    Field::u32(FieldId::ChatId, chat_id),
+                    Field::u16(FieldId::UserId, session.user_id),
                 ],
             );
             for member in remaining {
@@ -216,7 +216,7 @@ impl Session {
         }
         let leave = Transaction::push(
             ServerOpcode::UserPart,
-            vec![Field::u16(ServerFieldId::UserId, session.user_id)],
+            vec![Field::u16(FieldId::UserId, session.user_id)],
         );
         state.publish(leave).await;
         Ok(())
@@ -275,7 +275,7 @@ impl Session {
                 if let Err(reason) = self.access_extra.require(AccessExtra::CAN_SPAM) {
                     return vec![Transaction::push(
                         ServerOpcode::Msg,
-                        vec![Field::string(ServerFieldId::Text, reason)],
+                        vec![Field::string(FieldId::Text, reason)],
                     )];
                 }
             }
@@ -401,13 +401,13 @@ impl Session {
         };
 
         let fields = vec![
-            Field::u16(ServerFieldId::Serverversion, 190),
-            Field::u16(ServerFieldId::Bannerid, 0),
-            Field::string(ServerFieldId::Servername, config.server_name.clone()),
+            Field::u16(FieldId::Version, 190),
+            Field::u16(FieldId::Bannerid, 0),
+            Field::string(FieldId::Servername, config.server_name.clone()),
         ];
         let mut replies = vec![tx.reply(fields)];
 
-        // No HTLC_DATA_CLIENTVERSION (160) counts as pre-150.
+        // No myField_Vers (160) counts as pre-150.
         let modern = self.client_version.unwrap_or(0) >= 150;
 
         // DONT_SHOW_AGREEMENT skips the real text, not just its display.
@@ -416,12 +416,12 @@ impl Session {
         if show_agreement && have_agreement {
             replies.push(Transaction::push(
                 ServerOpcode::Agreement,
-                vec![Field::string(ServerFieldId::Text, config.agreement.clone())],
+                vec![Field::string(FieldId::Text, config.agreement.clone())],
             ));
         } else if modern {
             replies.push(Transaction::push(
                 ServerOpcode::Agreement,
-                vec![Field::bytes(ServerFieldId::Noagreement, vec![0, 1])],
+                vec![Field::bytes(FieldId::Noagreement, vec![0, 1])],
             ));
         }
 
@@ -450,7 +450,7 @@ impl Session {
                 self.user_id,
                 Transaction::push(
                     ServerOpcode::Politequit,
-                    vec![Field::string(ServerFieldId::Text, reason)],
+                    vec![Field::string(FieldId::Text, reason)],
                 ),
             )
             .await;
@@ -491,8 +491,8 @@ impl Session {
         Transaction::push(
             ServerOpcode::UserSelfinfo,
             vec![
-                Field::u64(ServerFieldId::Access, self.access.bits()),
-                Field::bytes(ServerFieldId::UserList, self_entry.encode(self.encoding())),
+                Field::u64(FieldId::Access, self.access.bits()),
+                Field::bytes(FieldId::UserList, self_entry.encode(self.encoding())),
             ],
         )
     }
@@ -504,14 +504,14 @@ impl Session {
         }
         let icon = tx.icon().unwrap_or(0);
         let options = UserChangeOptions::from_bits_truncate(
-            tx.field(ClientFieldId::Options)
+            tx.field(FieldId::Options)
                 .and_then(Field::as_u16)
                 .unwrap_or(0),
         );
         self.refuses_pm = options.contains(UserChangeOptions::REFUSE_PM);
         self.refuses_chat = options.contains(UserChangeOptions::REFUSE_CHAT);
         self.automatic_response = options.contains(UserChangeOptions::AUTO_RESPONSE).then(|| {
-            tx.string(ClientFieldId::AutomaticResponse, encoding)
+            tx.string(FieldId::AutomaticResponse, encoding)
                 .filter(|text| !text.is_empty())
                 .unwrap_or_else(|| {
                     "I'm not able to respond right now. Please try later!".to_string()
@@ -547,10 +547,10 @@ impl Session {
         let notify = Transaction::push(
             ServerOpcode::UserChange,
             vec![
-                Field::u16(ServerFieldId::UserId, self.user_id),
-                Field::u16(ServerFieldId::Icon, icon),
-                Field::string(ServerFieldId::Name, self.name.clone()),
-                Field::u16(ServerFieldId::Color, self.user_flags().bits()),
+                Field::u16(FieldId::UserId, self.user_id),
+                Field::u16(FieldId::Icon, icon),
+                Field::string(FieldId::Name, self.name.clone()),
+                Field::u16(FieldId::Color, self.user_flags().bits()),
             ],
         );
         if exclude_self {
@@ -591,10 +591,10 @@ impl Session {
             .publish(Transaction::push(
                 ServerOpcode::UserChange,
                 vec![
-                    Field::u16(ServerFieldId::UserId, self.user_id),
-                    Field::u16(ServerFieldId::Icon, entry.icon),
-                    Field::string(ServerFieldId::Name, entry.name),
-                    Field::u16(ServerFieldId::Color, self.user_flags().bits()),
+                    Field::u16(FieldId::UserId, self.user_id),
+                    Field::u16(FieldId::Icon, entry.icon),
+                    Field::string(FieldId::Name, entry.name),
+                    Field::u16(FieldId::Color, self.user_flags().bits()),
                 ],
             ))
             .await;
@@ -627,14 +627,14 @@ impl Session {
             // Sent only to the denied client; CHAT_SEND has no reply mechanism.
             return vec![Transaction::push(
                 ServerOpcode::Msg,
-                vec![Field::string(ServerFieldId::Text, reason)],
+                vec![Field::string(FieldId::Text, reason)],
             )];
         }
 
-        let chat_id = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32);
-        let style = tx.field(ClientFieldId::Style).and_then(Field::as_u16);
+        let chat_id = tx.field(FieldId::ChatId).and_then(Field::as_u32);
+        let style = tx.field(FieldId::Style).and_then(Field::as_u16);
         let encoding = self.encoding();
-        let Some(message) = tx.string(ClientFieldId::Text, encoding) else {
+        let Some(message) = tx.string(FieldId::Text, encoding) else {
             return Vec::new();
         };
 
@@ -644,9 +644,9 @@ impl Session {
         } else {
             format!("\r{:>13}:  {message}", self.name)
         };
-        let mut fields = vec![Field::string(ServerFieldId::Text, text)];
+        let mut fields = vec![Field::string(FieldId::Text, text)];
         if let Some(chat_id) = chat_id {
-            fields.push(Field::u32(ServerFieldId::ChatId, chat_id));
+            fields.push(Field::u32(FieldId::ChatId, chat_id));
         }
         let relay = Transaction::push(ServerOpcode::Chat, fields);
 
@@ -681,7 +681,7 @@ impl Session {
                 flags: u.flags(),
                 name: u.name,
             })
-            .map(|entry| Field::bytes(ServerFieldId::UserList, entry.encode(encoding)))
+            .map(|entry| Field::bytes(FieldId::UserList, entry.encode(encoding)))
             .collect();
         vec![tx.reply(fields)]
     }
@@ -693,7 +693,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
+        let Some(target_id) = tx.field(FieldId::UserId).and_then(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
         let Some(target) = state.user(target_id).await else {
@@ -736,8 +736,8 @@ impl Session {
         );
 
         vec![tx.reply(vec![
-            Field::string(ServerFieldId::Text, text),
-            Field::string(ServerFieldId::Name, target.name),
+            Field::string(FieldId::Text, text),
+            Field::string(FieldId::Name, target.name),
         ])]
     }
 
@@ -750,14 +750,14 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let target_id = tx
-            .field(ClientFieldId::Uid)
+            .field(FieldId::UserId)
             .and_then(Field::as_u16)
             .unwrap_or(0);
         if let Err(reason) = state.authorize_kick(target_id).await {
             return vec![tx.reply_error(reason)];
         }
         let ban = KickBan::from(
-            tx.field(ClientFieldId::Options)
+            tx.field(FieldId::Options)
                 .and_then(Field::as_u16)
                 .unwrap_or(0),
         );
@@ -789,7 +789,7 @@ impl Session {
                         target_id,
                         Transaction::push(
                             ServerOpcode::Politequit,
-                            vec![Field::string(ServerFieldId::Text, reason)],
+                            vec![Field::string(FieldId::Text, reason)],
                         ),
                     )
                     .await;
@@ -807,15 +807,15 @@ impl Session {
                 return vec![tx.reply_error(reason)];
             }
         }
-        let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
+        let Some(target_id) = tx.field(FieldId::UserId).and_then(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
         let encoding = self.encoding();
-        let Some(message) = tx.string(ClientFieldId::Text, encoding) else {
+        let Some(message) = tx.string(FieldId::Text, encoding) else {
             return vec![tx.reply_error("missing message")];
         };
         let options = tx
-            .field(ClientFieldId::Options)
+            .field(FieldId::Options)
             .and_then(Field::as_u16)
             .unwrap_or(0);
         let is_user_message = MsgOption::from(options) == MsgOption::UserMessage;
@@ -832,14 +832,14 @@ impl Session {
         }
         if !target.is_some_and(|target| target.refuses_pm) {
             let mut fields = vec![
-                Field::u16(ServerFieldId::UserId, self.user_id),
-                Field::string(ServerFieldId::Name, self.name.clone()),
-                Field::u16(ServerFieldId::Options, options),
-                Field::string(ServerFieldId::Text, message),
+                Field::u16(FieldId::UserId, self.user_id),
+                Field::string(FieldId::Name, self.name.clone()),
+                Field::u16(FieldId::Options, options),
+                Field::string(FieldId::Text, message),
             ];
-            if let Some(quote) = tx.field(ClientFieldId::QuotingMsg) {
+            if let Some(quote) = tx.field(FieldId::QuotingMsg) {
                 fields.push(Field::bytes(
-                    ServerFieldId::QuotingMsg,
+                    FieldId::QuotingMsg,
                     quote.as_bytes(encoding).into_owned(),
                 ));
             }
@@ -885,10 +885,10 @@ impl Session {
         Some(Transaction::push(
             ServerOpcode::Msg,
             vec![
-                Field::u16(ServerFieldId::UserId, target_id),
-                Field::string(ServerFieldId::Name, target.name.clone()),
-                Field::u16(ServerFieldId::Options, option.into()),
-                Field::string(ServerFieldId::Text, text),
+                Field::u16(FieldId::UserId, target_id),
+                Field::string(FieldId::Name, target.name.clone()),
+                Field::u16(FieldId::Options, option.into()),
+                Field::string(FieldId::Text, text),
             ],
         ))
     }
@@ -899,7 +899,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
-        let Some(message) = tx.string(ClientFieldId::Text, encoding) else {
+        let Some(message) = tx.string(FieldId::Text, encoding) else {
             return vec![tx.reply_error("missing message")];
         };
 
@@ -909,9 +909,9 @@ impl Session {
                 Transaction::push(
                     ServerOpcode::MsgBroadcast,
                     vec![
-                        Field::u16(ServerFieldId::UserId, self.user_id),
-                        Field::string(ServerFieldId::Text, message),
-                        Field::string(ServerFieldId::Name, self.name.clone()),
+                        Field::u16(FieldId::UserId, self.user_id),
+                        Field::string(FieldId::Text, message),
+                        Field::string(FieldId::Name, self.name.clone()),
                     ],
                 ),
             )
@@ -932,7 +932,7 @@ impl Session {
         // FILE_PATH (202) is optional in the request; root is assumed
         // when absent.
         let encoding = self.encoding();
-        let dir = match tx.file_path(ClientFieldId::FilePath, encoding) {
+        let dir = match tx.file_path(FieldId::FilePath, encoding) {
             Some(Ok(dir)) => dir,
             Some(Err(_)) => return vec![tx.reply_error("bad path")],
             None => HlPath::default(),
@@ -944,7 +944,7 @@ impl Session {
         };
         let fields = entries
             .into_iter()
-            .map(|entry| Field::bytes(ServerFieldId::FileList, entry.encode(encoding)))
+            .map(|entry| Field::bytes(FieldId::FileList, entry.encode(encoding)))
             .collect();
         vec![tx.reply(fields)]
     }
@@ -954,7 +954,7 @@ impl Session {
     fn path_field(
         &self,
         tx: &Transaction,
-        id: ClientFieldId,
+        id: FieldId,
     ) -> std::result::Result<HlPath, &'static str> {
         let encoding = self.encoding();
         match tx
@@ -974,9 +974,9 @@ impl Session {
     ) -> std::result::Result<(String, HlPath), &'static str> {
         let encoding = self.encoding();
         let name = tx
-            .string(ClientFieldId::FileName, encoding)
+            .string(FieldId::FileName, encoding)
             .ok_or("missing file name")?;
-        let dir = self.path_field(tx, ClientFieldId::FilePath)?;
+        let dir = self.path_field(tx, FieldId::FilePath)?;
         Ok((name, dir))
     }
 
@@ -987,10 +987,10 @@ impl Session {
         &self,
         tx: &Transaction,
     ) -> std::result::Result<(String, HlPath), &'static str> {
-        if tx.field(ClientFieldId::FileName).is_some() {
+        if tx.field(FieldId::FileName).is_some() {
             return self.file_name_and_dir(tx);
         }
-        let path = self.path_field(tx, ClientFieldId::FilePath)?;
+        let path = self.path_field(tx, FieldId::FilePath)?;
         let (name, dir) = path
             .components
             .split_last()
@@ -1001,7 +1001,7 @@ impl Session {
     /// 202: start a download. Allocates a transfer reference and tells
     /// the client the total byte count (flattened-object overhead plus
     /// the file's own bytes) to expect on the data connection. A client
-    /// resuming an interrupted download sends `HTLC_DATA_RFLT` (203) with
+    /// resuming an interrupted download sends `myField_FileResumeData` (203) with
     /// the byte count it already has; that portion of the data fork is
     /// skipped, though the flattened-object header is always resent.
     async fn on_file_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
@@ -1020,7 +1020,7 @@ impl Session {
         };
 
         let encoding = self.encoding();
-        let resume_offset = match tx.field(ClientFieldId::ResumeFileTransfer) {
+        let resume_offset = match tx.field(FieldId::ResumeFileTransfer) {
             Some(field) => match hotline_proto::htxf::decode_resume_data(&field.as_bytes(encoding))
             {
                 Ok(already_have) => (already_have as u64).min(data_size),
@@ -1044,9 +1044,9 @@ impl Session {
             .await;
 
         vec![tx.reply(vec![
-            Field::u32(ServerFieldId::TransferId, reference),
-            Field::u32(ServerFieldId::TransferSize, total_size as u32),
-            Field::u32(ServerFieldId::FileSize, data_size as u32),
+            Field::u32(FieldId::TransferId, reference),
+            Field::u32(FieldId::TransferSize, total_size as u32),
+            Field::u32(FieldId::FileSize, data_size as u32),
         ])]
     }
 
@@ -1072,7 +1072,7 @@ impl Session {
         }
 
         let size = tx
-            .field(ClientFieldId::TransferSize)
+            .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap_or(0);
         let reference = state
@@ -1087,7 +1087,7 @@ impl Session {
             })
             .await;
 
-        vec![tx.reply(vec![Field::u32(ServerFieldId::TransferId, reference)])]
+        vec![tx.reply(vec![Field::u32(FieldId::TransferId, reference)])]
     }
 
     /// 204: delete a file, or a folder and everything under it.
@@ -1150,12 +1150,12 @@ impl Session {
         .encode()
         .to_vec();
         let mut fields = vec![
-            Field::string(ServerFieldId::FileName, info.name),
-            Field::u32(ServerFieldId::FileSize, info.size),
-            Field::bytes(ServerFieldId::FileDateModify, zero_date),
+            Field::string(FieldId::FileName, info.name),
+            Field::u32(FieldId::FileSize, info.size),
+            Field::bytes(FieldId::FileDateModify, zero_date),
         ];
         if let Some(comment) = comment {
-            fields.push(Field::string(ServerFieldId::FileComment, comment));
+            fields.push(Field::string(FieldId::FileComment, comment));
         }
         vec![tx.reply(fields)]
     }
@@ -1169,8 +1169,8 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let encoding = self.encoding();
-        let new_name = tx.string(ClientFieldId::FileNewName, encoding);
-        let comment = tx.string(ClientFieldId::FileComment, encoding);
+        let new_name = tx.string(FieldId::FileNewName, encoding);
+        let comment = tx.string(FieldId::FileComment, encoding);
         if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
         }
@@ -1202,7 +1202,7 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let to_dir = match self.path_field(tx, ClientFieldId::FileNewPath) {
+        let to_dir = match self.path_field(tx, FieldId::FileNewPath) {
             Ok(dir) => dir,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1225,13 +1225,13 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let link_dir = match self.path_field(tx, ClientFieldId::FileNewPath) {
+        let link_dir = match self.path_field(tx, FieldId::FileNewPath) {
             Ok(dir) => dir,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let encoding = self.encoding();
         let link_name = tx
-            .string(ClientFieldId::FileNewName, encoding)
+            .string(FieldId::FileNewName, encoding)
             .unwrap_or_else(|| name.clone());
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
@@ -1249,7 +1249,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let news = state.news().await;
-        vec![tx.reply(vec![Field::string(ServerFieldId::Text, news)])]
+        vec![tx.reply(vec![Field::string(FieldId::Text, news)])]
     }
 
     /// 103: post to the classic (non-threaded) news.
@@ -1258,7 +1258,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
-        let Some((text, len)) = tx.string_len(ClientFieldId::Text, encoding) else {
+        let Some((text, len)) = tx.string_len(FieldId::Text, encoding) else {
             return vec![tx.reply_error("missing post text")];
         };
         if len > 8192 {
@@ -1269,13 +1269,13 @@ impl Session {
         state
             .publish(Transaction::push(
                 ServerOpcode::NewsfilePost,
-                vec![Field::string(ServerFieldId::Text, entry)],
+                vec![Field::string(FieldId::Text, entry)],
             ))
             .await;
         vec![tx.reply(vec![])]
     }
 
-    /// A `HTLC_DATA_NEWS_DIR` (325) field, decoded, or root if absent.
+    /// A `myField_NewsPath` (325) field, decoded, or root if absent.
     fn news_path(&self, tx: &Transaction) -> std::result::Result<HlPath, &'static str> {
         let encoding = self.encoding();
         match tx.news_path(encoding) {
@@ -1299,7 +1299,7 @@ impl Session {
         let mut fields = Vec::with_capacity(entries.len());
         for entry in entries {
             match entry.encode(encoding) {
-                Ok(bytes) => fields.push(Field::bytes(ServerFieldId::NewsDirlistExtended, bytes)),
+                Ok(bytes) => fields.push(Field::bytes(FieldId::NewsDirlistExtended, bytes)),
                 Err(_) => return vec![tx.reply_error("news listing too large to encode")],
             }
         }
@@ -1324,7 +1324,7 @@ impl Session {
             Ok(bytes) => bytes,
             Err(_) => return vec![tx.reply_error("news listing too large to encode")],
         };
-        vec![tx.reply(vec![Field::bytes(ServerFieldId::NewsCatlist, bytes)])]
+        vec![tx.reply(vec![Field::bytes(FieldId::NewsArtListData, bytes)])]
     }
 
     /// 380: delete a threaded news bundle or category.
@@ -1345,7 +1345,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
-        let Some(name) = tx.string(ClientFieldId::FileName, encoding) else {
+        let Some(name) = tx.string(FieldId::FileName, encoding) else {
             return vec![tx.reply_error("missing name")];
         };
         let path = match self.news_path(tx) {
@@ -1395,24 +1395,24 @@ impl Session {
         };
 
         let mut fields = vec![
-            Field::string(ServerFieldId::NewsSubject, detail.title),
-            Field::string(ServerFieldId::NewsPoster, detail.poster),
-            Field::bytes(ServerFieldId::NewsDate, detail.date.encode().to_vec()),
-            Field::u32(ServerFieldId::NewsPrevthreadid, detail.prev_id),
-            Field::u32(ServerFieldId::NewsNextthreadid, detail.next_id),
-            Field::u32(ServerFieldId::NewsParentthreadid, detail.parent_id),
-            Field::u32(ServerFieldId::NewsNextsubthreadid, detail.first_child_id),
+            Field::string(FieldId::NewsArtTitle, detail.title),
+            Field::string(FieldId::NewsArtPoster, detail.poster),
+            Field::bytes(FieldId::NewsArtDate, detail.date.encode().to_vec()),
+            Field::u32(FieldId::NewsArtPrevArt, detail.prev_id),
+            Field::u32(FieldId::NewsArtNextArt, detail.next_id),
+            Field::u32(FieldId::NewsArtParentArt, detail.parent_id),
+            Field::u32(FieldId::NewsArt1stChildArt, detail.first_child_id),
         ];
         // The reply always echoes back the requested flavor, but only
         // includes the article body when it matches what's stored.
         let encoding = self.encoding();
         let requested_flavor = tx.news_article_flavor(encoding).unwrap_or_default();
         fields.push(Field::string(
-            ServerFieldId::NewsMimetype,
+            FieldId::NewsArtDataFlavor,
             requested_flavor.clone(),
         ));
         if requested_flavor == detail.flavor {
-            fields.push(Field::bytes(ServerFieldId::NewsPost, detail.data));
+            fields.push(Field::bytes(FieldId::NewsArtData, detail.data));
         }
         vec![tx.reply(fields)]
     }
@@ -1488,7 +1488,7 @@ impl Session {
             return tx.reply_error(reason);
         }
         let target_ids: Vec<u16> = tx
-            .fields(ClientFieldId::Uid)
+            .fields(FieldId::UserId)
             .filter_map(Field::as_u16)
             .collect();
         if target_ids.is_empty() {
@@ -1512,20 +1512,20 @@ impl Session {
                     Transaction::push(
                         ServerOpcode::ChatInvite,
                         vec![
-                            Field::u32(ServerFieldId::ChatId, chat_id),
-                            Field::u16(ServerFieldId::UserId, self.user_id),
-                            Field::string(ServerFieldId::Name, self.name.clone()),
+                            Field::u32(FieldId::ChatId, chat_id),
+                            Field::u16(FieldId::UserId, self.user_id),
+                            Field::string(FieldId::Name, self.name.clone()),
                         ],
                     ),
                 )
                 .await;
         }
         tx.reply(vec![
-            Field::u32(ServerFieldId::ChatId, chat_id),
-            Field::u16(ServerFieldId::UserId, self.user_id),
-            Field::u16(ServerFieldId::Icon, icon),
-            Field::u16(ServerFieldId::Color, self.user_flags().bits()),
-            Field::string(ServerFieldId::Name, self.name.clone()),
+            Field::u32(FieldId::ChatId, chat_id),
+            Field::u16(FieldId::UserId, self.user_id),
+            Field::u16(FieldId::Icon, icon),
+            Field::u16(FieldId::Color, self.user_flags().bits()),
+            Field::string(FieldId::Name, self.name.clone()),
         ])
     }
 
@@ -1535,11 +1535,11 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let chat_id = tx
-            .field(ClientFieldId::ChatId)
+            .field(FieldId::ChatId)
             .and_then(Field::as_u32)
             .unwrap_or(0);
         let target_id = tx
-            .field(ClientFieldId::Uid)
+            .field(FieldId::UserId)
             .and_then(Field::as_u16)
             .unwrap_or(0);
         if chat_id == 0 || target_id == 0 {
@@ -1564,9 +1564,9 @@ impl Session {
                         Transaction::push(
                             ServerOpcode::ChatInvite,
                             vec![
-                                Field::u32(ServerFieldId::ChatId, chat_id),
-                                Field::u16(ServerFieldId::UserId, self.user_id),
-                                Field::string(ServerFieldId::Name, self.name.clone()),
+                                Field::u32(FieldId::ChatId, chat_id),
+                                Field::u16(FieldId::UserId, self.user_id),
+                                Field::string(FieldId::Name, self.name.clone()),
                             ],
                         ),
                     )
@@ -1582,13 +1582,11 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return tx.reply_error(reason);
         }
-        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
+        let Some(chat_id) = tx.field(FieldId::ChatId).and_then(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
         let encoding = self.encoding();
-        let password = tx
-            .string(ClientFieldId::Password, encoding)
-            .unwrap_or_default();
+        let password = tx.string(FieldId::Password, encoding).unwrap_or_default();
         if let Err(reason) = state.join_chat_room(chat_id, self.user_id, &password).await {
             return tx.reply_error(reason);
         }
@@ -1597,11 +1595,11 @@ impl Session {
         let notify = Transaction::push(
             ServerOpcode::ChatUserChange,
             vec![
-                Field::u32(ServerFieldId::ChatId, chat_id),
-                Field::u16(ServerFieldId::UserId, self.user_id),
-                Field::u16(ServerFieldId::Icon, icon),
-                Field::u16(ServerFieldId::Color, self.user_flags().bits()),
-                Field::string(ServerFieldId::Name, self.name.clone()),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::u16(FieldId::UserId, self.user_id),
+                Field::u16(FieldId::Icon, icon),
+                Field::u16(FieldId::Color, self.user_flags().bits()),
+                Field::string(FieldId::Name, self.name.clone()),
             ],
         );
 
@@ -1613,7 +1611,7 @@ impl Session {
             }
             if let Some(entry) = state.user(member_id).await {
                 fields.push(Field::bytes(
-                    ServerFieldId::UserList,
+                    FieldId::UserList,
                     UserNameWithInfo {
                         user_id: entry.user_id,
                         icon: entry.icon,
@@ -1624,7 +1622,7 @@ impl Session {
                 ));
             }
         }
-        fields.push(Field::string(ServerFieldId::ChatSubject, room.subject));
+        fields.push(Field::string(FieldId::ChatSubject, room.subject));
         tx.reply(fields)
     }
 
@@ -1633,7 +1631,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
+        let Some(chat_id) = tx.field(FieldId::ChatId).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
         let remaining = state.chat_room_members(chat_id).await.unwrap_or_default();
@@ -1642,8 +1640,8 @@ impl Session {
         let notify = Transaction::push(
             ServerOpcode::ChatUserPart,
             vec![
-                Field::u32(ServerFieldId::ChatId, chat_id),
-                Field::u16(ServerFieldId::UserId, self.user_id),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::u16(FieldId::UserId, self.user_id),
             ],
         );
         for member in remaining.into_iter().filter(|&m| m != self.user_id) {
@@ -1657,17 +1655,17 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return vec![tx.reply_error(reason)];
         }
-        if let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) {
+        if let Some(chat_id) = tx.field(FieldId::ChatId).and_then(Field::as_u32) {
             state.invite_declined(chat_id, self.user_id).await;
             if let Some(members) = state.chat_room_members(chat_id).await {
                 let notify = Transaction::push(
                     ServerOpcode::Chat,
                     vec![
                         Field::string(
-                            ServerFieldId::Text,
+                            FieldId::Text,
                             format!("\r<<< \"{}\" declined invitation to chat >>>", self.name),
                         ),
-                        Field::u32(ServerFieldId::ChatId, chat_id),
+                        Field::u32(FieldId::ChatId, chat_id),
                     ],
                 );
                 for member in members {
@@ -1683,12 +1681,12 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
+        let Some(chat_id) = tx.field(FieldId::ChatId).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
         let encoding = self.encoding();
-        let subject = tx.string(ClientFieldId::ChatSubject, encoding);
-        let password = tx.string(ClientFieldId::Password, encoding);
+        let subject = tx.string(FieldId::ChatSubject, encoding);
+        let password = tx.string(FieldId::Password, encoding);
         if subject.is_none() && password.is_none() {
             return vec![tx.reply_error("missing subject or password")];
         }
@@ -1707,7 +1705,7 @@ impl Session {
                 state,
                 chat_id,
                 is_global,
-                Field::string(ServerFieldId::ChatSubject, subject),
+                Field::string(FieldId::ChatSubject, subject),
             )
             .await;
         }
@@ -1717,7 +1715,7 @@ impl Session {
                 state,
                 chat_id,
                 is_global,
-                Field::string(ServerFieldId::Password, password),
+                Field::string(FieldId::Password, password),
             )
             .await;
         }
@@ -1735,7 +1733,7 @@ impl Session {
     ) {
         let notify = Transaction::push(
             ServerOpcode::ChatSubject,
-            vec![Field::u32(ServerFieldId::ChatId, chat_id), field],
+            vec![Field::u32(FieldId::ChatId, chat_id), field],
         );
         if is_global {
             state.publish(notify).await;
@@ -1782,7 +1780,7 @@ impl Session {
                     Transaction::push(
                         ServerOpcode::Politequit,
                         vec![Field::string(
-                            ServerFieldId::Text,
+                            FieldId::Text,
                             "You are logged in with an account which was deleted.",
                         )],
                     ),
@@ -1797,7 +1795,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
-        let Some(login) = tx.string(ClientFieldId::Login, encoding) else {
+        let Some(login) = tx.string(FieldId::Login, encoding) else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
@@ -1805,10 +1803,10 @@ impl Session {
             return vec![tx.reply_error("no such account")];
         };
         vec![tx.reply(vec![
-            Field::string(ServerFieldId::Name, account.name),
-            Field::obfuscated_string(ServerFieldId::Login, login),
+            Field::string(FieldId::Name, account.name),
+            Field::obfuscated_string(FieldId::Login, login),
             Self::redacted_password_field(&account.password),
-            Field::u64(ServerFieldId::Access, account.access.bits()),
+            Field::u64(FieldId::Access, account.access.bits()),
         ])]
     }
 
@@ -1835,7 +1833,7 @@ impl Session {
         let login = login.to_lowercase();
         let existing = state.account(&login).await;
         // Absent PASSWORD clears it; raw byte 0x00 means unchanged.
-        let password = match tx.field(ClientFieldId::Password) {
+        let password = match tx.field(FieldId::Password) {
             Some(field) if field.as_bytes(encoding).as_ref() == [0u8] => existing
                 .as_ref()
                 .map(|a| a.password.clone())
@@ -1881,7 +1879,7 @@ impl Session {
     /// a single `x` otherwise, so the real password is never echoed.
     fn redacted_password_field(password: &str) -> Field {
         Field::string(
-            ServerFieldId::Password,
+            FieldId::Password,
             if password.is_empty() { "" } else { "x" },
         )
     }
@@ -1902,16 +1900,16 @@ impl Session {
             .filter_map(|(login, account)| {
                 Transaction::encode_field_list(
                     &[
-                        Field::string(ServerFieldId::Name, account.name),
-                        Field::obfuscated_string(ServerFieldId::Login, login),
+                        Field::string(FieldId::Name, account.name),
+                        Field::obfuscated_string(FieldId::Login, login),
                         Self::redacted_password_field(&account.password),
-                        Field::u64(ServerFieldId::Access, account.access.bits()),
+                        Field::u64(FieldId::Access, account.access.bits()),
                     ],
                     encoding,
                 )
                 .ok()
             })
-            .map(|record| Field::bytes(ServerFieldId::Text, record))
+            .map(|record| Field::bytes(FieldId::Text, record))
             .collect();
         vec![tx.reply(fields)]
     }
@@ -1926,7 +1924,7 @@ impl Session {
     async fn on_set_user_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let encoding = self.encoding();
         let mut save_error = false;
-        for field in tx.fields(ClientFieldId::Text) {
+        for field in tx.fields(FieldId::Text) {
             let Ok(record) = Transaction::decode_field_list(&field.as_bytes(encoding)) else {
                 save_error = true;
                 continue;
@@ -1961,15 +1959,13 @@ impl Session {
         let encoding = self.encoding();
         let as_deobfuscated_string = |f: &Field| f.as_deobfuscated_string(encoding);
         let old_login = record
-            .field(ClientFieldId::Text)
+            .field(FieldId::Text)
             .map(as_deobfuscated_string)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_lowercase());
-        let name = record
-            .string(ClientFieldId::Name, encoding)
-            .unwrap_or_default();
+        let name = record.string(FieldId::Name, encoding).unwrap_or_default();
         let login = record
-            .field(ClientFieldId::Login)
+            .field(FieldId::Login)
             .map(as_deobfuscated_string)
             .unwrap_or_default()
             .to_lowercase();
@@ -1988,7 +1984,7 @@ impl Session {
             };
         }
 
-        let password = match record.field(ClientFieldId::Password) {
+        let password = match record.field(FieldId::Password) {
             Some(f) if f.as_bytes(encoding).as_ref() == [0u8] => {
                 let Some(old_login) = &old_login else {
                     return Ok(false);
@@ -2002,7 +1998,7 @@ impl Session {
             None => String::new(),
         };
         let access = record
-            .field(ClientFieldId::Access)
+            .field(FieldId::Access)
             .and_then(Field::as_u64)
             .map(Access::from_bits_truncate)
             .unwrap_or_else(Access::empty);
@@ -2043,7 +2039,7 @@ impl Session {
                     Transaction::push(
                         ServerOpcode::Msg,
                         vec![Field::string(
-                            ServerFieldId::Text,
+                            FieldId::Text,
                             format!(
                                 "Cannot create account \"{login}\" because there is already an account with that login."
                             ),
@@ -2205,7 +2201,7 @@ mod tests {
 
         let reply = &session.on_user_get_list(&request, &state).await[0];
         let entry = reply
-            .field(ServerFieldId::UserList)
+            .field(FieldId::UserList)
             .map(|f| UserNameWithInfo::decode(&f.as_bytes(sjis), sjis).unwrap())
             .expect("expected bob's user list entry");
         assert_eq!(entry.name, konnichiwa);
@@ -2237,13 +2233,13 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::UserGetinfo,
             1,
-            vec![Field::u16(ClientFieldId::Uid, 2)],
+            vec![Field::u16(FieldId::UserId, 2)],
         );
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
-        assert_eq!(reply.string(ServerFieldId::Name, encoding).unwrap(), "Bob");
-        assert!(reply.field(ServerFieldId::UserId).is_none());
-        let text = reply.string(ServerFieldId::Text, encoding).unwrap();
+        assert_eq!(reply.string(FieldId::Name, encoding).unwrap(), "Bob");
+        assert!(reply.field(FieldId::UserId).is_none());
+        let text = reply.string(FieldId::Text, encoding).unwrap();
         assert!(text.contains("Nickname:   Bob"));
         assert!(text.contains("Name:       Bobby"));
         assert!(text.contains("Account:    bob"));
@@ -2285,11 +2281,11 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::UserGetinfo,
             1,
-            vec![Field::u16(ClientFieldId::Uid, 2)],
+            vec![Field::u16(FieldId::UserId, 2)],
         );
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
-        let text = reply.string(ServerFieldId::Text, encoding).unwrap();
+        let text = reply.string(FieldId::Text, encoding).unwrap();
         assert!(text.contains("Account:    (guest)"));
         assert!(text.contains("Name:       (none)"));
         assert!(!text.contains("Version:"));
@@ -2303,7 +2299,7 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::Chat,
             1,
-            vec![Field::string(ClientFieldId::Text, "hi")],
+            vec![Field::string(FieldId::Text, "hi")],
         );
 
         let mut rx = state.register_recipient(1).await;
@@ -2314,7 +2310,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
-            .string(ServerFieldId::Text, encoding)
+            .string(FieldId::Text, encoding)
             .unwrap();
         assert_eq!(text, "\r        Alice:  hi");
     }
@@ -2328,8 +2324,8 @@ mod tests {
             ClientOpcode::Chat,
             1,
             vec![
-                Field::string(ClientFieldId::Text, "waves"),
-                Field::u16(ClientFieldId::Style, 1),
+                Field::string(FieldId::Text, "waves"),
+                Field::u16(FieldId::Style, 1),
             ],
         );
 
@@ -2341,7 +2337,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
-            .string(ServerFieldId::Text, encoding)
+            .string(FieldId::Text, encoding)
             .unwrap();
         assert_eq!(text, "\r *** Alice waves");
     }
@@ -2355,8 +2351,8 @@ mod tests {
             ClientOpcode::Chat,
             1,
             vec![
-                Field::string(ClientFieldId::Text, "hi"),
-                Field::u16(ClientFieldId::Style, 0),
+                Field::string(FieldId::Text, "hi"),
+                Field::u16(FieldId::Style, 0),
             ],
         );
 
@@ -2368,7 +2364,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
-            .string(ServerFieldId::Text, encoding)
+            .string(FieldId::Text, encoding)
             .unwrap();
         assert_eq!(text, "\r        Alice:  hi");
     }
@@ -2383,9 +2379,7 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0]
-                .field(ServerFieldId::Serverversion)
-                .and_then(Field::as_u16),
+            replies[0].field(FieldId::Version).and_then(Field::as_u16),
             Some(190)
         );
     }
@@ -2400,9 +2394,7 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0]
-                .field(ServerFieldId::Bannerid)
-                .and_then(Field::as_u16),
+            replies[0].field(FieldId::Bannerid).and_then(Field::as_u16),
             Some(0)
         );
     }
@@ -2421,7 +2413,7 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].string(ServerFieldId::Servername, encoding),
+            replies[0].string(FieldId::Servername, encoding),
             Some(String::new())
         );
     }
@@ -2440,8 +2432,8 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::string(ClientFieldId::Name, "Alice"),
-                Field::u16(ClientFieldId::Icon, 42),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -2451,12 +2443,9 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
+        assert_eq!(notify.string(FieldId::Name, encoding).unwrap(), "Alice");
         assert_eq!(
-            notify.string(ServerFieldId::Name, encoding).unwrap(),
-            "Alice"
-        );
-        assert_eq!(
-            notify.field(ServerFieldId::Icon).and_then(Field::as_u16),
+            notify.field(FieldId::Icon).and_then(Field::as_u16),
             Some(42)
         );
         assert!(
@@ -2492,8 +2481,8 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "alice"),
-                Field::obfuscated_string(ClientFieldId::Password, "hunter2"),
+                Field::obfuscated_string(FieldId::Login, "alice"),
+                Field::obfuscated_string(FieldId::Password, "hunter2"),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -2524,8 +2513,8 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "ALICE"),
-                Field::obfuscated_string(ClientFieldId::Password, "hunter2"),
+                Field::obfuscated_string(FieldId::Login, "ALICE"),
+                Field::obfuscated_string(FieldId::Password, "hunter2"),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -2555,7 +2544,7 @@ mod tests {
         let login = Transaction::request(
             ClientOpcode::Login,
             1,
-            vec![Field::obfuscated_string(ClientFieldId::Login, "alice")],
+            vec![Field::obfuscated_string(FieldId::Login, "alice")],
         );
         session.on_login(&login, &state, &config).await;
 
@@ -2585,8 +2574,8 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "alice"),
-                Field::obfuscated_string(ClientFieldId::Password, "wrong"),
+                Field::obfuscated_string(FieldId::Login, "alice"),
+                Field::obfuscated_string(FieldId::Password, "wrong"),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
@@ -2625,8 +2614,8 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "alice"),
-                Field::obfuscated_string(ClientFieldId::Password, "anything"),
+                Field::obfuscated_string(FieldId::Login, "alice"),
+                Field::obfuscated_string(FieldId::Password, "anything"),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
@@ -2644,7 +2633,7 @@ mod tests {
         let login = Transaction::request(
             ClientOpcode::Login,
             1,
-            vec![Field::obfuscated_string(ClientFieldId::Login, "nobody")],
+            vec![Field::obfuscated_string(FieldId::Login, "nobody")],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
@@ -2679,7 +2668,7 @@ mod tests {
         let login = Transaction::request(
             ClientOpcode::Login,
             1,
-            vec![Field::u16(ClientFieldId::Version, 151)],
+            vec![Field::u16(FieldId::Version, 151)],
         );
         session.on_login(&login, &state, &config).await;
 
@@ -2690,8 +2679,8 @@ mod tests {
             ClientOpcode::Agreed,
             2,
             vec![
-                Field::string(ClientFieldId::Name, "Alice"),
-                Field::u16(ClientFieldId::Icon, 42),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
             ],
         );
         session.on_agreed(&agreed, &state).await;
@@ -2701,10 +2690,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("agreed should announce a join");
-        assert_eq!(
-            notify.string(ServerFieldId::Name, encoding).unwrap(),
-            "Alice"
-        );
+        assert_eq!(notify.string(FieldId::Name, encoding).unwrap(), "Alice");
         assert!(matches!(session.state, SessionState::Joined));
     }
 
@@ -2739,8 +2725,8 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::u16(ClientFieldId::Version, 151),
-                Field::string(ClientFieldId::Name, "Alice"),
+                Field::u16(FieldId::Version, 151),
+                Field::string(FieldId::Name, "Alice"),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -2764,9 +2750,9 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::u16(ClientFieldId::Version, 151),
-                Field::string(ClientFieldId::Name, "Alice"),
-                Field::u16(ClientFieldId::Icon, 42),
+                Field::u16(FieldId::Version, 151),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -2790,7 +2776,7 @@ mod tests {
         let login = Transaction::request(
             ClientOpcode::Login,
             1,
-            vec![Field::u16(ClientFieldId::Version, 151)],
+            vec![Field::u16(FieldId::Version, 151)],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
@@ -2798,7 +2784,7 @@ mod tests {
             .iter()
             .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement))
             .expect("modern client should get a Noagreement marker");
-        assert!(agreement.field(ServerFieldId::Noagreement).is_some());
+        assert!(agreement.field(FieldId::Noagreement).is_some());
     }
 
     #[tokio::test]
@@ -2846,8 +2832,8 @@ mod tests {
             ClientOpcode::Login,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "skipper"),
-                Field::u16(ClientFieldId::Version, 151),
+                Field::obfuscated_string(FieldId::Login, "skipper"),
+                Field::u16(FieldId::Version, 151),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
@@ -2857,10 +2843,10 @@ mod tests {
             .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement))
             .expect("modern client still gets a no-agreement marker");
         assert!(
-            agreement.field(ServerFieldId::Noagreement).is_some(),
+            agreement.field(FieldId::Noagreement).is_some(),
             "DONT_SHOW_AGREEMENT must skip the real text, not just its display"
         );
-        assert!(agreement.field(ServerFieldId::Text).is_none());
+        assert!(agreement.field(FieldId::Text).is_none());
     }
 
     #[tokio::test]
@@ -2887,7 +2873,7 @@ mod tests {
         let login = Transaction::request(
             ClientOpcode::Login,
             1,
-            vec![Field::obfuscated_string(ClientFieldId::Login, "skipper")],
+            vec![Field::obfuscated_string(FieldId::Login, "skipper")],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
@@ -2921,7 +2907,7 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::Chat,
             1,
-            vec![Field::string(ClientFieldId::Text, "hi")],
+            vec![Field::string(FieldId::Text, "hi")],
         );
         let replies = session.handle(&request, &state, &config).await;
         assert_eq!(replies.len(), 1);
@@ -2938,8 +2924,8 @@ mod tests {
             ClientOpcode::Agreed,
             1,
             vec![
-                Field::string(ClientFieldId::Name, "Alice"),
-                Field::u16(ClientFieldId::Icon, 42),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
             ],
         );
         let replies = session.on_agreed(&agreed, &state).await;
@@ -2949,7 +2935,7 @@ mod tests {
             .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::UserSelfinfo))
             .expect("on_agreed should push UserSelfinfo");
         let entry = selfinfo
-            .field(ServerFieldId::UserList)
+            .field(FieldId::UserList)
             .and_then(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding).ok())
             .expect("UserSelfinfo should carry the joiner's own UserList entry");
         assert_eq!(entry.user_id, 1); // test_session()'s fixed user_id
@@ -2966,8 +2952,8 @@ mod tests {
             ClientOpcode::Agreed,
             1,
             vec![
-                Field::string(ClientFieldId::Name, "Alice"),
-                Field::u16(ClientFieldId::Icon, 42),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
             ],
         );
         let replies = session.on_agreed(&agreed, &state).await;
@@ -2977,9 +2963,7 @@ mod tests {
             .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::UserSelfinfo))
             .expect("on_agreed should push UserSelfinfo");
         assert_eq!(
-            selfinfo
-                .field(ServerFieldId::Access)
-                .and_then(Field::as_u64),
+            selfinfo.field(FieldId::Access).and_then(Field::as_u64),
             Some(Access::DOWNLOAD_FILE.bits())
         );
     }
@@ -3008,7 +2992,7 @@ mod tests {
         let login = Transaction::request(
             ClientOpcode::Login,
             1,
-            vec![Field::string(ClientFieldId::Name, "Mod")],
+            vec![Field::string(FieldId::Name, "Mod")],
         );
         session.on_login(&login, &state, &config).await;
 
@@ -3018,7 +3002,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
         let color = notify
-            .field(ServerFieldId::Color)
+            .field(FieldId::Color)
             .and_then(Field::as_u16)
             .unwrap_or(0);
         assert!(
@@ -3057,7 +3041,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a UserChange push")
-            .field(ServerFieldId::Color)
+            .field(FieldId::Color)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
             .unwrap_or_else(UserFlags::empty);
@@ -3069,7 +3053,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a UserChange push")
-            .field(ServerFieldId::Color)
+            .field(FieldId::Color)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
             .unwrap_or_else(UserFlags::empty);
@@ -3100,10 +3084,10 @@ mod tests {
             ClientOpcode::UserChange,
             1,
             vec![
-                Field::string(ClientFieldId::Name, "Alice".to_string()),
-                Field::u16(ClientFieldId::Icon, 0),
+                Field::string(FieldId::Name, "Alice".to_string()),
+                Field::u16(FieldId::Icon, 0),
                 Field::u16(
-                    ClientFieldId::Options,
+                    FieldId::Options,
                     (UserChangeOptions::REFUSE_PM | UserChangeOptions::REFUSE_CHAT).bits(),
                 ),
             ],
@@ -3126,13 +3110,10 @@ mod tests {
             ClientOpcode::UserChange,
             1,
             vec![
-                Field::string(ClientFieldId::Name, "Alice".to_string()),
-                Field::u16(ClientFieldId::Icon, 0),
-                Field::u16(
-                    ClientFieldId::Options,
-                    UserChangeOptions::AUTO_RESPONSE.bits(),
-                ),
-                Field::string(ClientFieldId::AutomaticResponse, "Back in five."),
+                Field::string(FieldId::Name, "Alice".to_string()),
+                Field::u16(FieldId::Icon, 0),
+                Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
+                Field::string(FieldId::AutomaticResponse, "Back in five."),
             ],
         );
         session.on_user_change(&request, &state).await;
@@ -3149,12 +3130,9 @@ mod tests {
             ClientOpcode::UserChange,
             1,
             vec![
-                Field::string(ClientFieldId::Name, "Alice".to_string()),
-                Field::u16(ClientFieldId::Icon, 0),
-                Field::u16(
-                    ClientFieldId::Options,
-                    UserChangeOptions::AUTO_RESPONSE.bits(),
-                ),
+                Field::string(FieldId::Name, "Alice".to_string()),
+                Field::u16(FieldId::Icon, 0),
+                Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
             ],
         );
         session.on_user_change(&request, &state).await;
@@ -3174,14 +3152,14 @@ mod tests {
         let post = Transaction::request(
             ClientOpcode::NewsfilePost,
             1,
-            vec![Field::string(ClientFieldId::Text, "hello news")],
+            vec![Field::string(FieldId::Text, "hello news")],
         );
         session.on_newsfile_post(&post, &state).await;
 
         let get = Transaction::request(ClientOpcode::NewsfileGet, 2, vec![]);
         let reply = session.on_newsfile_get(&get, &state).await;
         let [reply] = reply.try_into().unwrap();
-        let news = reply.string(ServerFieldId::Text, encoding).unwrap();
+        let news = reply.string(FieldId::Text, encoding).unwrap();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
     }
@@ -3194,7 +3172,7 @@ mod tests {
         let post = Transaction::request(
             ClientOpcode::NewsfilePost,
             1,
-            vec![Field::string(ClientFieldId::Text, "hello news")],
+            vec![Field::string(FieldId::Text, "hello news")],
         );
         session.on_newsfile_post(&post, &state).await;
 
@@ -3219,14 +3197,14 @@ mod tests {
         let post = Transaction::request(
             ClientOpcode::NewsfilePost,
             1,
-            vec![Field::string(ClientFieldId::Text, "a".repeat(8193))],
+            vec![Field::string(FieldId::Text, "a".repeat(8193))],
         );
         let replies = session.on_newsfile_post(&post, &state).await;
 
         assert_eq!(replies.len(), 1);
         assert!(replies[0].is_error());
         assert_eq!(
-            replies[0].string(ServerFieldId::ErrorText, encoding),
+            replies[0].string(FieldId::ErrorText, encoding),
             Some("Your news post was not accepted because it was too big.".to_string())
         );
         assert!(state.news().await.is_empty(), "oversized post not stored");
@@ -3240,7 +3218,7 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::UserKick,
             1,
-            vec![Field::u16(ClientFieldId::Uid, 2)],
+            vec![Field::u16(FieldId::UserId, 2)],
         );
         let replies = session.on_user_kick(&request, &state).await;
         assert_eq!(replies.len(), 1);
@@ -3255,7 +3233,7 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::UserKick,
             1,
-            vec![Field::u16(ClientFieldId::Uid, 2)],
+            vec![Field::u16(FieldId::UserId, 2)],
         );
         let replies = session.on_user_kick(&request, &state).await;
         assert_eq!(replies.len(), 1);
@@ -3281,8 +3259,8 @@ mod tests {
             ClientOpcode::UserKick,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 2),
-                Field::u16(ClientFieldId::Options, 2),
+                Field::u16(FieldId::UserId, 2),
+                Field::u16(FieldId::Options, 2),
             ],
         );
         let replies = session.on_user_kick(&request, &state).await;
@@ -3299,7 +3277,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Politequit push notifying the target of the ban");
         assert_eq!(
-            notice.string(ServerFieldId::Text, encoding).unwrap(),
+            notice.string(FieldId::Text, encoding).unwrap(),
             "You are permanently banned on this server."
         );
         assert_eq!(
@@ -3323,8 +3301,8 @@ mod tests {
             ClientOpcode::UserKick,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 2),
-                Field::u16(ClientFieldId::Options, 1),
+                Field::u16(FieldId::UserId, 2),
+                Field::u16(FieldId::Options, 1),
             ],
         );
         let replies = session.on_user_kick(&request, &state).await;
@@ -3342,7 +3320,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Politequit push notifying the target of the ban");
         assert_eq!(
-            notice.string(ServerFieldId::Text, encoding).unwrap(),
+            notice.string(FieldId::Text, encoding).unwrap(),
             "You are temporarily banned on this server."
         );
     }
@@ -3446,8 +3424,8 @@ mod tests {
             ClientOpcode::Msg,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 42),
-                Field::string(ClientFieldId::Text, "hi there"),
+                Field::u16(FieldId::UserId, 42),
+                Field::string(FieldId::Text, "hi there"),
             ],
         );
         let replies = session.on_private_msg(&request, &state).await;
@@ -3459,7 +3437,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Msg push");
         assert_eq!(
-            delivered.string(ServerFieldId::Text, encoding).unwrap(),
+            delivered.string(FieldId::Text, encoding).unwrap(),
             "hi there"
         );
         assert!(
@@ -3478,9 +3456,9 @@ mod tests {
             ClientOpcode::Msg,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 42),
-                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
-                Field::string(ClientFieldId::Text, "hi there"),
+                Field::u16(FieldId::UserId, 42),
+                Field::u16(FieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(FieldId::Text, "hi there"),
             ],
         );
         let replies = session.on_private_msg(&request, &state).await;
@@ -3492,7 +3470,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Msg push");
         assert_eq!(
-            delivered.field(ServerFieldId::Options).unwrap().as_u16(),
+            delivered.field(FieldId::Options).unwrap().as_u16(),
             Some(MsgOption::UserMessage.into())
         );
     }
@@ -3514,20 +3492,20 @@ mod tests {
             ClientOpcode::Msg,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 42),
-                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
-                Field::string(ClientFieldId::Text, "hi there"),
+                Field::u16(FieldId::UserId, 42),
+                Field::u16(FieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(FieldId::Text, "hi there"),
             ],
         );
         let replies = session.on_private_msg(&request, &state).await;
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].string(ServerFieldId::Text, encoding).unwrap(),
+            replies[0].string(FieldId::Text, encoding).unwrap(),
             "Bob does not accept private messages."
         );
         assert_eq!(
-            replies[0].field(ServerFieldId::Options).unwrap().as_u16(),
+            replies[0].field(FieldId::Options).unwrap().as_u16(),
             Some(MsgOption::RefuseMessage.into())
         );
         assert!(!replies[1].is_error());
@@ -3554,20 +3532,20 @@ mod tests {
             ClientOpcode::Msg,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 42),
-                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
-                Field::string(ClientFieldId::Text, "hi there"),
+                Field::u16(FieldId::UserId, 42),
+                Field::u16(FieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(FieldId::Text, "hi there"),
             ],
         );
         let replies = session.on_private_msg(&request, &state).await;
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].string(ServerFieldId::Text, encoding).unwrap(),
+            replies[0].string(FieldId::Text, encoding).unwrap(),
             "At lunch, back soon."
         );
         assert_eq!(
-            replies[0].field(ServerFieldId::Options).unwrap().as_u16(),
+            replies[0].field(FieldId::Options).unwrap().as_u16(),
             Some(MsgOption::AutomaticResponse.into())
         );
         let delivered = target_rx
@@ -3576,7 +3554,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("automatic response still lets the message through");
         assert_eq!(
-            delivered.string(ServerFieldId::Text, encoding).unwrap(),
+            delivered.string(FieldId::Text, encoding).unwrap(),
             "hi there"
         );
     }
@@ -3597,9 +3575,9 @@ mod tests {
             ClientOpcode::Msg,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 42),
-                Field::u16(ClientFieldId::Options, MsgOption::UserMessage.into()),
-                Field::string(ClientFieldId::Text, "hi there"),
+                Field::u16(FieldId::UserId, 42),
+                Field::u16(FieldId::Options, MsgOption::UserMessage.into()),
+                Field::string(FieldId::Text, "hi there"),
             ],
         );
         let replies = session.on_private_msg(&request, &state).await;
@@ -3619,8 +3597,8 @@ mod tests {
             ClientOpcode::Msg,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 42),
-                Field::string(ClientFieldId::Text, "hi there"),
+                Field::u16(FieldId::UserId, 42),
+                Field::string(FieldId::Text, "hi there"),
             ],
         );
         let replies = session.on_private_msg(&request, &state).await;
@@ -3638,8 +3616,8 @@ mod tests {
             ClientOpcode::Msg,
             1,
             vec![
-                Field::u16(ClientFieldId::Uid, 42),
-                Field::string(ClientFieldId::Text, "hi there"),
+                Field::u16(FieldId::UserId, 42),
+                Field::string(FieldId::Text, "hi there"),
             ],
         );
         let replies = session.on_private_msg(&request, &state).await;
@@ -3656,8 +3634,8 @@ mod tests {
             ClientOpcode::ChatInvite,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, 1),
-                Field::u16(ClientFieldId::Uid, 2),
+                Field::u32(FieldId::ChatId, 1),
+                Field::u16(FieldId::UserId, 2),
             ],
         );
         assert!(session.on_chat_invite(&invite, &state).await[0].is_error());
@@ -3665,21 +3643,21 @@ mod tests {
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, 1)],
+            vec![Field::u32(FieldId::ChatId, 1)],
         );
         assert!(session.on_chat_join(&join, &state).await.is_error());
 
         let part = Transaction::request(
             ClientOpcode::ChatPart,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, 1)],
+            vec![Field::u32(FieldId::ChatId, 1)],
         );
         assert!(session.on_chat_part(&part, &state).await[0].is_error());
 
         let decline = Transaction::request(
             ClientOpcode::ChatDecline,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, 1)],
+            vec![Field::u32(FieldId::ChatId, 1)],
         );
         assert!(session.on_chat_decline(&decline, &state).await[0].is_error());
 
@@ -3687,8 +3665,8 @@ mod tests {
             ClientOpcode::ChatSubject,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, 1),
-                Field::string(ClientFieldId::ChatSubject, "Topic"),
+                Field::u32(FieldId::ChatId, 1),
+                Field::string(FieldId::ChatSubject, "Topic"),
             ],
         );
         assert!(session.on_chat_subject(&subject, &state).await[0].is_error());
@@ -3705,7 +3683,7 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::MsgBroadcast,
             1,
-            vec![Field::string(ClientFieldId::Text, "server going down")],
+            vec![Field::string(FieldId::Text, "server going down")],
         );
         let replies = session.on_msg_broadcast(&request, &state).await;
         assert!(!replies[0].is_error());
@@ -3720,7 +3698,7 @@ mod tests {
             TransactionType::Push(ServerOpcode::MsgBroadcast)
         );
         assert_eq!(
-            sent.field(ServerFieldId::Text).unwrap().as_string(encoding),
+            sent.field(FieldId::Text).unwrap().as_string(encoding),
             "server going down"
         );
 
@@ -3735,7 +3713,7 @@ mod tests {
         let request = Transaction::request(
             ClientOpcode::MsgBroadcast,
             1,
-            vec![Field::string(ClientFieldId::Text, "hi")],
+            vec![Field::string(FieldId::Text, "hi")],
         );
         let replies = session.on_msg_broadcast(&request, &state).await;
         assert!(replies[0].is_error());
@@ -3751,10 +3729,10 @@ mod tests {
             ClientOpcode::AccountCreate,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::obfuscated_string(ClientFieldId::Password, "secret"),
-                Field::string(ClientFieldId::Name, "Bob"),
-                Field::u64(ClientFieldId::Access, Access::SEND_CHAT.bits()),
+                Field::obfuscated_string(FieldId::Login, "bob"),
+                Field::obfuscated_string(FieldId::Password, "secret"),
+                Field::string(FieldId::Name, "Bob"),
+                Field::u64(FieldId::Access, Access::SEND_CHAT.bits()),
             ],
         );
         let replies = session.on_account_create(&create, &state).await;
@@ -3763,18 +3741,13 @@ mod tests {
         let read = Transaction::request(
             ClientOpcode::AccountRead,
             2,
-            vec![Field::obfuscated_string(ClientFieldId::Login, "bob")],
+            vec![Field::obfuscated_string(FieldId::Login, "bob")],
         );
         let replies = session.on_account_read(&read, &state).await;
         assert!(!replies[0].is_error());
+        assert_eq!(replies[0].string(FieldId::Name, encoding).unwrap(), "Bob");
         assert_eq!(
-            replies[0].string(ServerFieldId::Name, encoding).unwrap(),
-            "Bob"
-        );
-        assert_eq!(
-            replies[0]
-                .field(ServerFieldId::Access)
-                .and_then(Field::as_u64),
+            replies[0].field(FieldId::Access).and_then(Field::as_u64),
             Some(Access::SEND_CHAT.bits())
         );
     }
@@ -3788,10 +3761,10 @@ mod tests {
             ClientOpcode::AccountCreate,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "Bob"),
-                Field::obfuscated_string(ClientFieldId::Password, "secret"),
-                Field::string(ClientFieldId::Name, "Bob"),
-                Field::u64(ClientFieldId::Access, Access::SEND_CHAT.bits()),
+                Field::obfuscated_string(FieldId::Login, "Bob"),
+                Field::obfuscated_string(FieldId::Password, "secret"),
+                Field::string(FieldId::Name, "Bob"),
+                Field::u64(FieldId::Access, Access::SEND_CHAT.bits()),
             ],
         );
         assert!(!session.on_account_create(&create, &state).await[0].is_error());
@@ -3820,7 +3793,7 @@ mod tests {
         let delete = Transaction::request(
             ClientOpcode::AccountDelete,
             1,
-            vec![Field::obfuscated_string(ClientFieldId::Login, "BOB")],
+            vec![Field::obfuscated_string(FieldId::Login, "BOB")],
         );
         assert!(!session.on_account_delete(&delete, &state).await[0].is_error());
         assert!(state.account("bob").await.is_none());
@@ -3848,9 +3821,9 @@ mod tests {
             ClientOpcode::AccountModify,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::string(ClientFieldId::Name, "Bobby"),
-                Field::bytes(ClientFieldId::Password, vec![0]),
+                Field::obfuscated_string(FieldId::Login, "bob"),
+                Field::string(FieldId::Name, "Bobby"),
+                Field::bytes(FieldId::Password, vec![0]),
             ],
         );
         session.on_account_modify(&modify, &state).await;
@@ -3884,8 +3857,8 @@ mod tests {
             ClientOpcode::AccountModify,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::string(ClientFieldId::Name, "Bobby"),
+                Field::obfuscated_string(FieldId::Login, "bob"),
+                Field::string(FieldId::Name, "Bobby"),
             ],
         );
         session.on_account_modify(&modify, &state).await;
@@ -3928,7 +3901,7 @@ mod tests {
             Transaction::request(
                 ClientOpcode::AccountRead,
                 1,
-                vec![Field::obfuscated_string(ClientFieldId::Login, login)],
+                vec![Field::obfuscated_string(FieldId::Login, login)],
             )
         };
 
@@ -3939,7 +3912,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             with_password
-                .field(ServerFieldId::Password)
+                .field(FieldId::Password)
                 .unwrap()
                 .as_bytes(encoding)
                 .as_ref(),
@@ -3953,7 +3926,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             without_password
-                .field(ServerFieldId::Password)
+                .field(FieldId::Password)
                 .unwrap()
                 .as_bytes(encoding)
                 .as_ref(),
@@ -4005,8 +3978,8 @@ mod tests {
             ClientOpcode::AccountModify,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::u64(ClientFieldId::Access, Access::BROADCAST.bits()),
+                Field::obfuscated_string(FieldId::Login, "bob"),
+                Field::u64(FieldId::Access, Access::BROADCAST.bits()),
             ],
         );
         admin.on_account_modify(&modify, &state).await;
@@ -4026,7 +3999,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("the live update should also push a UserChange");
         assert_eq!(
-            notify.field(ServerFieldId::UserId).and_then(Field::as_u16),
+            notify.field(FieldId::UserId).and_then(Field::as_u16),
             Some(bob.user_id)
         );
     }
@@ -4075,8 +4048,8 @@ mod tests {
             ClientOpcode::AccountModify,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "bob"),
-                Field::u64(ClientFieldId::Access, Access::empty().bits()),
+                Field::obfuscated_string(FieldId::Login, "bob"),
+                Field::u64(FieldId::Access, Access::empty().bits()),
             ],
         );
         admin.on_account_modify(&revoke, &state).await;
@@ -4091,9 +4064,9 @@ mod tests {
             ClientOpcode::AccountModify,
             1,
             vec![
-                Field::obfuscated_string(ClientFieldId::Login, "bob"),
+                Field::obfuscated_string(FieldId::Login, "bob"),
                 Field::u64(
-                    ClientFieldId::Access,
+                    FieldId::Access,
                     (Access::ANY_NAME | Access::SEND_CHAT).bits(),
                 ),
             ],
@@ -4124,7 +4097,7 @@ mod tests {
         let delete = Transaction::request(
             ClientOpcode::AccountDelete,
             1,
-            vec![Field::obfuscated_string(ClientFieldId::Login, "bob")],
+            vec![Field::obfuscated_string(FieldId::Login, "bob")],
         );
         let replies = session.on_account_delete(&delete, &state).await;
         assert!(!replies[0].is_error());
@@ -4135,7 +4108,7 @@ mod tests {
     async fn account_crud_denied_without_matching_privilege() {
         let session = test_session("Alice", Access::empty());
         let state = SharedState::default();
-        let login_field = Field::obfuscated_string(ClientFieldId::Login, "bob");
+        let login_field = Field::obfuscated_string(FieldId::Login, "bob");
 
         let create =
             Transaction::request(ClientOpcode::AccountCreate, 1, vec![login_field.clone()]);
@@ -4164,18 +4137,18 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let mut fields = Vec::new();
         if let Some(old_login) = old_login {
-            fields.push(Field::obfuscated_string(ClientFieldId::Text, old_login));
+            fields.push(Field::obfuscated_string(FieldId::Text, old_login));
         }
         if !name.is_empty() {
-            fields.push(Field::string(ClientFieldId::Name, name));
+            fields.push(Field::string(FieldId::Name, name));
         }
         if !login.is_empty() {
-            fields.push(Field::obfuscated_string(ClientFieldId::Login, login));
+            fields.push(Field::obfuscated_string(FieldId::Login, login));
         }
         fields.push(password);
-        fields.push(Field::u64(ClientFieldId::Access, access.bits()));
+        fields.push(Field::u64(FieldId::Access, access.bits()));
         Field::bytes(
-            ClientFieldId::Text,
+            FieldId::Text,
             Transaction::encode_field_list(&fields, encoding).unwrap(),
         )
     }
@@ -4214,20 +4187,20 @@ mod tests {
             .unwrap();
 
         // The seeded admin/guest accounts plus the one just added.
-        let records: Vec<_> = reply.fields(ServerFieldId::Text).collect();
+        let records: Vec<_> = reply.fields(FieldId::Text).collect();
         assert_eq!(records.len(), 3);
 
         let bob = records
             .iter()
             .map(|f| Transaction::decode_field_list(&f.as_bytes(encoding)).unwrap())
-            .find(|fields| fields.string(ServerFieldId::Name, encoding).as_deref() == Some("Bob"))
+            .find(|fields| fields.string(FieldId::Name, encoding).as_deref() == Some("Bob"))
             .expect("bob's record");
         let login = bob
-            .field(ServerFieldId::Login)
+            .field(FieldId::Login)
             .unwrap()
             .as_deobfuscated_string(encoding);
         assert_eq!(login, "bob");
-        let password = bob.field(ServerFieldId::Password).unwrap();
+        let password = bob.field(FieldId::Password).unwrap();
         assert_eq!(password.as_bytes(encoding).as_ref(), b"x");
     }
 
@@ -4240,7 +4213,7 @@ mod tests {
             None,
             "Bob",
             "bob",
-            Field::obfuscated_string(ClientFieldId::Password, "secret"),
+            Field::obfuscated_string(FieldId::Password, "secret"),
             Access::SEND_CHAT,
         );
         let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
@@ -4262,7 +4235,7 @@ mod tests {
             None,
             "Bob",
             "bob",
-            Field::obfuscated_string(ClientFieldId::Password, "secret"),
+            Field::obfuscated_string(FieldId::Password, "secret"),
             Access::all(),
         );
         let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
@@ -4293,7 +4266,7 @@ mod tests {
             None,
             "Bob Two",
             "bob",
-            Field::obfuscated_string(ClientFieldId::Password, "new"),
+            Field::obfuscated_string(FieldId::Password, "new"),
             Access::SEND_CHAT,
         );
         let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
@@ -4325,7 +4298,7 @@ mod tests {
             Some("bob"),
             "Bobby",
             "bobby",
-            Field::bytes(ClientFieldId::Password, vec![0u8]),
+            Field::bytes(FieldId::Password, vec![0u8]),
             Access::SEND_CHAT,
         );
         let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
@@ -4378,7 +4351,7 @@ mod tests {
             Some("bob"),
             "",
             "",
-            Field::bytes(ClientFieldId::Password, vec![]),
+            Field::bytes(FieldId::Password, vec![]),
             Access::empty(),
         );
         let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
@@ -4406,7 +4379,7 @@ mod tests {
             None,
             "Bob",
             "bob",
-            Field::obfuscated_string(ClientFieldId::Password, "secret"),
+            Field::obfuscated_string(FieldId::Password, "secret"),
             Access::empty(),
         );
         let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![create]);
@@ -4459,14 +4432,10 @@ mod tests {
         let create = Transaction::request(
             ClientOpcode::ChatCreate,
             1,
-            vec![Field::u16(ClientFieldId::Uid, 2)],
+            vec![Field::u16(FieldId::UserId, 2)],
         );
         let reply = creator.on_chat_create(&create, &state).await;
-        let chat_id = reply
-            .field(ServerFieldId::ChatId)
-            .unwrap()
-            .as_u32()
-            .unwrap();
+        let chat_id = reply.field(FieldId::ChatId).unwrap().as_u32().unwrap();
 
         let invite = bob_rx
             .try_recv()
@@ -4474,7 +4443,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a ChatInvite push");
         assert_eq!(
-            invite.field(ServerFieldId::ChatId).unwrap().as_u32(),
+            invite.field(FieldId::ChatId).unwrap().as_u32(),
             Some(chat_id)
         );
 
@@ -4483,11 +4452,11 @@ mod tests {
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         let join_reply = bob.on_chat_join(&join, &state).await;
         let user_list_ids: Vec<u16> = join_reply
-            .fields(ServerFieldId::UserList)
+            .fields(FieldId::UserList)
             .map(|f| {
                 UserNameWithInfo::decode(&f.as_bytes(encoding), encoding)
                     .unwrap()
@@ -4500,9 +4469,7 @@ mod tests {
             "should list members in join order, not reversed"
         );
         assert_eq!(
-            join_reply
-                .string(ServerFieldId::ChatSubject, encoding)
-                .unwrap(),
+            join_reply.string(FieldId::ChatSubject, encoding).unwrap(),
             ""
         );
 
@@ -4515,8 +4482,8 @@ mod tests {
             ClientOpcode::Chat,
             2,
             vec![
-                Field::string(ClientFieldId::Text, "room only"),
-                Field::u32(ClientFieldId::ChatId, chat_id),
+                Field::string(FieldId::Text, "room only"),
+                Field::u32(FieldId::ChatId, chat_id),
             ],
         );
         creator.on_chat(&room_chat, &state).await;
@@ -4527,7 +4494,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a room-chat push");
         assert_eq!(
-            delivered.string(ServerFieldId::Text, encoding).unwrap(),
+            delivered.string(FieldId::Text, encoding).unwrap(),
             "\r        Alice:  room only"
         );
         assert!(
@@ -4548,7 +4515,7 @@ mod tests {
         let part = Transaction::request(
             ClientOpcode::ChatPart,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         let replies = bob.on_chat_part(&part, &state).await;
 
@@ -4560,13 +4527,10 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a ChatUserPart push");
         assert_eq!(
-            notify.field(ServerFieldId::ChatId).unwrap().as_u32(),
+            notify.field(FieldId::ChatId).unwrap().as_u32(),
             Some(chat_id)
         );
-        assert_eq!(
-            notify.field(ServerFieldId::UserId).unwrap().as_u16(),
-            Some(2)
-        );
+        assert_eq!(notify.field(FieldId::UserId).unwrap().as_u16(), Some(2));
 
         let members = state.chat_room_members(chat_id).await.unwrap();
         assert_eq!(members, vec![1]);
@@ -4581,7 +4545,7 @@ mod tests {
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         let reply = bob.on_chat_join(&join, &state).await;
 
@@ -4604,7 +4568,7 @@ mod tests {
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         let reply = bob.on_chat_join(&join, &state).await;
 
@@ -4626,7 +4590,7 @@ mod tests {
         let no_password = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         assert!(bob.on_chat_join(&no_password, &state).await.is_error());
 
@@ -4634,8 +4598,8 @@ mod tests {
             ClientOpcode::ChatJoin,
             2,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::string(ClientFieldId::Password, "nope"),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::string(FieldId::Password, "nope"),
             ],
         );
         assert!(bob.on_chat_join(&wrong_password, &state).await.is_error());
@@ -4644,8 +4608,8 @@ mod tests {
             ClientOpcode::ChatJoin,
             3,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::string(ClientFieldId::Password, "hunter2"),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::string(FieldId::Password, "hunter2"),
             ],
         );
         assert!(!bob.on_chat_join(&right_password, &state).await.is_error());
@@ -4664,7 +4628,7 @@ mod tests {
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         assert!(!bob.on_chat_join(&join, &state).await.is_error());
     }
@@ -4683,8 +4647,8 @@ mod tests {
             ClientOpcode::ChatSubject,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::string(ClientFieldId::ChatSubject, "Nope"),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::string(FieldId::ChatSubject, "Nope"),
             ],
         );
         let replies = outsider.on_chat_subject(&request, &state).await;
@@ -4704,8 +4668,8 @@ mod tests {
             ClientOpcode::ChatSubject,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::string(ClientFieldId::Password, "hunter2"),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::string(FieldId::Password, "hunter2"),
             ],
         );
         let replies = member.on_chat_subject(&request, &state).await;
@@ -4718,7 +4682,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a ChatSubject push");
         assert_eq!(
-            notify.string(ServerFieldId::Password, encoding),
+            notify.string(FieldId::Password, encoding),
             Some("hunter2".to_string())
         );
     }
@@ -4732,8 +4696,8 @@ mod tests {
             ClientOpcode::ChatSubject,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, 0),
-                Field::string(ClientFieldId::ChatSubject, "Nope"),
+                Field::u32(FieldId::ChatId, 0),
+                Field::string(FieldId::ChatSubject, "Nope"),
             ],
         );
         let replies = guest.on_chat_subject(&request, &state).await;
@@ -4753,8 +4717,8 @@ mod tests {
             ClientOpcode::ChatSubject,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, 0),
-                Field::string(ClientFieldId::ChatSubject, "Welcome"),
+                Field::u32(FieldId::ChatId, 0),
+                Field::string(FieldId::ChatSubject, "Welcome"),
             ],
         );
         let replies = admin.on_chat_subject(&request, &state).await;
@@ -4766,12 +4730,10 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a ChatSubject push");
+        assert_eq!(notify.field(FieldId::ChatId).unwrap().as_u32(), Some(0));
+        assert_eq!(notify.field(FieldId::ChatId).unwrap().as_u32(), Some(0));
         assert_eq!(
-            notify.field(ServerFieldId::ChatId).unwrap().as_u32(),
-            Some(0)
-        );
-        assert_eq!(
-            notify.string(ServerFieldId::ChatSubject, encoding),
+            notify.string(FieldId::ChatSubject, encoding),
             Some("Welcome".to_string())
         );
     }
@@ -4786,8 +4748,8 @@ mod tests {
             ClientOpcode::ChatInvite,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::u16(ClientFieldId::Uid, 2),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::u16(FieldId::UserId, 2),
             ],
         );
         let reply = alice.on_chat_invite(&invite, &state).await;
@@ -4804,7 +4766,7 @@ mod tests {
         let missing_uid = Transaction::request(
             ClientOpcode::ChatInvite,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         assert!(alice.on_chat_invite(&missing_uid, &state).await[0].is_error());
 
@@ -4812,8 +4774,8 @@ mod tests {
             ClientOpcode::ChatInvite,
             2,
             vec![
-                Field::u32(ClientFieldId::ChatId, 0),
-                Field::u16(ClientFieldId::Uid, 2),
+                Field::u32(FieldId::ChatId, 0),
+                Field::u16(FieldId::UserId, 2),
             ],
         );
         assert!(alice.on_chat_invite(&zero_chat_id, &state).await[0].is_error());
@@ -4848,8 +4810,8 @@ mod tests {
             ClientOpcode::ChatInvite,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::u16(ClientFieldId::Uid, 2),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::u16(FieldId::UserId, 2),
             ],
         );
         let reply = alice.on_chat_invite(&invite, &state).await;
@@ -4886,8 +4848,8 @@ mod tests {
             ClientOpcode::ChatInvite,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::u16(ClientFieldId::Uid, 2),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::u16(FieldId::UserId, 2),
             ],
         );
         let reply = alice.on_chat_invite(&invite, &state).await;
@@ -4913,19 +4875,19 @@ mod tests {
             ClientOpcode::ChatInvite,
             1,
             vec![
-                Field::u32(ClientFieldId::ChatId, chat_id),
-                Field::u16(ClientFieldId::Uid, 2),
+                Field::u32(FieldId::ChatId, chat_id),
+                Field::u16(FieldId::UserId, 2),
             ],
         );
         let replies = alice.on_chat_invite(&invite, &state).await;
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].string(ServerFieldId::Text, encoding).unwrap(),
+            replies[0].string(FieldId::Text, encoding).unwrap(),
             "Bob does not accept private chats."
         );
         assert_eq!(
-            replies[0].field(ServerFieldId::Options).unwrap().as_u16(),
+            replies[0].field(FieldId::Options).unwrap().as_u16(),
             Some(MsgOption::RefuseChat.into())
         );
         assert!(!replies[1].is_error());
@@ -4949,7 +4911,7 @@ mod tests {
         let join = Transaction::request(
             ClientOpcode::ChatJoin,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         bob.on_chat_join(&join, &state).await;
 
@@ -4969,7 +4931,7 @@ mod tests {
         let decline = Transaction::request(
             ClientOpcode::ChatDecline,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         let replies = bob.on_chat_decline(&decline, &state).await;
 
@@ -4992,7 +4954,7 @@ mod tests {
         let decline = Transaction::request(
             ClientOpcode::ChatDecline,
             1,
-            vec![Field::u32(ClientFieldId::ChatId, chat_id)],
+            vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         let replies = bob.on_chat_decline(&decline, &state).await;
         assert!(replies.is_empty());
@@ -5004,11 +4966,11 @@ mod tests {
             .expect("expected a Chat push notifying the room");
         assert_eq!(notify.r#type(), TransactionType::Push(ServerOpcode::Chat));
         assert_eq!(
-            notify.string(ServerFieldId::Text, encoding).unwrap(),
+            notify.string(FieldId::Text, encoding).unwrap(),
             "\r<<< \"Bob\" declined invitation to chat >>>"
         );
         assert_eq!(
-            notify.field(ServerFieldId::ChatId).unwrap().as_u32(),
+            notify.field(FieldId::ChatId).unwrap().as_u32(),
             Some(chat_id)
         );
     }
@@ -5031,7 +4993,7 @@ mod tests {
         let get = Transaction::request(
             ClientOpcode::FileGet,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
         assert!(reply.is_error());
@@ -5047,17 +5009,17 @@ mod tests {
         let get = Transaction::request(
             ClientOpcode::FileGet,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
 
         assert!(!reply.is_error());
         let reference = reply
-            .field(ServerFieldId::TransferId)
+            .field(FieldId::TransferId)
             .and_then(Field::as_u32)
             .unwrap();
         let total_size = reply
-            .field(ServerFieldId::TransferSize)
+            .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(
@@ -5065,7 +5027,7 @@ mod tests {
             5 + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32
         );
         let file_size = reply
-            .field(ServerFieldId::FileSize)
+            .field(FieldId::FileSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(file_size, 5);
@@ -5077,7 +5039,7 @@ mod tests {
         assert_eq!(transfer.resume_offset, 0);
     }
 
-    /// Builds a `FileResumeData` (`HTLC_DATA_RFLT`) blob claiming
+    /// Builds a `FileResumeData` (`myField_FileResumeData`) blob claiming
     /// `already_have` bytes of the `DATA` fork, matching the wire shape
     /// [`hotline_proto::htxf::decode_resume_data`] parses.
     fn resume_data(already_have: u32) -> [u8; 58] {
@@ -5104,15 +5066,15 @@ mod tests {
             ClientOpcode::FileGet,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::bytes(ClientFieldId::ResumeFileTransfer, resume_data(6)),
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::bytes(FieldId::ResumeFileTransfer, resume_data(6)),
             ],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
 
         assert!(!reply.is_error());
         let total_size = reply
-            .field(ServerFieldId::TransferSize)
+            .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(
@@ -5120,13 +5082,13 @@ mod tests {
             5 + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32
         );
         let file_size = reply
-            .field(ServerFieldId::FileSize)
+            .field(FieldId::FileSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(file_size, 11);
 
         let reference = reply
-            .field(ServerFieldId::TransferId)
+            .field(FieldId::TransferId)
             .and_then(Field::as_u32)
             .unwrap();
         let transfer = state.take_transfer(reference).await.unwrap();
@@ -5145,15 +5107,15 @@ mod tests {
             ClientOpcode::FileGet,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::bytes(ClientFieldId::ResumeFileTransfer, resume_data(999)),
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::bytes(FieldId::ResumeFileTransfer, resume_data(999)),
             ],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
 
         assert!(!reply.is_error());
         let total_size = reply
-            .field(ServerFieldId::TransferSize)
+            .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(total_size, hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32);
@@ -5170,8 +5132,8 @@ mod tests {
             ClientOpcode::FileGet,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::bytes(ClientFieldId::ResumeFileTransfer, vec![1, 2, 3]),
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::bytes(FieldId::ResumeFileTransfer, vec![1, 2, 3]),
             ],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
@@ -5187,7 +5149,7 @@ mod tests {
         let get = Transaction::request(
             ClientOpcode::FileGet,
             1,
-            vec![Field::string(ClientFieldId::FileName, "missing.txt")],
+            vec![Field::string(FieldId::FileName, "missing.txt")],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
         assert!(reply.is_error());
@@ -5207,7 +5169,7 @@ mod tests {
             ClientOpcode::FileList,
             1,
             vec![Field::bytes(
-                ClientFieldId::FilePath,
+                FieldId::FilePath,
                 HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
             )],
         );
@@ -5232,7 +5194,7 @@ mod tests {
             ClientOpcode::FileList,
             1,
             vec![Field::bytes(
-                ClientFieldId::FilePath,
+                FieldId::FilePath,
                 HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
             )],
         );
@@ -5259,9 +5221,9 @@ mod tests {
             ClientOpcode::FileGet,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::string(FieldId::FileName, "secret.txt"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -5284,9 +5246,9 @@ mod tests {
             ClientOpcode::FileDelete,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::string(FieldId::FileName, "secret.txt"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -5320,9 +5282,9 @@ mod tests {
             ClientOpcode::FileGetinfo,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::string(FieldId::FileName, "secret.txt"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -5347,9 +5309,9 @@ mod tests {
             ClientOpcode::FileMkdir,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "Drop Box"),
+                Field::string(FieldId::FileName, "Drop Box"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     HlPath::default().encode(encoding).unwrap(),
                 ),
             ],
@@ -5376,10 +5338,10 @@ mod tests {
             ClientOpcode::FileSetinfo,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "secret.txt"),
-                Field::string(ClientFieldId::FileNewName, "renamed.txt"),
+                Field::string(FieldId::FileName, "secret.txt"),
+                Field::string(FieldId::FileNewName, "renamed.txt"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -5407,9 +5369,9 @@ mod tests {
             ClientOpcode::FileMove,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
                 Field::bytes(
-                    ClientFieldId::FileNewPath,
+                    FieldId::FileNewPath,
                     HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -5442,13 +5404,13 @@ mod tests {
             ClientOpcode::FileSymlink,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "secret.txt"),
+                Field::string(FieldId::FileName, "secret.txt"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
                 Field::bytes(
-                    ClientFieldId::FileNewPath,
+                    FieldId::FileNewPath,
                     HlPath::default().encode(encoding).unwrap(),
                 ),
             ],
@@ -5471,7 +5433,7 @@ mod tests {
         let put = Transaction::request(
             ClientOpcode::FilePut,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
         assert!(reply.is_error());
@@ -5489,9 +5451,9 @@ mod tests {
             ClientOpcode::FilePut,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     hotline_proto::types::HlPath::new(["Uploads"])
                         .encode(encoding)
                         .unwrap(),
@@ -5500,7 +5462,7 @@ mod tests {
         );
         let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
         assert!(!reply.is_error());
-        assert!(reply.field(ServerFieldId::TransferId).is_some());
+        assert!(reply.field(FieldId::TransferId).is_some());
     }
 
     #[tokio::test]
@@ -5513,7 +5475,7 @@ mod tests {
         let put = Transaction::request(
             ClientOpcode::FilePut,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
         assert!(reply.is_error());
@@ -5529,7 +5491,7 @@ mod tests {
         let delete = Transaction::request(
             ClientOpcode::FileDelete,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
             .on_file_delete(&delete, &state)
@@ -5556,7 +5518,7 @@ mod tests {
         let delete = Transaction::request(
             ClientOpcode::FileDelete,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
             .on_file_delete(&delete, &state)
@@ -5574,7 +5536,7 @@ mod tests {
         let delete = Transaction::request(
             ClientOpcode::FileDelete,
             1,
-            vec![Field::string(ClientFieldId::FileName, "missing.txt")],
+            vec![Field::string(FieldId::FileName, "missing.txt")],
         );
         let [reply] = session
             .on_file_delete(&delete, &state)
@@ -5592,7 +5554,7 @@ mod tests {
         let mkdir = Transaction::request(
             ClientOpcode::FileMkdir,
             1,
-            vec![Field::string(ClientFieldId::FileName, "NewFolder")],
+            vec![Field::string(FieldId::FileName, "NewFolder")],
         );
         let [reply] = session
             .on_file_mkdir(&mkdir, &state)
@@ -5617,7 +5579,7 @@ mod tests {
         let mkdir = Transaction::request(
             ClientOpcode::FileMkdir,
             1,
-            vec![Field::string(ClientFieldId::FileName, "NewFolder")],
+            vec![Field::string(FieldId::FileName, "NewFolder")],
         );
         let [reply] = session
             .on_file_mkdir(&mkdir, &state)
@@ -5655,7 +5617,7 @@ mod tests {
         let getinfo = Transaction::request(
             ClientOpcode::FileGetinfo,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
             .on_file_getinfo(&getinfo, &state)
@@ -5677,7 +5639,7 @@ mod tests {
         let getinfo = Transaction::request(
             ClientOpcode::FileGetinfo,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
             .on_file_getinfo(&getinfo, &state)
@@ -5685,20 +5647,17 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
+        assert_eq!(reply.string(FieldId::FileName, encoding).unwrap(), "a.txt");
         assert_eq!(
-            reply.string(ServerFieldId::FileName, encoding).unwrap(),
-            "a.txt"
-        );
-        assert_eq!(
-            reply.field(ServerFieldId::FileSize).and_then(Field::as_u32),
+            reply.field(FieldId::FileSize).and_then(Field::as_u32),
             Some(5)
         );
         // No real HFS metadata is persisted, so these are omitted rather
         // than sent zeroed.
-        assert!(reply.field(ServerFieldId::FileType).is_none());
-        assert!(reply.field(ServerFieldId::FileCreator).is_none());
-        assert!(reply.field(ServerFieldId::FileDateCreate).is_none());
-        assert!(reply.field(ServerFieldId::FileComment).is_none());
+        assert!(reply.field(FieldId::FileType).is_none());
+        assert!(reply.field(FieldId::FileCreator).is_none());
+        assert!(reply.field(FieldId::FileDateCreate).is_none());
+        assert!(reply.field(FieldId::FileComment).is_none());
     }
 
     #[tokio::test]
@@ -5714,7 +5673,7 @@ mod tests {
             ClientOpcode::FileGetinfo,
             1,
             vec![Field::bytes(
-                ClientFieldId::FilePath,
+                FieldId::FilePath,
                 HlPath::new(["a.txt"]).encode(encoding).unwrap(),
             )],
         );
@@ -5724,10 +5683,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        assert_eq!(
-            reply.string(ServerFieldId::FileName, encoding).unwrap(),
-            "a.txt"
-        );
+        assert_eq!(reply.string(FieldId::FileName, encoding).unwrap(), "a.txt");
     }
 
     #[tokio::test]
@@ -5741,8 +5697,8 @@ mod tests {
             ClientOpcode::FileSetinfo,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::string(ClientFieldId::FileNewName, "b.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileNewName, "b.txt"),
             ],
         );
         let [reply] = session
@@ -5777,8 +5733,8 @@ mod tests {
             ClientOpcode::FileSetinfo,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::string(ClientFieldId::FileNewName, "b.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileNewName, "b.txt"),
             ],
         );
         let [reply] = session
@@ -5799,7 +5755,7 @@ mod tests {
         let setinfo = Transaction::request(
             ClientOpcode::FileSetinfo,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
             .on_file_setinfo(&setinfo, &state)
@@ -5828,8 +5784,8 @@ mod tests {
             ClientOpcode::FileSetinfo,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::string(ClientFieldId::FileComment, "a note"),
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileComment, "a note"),
             ],
         );
         let [reply] = session
@@ -5842,7 +5798,7 @@ mod tests {
         let getinfo = Transaction::request(
             ClientOpcode::FileGetinfo,
             1,
-            vec![Field::string(ClientFieldId::FileName, "a.txt")],
+            vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
             .on_file_getinfo(&getinfo, &state)
@@ -5850,7 +5806,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(
-            reply.string(ServerFieldId::FileComment, encoding),
+            reply.string(FieldId::FileComment, encoding),
             Some("a note".to_string())
         );
     }
@@ -5868,8 +5824,8 @@ mod tests {
             ClientOpcode::FileSetinfo,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
-                Field::string(ClientFieldId::FileComment, "a note"),
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileComment, "a note"),
             ],
         );
         let [reply] = session
@@ -5893,8 +5849,8 @@ mod tests {
             ClientOpcode::FileSetinfo,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "Folder"),
-                Field::string(ClientFieldId::FileComment, "a note"),
+                Field::string(FieldId::FileName, "Folder"),
+                Field::string(FieldId::FileComment, "a note"),
             ],
         );
         let [reply] = session
@@ -5915,7 +5871,7 @@ mod tests {
             ClientOpcode::FileMkdir,
             1,
             vec![Field::bytes(
-                ClientFieldId::FilePath,
+                FieldId::FilePath,
                 HlPath::new(["NewFolder"]).encode(encoding).unwrap(),
             )],
         );
@@ -5945,9 +5901,9 @@ mod tests {
             ClientOpcode::FileMove,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
                 Field::bytes(
-                    ClientFieldId::FileNewPath,
+                    FieldId::FileNewPath,
                     HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -5983,9 +5939,9 @@ mod tests {
             ClientOpcode::FileMove,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
                 Field::bytes(
-                    ClientFieldId::FilePath,
+                    FieldId::FilePath,
                     HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
                 // No FileNewPath field: the destination is the root directory.
@@ -6024,9 +5980,9 @@ mod tests {
             ClientOpcode::FileMove,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
                 Field::bytes(
-                    ClientFieldId::FileNewPath,
+                    FieldId::FileNewPath,
                     HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -6053,9 +6009,9 @@ mod tests {
             ClientOpcode::FileSymlink,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
                 Field::bytes(
-                    ClientFieldId::FileNewPath,
+                    FieldId::FileNewPath,
                     HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -6080,9 +6036,9 @@ mod tests {
             ClientOpcode::FileSymlink,
             1,
             vec![
-                Field::string(ClientFieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileName, "a.txt"),
                 Field::bytes(
-                    ClientFieldId::FileNewPath,
+                    FieldId::FileNewPath,
                     HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
@@ -6108,7 +6064,7 @@ mod tests {
         let mkdir = Transaction::request(
             ClientOpcode::NewsMkdir,
             1,
-            vec![Field::string(ClientFieldId::FileName, "Bundle")],
+            vec![Field::string(FieldId::FileName, "Bundle")],
         );
         let [reply] = session
             .on_news_mkdir(&mkdir, &state)
@@ -6120,7 +6076,7 @@ mod tests {
         let mkcategory = Transaction::request(
             ClientOpcode::NewsMkcategory,
             2,
-            vec![Field::string(ClientFieldId::NewsCatName, "General")],
+            vec![Field::string(FieldId::NewsCatName, "General")],
         );
         let [reply] = session
             .on_news_mkcategory(&mkcategory, &state)
@@ -6149,7 +6105,7 @@ mod tests {
         let mkdir = Transaction::request(
             ClientOpcode::NewsMkdir,
             1,
-            vec![Field::string(ClientFieldId::FileName, "Bundle")],
+            vec![Field::string(FieldId::FileName, "Bundle")],
         );
         let [reply] = session
             .on_news_mkdir(&mkdir, &state)
@@ -6176,7 +6132,7 @@ mod tests {
             ClientOpcode::NewsDelete,
             1,
             vec![Field::bytes(
-                ClientFieldId::NewsPath,
+                FieldId::NewsPath,
                 HlPath::new(["Bundle"]).encode(encoding).unwrap(),
             )],
         );
@@ -6213,7 +6169,7 @@ mod tests {
             .unwrap();
         let path_field = || {
             Field::bytes(
-                ClientFieldId::NewsPath,
+                FieldId::NewsPath,
                 HlPath::new(["General"]).encode(encoding).unwrap(),
             )
         };
@@ -6223,9 +6179,9 @@ mod tests {
             1,
             vec![
                 path_field(),
-                Field::string(ClientFieldId::NewsArtTitle, "Hello"),
-                Field::string(ClientFieldId::NewsArtDataFlavor, "text/plain"),
-                Field::bytes(ClientFieldId::NewsArtData, b"body text".to_vec()),
+                Field::string(FieldId::NewsArtTitle, "Hello"),
+                Field::string(FieldId::NewsArtDataFlavor, "text/plain"),
+                Field::bytes(FieldId::NewsArtData, b"body text".to_vec()),
             ],
         );
         let [reply] = session
@@ -6250,8 +6206,8 @@ mod tests {
             3,
             vec![
                 path_field(),
-                Field::u32(ClientFieldId::NewsArtId, 1),
-                Field::string(ClientFieldId::NewsArtDataFlavor, "text/plain"),
+                Field::u32(FieldId::NewsArtId, 1),
+                Field::string(FieldId::NewsArtDataFlavor, "text/plain"),
             ],
         );
         let [reply] = session
@@ -6261,18 +6217,18 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         let data = reply
-            .field(ServerFieldId::NewsPost)
+            .field(FieldId::NewsArtData)
             .map(|f| f.as_bytes(encoding).into_owned());
         assert_eq!(data, Some(b"body text".to_vec()));
         assert_eq!(
-            reply.string(ServerFieldId::NewsSubject, encoding),
+            reply.string(FieldId::NewsArtTitle, encoding),
             Some("Hello".to_string())
         );
 
         let delete = Transaction::request(
             ClientOpcode::NewsDeletethread,
             4,
-            vec![path_field(), Field::u32(ClientFieldId::NewsArtId, 1)],
+            vec![path_field(), Field::u32(FieldId::NewsArtId, 1)],
         );
         let [reply] = session
             .on_news_deletethread(&delete, &state)
@@ -6307,11 +6263,11 @@ mod tests {
             1,
             vec![
                 Field::bytes(
-                    ClientFieldId::NewsPath,
+                    FieldId::NewsPath,
                     HlPath::new(["General"]).encode(encoding).unwrap(),
                 ),
-                Field::string(ClientFieldId::NewsArtTitle, "Hello"),
-                Field::bytes(ClientFieldId::NewsArtData, b"x".to_vec()),
+                Field::string(FieldId::NewsArtTitle, "Hello"),
+                Field::bytes(FieldId::NewsArtData, b"x".to_vec()),
             ],
         );
         let [reply] = session

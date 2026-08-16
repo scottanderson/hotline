@@ -19,7 +19,7 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   server accepts up to the wire format's real 255-byte `pstring` limit
   and errors past that instead. More permissive by design; not changed.
 - **Posted news article flavor default.** Openline stores an empty
-  string when a post omits `HTLC_DATA_NEWS_MIMETYPE`; this server
+  string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
   this only affects a hand-crafted request; not changed.
 
@@ -97,19 +97,20 @@ debug-logged reason rather than failing the request.
 6. **HTXF follow ups, deferred out of the initial file-transfer work.**
    Four largely independent pieces:
    - ~~Resume support (client-sent `RFLT` blob).~~ **Resolved for
-     downloads.** `FILE_GET` (202) now reads `HTLC_DATA_RFLT` (203) when
-     present: `hotline_proto::htxf::decode_resume_data` finds the `DATA`
-     fork entry's already-transferred byte count (any other fork entry,
-     e.g. a resource-fork position, is ignored, matching the single-fork
-     model below), the offset is clamped to the file's size rather than
-     rejected (an offset past EOF just yields zero bytes left to send,
-     matching the reference's own clamp), and `PendingTransfer` carries it
-     through to the data connection: the flattened-object header is
-     always resent in full, but its `DATA` fork now declares only the
-     remaining size, and the reader skips the already-sent leading bytes
-     before copying the rest. **Upload resume (`FILE_PUT`'s `opts == 1`,
-     replying with a fresh `RFLT` via `HTLS_DATA_RFLT`) is not
-     implemented and is a blocker, not just deferred work:** the
+     downloads.** `FILE_GET` (202) now reads `myField_FileResumeData`
+     (203) when present: `hotline_proto::htxf::decode_resume_data` finds
+     the `DATA` fork entry's already-transferred byte count (any other
+     fork entry, e.g. a resource-fork position, is ignored, matching the
+     single-fork model below), the offset is clamped to the file's size
+     rather than rejected (an offset past EOF just yields zero bytes left
+     to send, matching the reference's own clamp), and `PendingTransfer`
+     carries it through to the data connection: the flattened-object
+     header is always resent in full, but its `DATA` fork now declares
+     only the remaining size, and the reader skips the already-sent
+     leading bytes before copying the rest. **Upload resume (`FILE_PUT`'s
+     `opts == 1`, replying with a fresh `RFLT` via
+     `myField_FileResumeData`) is not implemented and is a blocker, not
+     just deferred work:** the
      reference only allows resuming into a file it recognizes as one of
      its own interrupted uploads, checked via a type/creator marker
      persisted on the partial file itself; this server's `FileProvider`
@@ -254,33 +255,32 @@ debug-logged reason rather than failing the request.
     which already logs the peer and the specific rejection reason on any
     session error, including this one. No wire-visible behavior changes:
     the connection still closes without a reply on mismatch.
-15. Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
+15. ~~Reconsider the `HTLC_HDR_*`/`HTLS_HDR_*`/`HTLC_DATA_*`/`HTLS_DATA_*`
     naming used throughout doc comments and `opcode_names!`/field-id
     tables. That convention comes from the reference's own C header, which
     has no stronger claim to being canonical than any other
     implementation's naming. `HLProtocol.md` (repo root) is the actual
     official source and uses its own names (`myTran_*`, `myField_*`,
-    `myAcc_*`); doc comments and naming could cite those instead. Touches
-    `opcode.rs`, `field_id.rs`, every "Original: `HTLC_HDR_X`" comment, and
-    AGENTS.md's own style rule mandating `HTLC_HDR_*` (which would need to
-    change too). Not started — wide, mechanical, non-trivial rename.
-    Confirmed concretely while adding `HTLC_HDR_GET_USER_LIST`/
-    `HTLC_HDR_SET_USER_LIST` (348/349): most existing 100-116 range field
-    variants (`Login`, `Password`, `Access`, `Uid`, `Icon`, ...) are
-    shortened Rust-ish names, not the reference's own tail (`UserLogin`,
-    `UserPassword`, `UserAccess`, `UserID`, `UserIconID`, ...); field 109
-    is `Style`/`HTLC_DATA_STYLE` here but the reference calls it
-    `ChatOptions`. Newly added fields/opcodes since then use the
-    reference's own tail (`UserAlias`, `GetUserList`, `SetUserList`);
-    everything older still uses the shortened form until this item lands.
-    Also applies to `Ping` (500): absent from `HLProtocol.md` entirely,
-    so it has no official name to cite there either; the
-    `HTLC_HDR_PING` name currently used for it traces to the secondary
-    reference used for cross-checking (see AGENTS.md), while the
-    primary reference's own header names the same opcode
-    `myTran_KeepConnectionAlive`. Worth resolving which name this item
-    settles on before renaming it.
-16. Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
+    `myAcc_*`); doc comments and naming could cite those instead.~~
+    **Resolved.** Every "Original: `HTLC_HDR_X`"/"Original: `HTLS_DATA_X`"
+    style comment, the `opcode_names!`/`name()` tables in `opcode.rs`/
+    `field_id.rs`, and AGENTS.md's own citation rule now cite
+    `HLProtocol.md`'s `myTran_*`/`myField_*` constant instead, checked
+    field by field and opcode by opcode against the doc's own tables.
+    Two opcodes (`GetUserList`/`SetUserList`, 348/349) have no
+    `HLProtocol.md` entry at all, so they keep citing the reference
+    header's own name, and AGENTS.md's rule now says so explicitly. Same
+    for `Ping` (500): still absent from `HLProtocol.md`, so it now cites
+    the *primary* reference's own name for it, `myTran_KeepConnectionAlive`
+    (the secondary reference's `HTLC_HDR_PING` traced to cross-checking
+    only, per AGENTS.md the primary reference is the one with the
+    stronger claim when a name has to be chosen without an official
+    source). Rust variant identifiers (`Ping`, `Style`, `Uid`, ...) are
+    unchanged; this item was about which name a doc comment cites, not
+    about renaming the Rust-side symbols, so the pre-existing drift
+    between variant names and their cited original noted below is still
+    there where it was before.
+16. ~~Collapse `ClientFieldId`/`ServerFieldId` into one `FieldId`, and
     `ClientOpcode`/`ServerOpcode` into one `Opcode`. `HLProtocol.md` has no
     client/server split in its numbering — one flat `myField_*` list, one
     flat `myTran_*` list, with direction recorded separately per
@@ -376,7 +376,7 @@ debug-logged reason rather than failing the request.
     message as `"*** {name} ..."` instead of the normal
     `"{name}: ..."` prefix when it's set to 1; this server always uses
     the normal prefix regardless of `Style`.~~ **Resolved.** `on_chat`
-    now reads `ClientFieldId::Style` and formats the relayed message as
+    now reads `FieldId::Style` and formats the relayed message as
     `"\r*** {name} {text}"` when it's 1, keeping the normal
     `"\r{name:>13}:  {text}"` prefix otherwise.
 24. ~~`on_msg_broadcast` sends the broadcast to every connected user
@@ -415,7 +415,7 @@ debug-logged reason rather than failing the request.
     both `TransferSize` (the flattened-object envelope size) and
     `FileSize` (the raw file size) on this transaction.~~ **Resolved.**
     `on_file_get`'s reply now also sends `FileSize`, the raw file size,
-    alongside `TransferId`/`TransferSize`. `ClientFieldId::FileXferOptions`
+    alongside `TransferId`/`TransferSize`. `FieldId::FileXferOptions`
     still isn't read at all — the reference's `opts == 2` ("data fork
     only") request shape has no equivalent here, every `FILE_GET` is
     treated as a full flattened transfer. `FILE_PUT`'s resume option
@@ -464,11 +464,11 @@ debug-logged reason rather than failing the request.
     reply can never include it; the reference always sends this field
     (typically zero) on login. Low priority, cosmetic given the reference
     default is usually unset.~~ **Resolved.** The variant already existed
-    as `ServerFieldId::Bannerid` (161); `on_login` now sends it as
-    `Field::u16(ServerFieldId::Bannerid, 0)`.
+    as `FieldId::Bannerid` (161); `on_login` now sends it as
+    `Field::u16(FieldId::Bannerid, 0)`.
 34. ~~`on_login` only sends `ServerName` when configured non-empty; the
     reference always sends the field (as an empty pstring when unset).~~
-    **Resolved.** `on_login` now always pushes `ServerFieldId::Servername`,
+    **Resolved.** `on_login` now always pushes `FieldId::Servername`,
     empty when unconfigured.
 35. ~~Not a bug, a primary/secondary divergence like item 18.~~
     **Resolved: kept the existing gated behavior.** `on_user_get_list`
@@ -508,7 +508,7 @@ debug-logged reason rather than failing the request.
     added the same way: neither reference reports icon/client-version in
     this exact shape, but both are locally useful and now tracked
     end to end (`UserEntry::client_version`/`Session::client_version`,
-    an `Option<u16>` set from `HTLC_DATA_CLIENTVERSION` (160) at login),
+    an `Option<u16>` set from `myField_Vers` (160) at login),
     so they're included alongside `Online` rather than left out. The
     `Version` line itself is omitted entirely rather than printed as
     empty/zero when a client never sent one. Still not carried over

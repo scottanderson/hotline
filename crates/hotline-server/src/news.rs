@@ -1,10 +1,10 @@
 //! Threaded news storage: a tree of bundles (folders) and categories
-//! (article threads), addressed by `HTLC_DATA_NEWS_DIR` (325).
+//! (article threads), addressed by `myField_NewsPath` (325).
 //!
 //! [`NewsBundle`] mirrors [`crate::files::Dir`]'s nested-tree shape: an
 //! in-memory tree keyed by path component, with no per-login scoping;
 //! [`NewsProvider`] persists it. A [`NewsCategory`] leaf holds a thread of
-//! [`NewsArticle`]s; sibling order (`HTLC_DATA_NEWS_PREVTHREADID`/
+//! [`NewsArticle`]s; sibling order (`myField_NewsArtPrevArt`/
 //! `_NEXTTHREADID`) comes from each article's position in its parent's
 //! `children` list, not stored previous/next pointers.
 
@@ -122,7 +122,7 @@ impl NewsBundle {
 
     /// Create a new bundle named `name` under `components`.
     /// `Err` if `components` isn't a bundle, `name` already exists, or
-    /// `name` is too long for the `HTLS_DATA_NEWS_DIRLIST_EXTENDED` (323)
+    /// `name` is too long for the `myField_NewsCatListData15` (323)
     /// listing entry it will need to encode into (a 1-byte length prefix).
     pub fn mkdir(&mut self, components: &[String], name: &str) -> Result<(), &'static str> {
         let parent = self.check_new_name(components, name)?;
@@ -194,7 +194,7 @@ impl NewsBundle {
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
         // Each is wire-encoded with a 1-byte length prefix in the
-        // article listing (`HTLC_DATA_NEWS_CATLIST`, 321). Openline
+        // article listing (`myField_NewsArtListData`, 321). Openline
         // actually caps title/flavor at a much smaller fixed buffer and
         // truncates silently rather than rejecting; this server accepts
         // up to the wire format's real 255-byte limit and errors past
@@ -292,7 +292,7 @@ pub struct ArticleView<'a> {
 }
 
 /// A leaf category: a thread of articles plus the bookkeeping mirrored
-/// into `HTLC_DATA_NEWS_DIRLIST_EXTENDED` (323).
+/// into `myField_NewsCatListData15` (323).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewsCategory {
     pub guid: Uuid,

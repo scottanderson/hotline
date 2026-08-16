@@ -3,7 +3,7 @@
 //! logic.
 
 use hotline_client::HotlineClient;
-use hotline_proto::field_id::ServerFieldId;
+use hotline_proto::field_id::FieldId;
 use hotline_proto::opcode::{ServerOpcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::UserNameWithInfo;
@@ -126,7 +126,7 @@ impl App {
     // nothing to accept, so the caller should accept right away.
     fn apply_agreement(&mut self, tx: &Transaction) -> EventOutcome {
         let encoding = self.encoding.get();
-        match tx.string(ServerFieldId::Text, encoding) {
+        match tx.string(FieldId::Text, encoding) {
             Some(text) => {
                 self.show_agreement(text);
                 EventOutcome::Applied
@@ -138,8 +138,8 @@ impl App {
     // 104
     fn apply_msg(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
-        let text = tx.string(ServerFieldId::Text, encoding);
-        let from = tx.string(ServerFieldId::Name, encoding);
+        let text = tx.string(FieldId::Text, encoding);
+        let from = tx.string(FieldId::Name, encoding);
         match (from, text) {
             // A private message carries the sender's name; a
             // permission-denied or admin broadcast notice
@@ -160,7 +160,7 @@ impl App {
     // 106
     fn apply_chat(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
-        if let Some(text) = tx.string(ServerFieldId::Text, encoding) {
+        if let Some(text) = tx.string(FieldId::Text, encoding) {
             self.push(display_text(&text), LineKind::Chat);
         }
     }
@@ -169,7 +169,7 @@ impl App {
     fn apply_politequit(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
         let reason = tx
-            .string(ServerFieldId::Text, encoding)
+            .string(FieldId::Text, encoding)
             .unwrap_or_else(|| "disconnected by the server".to_string());
         self.push(display_text(&reason), LineKind::Error);
         self.quit();
@@ -179,9 +179,9 @@ impl App {
     fn apply_chat_invite(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
         let from = tx
-            .string(ServerFieldId::Name, encoding)
+            .string(FieldId::Name, encoding)
             .unwrap_or_else(|| "someone".to_string());
-        let chat_id = tx.field(ServerFieldId::ChatId).and_then(Field::as_u32);
+        let chat_id = tx.field(FieldId::ChatId).and_then(Field::as_u32);
         self.push(
             format!(
                 "{from} invited you to a private chat (id {})",
@@ -193,17 +193,17 @@ impl App {
 
     // 301
     fn apply_user_change(&mut self, tx: &Transaction) {
-        let Some(user_id) = tx.field(ServerFieldId::UserId).and_then(Field::as_u16) else {
+        let Some(user_id) = tx.field(FieldId::UserId).and_then(Field::as_u16) else {
             return;
         };
         let encoding = self.encoding.get();
-        let name = tx.string(ServerFieldId::Name, encoding).unwrap_or_default();
+        let name = tx.string(FieldId::Name, encoding).unwrap_or_default();
         let icon = tx
-            .field(ServerFieldId::Icon)
+            .field(FieldId::Icon)
             .and_then(Field::as_u16)
             .unwrap_or_default();
         let flags = tx
-            .field(ServerFieldId::Color)
+            .field(FieldId::Color)
             .and_then(Field::as_u16)
             .unwrap_or_default();
 
@@ -237,7 +237,7 @@ impl App {
 
     // 302
     fn apply_user_part(&mut self, tx: &Transaction) {
-        let Some(user_id) = tx.field(ServerFieldId::UserId).and_then(Field::as_u16) else {
+        let Some(user_id) = tx.field(FieldId::UserId).and_then(Field::as_u16) else {
             return;
         };
         if let Some(pos) = self.users.iter().position(|u| u.user_id == user_id) {
@@ -321,15 +321,15 @@ mod tests {
     /// this push and silently drop it here.
     #[test]
     fn chat_invite_push_is_recognized_despite_sharing_its_wire_value_with_a_client_opcode() {
-        use hotline_proto::field_id::ServerFieldId;
+        use hotline_proto::field_id::FieldId;
         use hotline_proto::opcode::ServerOpcode;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let invite = Transaction::push(
             ServerOpcode::ChatInvite,
             vec![
-                Field::string(ServerFieldId::Name, "Alice"),
-                Field::u32(ServerFieldId::ChatId, 7),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u32(FieldId::ChatId, 7),
             ],
         );
         let _ = app.apply_server_event(&invite);
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn apply_user_change_carries_admin_color_for_new_and_existing_users() {
-        use hotline_proto::field_id::ServerFieldId;
+        use hotline_proto::field_id::FieldId;
         use hotline_proto::opcode::ServerOpcode;
         use hotline_proto::types::UserFlags;
 
@@ -348,10 +348,10 @@ mod tests {
         let admin_change = Transaction::push(
             ServerOpcode::UserChange,
             vec![
-                Field::u16(ServerFieldId::UserId, 2),
-                Field::u16(ServerFieldId::Icon, 0),
-                Field::string(ServerFieldId::Name, "Root"),
-                Field::u16(ServerFieldId::Color, UserFlags::ADMIN.bits()),
+                Field::u16(FieldId::UserId, 2),
+                Field::u16(FieldId::Icon, 0),
+                Field::string(FieldId::Name, "Root"),
+                Field::u16(FieldId::Color, UserFlags::ADMIN.bits()),
             ],
         );
 
@@ -364,10 +364,10 @@ mod tests {
         let demoted = Transaction::push(
             ServerOpcode::UserChange,
             vec![
-                Field::u16(ServerFieldId::UserId, 2),
-                Field::u16(ServerFieldId::Icon, 0),
-                Field::string(ServerFieldId::Name, "Root"),
-                Field::u16(ServerFieldId::Color, 0),
+                Field::u16(FieldId::UserId, 2),
+                Field::u16(FieldId::Icon, 0),
+                Field::string(FieldId::Name, "Root"),
+                Field::u16(FieldId::Color, 0),
             ],
         );
         let _ = app.apply_server_event(&demoted);
@@ -377,17 +377,17 @@ mod tests {
 
     #[test]
     fn apply_user_change_notes_a_rename() {
-        use hotline_proto::field_id::ServerFieldId;
+        use hotline_proto::field_id::FieldId;
         use hotline_proto::opcode::ServerOpcode;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let joined = Transaction::push(
             ServerOpcode::UserChange,
             vec![
-                Field::u16(ServerFieldId::UserId, 2),
-                Field::u16(ServerFieldId::Icon, 0),
-                Field::string(ServerFieldId::Name, "Alice"),
-                Field::u16(ServerFieldId::Color, 0),
+                Field::u16(FieldId::UserId, 2),
+                Field::u16(FieldId::Icon, 0),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Color, 0),
             ],
         );
         let _ = app.apply_server_event(&joined);
@@ -395,10 +395,10 @@ mod tests {
         let renamed = Transaction::push(
             ServerOpcode::UserChange,
             vec![
-                Field::u16(ServerFieldId::UserId, 2),
-                Field::u16(ServerFieldId::Icon, 0),
-                Field::string(ServerFieldId::Name, "Alicia"),
-                Field::u16(ServerFieldId::Color, 0),
+                Field::u16(FieldId::UserId, 2),
+                Field::u16(FieldId::Icon, 0),
+                Field::string(FieldId::Name, "Alicia"),
+                Field::u16(FieldId::Color, 0),
             ],
         );
         let _ = app.apply_server_event(&renamed);

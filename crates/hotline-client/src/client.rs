@@ -12,10 +12,7 @@ use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
-use hotline_proto::{
-    ClientFieldId, ClientHandshake, ClientOpcode, Field, ServerFieldId, ServerHandshake,
-    Transaction,
-};
+use hotline_proto::{ClientHandshake, ClientOpcode, Field, FieldId, ServerHandshake, Transaction};
 
 use crate::error::{ClientError, Result};
 
@@ -128,7 +125,7 @@ impl HotlineClient {
         if reply.is_error() {
             let encoding = self.encoding.get();
             let msg = reply
-                .string(ServerFieldId::ErrorText, encoding)
+                .string(FieldId::ErrorText, encoding)
                 .unwrap_or_else(|| "unknown error".to_string());
             return Err(ClientError::Server(msg));
         }
@@ -148,20 +145,18 @@ impl HotlineClient {
             .request(
                 ClientOpcode::Login,
                 vec![
-                    Field::obfuscated_string(ClientFieldId::Login, login),
-                    Field::obfuscated_string(ClientFieldId::Password, password),
-                    Field::u16(ClientFieldId::Version, 151),
+                    Field::obfuscated_string(FieldId::Login, login),
+                    Field::obfuscated_string(FieldId::Password, password),
+                    Field::u16(FieldId::Version, 151),
                 ],
             )
             .await?;
 
         let encoding = self.encoding.get();
         Ok(LoginResult {
-            version: reply
-                .field(ServerFieldId::Serverversion)
-                .and_then(Field::as_u16),
-            banner_id: reply.field(ServerFieldId::Bannerid).and_then(Field::as_u16),
-            server_name: reply.string(ServerFieldId::Servername, encoding),
+            version: reply.field(FieldId::Version).and_then(Field::as_u16),
+            banner_id: reply.field(FieldId::Bannerid).and_then(Field::as_u16),
+            server_name: reply.string(FieldId::Servername, encoding),
         })
     }
 
@@ -170,8 +165,8 @@ impl HotlineClient {
         self.request(
             ClientOpcode::Agreed,
             vec![
-                Field::string(ClientFieldId::Name, nick),
-                Field::u16(ClientFieldId::Icon, icon),
+                Field::string(FieldId::Name, nick),
+                Field::u16(FieldId::Icon, icon),
             ],
         )
         .await?;
@@ -184,7 +179,7 @@ impl HotlineClient {
         let tx = Transaction::request(
             ClientOpcode::Chat,
             id,
-            vec![Field::string(ClientFieldId::Text, message)],
+            vec![Field::string(FieldId::Text, message)],
         );
         self.writer.lock().await.send(tx).await?;
         Ok(())
