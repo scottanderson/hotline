@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::types::{
@@ -20,7 +20,7 @@ use hotline_proto::Transaction;
 
 use crate::accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 use crate::files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
-use crate::news::{NewsBundle, NewsItemKind, NewsListKind};
+use crate::news::{InMemoryNewsProvider, NewsItemKind, NewsListKind, NewsProvider};
 
 /// How long without any request before a user is considered idle.
 pub const IDLE_THRESHOLD: Duration = Duration::from_secs(10 * 60);
@@ -247,10 +247,13 @@ pub struct SharedState {
     /// File storage backing the file listing and `FILE_GET`/`FILE_PUT`;
     /// see [`crate::FileProvider`].
     files: Arc<dyn FileProvider>,
-    /// Classic (pre-threaded) news: one flat, newest-first text blob.
-    news: Arc<RwLock<String>>,
-    /// Threaded news: a tree of bundles and categories, see [`crate::news`].
-    news_tree: Arc<RwLock<NewsBundle>>,
+    /// News storage, see [`crate::NewsProvider`]. No local cache: read and
+    /// written directly on every call.
+    news_provider: Arc<dyn NewsProvider>,
+    /// Serializes a flat-news load-then-save round trip through `news_provider`.
+    news_flat_lock: Arc<Mutex<()>>,
+    /// Same purpose as `news_flat_lock`, for the threaded tree.
+    news_tree_lock: Arc<Mutex<()>>,
     /// Chat ID `0` is always present: the main room every connected
     /// user is implicitly in. Other entries are private rooms.
     chat_rooms: Arc<RwLock<HashMap<u32, ChatRoom>>>,
@@ -268,20 +271,26 @@ impl Default for SharedState {
         Self::new(
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(InMemoryFileProvider::default()),
+            Arc::new(InMemoryNewsProvider::default()),
         )
     }
 }
 
 impl SharedState {
-    /// Build fresh shared state backed by `accounts` and `files`.
-    pub fn new(accounts: Arc<dyn AccountProvider>, files: Arc<dyn FileProvider>) -> Self {
+    /// Build fresh shared state backed by `accounts`, `files`, and `news`.
+    pub fn new(
+        accounts: Arc<dyn AccountProvider>,
+        files: Arc<dyn FileProvider>,
+        news: Arc<dyn NewsProvider>,
+    ) -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
             next_user_id: Arc::new(AtomicU16::new(1)),
             recipients: Arc::new(RwLock::new(HashMap::new())),
             files,
-            news: Arc::new(RwLock::new(String::new())),
-            news_tree: Arc::new(RwLock::new(NewsBundle::default())),
+            news_provider: news,
+            news_flat_lock: Arc::new(Mutex::new(())),
+            news_tree_lock: Arc::new(Mutex::new(())),
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
             accounts,
@@ -674,14 +683,19 @@ impl SharedState {
 
     /// The full classic news text.
     pub async fn news(&self) -> String {
-        self.news.read().await.clone()
+        self.news_provider.load_flat().await.to_string()
     }
 
     /// Prepend a new post to the classic news. Returns the formatted entry.
     pub async fn post_news(&self, poster: &str, text: &str) -> String {
         const DIVIDER: &str = "_________________________________________________________";
         let entry = format!("{DIVIDER}\rFrom {poster}\r\r{text}\r\r");
-        self.news.write().await.insert_str(0, &entry);
+        let _guard = self.news_flat_lock.lock().await;
+        let flat = self.news_provider.load_flat().await;
+        let mut new_flat = String::with_capacity(entry.len() + flat.len());
+        new_flat.push_str(&entry);
+        new_flat.push_str(&flat);
+        self.news_provider.save_flat(new_flat.into()).await;
         entry
     }
 
@@ -691,7 +705,7 @@ impl SharedState {
         &self,
         path: &HlPath,
     ) -> Result<Vec<NewsCategoryListEntry>, &'static str> {
-        let tree = self.news_tree.read().await;
+        let tree = self.news_provider.load_tree().await;
         let entries = tree
             .list_dir(&path.components)
             .ok_or("news bundle not found")?;
@@ -716,7 +730,7 @@ impl SharedState {
         &self,
         path: &HlPath,
     ) -> Result<NewsArticleListData, &'static str> {
-        let tree = self.news_tree.read().await;
+        let tree = self.news_provider.load_tree().await;
         let articles = tree
             .list_articles(&path.components)
             .ok_or("news category not found")?;
@@ -744,7 +758,7 @@ impl SharedState {
         path: &HlPath,
         id: u32,
     ) -> Result<NewsArticleDetail, &'static str> {
-        let tree = self.news_tree.read().await;
+        let tree = self.news_provider.load_tree().await;
         let view = tree
             .article(&path.components, id)
             .ok_or("news article not found")?;
@@ -763,15 +777,20 @@ impl SharedState {
 
     /// Create a news bundle (folder) named `name` under `path`.
     pub async fn news_mkdir(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        self.news_tree.write().await.mkdir(&path.components, name)
+        let _guard = self.news_tree_lock.lock().await;
+        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
+        tree.mkdir(&path.components, name)?;
+        self.news_provider.save_tree(Arc::new(tree)).await;
+        Ok(())
     }
 
     /// Create a news category named `name` under `path`.
     pub async fn news_mkcategory(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        self.news_tree
-            .write()
-            .await
-            .mkcategory(&path.components, name)
+        let _guard = self.news_tree_lock.lock().await;
+        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
+        tree.mkcategory(&path.components, name)?;
+        self.news_provider.save_tree(Arc::new(tree)).await;
+        Ok(())
     }
 
     /// Delete the news bundle or category named by `path` (its last
@@ -782,7 +801,8 @@ impl SharedState {
         if path.components.is_empty() {
             return Err("news item not found".to_string());
         }
-        let mut tree = self.news_tree.write().await;
+        let _guard = self.news_tree_lock.lock().await;
+        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
         let kind = tree
             .item_kind(&path.components)
             .ok_or("news item not found")?;
@@ -791,7 +811,9 @@ impl SharedState {
             NewsItemKind::Category => Access::NEWS_DELETE_CAT,
         };
         access.require(required)?;
-        tree.delete(&path.components).map_err(|e| e.to_string())
+        tree.delete(&path.components).map_err(|e| e.to_string())?;
+        self.news_provider.save_tree(Arc::new(tree)).await;
+        Ok(())
     }
 
     /// Post a new article into the news category at `path`.
@@ -806,7 +828,9 @@ impl SharedState {
         flavor: String,
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
-        self.news_tree.write().await.post_article(
+        let _guard = self.news_tree_lock.lock().await;
+        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
+        let id = tree.post_article(
             &path.components,
             parent_id,
             title,
@@ -814,7 +838,9 @@ impl SharedState {
             flags,
             flavor,
             data,
-        )
+        )?;
+        self.news_provider.save_tree(Arc::new(tree)).await;
+        Ok(id)
     }
 
     /// Delete an article from the news category at `path`. If
@@ -826,10 +852,11 @@ impl SharedState {
         id: u32,
         recursive: bool,
     ) -> Result<(), &'static str> {
-        self.news_tree
-            .write()
-            .await
-            .delete_article(&path.components, id, recursive)
+        let _guard = self.news_tree_lock.lock().await;
+        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
+        tree.delete_article(&path.components, id, recursive)?;
+        self.news_provider.save_tree(Arc::new(tree)).await;
+        Ok(())
     }
 
     /// Create a new private chat room with `creator` as its only member,
@@ -1059,6 +1086,49 @@ impl SharedState {
 mod tests {
     use super::*;
 
+    /// Two `SharedState`s sharing a [`NewsProvider`] see each other's writes.
+    #[tokio::test]
+    async fn news_is_visible_across_shared_states_backed_by_the_same_provider() {
+        let provider: Arc<dyn NewsProvider> = Arc::new(InMemoryNewsProvider::default());
+        let state = SharedState::new(
+            Arc::new(InMemoryAccountProvider::default()),
+            Arc::new(InMemoryFileProvider::default()),
+            provider.clone(),
+        );
+
+        state.post_news("alice", "hello").await;
+        state
+            .news_mkcategory(&HlPath::default(), "General")
+            .await
+            .unwrap();
+        state
+            .news_post_article(
+                &HlPath::new(["General"]),
+                0,
+                "Hi".to_string(),
+                "alice".to_string(),
+                0,
+                "text/plain".to_string(),
+                b"hello".to_vec(),
+            )
+            .await
+            .unwrap();
+
+        let other = SharedState::new(
+            Arc::new(InMemoryAccountProvider::default()),
+            Arc::new(InMemoryFileProvider::default()),
+            provider,
+        );
+
+        assert!(other.news().await.contains("hello"));
+        let articles = other
+            .news_list_articles(&HlPath::new(["General"]))
+            .await
+            .unwrap();
+        assert_eq!(articles.articles.len(), 1);
+        assert_eq!(articles.articles[0].title, "Hi");
+    }
+
     /// `HashMap`'s iteration order has no relation to insertion order, so
     /// `users()` must sort explicitly rather than rely on it.
     #[tokio::test]
@@ -1145,7 +1215,11 @@ mod tests {
         let files = Arc::new(InMemoryFileProvider::default());
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         files.seed(&HlPath::new(["sub"]), "inner.txt", *b"x");
-        let state = SharedState::new(Arc::new(InMemoryAccountProvider::default()), files);
+        let state = SharedState::new(
+            Arc::new(InMemoryAccountProvider::default()),
+            files,
+            Arc::new(crate::news::InMemoryNewsProvider::default()),
+        );
 
         let requester = FileRequester { login: "alice" };
         let mut entries = state

@@ -17,6 +17,7 @@ mod state;
 pub use accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 pub use error::{Result, ServerError};
 pub use files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
+pub use news::{InMemoryNewsProvider, NewsBundle, NewsProvider};
 pub use server::{Server, ServerConfig};
 pub use session::Session;
 pub use state::{NewsArticleDetail, PendingTransfer, SharedState, TransferDirection, UserEntry};

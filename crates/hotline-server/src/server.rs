@@ -9,6 +9,7 @@ use hotline_proto::htxf::{self, ForkHeader, HtxfHeader};
 use crate::accounts::AccountProvider;
 use crate::error::Result;
 use crate::files::{FileProvider, FileRequester};
+use crate::news::NewsProvider;
 use crate::session::Session;
 use crate::state::{PendingTransfer, SharedState, TransferDirection};
 
@@ -42,14 +43,16 @@ pub struct Server {
 
 impl Server {
     /// Create a server with the given configuration, backed by `accounts`
-    /// (see [`AccountProvider`]) and `files` (see [`FileProvider`]) - the
-    /// embedding application supplies both concrete backends.
+    /// (see [`AccountProvider`]), `files` (see [`FileProvider`]), and
+    /// `news` (see [`NewsProvider`]) - the embedding application supplies
+    /// all three concrete backends.
     pub fn new(
         config: ServerConfig,
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
+        news: Arc<dyn NewsProvider>,
     ) -> Self {
-        let state = SharedState::new(accounts, files);
+        let state = SharedState::new(accounts, files, news);
         Self { config, state }
     }
 

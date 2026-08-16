@@ -4652,6 +4652,7 @@ mod tests {
         SharedState::new(
             std::sync::Arc::new(crate::accounts::InMemoryAccountProvider::default()),
             std::sync::Arc::new(files),
+            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
         )
     }
 

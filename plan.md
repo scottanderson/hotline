@@ -578,16 +578,35 @@ recommendation either way.
     `FILE_COMMENT`, so there's nothing yet for `SET_FILE_COMMENT`/
     `SET_FOLDER_COMMENT` to gate either — both larger features this
     backlog doesn't otherwise track yet.
-41. **Neither classic nor threaded news is persisted anywhere.**
-    `SharedState::news` (classic, a flat `String`) and `SharedState::news_tree`
-    (threaded, a `NewsBundle`, `crate::news`) are both plain in-memory
-    fields with no backing store, so every post/category/bundle is lost
-    on restart. Unlike accounts (`AccountProvider`) and files
-    (`FileProvider`), news has no pluggable storage trait for the
-    embedding application to supply; `news.rs`'s own module doc already
-    flags this ("no persistence and no per-login scoping") for the
-    threaded side. Needs a `NewsProvider`-shaped trait (or similar) before
-    this is durable across restarts.
+41. ~~Neither classic nor threaded news is persisted anywhere.~~
+    **Resolved.** Added `NewsProvider` (`crate::news`), following the same
+    plug-in shape as `AccountProvider`/`FileProvider`: `hotline-server`
+    only defines the trait and an `InMemoryNewsProvider` default, and the
+    embedding application supplies the real backend to `Server::new`.
+    Flat text and the threaded tree are two independent `load`/`save`
+    pairs on the trait, not one combined snapshot, matching how they're
+    unrelated data with no shared invariant, kept in two separate files on
+    disk by real server implementations. `SharedState` keeps no news
+    cache of its own: every read calls `load_flat`/`load_tree` and every
+    mutation does a `load`-mutate-`save` round trip, guarded by a
+    `SharedState`-side lock per data kind so two concurrent mutations of
+    the same kind can't silently drop one of their updates (a provider's
+    own internal lock, if it has one, only ever protects a single
+    `load`/`save` call, not the pair). `load`/`save` move an `Arc` rather
+    than an owned value or a reference: a read-only call only ever needs
+    to borrow the result, so `load` returning `Arc<str>`/`Arc<NewsBundle>`
+    makes that a refcount bump instead of a deep clone of the whole tree,
+    and a provider caching its own copy on `save` just stores the `Arc`
+    it's handed rather than cloning it again. A posted article's date is
+    stored as an ISO 8601 string (`crate::news::iso_date`) rather than its
+    raw wire fields; `hotline-proto` stays free of a `serde` dependency,
+    so this conversion lives on the persistence side that actually needs
+    it. `hotline-daemon` supplies `FileNewsProvider`: flat news persists
+    as a plain text file (the same bytes a client reads, no framing) and
+    the threaded tree persists separately as a JSON file, matching the
+    real split between an unstructured flat-text file and a structured
+    tree that a widely used non-primary server implementation uses for
+    these two kinds of news.
 42. **All wire text is decoded as lossy UTF-8, not the classic client's
     actual encoding.** `Field::as_string` (`crates/hotline-proto/src/field.rs`)
     and the name-decoding paths in `types.rs` (`FileNameWithInfo`,

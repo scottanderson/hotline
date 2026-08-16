@@ -1,5 +1,6 @@
 mod accounts;
 mod files;
+mod news;
 
 use std::sync::Arc;
 
@@ -8,6 +9,7 @@ use hotline_server::{Server, ServerConfig};
 
 use accounts::FileAccountProvider;
 use files::DirectoryFileProvider;
+use news::FileNewsProvider;
 
 /// A minimal Hotline server.
 #[derive(Parser, Debug)]
@@ -37,6 +39,15 @@ struct Args {
     /// missing). The transfer data connection listens on `port + 1`.
     #[arg(long, default_value = "files")]
     files_dir: String,
+
+    /// File to persist classic (flat) news to, as plain text (created if
+    /// missing).
+    #[arg(long, default_value = "news.txt")]
+    news_file: String,
+
+    /// File to persist threaded news to, as JSON (created if missing).
+    #[arg(long, default_value = "news.json")]
+    news_tree_file: String,
 }
 
 #[tokio::main]
@@ -52,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
 
     let accounts = Arc::new(FileAccountProvider::open(args.accounts_dir).await?);
     let files = Arc::new(DirectoryFileProvider::open(args.files_dir).await?);
-    Server::new(config, accounts, files).run().await?;
+    let news = Arc::new(FileNewsProvider::open(args.news_file, args.news_tree_file).await?);
+    Server::new(config, accounts, files, news).run().await?;
     Ok(())
 }

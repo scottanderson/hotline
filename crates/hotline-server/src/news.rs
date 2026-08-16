@@ -2,21 +2,25 @@
 //! (article threads), addressed by `HTLC_DATA_NEWS_DIR` (325).
 //!
 //! [`NewsBundle`] mirrors [`crate::files::Dir`]'s nested-tree shape: an
-//! in-memory tree keyed by path component, with no persistence and no
-//! per-login scoping. A [`NewsCategory`] leaf holds a thread of
-//! [`NewsArticle`]s; sibling order (used for `HTLC_DATA_NEWS_PREVTHREADID`/
-//! `HTLC_DATA_NEWS_NEXTTHREADID`) is derived from each article's position
-//! in its parent's `children` list rather than stored as explicit
-//! previous/next pointers.
+//! in-memory tree keyed by path component, with no per-login scoping;
+//! [`NewsProvider`] persists it. A [`NewsCategory`] leaf holds a thread of
+//! [`NewsArticle`]s; sibling order (`HTLC_DATA_NEWS_PREVTHREADID`/
+//! `_NEXTTHREADID`) comes from each article's position in its parent's
+//! `children` list, not stored previous/next pointers.
+
+mod iso_date;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::SystemTime;
 
+use async_trait::async_trait;
 use hotline_proto::types::HlDate;
+use serde::{Deserialize, Serialize};
 
 /// One item in the news bundle tree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NewsNode {
     /// A folder containing other bundles/categories.
     Bundle(NewsBundle),
@@ -36,7 +40,7 @@ impl NewsNode {
 }
 
 /// A folder containing other bundles/categories, keyed by name.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NewsBundle {
     pub entries: HashMap<String, NewsNode>,
 }
@@ -287,7 +291,7 @@ pub struct ArticleView<'a> {
 
 /// A leaf category: a thread of articles plus the bookkeeping mirrored
 /// into `HTLC_DATA_NEWS_DIRLIST_EXTENDED` (323).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewsCategory {
     pub guid: [u8; 16],
     /// Incremented by one each time an article is added. Never reset.
@@ -435,10 +439,11 @@ impl NewsCategory {
 }
 
 /// One posted article.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewsArticle {
     pub parent_id: u32,
     pub flags: u32,
+    #[serde(with = "iso_date")]
     pub date: HlDate,
     pub title: String,
     pub poster: String,
@@ -493,6 +498,43 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+/// News persistence, supplied by the embedding application like
+/// [`crate::AccountProvider`]/[`crate::FileProvider`]. Flat text and the
+/// threaded tree are independent load/save pairs, not one snapshot.
+#[async_trait]
+pub trait NewsProvider: Send + Sync {
+    async fn load_flat(&self) -> Arc<str>;
+    async fn save_flat(&self, flat: Arc<str>);
+    async fn load_tree(&self) -> Arc<NewsBundle>;
+    async fn save_tree(&self, tree: Arc<NewsBundle>);
+}
+
+/// A [`NewsProvider`] that keeps news in memory only; nothing survives a restart.
+#[derive(Debug, Default)]
+pub struct InMemoryNewsProvider {
+    flat: tokio::sync::RwLock<Arc<str>>,
+    tree: tokio::sync::RwLock<Arc<NewsBundle>>,
+}
+
+#[async_trait]
+impl NewsProvider for InMemoryNewsProvider {
+    async fn load_flat(&self) -> Arc<str> {
+        self.flat.read().await.clone()
+    }
+
+    async fn save_flat(&self, flat: Arc<str>) {
+        *self.flat.write().await = flat;
+    }
+
+    async fn load_tree(&self) -> Arc<NewsBundle> {
+        self.tree.read().await.clone()
+    }
+
+    async fn save_tree(&self, tree: Arc<NewsBundle>) {
+        *self.tree.write().await = tree;
+    }
 }
 
 #[cfg(test)]

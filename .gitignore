@@ -1,6 +1,8 @@
 /target
 /accounts
 /files
+news.json
+news.txt
 **/*.rs.bk
 Cargo.lock
 .DS_Store
