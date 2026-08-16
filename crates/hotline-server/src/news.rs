@@ -9,6 +9,7 @@
 //! `children` list, not stored previous/next pointers.
 
 mod iso_date;
+mod repr;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -439,11 +440,10 @@ impl NewsCategory {
 }
 
 /// One posted article.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NewsArticle {
     pub parent_id: u32,
     pub flags: u32,
-    #[serde(with = "iso_date")]
     pub date: HlDate,
     pub title: String,
     pub poster: String,
