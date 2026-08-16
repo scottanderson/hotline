@@ -548,13 +548,33 @@ debug-logged reason rather than failing the request.
     real upload/download progress needs a live per-transfer-progress
     tracker this server doesn't have yet (item 6's territory, not
     something to invent standalone here).
-38. **Banner support is incomplete.** `ServerFieldId` has the wire fields
+38. ~~**Banner support is incomplete.** `ServerFieldId` has the wire fields
     (`Banner` (151), `BannerType` (152), `BannerUrl` (153), `Bannerid`
     (161)) and `AccessExtra::BANNER_GET` exists, but `on_login` only ever
     sends `Bannerid` hardcoded to 0, and nothing serves actual banner
     bytes/type/URL or handles a banner-fetch request. Needs the
     fetch opcode identified and a real banner source (configured image or
-    URL) before this is more than a stub.
+    URL) before this is more than a stub.~~ **Resolved**, together with
+    item 46. Added `Opcode::BannerGet` (212) and `Opcode::Banner`
+    (122), missing from `opcode.rs` entirely before this. On login, once a
+    session completes its join (immediate-join or after `myTran_Agreed`)
+    and the client reports `myField_Vers` >= 151, a `myTran_ServerBanner`
+    push carries `BannerType` and, for a URL banner, `BannerUrl`; an image
+    banner sends `BannerType` alone; the client is expected to follow up
+    with `BANNER_GET`. `BANNER_GET` is gated on `AccessExtra::BANNER_GET`
+    and, like `FILE_GET`, replies with a transfer reference and size, then
+    the image bytes are pulled over the same `HTXF` data connection a file
+    transfer uses. Unlike a file transfer, a banner image has no
+    flattened-object (`FILP`/`INFO`/`DATA`) framing, just the raw bytes, so
+    `PendingTransfer` gained a `TransferKind::{File,Banner}` tag and the
+    `HTXF` listener sends a banner transfer through a separate unframed
+    path. `Bannerid` itself (a distinct legacy community-tracker ID, not
+    this banner content) is untouched, still hardcoded 0. Unlike every
+    other bit this gate checks, the reference never restricts banner
+    downloads at all; `AccessExtra::BANNER_GET` is this server's own
+    opt-in gate with no reference counterpart, so it's included in
+    `AccessExtra::default()` to keep a fresh account's behavior
+    unrestricted like the reference's.
 39. ~~`on_chat`'s `SEND_CHAT` privilege check goes through the generic
     `Access::require`, which renders as "You are not allowed to do that
     (SEND_CHAT)."; the reference sends the fixed string "You are not
@@ -751,11 +771,27 @@ debug-logged reason rather than failing the request.
     as `AccountProvider`/`FileProvider`: `hotline-server` would define
     the trait and dispatch, the embedding application would supply which
     commands actually exist.
-46. **Banner content has no provider seam either**, once item 38's banner
+46. ~~**Banner content has no provider seam either**, once item 38's banner
     support is built. The secondary reference reads banner bytes/type/URL
     from static server config; a `BannerProvider` (parallel to
     `FileProvider`) would let the embedding application serve a banner
-    generated per-login or per-request instead of one fixed image.
+    generated per-login or per-request instead of one fixed image.~~
+    **Resolved**, together with item 38. Added `BannerProvider`
+    (`crate::banner`), the same plug-in shape as `FileProvider`: `kind`
+    answers the login-time push (`None`, a URL, or an image's format tag),
+    `open_read`/`size` back a `BANNER_GET` download and are only ever
+    called for an image banner. `hotline-server` provides two defaults,
+    `NoBanner` (nothing configured) and `UrlBannerProvider` (a fixed URL,
+    nothing to fetch over `HTXF`); `Server::new` takes a sixth `banner:
+    Arc<dyn BannerProvider>` argument the same way it already takes `bans`.
+    `hls` wires in a single `--banner` flag: an `http://`/`https://`
+    value picks `UrlBannerProvider`, anything else is a local or relative
+    path served by `FileBannerProvider` (`hotline-daemon`'s own
+    `banner.rs`). `FileBannerProvider` infers the wire format tag from
+    the file's extension (`.jpg`/`.jpeg`, `.gif`, `.pct`/`.pict`,
+    `.bmp`/`.dib`), the same mapping the reference server applies; an
+    unrecognized extension is a startup error rather than a guess.
+    `NoBanner` when the flag is unset.
 47. ~~`on_chat_invite`/`_join`/`_part`/`_decline`/`_subject` never checked
     `AccessExtra::CHAT_PRIVATE` at all, though the field and its account-
     default (on) already existed.~~ **Resolved.** Each of those five

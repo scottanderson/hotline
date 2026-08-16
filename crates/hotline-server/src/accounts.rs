@@ -138,6 +138,7 @@ impl Default for AccessExtra {
             | Self::IS_0WN3D
             | Self::INFO_GET_ADDRESS
             | Self::INFO_GET_LOGIN
+            | Self::BANNER_GET
     }
 }
 
@@ -310,7 +311,8 @@ mod tests {
             | AccessExtra::ACCESS_VOLATILE
             | AccessExtra::IS_0WN3D
             | AccessExtra::INFO_GET_ADDRESS
-            | AccessExtra::INFO_GET_LOGIN;
+            | AccessExtra::INFO_GET_LOGIN
+            | AccessExtra::BANNER_GET;
         assert_eq!(AccessExtra::default(), expected);
     }
 }

@@ -20,6 +20,7 @@ use hotline_proto::types::{
 use hotline_proto::Transaction;
 
 use crate::accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
+use crate::banner::{BannerKind, BannerProvider, NoBanner};
 use crate::bans::{BanProvider, BanRecord, InMemoryBanProvider};
 use crate::files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
 use crate::flood::{FloodDecision, FloodPolicy, NoFloodPolicy};
@@ -166,14 +167,27 @@ pub enum TransferDirection {
     Put,
 }
 
+/// Which resource a pending `HTXF` transfer moves bytes for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferKind {
+    /// A file from [`FileProvider`], framed as a flattened file object.
+    File,
+    /// The server banner image from [`BannerProvider`], sent as a plain
+    /// unframed byte stream.
+    Banner,
+}
+
 /// A transfer awaiting its data connection: allocated when `FILE_GET`/
-/// `FILE_PUT` replies with a reference number, consumed once the client
-/// opens the second connection and sends that reference back. Identifies
-/// the file by [`FileRequester`] login plus directory/name, not a raw
-/// path, so completing the transfer still goes through the
-/// [`FileProvider`] rather than assuming filesystem storage.
+/// `FILE_PUT`/`myTran_DownloadBanner` replies with a reference number,
+/// consumed once the client opens the second connection and sends that
+/// reference back. Identifies the file by [`FileRequester`] login plus
+/// directory/name, not a raw path, so completing the transfer still goes
+/// through the [`FileProvider`] rather than assuming filesystem storage.
+/// `dir`/`name`/`login` are unused for [`TransferKind::Banner`].
 #[derive(Debug, Clone)]
 pub struct PendingTransfer {
+    /// Which storage backs this transfer.
+    pub kind: TransferKind,
     /// Whether this is a download or upload.
     pub direction: TransferDirection,
     /// The requesting session's account login.
@@ -281,6 +295,8 @@ pub struct SharedState {
     bans: Arc<dyn BanProvider>,
     /// Flood/spam policy; see [`crate::FloodPolicy`].
     flood: Arc<dyn FloodPolicy>,
+    /// Banner storage; see [`crate::BannerProvider`].
+    banner: Arc<dyn BannerProvider>,
     /// Transfers awaiting their `HTXF` data connection, keyed by the
     /// reference number handed to the client.
     transfers: Arc<RwLock<HashMap<u32, PendingTransfer>>>,
@@ -295,19 +311,21 @@ impl Default for SharedState {
             Arc::new(InMemoryNewsProvider::default()),
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
+            Arc::new(NoBanner),
         )
     }
 }
 
 impl SharedState {
     /// Build fresh shared state backed by `accounts`, `files`, `news`,
-    /// `bans`, and `flood`.
+    /// `bans`, `flood`, and `banner`.
     pub fn new(
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
         news: Arc<dyn NewsProvider>,
         bans: Arc<dyn BanProvider>,
         flood: Arc<dyn FloodPolicy>,
+        banner: Arc<dyn BannerProvider>,
     ) -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
@@ -322,6 +340,7 @@ impl SharedState {
             accounts,
             bans,
             flood,
+            banner,
             transfers: Arc::new(RwLock::new(HashMap::new())),
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
         }
@@ -750,6 +769,48 @@ impl SharedState {
     /// is still waiting. Consumes it: a reference is only good once.
     pub async fn take_transfer(&self, reference: u32) -> Option<PendingTransfer> {
         self.transfers.write().await.remove(&reference)
+    }
+
+    /// The currently configured banner, for the login-time `myTran_ServerBanner`
+    /// push.
+    pub async fn banner_kind(&self) -> Option<BannerKind> {
+        self.banner.kind().await
+    }
+
+    /// Start a banner-image download over `HTXF`, returning `(byte size,
+    /// reference)` to reply with. `Err` if no image banner is configured
+    /// (a URL banner has nothing to fetch this way).
+    pub async fn start_banner_transfer(
+        &self,
+        client_ip: IpAddr,
+    ) -> Result<(u64, u32), &'static str> {
+        match self.banner.kind().await {
+            Some(BannerKind::Image { .. }) => {}
+            _ => return Err("no banner is configured."),
+        }
+        let size = self
+            .banner
+            .size()
+            .await
+            .map_err(|_| "banner is unavailable.")?;
+        let reference = self
+            .register_transfer(PendingTransfer {
+                kind: TransferKind::Banner,
+                direction: TransferDirection::Get,
+                login: String::new(),
+                dir: HlPath::default(),
+                name: String::new(),
+                size,
+                resume_offset: 0,
+                client_ip,
+            })
+            .await;
+        Ok((size, reference))
+    }
+
+    /// Open the banner image for reading, for a `BANNER_GET` download.
+    pub async fn open_banner_read(&self) -> std::io::Result<BoxedReader> {
+        self.banner.open_read().await
     }
 
     /// The full classic news text.
@@ -1198,6 +1259,7 @@ mod tests {
             provider.clone(),
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
+            Arc::new(NoBanner),
         );
 
         state.post_news("alice", "hello").await;
@@ -1224,6 +1286,7 @@ mod tests {
             provider,
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
+            Arc::new(NoBanner),
         );
 
         assert!(other.news().await.contains("hello"));
@@ -1327,6 +1390,7 @@ mod tests {
             Arc::new(crate::news::InMemoryNewsProvider::default()),
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
+            Arc::new(NoBanner),
         );
 
         let requester = FileRequester { login: "alice" };
@@ -1347,6 +1411,7 @@ mod tests {
     async fn register_transfer_allocates_distinct_refs_and_take_consumes_them() {
         let state = SharedState::default();
         let make = || PendingTransfer {
+            kind: TransferKind::File,
             direction: TransferDirection::Get,
             login: "alice".to_string(),
             dir: HlPath::default(),

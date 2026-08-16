@@ -10,14 +10,17 @@ use crate::wire::{PacketReader, PacketWriter, VecWriter};
 
 const MAGIC: &[u8; 4] = b"HTXF";
 
-/// Transfer type carried in [`HtxfHeader::transfer_type`]. Folder and
-/// banner transfers use other wire values but aren't implemented here.
+/// Transfer type carried in [`HtxfHeader::transfer_type`]. Folder
+/// transfers use another wire value not implemented here.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum HtxfType {
-    /// A single file, the only type this server sends/accepts.
+    /// A single file.
     FileTransfer = 0,
+
+    /// The server banner image (`myTran_DownloadBanner`, 212).
+    Banner = 2,
 
     /// Not recognized by this build. Carries the raw wire value so
     /// callers can still log/forward it.

@@ -7,13 +7,14 @@ use tokio::net::{TcpListener, TcpStream};
 use hotline_proto::htxf::{self, ForkHeader, HtxfHeader};
 
 use crate::accounts::AccountProvider;
+use crate::banner::BannerProvider;
 use crate::bans::BanProvider;
 use crate::error::Result;
 use crate::files::{FileProvider, FileRequester};
 use crate::flood::FloodPolicy;
 use crate::news::NewsProvider;
 use crate::session::Session;
-use crate::state::{PendingTransfer, SharedState, TransferDirection};
+use crate::state::{PendingTransfer, SharedState, TransferDirection, TransferKind};
 
 /// Server configuration.
 #[derive(Debug, Clone)]
@@ -46,9 +47,9 @@ pub struct Server {
 impl Server {
     /// Create a server with the given configuration, backed by `accounts`
     /// (see [`AccountProvider`]), `files` (see [`FileProvider`]), `news`
-    /// (see [`NewsProvider`]), `bans` (see [`BanProvider`]), and `flood`
-    /// (see [`FloodPolicy`]) - the embedding application supplies all five
-    /// concrete backends.
+    /// (see [`NewsProvider`]), `bans` (see [`BanProvider`]), `flood` (see
+    /// [`FloodPolicy`]), and `banner` (see [`BannerProvider`]) - the
+    /// embedding application supplies all six concrete backends.
     pub fn new(
         config: ServerConfig,
         accounts: Arc<dyn AccountProvider>,
@@ -56,8 +57,9 @@ impl Server {
         news: Arc<dyn NewsProvider>,
         bans: Arc<dyn BanProvider>,
         flood: Arc<dyn FloodPolicy>,
+        banner: Arc<dyn BannerProvider>,
     ) -> Self {
-        let state = SharedState::new(accounts, files, news, bans, flood);
+        let state = SharedState::new(accounts, files, news, bans, flood, banner);
         Self { config, state }
     }
 
@@ -143,10 +145,21 @@ async fn handle_htxf_connection(
         return Ok(());
     }
 
-    match transfer.direction {
-        TransferDirection::Get => send_file(&mut stream, &transfer, state).await,
-        TransferDirection::Put => receive_file(&mut stream, &transfer, state).await,
+    match transfer.kind {
+        TransferKind::Banner => send_banner(&mut stream, state).await,
+        TransferKind::File => match transfer.direction {
+            TransferDirection::Get => send_file(&mut stream, &transfer, state).await,
+            TransferDirection::Put => receive_file(&mut stream, &transfer, state).await,
+        },
     }
+}
+
+/// Send a `BANNER_GET` download: the banner image's raw bytes, with none
+/// of a file transfer's flattened-object framing.
+async fn send_banner(stream: &mut TcpStream, state: &SharedState) -> Result<()> {
+    let mut reader = state.open_banner_read().await?;
+    tokio::io::copy(&mut reader, stream).await?;
+    Ok(())
 }
 
 /// Send a `FILE_GET` download: the flattened-file-object header, then

@@ -104,6 +104,9 @@ pub enum Opcode {
     /// Accept the server's usage agreement, completing login (121).
     /// Original: `myTran_Agreed`.
     Agreed = 121,
+    /// The server banner's type and, for a URL banner, its target (122).
+    /// Original: `myTran_ServerBanner`.
+    Banner = 122,
     /// List files in a folder (200).
     /// Original: `myTran_GetFileNameList`.
     FileList = 200,
@@ -131,6 +134,9 @@ pub enum Opcode {
     /// Create a file alias (209).
     /// Original: `myTran_MakeFileAlias`.
     FileSymlink = 209,
+    /// Fetch the server banner image over `HTXF` (212).
+    /// Original: `myTran_DownloadBanner`.
+    BannerGet = 212,
     /// Fetch the connected-user list (300).
     /// Original: `myTran_GetUserNameList`.
     UserGetlist = 300,
@@ -242,6 +248,7 @@ opcode_names!(
     (myTran_NotifyChatSubject, NotifyChatSubject),
     (myTran_SetChatSubject, SetChatSubject),
     (myTran_Agreed, Agreed),
+    (myTran_ServerBanner, Banner),
     (myTran_GetFileNameList, FileList),
     (myTran_DownloadFile, FileGet),
     (myTran_UploadFile, FilePut),
@@ -251,6 +258,7 @@ opcode_names!(
     (myTran_SetFileInfo, FileSetinfo),
     (myTran_MoveFile, FileMove),
     (myTran_MakeFileAlias, FileSymlink),
+    (myTran_DownloadBanner, BannerGet),
     (myTran_GetUserNameList, UserGetlist),
     (myTran_NotifyChangeUser, NotifyChangeUser),
     (myTran_NotifyDeleteUser, UserPart),

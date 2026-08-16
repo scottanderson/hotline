@@ -16,13 +16,14 @@ use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldList, ServerHandshake, Transaction};
 
 use crate::accounts::{AccessExtra, Account};
+use crate::banner::BannerKind;
 use crate::error::{Result, ServerError};
 use crate::files::FileRequester;
 use crate::flood::FloodDecision;
 use crate::server::ServerConfig;
 use crate::state::{
-    AccessUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection, UserEntry,
-    IDLE_THRESHOLD,
+    AccessUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection, TransferKind,
+    UserEntry, IDLE_THRESHOLD,
 };
 
 bitflags::bitflags! {
@@ -335,6 +336,7 @@ impl Session {
             /* 207 */ Opcode::FileSetinfo => self.on_file_setinfo(tx, state).await,
             /* 208 */ Opcode::FileMove => self.on_file_move(tx, state).await,
             /* 209 */ Opcode::FileSymlink => self.on_file_symlink(tx, state).await,
+            /* 212 */ Opcode::BannerGet => self.on_banner_get(tx, state).await,
             /* 300 */ Opcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 370 */ Opcode::NewsListdir => self.on_news_listdir(tx, state).await,
             /* 371 */
@@ -429,6 +431,9 @@ impl Session {
         if (name.is_some() && icon != 0) || !modern {
             let selfinfo = self.complete_join(name, icon, state).await;
             replies.push(selfinfo);
+            if let Some(banner) = self.banner_push(state).await {
+                replies.push(banner);
+            }
         }
 
         replies
@@ -461,7 +466,28 @@ impl Session {
         let encoding = self.encoding();
         let name = tx.name(encoding);
         let selfinfo = self.complete_join(name, icon, state).await;
-        vec![tx.reply(vec![]), selfinfo]
+        let mut replies = vec![tx.reply(vec![]), selfinfo];
+        if let Some(banner) = self.banner_push(state).await {
+            replies.push(banner);
+        }
+        replies
+    }
+
+    /// If a banner is configured and this client's reported version can
+    /// display one (`myField_Vers` >= 151), build the
+    /// `myTran_ServerBanner` push: `BannerType`, plus `BannerUrl` for a URL
+    /// banner. An image banner sends no URL; the client is expected to
+    /// follow up with `myTran_DownloadBanner`.
+    async fn banner_push(&self, state: &SharedState) -> Option<Transaction> {
+        if self.client_version.unwrap_or(0) < 151 {
+            return None;
+        }
+        let kind = state.banner_kind().await?;
+        let mut fields = vec![Field::bytes(FieldId::BannerType, kind.type_tag().to_vec())];
+        if let BannerKind::Url(url) = &kind {
+            fields.push(Field::string(FieldId::BannerUrl, url.clone()));
+        }
+        Some(Transaction::push(Opcode::Banner, fields))
     }
 
     /// Register name/icon, broadcast the join excluding self, mark this
@@ -1031,6 +1057,7 @@ impl Session {
         let total_size = remaining + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64;
         let reference = state
             .register_transfer(PendingTransfer {
+                kind: TransferKind::File,
                 direction: TransferDirection::Get,
                 login: self.login.clone(),
                 dir,
@@ -1045,6 +1072,24 @@ impl Session {
             Field::u32(FieldId::TransferId, reference),
             Field::u32(FieldId::TransferSize, total_size as u32),
             Field::u32(FieldId::FileSize, data_size as u32),
+        ])]
+    }
+
+    /// 212: request the server banner image over `HTXF`, the same
+    /// download-reference-and-second-connection dance as `FILE_GET`.
+    /// `Err` if no image banner is configured (a URL banner has nothing
+    /// to fetch this way).
+    async fn on_banner_get(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        if let Err(reason) = self.access_extra.require(AccessExtra::BANNER_GET) {
+            return vec![tx.reply_error(reason)];
+        }
+        let (size, reference) = match state.start_banner_transfer(self.remote_addr.ip()).await {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        vec![tx.reply(vec![
+            Field::u32(FieldId::TransferId, reference),
+            Field::u32(FieldId::TransferSize, size as u32),
         ])]
     }
 
@@ -1075,6 +1120,7 @@ impl Session {
             .unwrap_or(0);
         let reference = state
             .register_transfer(PendingTransfer {
+                kind: TransferKind::File,
                 direction: TransferDirection::Put,
                 login: self.login.clone(),
                 dir,
@@ -2749,6 +2795,230 @@ mod tests {
         assert!(matches!(session.state, SessionState::Joined));
     }
 
+    /// A fixed-bytes [`crate::banner::BannerProvider`], for exercising
+    /// the `BANNER_GET`/`myTran_ServerBanner` login push paths.
+    struct TestImageBanner {
+        format: [u8; 4],
+        bytes: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::banner::BannerProvider for TestImageBanner {
+        async fn kind(&self) -> Option<crate::banner::BannerKind> {
+            Some(crate::banner::BannerKind::Image {
+                format: self.format,
+            })
+        }
+
+        async fn open_read(&self) -> std::io::Result<crate::files::BoxedReader> {
+            Ok(Box::new(std::io::Cursor::new(self.bytes.clone())))
+        }
+
+        async fn size(&self) -> std::io::Result<u64> {
+            Ok(self.bytes.len() as u64)
+        }
+    }
+
+    fn state_with_banner(banner: std::sync::Arc<dyn crate::banner::BannerProvider>) -> SharedState {
+        SharedState::new(
+            std::sync::Arc::new(crate::accounts::InMemoryAccountProvider::default()),
+            std::sync::Arc::new(crate::files::InMemoryFileProvider::default()),
+            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            std::sync::Arc::new(crate::bans::InMemoryBanProvider::default()),
+            std::sync::Arc::new(crate::flood::NoFloodPolicy),
+            banner,
+        )
+    }
+
+    #[tokio::test]
+    async fn login_push_carries_image_banner_type_with_no_url() {
+        let encoding = text_encoding::DEFAULT;
+        let mut session = test_session("guest1", Access::default());
+        let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
+            format: *b"JPEG",
+            bytes: b"hi".to_vec(),
+        }));
+        let config = ServerConfig::default();
+
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::u16(FieldId::Version, 151),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        let banner = replies
+            .iter()
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner))
+            .expect("expected a myTran_ServerBanner push");
+        assert_eq!(
+            banner
+                .field(FieldId::BannerType)
+                .unwrap()
+                .as_bytes(encoding)
+                .as_ref(),
+            b"JPEG"
+        );
+        assert!(banner.field(FieldId::BannerUrl).is_none());
+    }
+
+    #[tokio::test]
+    async fn login_push_carries_url_banner_type_and_url() {
+        let encoding = text_encoding::DEFAULT;
+        let mut session = test_session("guest1", Access::default());
+        let state = state_with_banner(std::sync::Arc::new(crate::banner::UrlBannerProvider::new(
+            "https://example.com/banner.jpg",
+        )));
+        let config = ServerConfig::default();
+
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::u16(FieldId::Version, 151),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        let banner = replies
+            .iter()
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner))
+            .expect("expected a myTran_ServerBanner push");
+        assert_eq!(
+            banner
+                .field(FieldId::BannerType)
+                .unwrap()
+                .as_bytes(encoding)
+                .as_ref(),
+            b"URL "
+        );
+        assert_eq!(
+            banner.string(FieldId::BannerUrl, encoding),
+            Some("https://example.com/banner.jpg".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn login_push_omitted_below_client_version_151() {
+        let mut session = test_session("guest1", Access::default());
+        let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
+            format: *b"JPEG",
+            bytes: b"hi".to_vec(),
+        }));
+        let config = ServerConfig::default();
+
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::u16(FieldId::Version, 150),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert!(!replies
+            .iter()
+            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner)));
+    }
+
+    #[tokio::test]
+    async fn login_push_omitted_when_no_banner_configured() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::u16(FieldId::Version, 151),
+                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Icon, 42),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        assert!(!replies
+            .iter()
+            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner)));
+    }
+
+    #[tokio::test]
+    async fn banner_get_denied_without_access_extra_banner_get() {
+        let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
+            format: *b"JPEG",
+            bytes: b"hi".to_vec(),
+        }));
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.remove(AccessExtra::BANNER_GET);
+
+        let get = Transaction::request(Opcode::BannerGet, 1, vec![]);
+        let [reply] = session
+            .on_banner_get(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn banner_get_replies_with_ref_and_size_and_registers_a_banner_transfer() {
+        let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
+            format: *b"JPEG",
+            bytes: b"hello".to_vec(),
+        }));
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::BANNER_GET);
+
+        let get = Transaction::request(Opcode::BannerGet, 1, vec![]);
+        let [reply] = session
+            .on_banner_get(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+
+        let reference = reply
+            .field(FieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+        let size = reply
+            .field(FieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert_eq!(size, 5);
+
+        let transfer = state.take_transfer(reference).await.unwrap();
+        assert_eq!(transfer.kind, TransferKind::Banner);
+        assert_eq!(transfer.direction, TransferDirection::Get);
+        assert_eq!(transfer.size, 5);
+    }
+
+    #[tokio::test]
+    async fn banner_get_denied_when_only_a_url_banner_is_configured() {
+        let state = state_with_banner(std::sync::Arc::new(crate::banner::UrlBannerProvider::new(
+            "https://example.com/banner.jpg",
+        )));
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::BANNER_GET);
+
+        let get = Transaction::request(Opcode::BannerGet, 1, vec![]);
+        let [reply] = session
+            .on_banner_get(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
     #[tokio::test]
     async fn modern_client_gets_no_agreement_push_without_configured_text() {
         let mut session = test_session("guest1", Access::default());
@@ -3308,6 +3578,7 @@ mod tests {
             std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::bans::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::new(config)),
+            std::sync::Arc::new(crate::banner::NoBanner),
         )
     }
 
@@ -4926,6 +5197,7 @@ mod tests {
             std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::bans::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::NoFloodPolicy),
+            std::sync::Arc::new(crate::banner::NoBanner),
         )
     }
 

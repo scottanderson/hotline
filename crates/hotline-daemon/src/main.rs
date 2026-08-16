@@ -1,4 +1,5 @@
 mod accounts;
+mod banner;
 mod bans;
 mod files;
 mod news;
@@ -6,9 +7,10 @@ mod news;
 use std::sync::Arc;
 
 use clap::Parser;
-use hotline_server::{InMemoryFloodPolicy, Server, ServerConfig};
+use hotline_server::{InMemoryFloodPolicy, NoBanner, Server, ServerConfig, UrlBannerProvider};
 
 use accounts::FileAccountProvider;
+use banner::FileBannerProvider;
 use bans::FileBanProvider;
 use files::FileFileProvider;
 use news::FileNewsProvider;
@@ -60,6 +62,12 @@ struct Args {
     /// File to persist address bans to, as JSON (created if missing).
     #[arg(long, default_value = "bans.json")]
     ban_file: String,
+
+    /// Banner shown to clients on login (unset disables the banner). An
+    /// `http://`/`https://` value is shown as a URL; anything else is a
+    /// local or relative path to an image file served over `HTXF`.
+    #[arg(long)]
+    banner: Option<String>,
 }
 
 #[tokio::main]
@@ -78,7 +86,14 @@ async fn main() -> anyhow::Result<()> {
     let news = Arc::new(FileNewsProvider::open(args.news_file, args.news_tree_file).await?);
     let bans = Arc::new(FileBanProvider::open(args.ban_file).await?);
     let flood = Arc::new(InMemoryFloodPolicy::default());
-    Server::new(config, accounts, files, news, bans, flood)
+    let banner: Arc<dyn hotline_server::BannerProvider> = match args.banner {
+        Some(value) if value.starts_with("http://") || value.starts_with("https://") => {
+            Arc::new(UrlBannerProvider::new(value))
+        }
+        Some(path) => Arc::new(FileBannerProvider::open(path).await?),
+        None => Arc::new(NoBanner),
+    };
+    Server::new(config, accounts, files, news, bans, flood, banner)
         .run()
         .await?;
     Ok(())
