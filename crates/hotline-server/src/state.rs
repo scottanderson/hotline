@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::opcode::ClientOpcode;
 use hotline_proto::types::{
     FileNameWithInfo, HlDate, HlPath, NewsArticleListData, NewsArticleSummary,
     NewsCategoryListEntry, UserFlags,
@@ -21,6 +22,7 @@ use hotline_proto::Transaction;
 use crate::accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 use crate::bans::{BanProvider, BanRecord, InMemoryBanProvider};
 use crate::files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
+use crate::flood::{FloodDecision, FloodPolicy, NoFloodPolicy};
 use crate::news::{InMemoryNewsProvider, NewsItemKind, NewsListKind, NewsProvider};
 
 /// How long without any request before a user is considered idle.
@@ -277,6 +279,8 @@ pub struct SharedState {
     accounts: Arc<dyn AccountProvider>,
     /// Ban storage; see [`crate::BanProvider`].
     bans: Arc<dyn BanProvider>,
+    /// Flood/spam policy; see [`crate::FloodPolicy`].
+    flood: Arc<dyn FloodPolicy>,
     /// Transfers awaiting their `HTXF` data connection, keyed by the
     /// reference number handed to the client.
     transfers: Arc<RwLock<HashMap<u32, PendingTransfer>>>,
@@ -290,17 +294,20 @@ impl Default for SharedState {
             Arc::new(InMemoryFileProvider::default()),
             Arc::new(InMemoryNewsProvider::default()),
             Arc::new(InMemoryBanProvider::default()),
+            Arc::new(NoFloodPolicy),
         )
     }
 }
 
 impl SharedState {
-    /// Build fresh shared state backed by `accounts`, `files`, `news`, and `bans`.
+    /// Build fresh shared state backed by `accounts`, `files`, `news`,
+    /// `bans`, and `flood`.
     pub fn new(
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
         news: Arc<dyn NewsProvider>,
         bans: Arc<dyn BanProvider>,
+        flood: Arc<dyn FloodPolicy>,
     ) -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
@@ -314,6 +321,7 @@ impl SharedState {
             next_chat_id: Arc::new(AtomicU32::new(1)),
             accounts,
             bans,
+            flood,
             transfers: Arc::new(RwLock::new(HashMap::new())),
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
         }
@@ -1147,6 +1155,17 @@ impl SharedState {
         self.bans.ban(ip, until).await
     }
 
+    /// Record one transaction from `user_id` and decide what happens to
+    /// it; see [`crate::FloodPolicy::check`].
+    pub async fn check_flood(&self, user_id: u16, opcode: ClientOpcode) -> FloodDecision {
+        self.flood.check(user_id, opcode).await
+    }
+
+    /// Forget `user_id`'s accumulated flood state, called on disconnect.
+    pub async fn reset_flood(&self, user_id: u16) {
+        self.flood.reset(user_id).await;
+    }
+
     /// Delete an account. `Err("no such account")` if it didn't exist.
     pub async fn delete_account(&self, login: &str) -> Result<(), String> {
         match self.accounts.delete(login).await {
@@ -1178,6 +1197,7 @@ mod tests {
             Arc::new(InMemoryFileProvider::default()),
             provider.clone(),
             Arc::new(InMemoryBanProvider::default()),
+            Arc::new(NoFloodPolicy),
         );
 
         state.post_news("alice", "hello").await;
@@ -1203,6 +1223,7 @@ mod tests {
             Arc::new(InMemoryFileProvider::default()),
             provider,
             Arc::new(InMemoryBanProvider::default()),
+            Arc::new(NoFloodPolicy),
         );
 
         assert!(other.news().await.contains("hello"));
@@ -1305,6 +1326,7 @@ mod tests {
             files,
             Arc::new(crate::news::InMemoryNewsProvider::default()),
             Arc::new(InMemoryBanProvider::default()),
+            Arc::new(NoFloodPolicy),
         );
 
         let requester = FileRequester { login: "alice" };

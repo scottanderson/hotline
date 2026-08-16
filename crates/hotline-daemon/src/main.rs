@@ -6,7 +6,7 @@ mod news;
 use std::sync::Arc;
 
 use clap::Parser;
-use hotline_server::{Server, ServerConfig};
+use hotline_server::{InMemoryFloodPolicy, Server, ServerConfig};
 
 use accounts::FileAccountProvider;
 use bans::FileBanProvider;
@@ -77,7 +77,8 @@ async fn main() -> anyhow::Result<()> {
     let files = Arc::new(FileFileProvider::open(args.files_dir, args.comments_file).await?);
     let news = Arc::new(FileNewsProvider::open(args.news_file, args.news_tree_file).await?);
     let bans = Arc::new(FileBanProvider::open(args.ban_file).await?);
-    Server::new(config, accounts, files, news, bans)
+    let flood = Arc::new(InMemoryFloodPolicy::default());
+    Server::new(config, accounts, files, news, bans, flood)
         .run()
         .await?;
     Ok(())

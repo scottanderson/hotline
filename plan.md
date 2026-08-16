@@ -692,15 +692,25 @@ debug-logged reason rather than failing the request.
     so once imposed a ban can only be lifted by hand-editing
     `bans.json`. Needs a `USER_UNBAN`-shaped transaction and handler
     before it's reachable.
-44. **No pluggable flood/spam policy.** `AccessExtra::CAN_SPAM` exists
-    (an account exempt from flood limits) but nothing in this server
-    tracks request rate at all, so there's no limit to be exempt from.
-    The secondary reference's own flood control is a handful of
-    deployment-specific tunables (points per transaction type, decay
-    time, ban duration); rather than hardcoding one policy, a
-    `FloodPolicy`-shaped trait (called once per inbound transaction,
-    deciding allow/throttle/kick) would let the embedding application
-    supply its own thresholds or none at all.
+44. ~~**No pluggable flood/spam policy.**~~ **Resolved.** Added a
+    `FloodPolicy` trait (`check`/`reset`, mirroring `BanProvider`'s
+    plug-in shape) and two implementations: `NoFloodPolicy` (always
+    allows) and `InMemoryFloodPolicy`, which accumulates points per
+    transaction, linearly decaying them over time, and returns
+    `FloodDecision::Throttle`/`Kick` once accumulated points cross a
+    configurable threshold (`FloodConfig`: points per transaction, a
+    chat/message override, decay time, and the two thresholds).
+    `Server::new` takes a fifth `flood: Arc<dyn FloodPolicy>`; `hls`
+    wires in `InMemoryFloodPolicy::default()`, so a stock server enforces
+    flood limits out of the box (no CLI flags to tune or disable it yet).
+    `Session::handle` checks it once per inbound transaction; a session
+    without `AccessExtra::CAN_SPAM` gets `Throttle`'s transaction dropped
+    and replaced with a `Msg` push carrying the same
+    `RequireFlags::require`-generated denial text ("You are not allowed
+    to bypass flood limits.") as any other privilege check, and `Kick`
+    disconnects the session the same way `on_user_kick`'s plain-kick path
+    does, via `RecipientMessage::Disconnect`. Accumulated state for a user is
+    forgotten on disconnect.
 45. **No pluggable admin/console-command layer.** Several `AccessExtra`
     fields exist purely to gate the secondary reference's in-chat admin
     commands (`/access`, `/0wn`, `/color`, `/users`, `/mon`, a debug

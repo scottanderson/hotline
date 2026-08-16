@@ -18,6 +18,7 @@ use hotline_proto::{ClientHandshake, Field, FieldList, ServerHandshake, Transact
 use crate::accounts::{AccessExtra, Account};
 use crate::error::{Result, ServerError};
 use crate::files::FileRequester;
+use crate::flood::FloodDecision;
 use crate::server::ServerConfig;
 use crate::state::{
     AccessUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection, UserEntry,
@@ -200,6 +201,7 @@ impl Session {
 
         state.remove_recipient(session.user_id).await;
         state.remove_user(session.user_id).await;
+        state.reset_flood(session.user_id).await;
         for (chat_id, remaining) in state.leave_all_chat_rooms(session.user_id).await {
             let notify = Transaction::push(
                 ServerOpcode::ChatUserPart,
@@ -261,6 +263,24 @@ impl Session {
             tracing::debug!(opcode = ?tx.r#type(), "not a recognized client request");
             return vec![tx.reply_error("not implemented")];
         };
+
+        match state.check_flood(self.user_id, opcode).await {
+            FloodDecision::Kick => {
+                if !self.access_extra.contains(AccessExtra::CAN_SPAM) {
+                    state.disconnect(self.user_id).await;
+                    return vec![];
+                }
+            }
+            FloodDecision::Throttle => {
+                if let Err(reason) = self.access_extra.require(AccessExtra::CAN_SPAM) {
+                    return vec![Transaction::push(
+                        ServerOpcode::Msg,
+                        vec![Field::string(ServerFieldId::Text, reason)],
+                    )];
+                }
+            }
+            FloodDecision::Allow => {}
+        }
 
         match self.state {
             SessionState::Agreement => self.handle_agreement(opcode, tx, state, config).await,
@@ -3337,6 +3357,83 @@ mod tests {
         assert!(!replies[0].is_error());
     }
 
+    fn state_with_flood(config: crate::flood::FloodConfig) -> SharedState {
+        SharedState::new(
+            std::sync::Arc::new(crate::accounts::InMemoryAccountProvider::default()),
+            std::sync::Arc::new(crate::files::InMemoryFileProvider::default()),
+            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            std::sync::Arc::new(crate::bans::InMemoryBanProvider::default()),
+            std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::new(config)),
+        )
+    }
+
+    #[tokio::test]
+    async fn hammering_a_session_past_the_flood_threshold_disconnects_it() {
+        let state = state_with_flood(crate::flood::FloodConfig {
+            default_points: 10,
+            chat_points: 10,
+            decay: Duration::from_secs(60),
+            throttle_threshold: 15,
+            kick_threshold: 25,
+        });
+        let mut session = test_session("Alice", Access::all());
+        let mut rx = state.register_recipient(session.user_id).await;
+        let ping = || Transaction::request(ClientOpcode::Ping, 1, vec![]);
+        let config = ServerConfig::default();
+
+        // First request: 10 points, under both thresholds.
+        let replies = session.handle(&ping(), &state, &config).await;
+        assert_eq!(replies.len(), 1);
+        assert!(!replies[0].is_error());
+
+        // Second request: 20 points, over throttle_threshold; dropped, with
+        // a warning pushed back to the sender instead of a reply.
+        let replies = session.handle(&ping(), &state, &config).await;
+        assert_eq!(replies.len(), 1);
+        assert_eq!(
+            replies[0].r#type(),
+            TransactionType::Push(ServerOpcode::Msg)
+        );
+
+        // Third request: 30 points, over kick_threshold; disconnected.
+        let replies = session.handle(&ping(), &state, &config).await;
+        assert!(replies.is_empty());
+
+        let msg = rx.try_recv().expect("expected a recipient message");
+        assert!(msg.is_disconnect(), "flood kick must send no wire notice");
+    }
+
+    #[tokio::test]
+    async fn can_spam_exempts_a_session_from_the_flood_policy() {
+        let state = state_with_flood(crate::flood::FloodConfig {
+            default_points: 100,
+            chat_points: 100,
+            decay: Duration::from_secs(60),
+            throttle_threshold: 15,
+            kick_threshold: 25,
+        });
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::CAN_SPAM);
+        let mut rx = state.register_recipient(session.user_id).await;
+        let config = ServerConfig::default();
+
+        for _ in 0..5 {
+            let replies = session
+                .handle(
+                    &Transaction::request(ClientOpcode::Ping, 1, vec![]),
+                    &state,
+                    &config,
+                )
+                .await;
+            assert_eq!(replies.len(), 1);
+            assert!(!replies[0].is_error());
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "exempt session was never disconnected"
+        );
+    }
+
     #[tokio::test]
     async fn private_message_delivered_only_to_target() {
         let encoding = text_encoding::DEFAULT;
@@ -4922,6 +5019,7 @@ mod tests {
             std::sync::Arc::new(files),
             std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::bans::InMemoryBanProvider::default()),
+            std::sync::Arc::new(crate::flood::NoFloodPolicy),
         )
     }
 

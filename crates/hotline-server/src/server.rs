@@ -10,6 +10,7 @@ use crate::accounts::AccountProvider;
 use crate::bans::BanProvider;
 use crate::error::Result;
 use crate::files::{FileProvider, FileRequester};
+use crate::flood::FloodPolicy;
 use crate::news::NewsProvider;
 use crate::session::Session;
 use crate::state::{PendingTransfer, SharedState, TransferDirection};
@@ -45,16 +46,18 @@ pub struct Server {
 impl Server {
     /// Create a server with the given configuration, backed by `accounts`
     /// (see [`AccountProvider`]), `files` (see [`FileProvider`]), `news`
-    /// (see [`NewsProvider`]), and `bans` (see [`BanProvider`]) - the
-    /// embedding application supplies all four concrete backends.
+    /// (see [`NewsProvider`]), `bans` (see [`BanProvider`]), and `flood`
+    /// (see [`FloodPolicy`]) - the embedding application supplies all five
+    /// concrete backends.
     pub fn new(
         config: ServerConfig,
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
         news: Arc<dyn NewsProvider>,
         bans: Arc<dyn BanProvider>,
+        flood: Arc<dyn FloodPolicy>,
     ) -> Self {
-        let state = SharedState::new(accounts, files, news, bans);
+        let state = SharedState::new(accounts, files, news, bans, flood);
         Self { config, state }
     }
 
