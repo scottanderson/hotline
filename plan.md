@@ -610,7 +610,10 @@ recommendation either way.
     plain text rather than a byte array when it reads as one (`flavor`
     starts with `"text/"`, or the bytes are plain ASCII regardless of
     flavor), so a hand-inspected news file reads like the post it holds
-    instead of an opaque array of numbers.
+    instead of an opaque array of numbers. `NewsCategory::guid` is a real
+    random UUIDv4 (the `uuid` crate) rather than a process-local
+    incrementing counter reinterpreted as 16 bytes, stored as the
+    canonical hyphenated string.
 42. **All wire text is decoded as lossy UTF-8, not the classic client's
     actual encoding.** `Field::as_string` (`crates/hotline-proto/src/field.rs`)
     and the name-decoding paths in `types.rs` (`FileNameWithInfo`,

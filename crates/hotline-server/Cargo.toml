@@ -19,6 +19,7 @@ async-trait = { workspace = true }
 bitflags = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 num_enum = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

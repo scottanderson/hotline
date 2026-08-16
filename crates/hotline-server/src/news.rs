@@ -12,13 +12,13 @@ mod iso_date;
 mod repr;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
 use hotline_proto::types::HlDate;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// One item in the news bundle tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,7 +274,7 @@ impl From<&NewsNode> for NewsListKind {
             },
             NewsNode::Category(c) => Self::Category(NewsCategorySummary {
                 count: node.count(),
-                guid: c.guid,
+                guid: c.guid.into_bytes(),
                 add_sn: c.add_sn,
                 del_sn: c.del_sn,
             }),
@@ -294,7 +294,7 @@ pub struct ArticleView<'a> {
 /// into `HTLC_DATA_NEWS_DIRLIST_EXTENDED` (323).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewsCategory {
-    pub guid: [u8; 16],
+    pub guid: Uuid,
     /// Incremented by one each time an article is added. Never reset.
     pub add_sn: u32,
     /// Always `1`: the reference this mirrors never actually updates it
@@ -306,17 +306,10 @@ pub struct NewsCategory {
     pub roots: Vec<u32>,
 }
 
-/// Deterministic, process-unique category identifiers. Not a real GUID:
-/// nothing about this server or the wire format ever validates its
-/// contents, only that it's 16 bytes and stable for the category's life.
-static NEXT_GUID: AtomicU32 = AtomicU32::new(1);
-
 impl NewsCategory {
     fn new() -> Self {
-        let mut guid = [0u8; 16];
-        guid[12..].copy_from_slice(&NEXT_GUID.fetch_add(1, Ordering::Relaxed).to_be_bytes());
         Self {
-            guid,
+            guid: Uuid::new_v4(),
             add_sn: 1,
             del_sn: 1,
             next_article_id: 1,
@@ -540,6 +533,31 @@ impl NewsProvider for InMemoryNewsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guid_serializes_as_a_hyphenated_uuid_string() {
+        let mut category = NewsCategory::new();
+        category.guid = Uuid::from_bytes([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 255]);
+
+        let json = serde_json::to_value(&category).unwrap();
+
+        assert_eq!(
+            json["guid"], "00010203-0405-0607-0809-0a0b0c0d0eff",
+            "{json}"
+        );
+        let round_tripped: NewsCategory = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped.guid, category.guid);
+    }
+
+    #[test]
+    fn new_categories_get_a_random_uuid_v4() {
+        let a = NewsCategory::new();
+        let b = NewsCategory::new();
+
+        assert_ne!(a.guid, b.guid);
+        assert_eq!(a.guid.get_version_num(), 4);
+        assert_eq!(b.guid.get_version_num(), 4);
+    }
 
     #[test]
     fn days_from_civil_round_trips_through_civil_from_days() {
