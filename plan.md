@@ -23,19 +23,24 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   defaults to `"text/plain"`. A real client always sends this field, so
   this only affects a hand-crafted request; not changed.
 
-## Decision point: primary vs. secondary reference for chat/login divergences
+## Decision point: primary vs. secondary reference for chat/login divergences (resolved)
 
-Items 18, 19, 20, 27, 30, 32, 35, 47, and 48 below are all the same shape:
-the two reference implementations disagree, and this server currently
-matches the *secondary* reference in every one of these cases (chat room
+Items 18, 19, 20, 27, 30, 32, 35, 47, and 48 below were all the same shape:
+the two reference implementations disagree, and this server matched the
+*secondary* reference in every one of these cases (chat room
 password/invite gating, chat subject checks, chat invite reply behavior,
 dropbox path substring matching, login case folding, agreement push
 branching, the `USER_GETLIST` access check, `AccessExtra::CHAT_PRIVATE`
 gating chat-room membership opcodes, and `AccessExtra::MSG` as an
-alternative to `Access::SEND_MESSAGE`). None of them has been switched to
-the primary reference's behavior. This note just records the current
-state as a single decision point to revisit later; it isn't a
-recommendation either way.
+alternative to `Access::SEND_MESSAGE`). **Decided: keep the
+secondary-matching behavior for all of them**, each now marked resolved at
+its own item below. The one exception found along the way was
+`on_chat_create`'s invite-target handling (item 18's bundled sub-bug),
+which matched neither reference and was fixed toward the *primary*
+reference's shape instead, since it's the one that fits this server's
+existing one-shared-room model. An entirely absent `Uid` still replies
+"missing user id"; a present but undeliverable target is skipped with a
+debug-logged reason rather than failing the request.
 
 ## Backlog, in priority order
 
@@ -317,50 +322,36 @@ recommendation either way.
     lifetime, which `Cow` can't avoid either. No real call site was
     found where `Cow::Borrowed` would have avoided a clone that happens
     today; reverted.
-18. **Private chat rooms have no password/invitation gate in the primary
-    reference at all, but do in the secondary one.** `SMyChat` (the
-    primary reference's chat-room struct) has no password field and no
-    invited-set; `ProcessTran_JoinChat` performs no check beyond "does
-    this chat ID still exist" before adding the joiner — the invite push
-    is purely a client-side UX nicety there, and any client that learns a
-    live chat ID can join directly. The secondary reference does
-    implement both: a per-room password plus an invited-file-descriptor
-    set that a join either matches against or bypasses, which is what
-    this server's `join_chat_room` (`state.rs`) actually ports (AGENTS.md's
-    Status section description of chat being "gated on invitation like
-    the reference" was written against that implementation, before the
-    primary reference's source was available to check against). Also
-    still true regardless of which reference this settles on:
-    `on_chat_create` only invites a single `Uid` where the primary
-    reference loops over every `UserID` field in the request, and fails
-    the whole room creation if that one target isn't connected, where
-    the primary reference just skips undeliverable invites and creates
-    the room regardless. Needs a decision on which reference's chat-room
-    semantics this server should track going forward, now that both are
-    known to disagree here.
-19. **Not a bug, a primary/secondary divergence like item 18.**
-    `on_chat_subject` adds an `AccessExtra::SET_SUBJECT` check, a
-    membership requirement, and a room-password mechanism; the primary
-    reference's `ProcessTran_SetChatSubject` has none of these — no
-    access check, no password field on this transaction at all. The
-    secondary reference's `rcv_chat_subject` has the identical shape to
-    this server's: the same `set_subject`-for-global/membership-for-room
-    check, and a real per-room password field. One gap either way: this
-    server always sends an empty reply on success where the secondary
-    reference sends none there either (it only replies, with an error
-    `Msg` push, on failure) — harmless either way, since a stray reply to
-    this transaction has no visible effect on a real client, but worth
-    matching if this item is revisited.
-20. **Not a bug, a primary/secondary divergence like item 18.**
-    `on_chat_invite` always sends a reply (empty or error), and
-    `invite_to_chat_room` (`state.rs`) requires the inviter to already be
-    a room member and rejects a repeat invite to an already-invited
-    target. The primary reference's `ProcessTran_InviteToChat` never
-    replies and only skips a target already in the room's client list;
-    the secondary reference's `rcv_chat_invite` matches this server
-    instead — it requires the inviter to already be in the room, rejects
-    a target already there, and always sends a `TASK` reply (success or
-    error).
+18. ~~Private chat rooms have no password/invitation gate in the primary
+    reference at all, but do in the secondary one.~~ **Resolved: keep the
+    secondary-matching gate.** `join_chat_room` (`state.rs`) keeps its
+    per-room password plus invited-set check; the primary reference's
+    "any client that learns a live chat ID can join" model was
+    considered and rejected. Separately, `on_chat_create`'s invite
+    behavior matched *neither* reference (it only read a single `Uid`
+    and failed the whole creation if that target wasn't connected, where
+    the primary reference loops over every `UserID` field, creates one
+    shared room, and just skips undeliverable targets, and the secondary
+    reference loops too but creates a separate room per target with a
+    per-target error reply). **Resolved toward the primary reference's
+    shape**, since it's the one that matches this server's existing
+    one-shared-room-with-an-invite-set model: `on_chat_create` now reads
+    every `Uid` field via `tx.fields(...)`, creates one room, and skips
+    (rather than fails on) a target that isn't connected.
+19. ~~Not a bug, a primary/secondary divergence like item 18.~~
+    **Resolved: keep the secondary-matching behavior.**
+    `on_chat_subject` keeps its `AccessExtra::SET_SUBJECT` check,
+    membership requirement, and room-password mechanism; the primary
+    reference's no-check, no-password behavior was considered and
+    rejected. The always-empty-success-reply gap noted here (secondary
+    sends no reply on success, only an error `Msg` push on failure) is
+    left as is — harmless, no visible effect on a real client.
+20. ~~Not a bug, a primary/secondary divergence like item 18.~~
+    **Resolved: keep the secondary-matching behavior.** `on_chat_invite`
+    keeps always sending a reply, requiring the inviter to already be a
+    room member, and rejecting a repeat invite to an already-invited
+    target; the primary reference's never-reply, looser-check behavior
+    was considered and rejected.
 21. ~~`on_chat_part` always sends an empty reply; `ProcessTran_LeaveChat`
     never replies (`inTsn` is unused in the reference). Member
     notification and delete-when-empty already match.~~
@@ -413,15 +404,13 @@ recommendation either way.
     `move_file`/`symlink_file` no longer call `dropbox_blocked`; only the
     type-specific privilege check remains. `mkdir`/`rename_file` still
     gate on drop-box visibility, unaffected by this change.
-27. **Not a bug, a primary/secondary divergence like item 18.**
+27. ~~Not a bug, a primary/secondary divergence like item 18.~~
+    **Resolved: keep the secondary-matching behavior.**
     `on_file_put`'s drop-box/upload-folder match
-    (`state.rs::is_dropbox_path`) treats any ancestor path component
-    containing "upload"/"drop box" as sufficient. The primary reference
-    only inspects the immediate destination folder's own name
-    (`GetPathTargetName`), so `Uploads/Subfolder/` would be rejected
-    there but accepted here. The secondary reference matches this server
-    instead: its upload gate runs `strcasestr()` over the whole resolved
-    destination path, the same substring-anywhere behavior.
+    (`state.rs::is_dropbox_path`) keeps treating any ancestor path
+    component containing "upload"/"drop box" as sufficient; the primary
+    reference's immediate-destination-folder-only check
+    (`GetPathTargetName`) was considered and rejected.
 28. ~~`on_file_get`'s reply omits `FileSize` (207); the reference sends
     both `TransferSize` (the flattened-object envelope size) and
     `FileSize` (the raw file size) on this transaction.~~ **Resolved.**
@@ -464,18 +453,13 @@ recommendation either way.
     `(tx.name().is_some() && icon != 0) || !modern`, so a modern client
     with a name but a zero or absent icon waits for `Agreed`; the
     pre-150 fallback is unaffected.
-32. **Not a bug, a primary/secondary divergence like item 18.**
-    `on_login`'s agreement-push logic collapses two distinct primary
-    reference cases into one: when `NO_AGREEMENT` isn't set and no
-    agreement text is configured, the primary reference still sends an
-    empty `ShowAgreement` push (three-way branch: hardcoded "no
-    agreement" flag, real text, or an empty prompt); this server sends
-    the hardcoded "no agreement" flag in both the `NO_AGREEMENT`-set and
-    no-text-configured cases, and skips the push entirely for pre-150
-    clients in the latter. The secondary reference matches this server
-    instead: it's a two-way branch too (real agreement text sent from a
-    file, or the hardcoded no-agreement flag for a modern client), with
-    no empty-prompt case.
+32. ~~Not a bug, a primary/secondary divergence like item 18.~~
+    **Resolved: keep the secondary-matching behavior.** `on_login`'s
+    agreement-push logic stays a two-way branch (real agreement text
+    sent from a file, or the hardcoded no-agreement flag for a modern
+    client, skipping the push entirely for pre-150 clients in the
+    no-text case); the primary reference's three-way branch (adding an
+    empty `ShowAgreement` prompt case) was considered and rejected.
 33. ~~`ServerFieldId` has no `CommunityBannerID` variant, so `on_login`'s
     reply can never include it; the reference always sends this field
     (typically zero) on login. Low priority, cosmetic given the reference
