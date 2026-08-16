@@ -1427,21 +1427,29 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 112: create a private chat room and invite its target user.
+    /// 112: create a private chat room and invite its target users.
     async fn on_chat_create(&self, tx: &Transaction, state: &SharedState) -> Transaction {
         if let Err(reason) = self.access.require(Access::CREATE_CHAT) {
             return tx.reply_error(reason);
         }
-        let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
+        let target_ids: Vec<u16> = tx
+            .fields(ClientFieldId::Uid)
+            .filter_map(Field::as_u16)
+            .collect();
+        if target_ids.is_empty() {
             return tx.reply_error("missing user id");
-        };
-        if let Err(reason) = state.require_connected_user(target_id).await {
-            return tx.reply_error(reason);
         }
 
         let chat_id = state.create_chat_room(self.user_id).await;
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
-        if target_id != self.user_id {
+        for target_id in target_ids {
+            if target_id == self.user_id {
+                continue;
+            }
+            if let Err(reason) = state.require_connected_user(target_id).await {
+                tracing::debug!(target_id, reason, "skipping undeliverable chat invite");
+                continue;
+            }
             state.invite(chat_id, target_id).await;
             state
                 .send_to(
