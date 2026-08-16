@@ -204,7 +204,7 @@ impl Default for InMemoryAccountProvider {
                     password: "admin".to_string(),
                     name: "Admin".to_string(),
                     access: Access::all(),
-                    access_extra: AccessExtra::default(),
+                    access_extra: AccessExtra::all(),
                 },
             ),
             (
