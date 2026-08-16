@@ -2,6 +2,7 @@
 /accounts
 /files
 comments.json
+bans.json
 news.json
 news.txt
 **/*.rs.bk

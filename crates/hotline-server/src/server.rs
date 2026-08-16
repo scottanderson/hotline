@@ -7,6 +7,7 @@ use tokio::net::{TcpListener, TcpStream};
 use hotline_proto::htxf::{self, ForkHeader, HtxfHeader};
 
 use crate::accounts::AccountProvider;
+use crate::bans::BanProvider;
 use crate::error::Result;
 use crate::files::{FileProvider, FileRequester};
 use crate::news::NewsProvider;
@@ -43,16 +44,17 @@ pub struct Server {
 
 impl Server {
     /// Create a server with the given configuration, backed by `accounts`
-    /// (see [`AccountProvider`]), `files` (see [`FileProvider`]), and
-    /// `news` (see [`NewsProvider`]) - the embedding application supplies
-    /// all three concrete backends.
+    /// (see [`AccountProvider`]), `files` (see [`FileProvider`]), `news`
+    /// (see [`NewsProvider`]), and `bans` (see [`BanProvider`]) - the
+    /// embedding application supplies all four concrete backends.
     pub fn new(
         config: ServerConfig,
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
         news: Arc<dyn NewsProvider>,
+        bans: Arc<dyn BanProvider>,
     ) -> Self {
-        let state = SharedState::new(accounts, files, news);
+        let state = SharedState::new(accounts, files, news, bans);
         Self { config, state }
     }
 
@@ -73,6 +75,13 @@ impl Server {
 
         loop {
             let (stream, peer) = listener.accept().await?;
+            // Reject a banned address before it can consume a handshake or
+            // any other protocol resource, matching how the reference
+            // server checks its ban list immediately on accept.
+            if self.state.is_banned(peer.ip()).await.is_some() {
+                tracing::debug!(%peer, "rejected connection from banned address");
+                continue;
+            }
             // Avoids Nagle delaying small replies behind the peer's ACKs.
             if let Err(e) = stream.set_nodelay(true) {
                 tracing::warn!(%peer, error = %e, "failed to set TCP_NODELAY");

@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use futures::{SinkExt, StreamExt};
 use num_enum::{FromPrimitive, IntoPrimitive};
@@ -51,6 +51,29 @@ enum MsgOption {
     #[num_enum(catch_all)]
     Unknown(u16),
 }
+
+/// `Options` (113) values on `HTLC_HDR_USER_KICK` (110): whether the kick
+/// also imposes an address ban, and for how long.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KickBan {
+    None,
+    Temporary,
+    Permanent,
+}
+
+impl From<u16> for KickBan {
+    fn from(value: u16) -> Self {
+        match value {
+            1 => Self::Temporary,
+            2 => Self::Permanent,
+            _ => Self::None,
+        }
+    }
+}
+
+/// Duration of a temporary kick-to-ban (`Options` (113) value 1). Not yet
+/// configurable; a fixed default until this gets a `ServerConfig` knob.
+const TEMP_BAN_DURATION: Duration = Duration::from_secs(30 * 60);
 
 /// Which opcodes a session may currently send.
 enum SessionState {
@@ -680,9 +703,10 @@ impl Session {
         ])]
     }
 
-    /// 110: disconnect (and, per the `Options` kick-to-ban bit, in a
-    /// fuller implementation ban) another user. A missing target id
-    /// defaults to 0, which no session holds, so the kick is just a no-op.
+    /// 110: disconnect another user, and if the `Options` (113) kick-to-ban
+    /// bit is set, ban their address and notify them why before
+    /// disconnecting them. A missing target id defaults to 0, which no
+    /// session holds, so the kick is just a no-op.
     async fn on_user_kick(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DISCON_USER) {
             return vec![tx.reply_error(reason)];
@@ -694,8 +718,47 @@ impl Session {
         if let Err(reason) = state.authorize_kick(target_id).await {
             return vec![tx.reply_error(reason)];
         }
+        let ban = KickBan::from(
+            tx.field(ClientFieldId::Options)
+                .and_then(Field::as_u16)
+                .unwrap_or(0),
+        );
+        let target_ip = state.user(target_id).await.map(|u| u.remote_addr.ip());
 
-        state.disconnect(target_id).await;
+        let notice = match (ban, target_ip) {
+            (KickBan::Temporary, Some(ip)) => {
+                if let Err(error) = state
+                    .ban(ip, Some(SystemTime::now() + TEMP_BAN_DURATION))
+                    .await
+                {
+                    tracing::warn!(%ip, error, "failed to persist ban");
+                }
+                Some("You are temporarily banned on this server.")
+            }
+            (KickBan::Permanent, Some(ip)) => {
+                if let Err(error) = state.ban(ip, None).await {
+                    tracing::warn!(%ip, error, "failed to persist ban");
+                }
+                Some("You are permanently banned on this server.")
+            }
+            (KickBan::None, _) | (_, None) => None,
+        };
+
+        match notice {
+            Some(reason) => {
+                state
+                    .send_to(
+                        target_id,
+                        Transaction::push(
+                            ServerOpcode::Politequit,
+                            vec![Field::string(ServerFieldId::Text, reason)],
+                        ),
+                    )
+                    .await;
+            }
+            None => state.disconnect(target_id).await,
+        }
+
         vec![tx.reply(vec![])]
     }
 
@@ -3086,6 +3149,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kick_with_permanent_ban_option_bans_the_target_address() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut target = test_user(2, "Bob");
+        target.access.remove(Access::CANNOT_BE_DISCON);
+        target.remote_addr = "192.0.2.9:5500".parse().unwrap();
+        state.insert_user(target).await;
+        let mut target_rx = state.register_recipient(2).await;
+
+        let request = Transaction::request(
+            ClientOpcode::UserKick,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 2),
+                Field::u16(ClientFieldId::Options, 2),
+            ],
+        );
+        let replies = session.on_user_kick(&request, &state).await;
+        assert!(!replies[0].is_error());
+
+        assert!(state
+            .is_banned("192.0.2.9".parse().unwrap())
+            .await
+            .is_some());
+
+        let notice = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Politequit push notifying the target of the ban");
+        assert_eq!(
+            notice.field(ServerFieldId::Text).unwrap().as_string(),
+            "You are permanently banned on this server."
+        );
+        assert_eq!(
+            notice.r#type(),
+            TransactionType::Push(ServerOpcode::Politequit)
+        );
+    }
+
+    #[tokio::test]
+    async fn kick_with_temporary_ban_option_sends_the_temporary_ban_notice() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut target = test_user(2, "Bob");
+        target.access.remove(Access::CANNOT_BE_DISCON);
+        target.remote_addr = "192.0.2.9:5500".parse().unwrap();
+        state.insert_user(target).await;
+        let mut target_rx = state.register_recipient(2).await;
+
+        let request = Transaction::request(
+            ClientOpcode::UserKick,
+            1,
+            vec![
+                Field::u16(ClientFieldId::Uid, 2),
+                Field::u16(ClientFieldId::Options, 1),
+            ],
+        );
+        let replies = session.on_user_kick(&request, &state).await;
+        assert!(!replies[0].is_error());
+
+        let ban = state
+            .is_banned("192.0.2.9".parse().unwrap())
+            .await
+            .expect("expected a temporary ban");
+        assert!(ban.until.is_some());
+
+        let notice = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Politequit push notifying the target of the ban");
+        assert_eq!(
+            notice.field(ServerFieldId::Text).unwrap().as_string(),
+            "You are temporarily banned on this server."
+        );
+    }
+
+    #[tokio::test]
     async fn kick_with_missing_uid_replies_success() {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
@@ -4675,6 +4817,7 @@ mod tests {
             std::sync::Arc::new(crate::accounts::InMemoryAccountProvider::default()),
             std::sync::Arc::new(files),
             std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            std::sync::Arc::new(crate::bans::InMemoryBanProvider::default()),
         )
     }
 

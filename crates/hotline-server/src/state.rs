@@ -19,6 +19,7 @@ use hotline_proto::types::{
 use hotline_proto::Transaction;
 
 use crate::accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
+use crate::bans::{BanProvider, BanRecord, InMemoryBanProvider};
 use crate::files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
 use crate::news::{InMemoryNewsProvider, NewsItemKind, NewsListKind, NewsProvider};
 
@@ -274,6 +275,8 @@ pub struct SharedState {
     next_chat_id: Arc<AtomicU32>,
     /// Account storage; see [`crate::AccountProvider`].
     accounts: Arc<dyn AccountProvider>,
+    /// Ban storage; see [`crate::BanProvider`].
+    bans: Arc<dyn BanProvider>,
     /// Transfers awaiting their `HTXF` data connection, keyed by the
     /// reference number handed to the client.
     transfers: Arc<RwLock<HashMap<u32, PendingTransfer>>>,
@@ -286,16 +289,18 @@ impl Default for SharedState {
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(InMemoryFileProvider::default()),
             Arc::new(InMemoryNewsProvider::default()),
+            Arc::new(InMemoryBanProvider::default()),
         )
     }
 }
 
 impl SharedState {
-    /// Build fresh shared state backed by `accounts`, `files`, and `news`.
+    /// Build fresh shared state backed by `accounts`, `files`, `news`, and `bans`.
     pub fn new(
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
         news: Arc<dyn NewsProvider>,
+        bans: Arc<dyn BanProvider>,
     ) -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
@@ -308,6 +313,7 @@ impl SharedState {
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
             accounts,
+            bans,
             transfers: Arc::new(RwLock::new(HashMap::new())),
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
         }
@@ -1125,6 +1131,20 @@ impl SharedState {
         self.accounts.put(login, account).await
     }
 
+    /// The active ban on `ip`, if any; see [`crate::BanProvider::is_banned`].
+    pub async fn is_banned(&self, ip: std::net::IpAddr) -> Option<BanRecord> {
+        self.bans.is_banned(ip).await
+    }
+
+    /// Ban `ip` until `until`, or permanently if `None`.
+    pub async fn ban(
+        &self,
+        ip: std::net::IpAddr,
+        until: Option<std::time::SystemTime>,
+    ) -> Result<(), String> {
+        self.bans.ban(ip, until).await
+    }
+
     /// Delete an account. `Err("no such account")` if it didn't exist.
     pub async fn delete_account(&self, login: &str) -> Result<(), String> {
         match self.accounts.delete(login).await {
@@ -1155,6 +1175,7 @@ mod tests {
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(InMemoryFileProvider::default()),
             provider.clone(),
+            Arc::new(InMemoryBanProvider::default()),
         );
 
         state.post_news("alice", "hello").await;
@@ -1179,6 +1200,7 @@ mod tests {
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(InMemoryFileProvider::default()),
             provider,
+            Arc::new(InMemoryBanProvider::default()),
         );
 
         assert!(other.news().await.contains("hello"));
@@ -1280,6 +1302,7 @@ mod tests {
             Arc::new(InMemoryAccountProvider::default()),
             files,
             Arc::new(crate::news::InMemoryNewsProvider::default()),
+            Arc::new(InMemoryBanProvider::default()),
         );
 
         let requester = FileRequester { login: "alice" };

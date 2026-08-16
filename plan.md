@@ -505,8 +505,8 @@ recommendation either way.
     **Resolved.** Plain kick now sends `RecipientMessage::Disconnect`
     (a new silent-close signal, handled in `Session::run`'s select loop)
     instead of pushing `Politequit`. A missing `Uid` now defaults to
-    target id 0 and still replies success. The temp/perm ban options
-    remain unimplemented.
+    target id 0 and still replies success. The temp/perm ban options are
+    now implemented too, see item 43.
 37. ~~`on_user_get_info`'s reply was a different report entirely, not just
     a different format: it sent connected duration and a privilege
     summary, and an extra `UserId` field the reference never includes.~~
@@ -668,14 +668,44 @@ recommendation either way.
     Unicode codepoint. Needs a real MacRoman-to-UTF-8 (and back, for
     encoding outgoing fields) table-based transcoding, or at minimum
     stop silently mangling non-ASCII bytes via lossy UTF-8 decoding.
-43. **No pluggable ban/mute list.** `on_user_kick`'s `Options` kick-to-ban
-    bit is a no-op (see item 36's follow-up): a real ban needs somewhere
-    durable to record "this login/address is banned until `T`" and a
-    login-time check against it, and different deployments will want
-    different backing stores (a flat file, a database, ...) the same way
-    account and file storage are pluggable. Needs a `BanProvider`-shaped
-    trait (list/check/add/remove) supplied to `Server::new`, plus the
-    `on_login`/`on_user_kick` wiring to use it.
+43. ~~**No pluggable ban/mute list.**~~ **Resolved.** Added a
+    `BanProvider` trait (`is_banned`/`ban`/`unban`, mirroring
+    `AccountProvider`'s plug-in shape) and its in-memory default,
+    `InMemoryBanProvider`, self-expiring a temporary ban rather than
+    needing a background sweep. `Server::new` takes a fourth
+    `bans: Arc<dyn BanProvider>`; `hls` wires in a JSON-file-backed
+    provider (`hotline-daemon`'s `FileBanProvider`), the same shape as
+    its account/comment persistence. Bans are keyed by a single exact IP
+    address, not a range and not login: the reference server records
+    bans against the connecting address, keeping perm bans as address
+    ranges with a capped, oldest-evicted list and an admin-supplied
+    description; there's no admin ban-management transaction wired up
+    here yet to ever populate a range or description, so this only
+    stores the single address `on_user_kick` bans, uncapped. Revisit the
+    range/cap/description shape if an admin ban-list command gets added.
+    `Server::run`'s accept loop rejects a banned address immediately,
+    before the TRTP handshake, matching the reference server's own
+    accept-time check. There's deliberately no separate check in
+    `on_login`: the reference doesn't check bans there either, only at
+    accept and (for already-connected sessions) when an admin's ban-list
+    edit is saved, which this server has no equivalent trigger for yet.
+    `on_user_kick` reads its `Options` (113) kick-to-ban bit into a
+    `KickBan` enum and, before disconnecting the target, bans their
+    address (permanently for `Options == 2`, for a fixed
+    `TEMP_BAN_DURATION` of 30 minutes for `Options == 1` — hardcoded,
+    not yet a `ServerConfig` knob) and sends them a `Politequit` push
+    with the reference's own ban notice text before the disconnect,
+    matching the reference's send-message-then-disconnect order rather
+    than disconnecting first and banning after (which would leave a
+    window for the target to reconnect before the ban took effect).
+    `BanProvider::ban`/`unban` return `Result<(), String>`, matching
+    `AccountProvider::put`'s shape; `FileBanProvider` only commits a
+    change to its in-memory cache after the backing file write succeeds,
+    so a failed persist can't silently drift from what's on disk.
+    `unban` has no caller yet: there's no admin-facing unban command,
+    so once imposed a ban can only be lifted by hand-editing
+    `bans.json`. Needs a `USER_UNBAN`-shaped transaction and handler
+    before it's reachable.
 44. **No pluggable flood/spam policy.** `AccessExtra::CAN_SPAM` exists
     (an account exempt from flood limits) but nothing in this server
     tracks request rate at all, so there's no limit to be exempt from.

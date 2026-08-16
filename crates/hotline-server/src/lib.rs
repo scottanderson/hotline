@@ -6,6 +6,7 @@
 //! by transaction type to the handlers registered on [`Server`].
 
 mod accounts;
+mod bans;
 mod bitflags_serde;
 mod error;
 mod files;
@@ -15,6 +16,7 @@ mod session;
 mod state;
 
 pub use accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
+pub use bans::{BanProvider, BanRecord, InMemoryBanProvider};
 pub use error::{Result, ServerError};
 pub use files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
 pub use news::{InMemoryNewsProvider, NewsBundle, NewsProvider};

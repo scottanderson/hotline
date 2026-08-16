@@ -1,4 +1,5 @@
 mod accounts;
+mod bans;
 mod files;
 mod news;
 
@@ -8,6 +9,7 @@ use clap::Parser;
 use hotline_server::{Server, ServerConfig};
 
 use accounts::FileAccountProvider;
+use bans::FileBanProvider;
 use files::FileFileProvider;
 use news::FileNewsProvider;
 
@@ -54,6 +56,10 @@ struct Args {
     /// File to persist threaded news to, as JSON (created if missing).
     #[arg(long, default_value = "news.json")]
     news_tree_file: String,
+
+    /// File to persist address bans to, as JSON (created if missing).
+    #[arg(long, default_value = "bans.json")]
+    ban_file: String,
 }
 
 #[tokio::main]
@@ -70,6 +76,9 @@ async fn main() -> anyhow::Result<()> {
     let accounts = Arc::new(FileAccountProvider::open(args.accounts_dir).await?);
     let files = Arc::new(FileFileProvider::open(args.files_dir, args.comments_file).await?);
     let news = Arc::new(FileNewsProvider::open(args.news_file, args.news_tree_file).await?);
-    Server::new(config, accounts, files, news).run().await?;
+    let bans = Arc::new(FileBanProvider::open(args.ban_file).await?);
+    Server::new(config, accounts, files, news, bans)
+        .run()
+        .await?;
     Ok(())
 }
