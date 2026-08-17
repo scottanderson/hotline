@@ -129,7 +129,11 @@ fn dropbox_blocked(dir: &HlPath, name: Option<&str>, access: Access) -> bool {
 /// `Err` if `dropbox_blocked` for `dir`/`name`, worded via
 /// [`RequireFlags::require`] so it names `VIEW_DROP_BOXES` like any other
 /// missing-privilege error.
-fn dropbox_access(dir: &HlPath, name: Option<&str>, access: Access) -> Result<(), String> {
+fn dropbox_access(
+    dir: &HlPath,
+    name: Option<&str>,
+    access: Access,
+) -> Result<(), Cow<'static, str>> {
     if dropbox_blocked(dir, name, access) {
         access.require(Access::VIEW_DROP_BOXES)?;
     }
@@ -476,7 +480,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let size = self
             .files
@@ -544,7 +548,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<FileNameWithInfo, String> {
+    ) -> Result<FileNameWithInfo, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let info = self
             .files
@@ -562,7 +566,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cow<'static, str>> {
         let info = self
             .files
             .info(requester, dir, name)
@@ -578,7 +582,8 @@ impl SharedState {
         self.files
             .delete(requester, dir, name, is_dir)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Create a folder, after checking drop box visibility.
@@ -588,12 +593,13 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         self.files
             .mkdir(requester, dir, name)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Rename a file or folder in place, after checking the matching
@@ -605,7 +611,7 @@ impl SharedState {
         name: &str,
         new_name: &str,
         access: Access,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let info = self
             .files
@@ -621,7 +627,8 @@ impl SharedState {
         self.files
             .rename(requester, dir, name, new_name)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Move a file or folder into another directory, keeping its name,
@@ -633,7 +640,7 @@ impl SharedState {
         name: &str,
         to_dir: &HlPath,
         access: Access,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cow<'static, str>> {
         let info = self
             .files
             .info(requester, dir, name)
@@ -648,7 +655,8 @@ impl SharedState {
         self.files
             .r#move(requester, dir, name, to_dir)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Create an alias at `link_dir`/`link_name` pointing at
@@ -660,11 +668,12 @@ impl SharedState {
         target_name: &str,
         link_dir: &HlPath,
         link_name: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cow<'static, str>> {
         self.files
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// A file or folder's stored comment, or `None` if it's never had
@@ -675,7 +684,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         Ok(self.files.comment(requester, dir, name).await)
     }
@@ -689,7 +698,7 @@ impl SharedState {
         name: &str,
         comment: &str,
         access: Access,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let info = self
             .files
@@ -705,7 +714,8 @@ impl SharedState {
         self.files
             .set_comment(requester, dir, name, comment)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Register a pending transfer, returning the reference number to
@@ -844,9 +854,13 @@ impl SharedState {
     /// component is the item's own name), after checking the matching
     /// bundle/category privilege. `Err` for the root or a path that
     /// doesn't resolve.
-    pub async fn news_delete(&self, path: &HlPath, access: Access) -> Result<(), String> {
+    pub async fn news_delete(
+        &self,
+        path: &HlPath,
+        access: Access,
+    ) -> Result<(), Cow<'static, str>> {
         if path.components.is_empty() {
-            return Err("news item not found".to_string());
+            Err("news item not found")?;
         }
         let _guard = self.news_tree_lock.lock().await;
         let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
