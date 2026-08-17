@@ -54,6 +54,34 @@ impl FileFileProvider {
         parts.join("/")
     }
 
+    /// Move every comment keyed under `old_key` to `new_key`: the entry
+    /// itself, plus every descendant comment whose key has `old_key` as a
+    /// path prefix (a renamed/moved folder's contents), then persists the
+    /// updated map to disk.
+    async fn rekey_comments(&self, old_key: &str, new_key: &str) -> io::Result<()> {
+        let mut comments = self.comments.write().await;
+        let old_prefix = format!("{old_key}/");
+        let matches: Vec<_> = comments
+            .keys()
+            .filter(|key| *key == old_key || key.starts_with(&old_prefix))
+            .cloned()
+            .collect();
+        if matches.is_empty() {
+            return Ok(());
+        }
+        for key in matches {
+            let comment = comments.remove(&key).unwrap();
+            let rekeyed = match key.strip_prefix(&old_prefix) {
+                Some(rest) => format!("{new_key}/{rest}"),
+                None => new_key.to_string(),
+            };
+            comments.insert(rekeyed, comment);
+        }
+        let bytes = serde_json::to_vec_pretty(&*comments)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        tokio::fs::write(&self.comments_path, bytes).await
+    }
+
     /// Resolve a directory path under `root`, rejecting any component
     /// that would escape it (`..`, a bare path separator).
     fn resolve_dir(&self, dir: &HlPath) -> Option<PathBuf> {
@@ -224,7 +252,12 @@ impl FileProvider for FileFileProvider {
         if tokio::fs::metadata(&new_path).await.is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        tokio::fs::rename(old_path, new_path).await
+        tokio::fs::rename(old_path, new_path).await?;
+        self.rekey_comments(
+            &Self::comment_key(dir, old_name),
+            &Self::comment_key(dir, new_name),
+        )
+        .await
     }
 
     async fn r#move(
@@ -243,7 +276,12 @@ impl FileProvider for FileFileProvider {
         if tokio::fs::metadata(&new_path).await.is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        tokio::fs::rename(old_path, new_path).await
+        tokio::fs::rename(old_path, new_path).await?;
+        self.rekey_comments(
+            &Self::comment_key(dir, name),
+            &Self::comment_key(to_dir, name),
+        )
+        .await
     }
 
     async fn symlink(
@@ -437,6 +475,125 @@ mod tests {
                 .comment(requester(), &HlPath::default(), "a.txt")
                 .await,
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_a_file_carries_its_comment_to_the_new_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments_dir = tempfile::tempdir().unwrap();
+        let provider =
+            FileFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
+                .await
+                .unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+            .await
+            .unwrap();
+
+        provider
+            .rename(requester(), &HlPath::default(), "a.txt", "b.txt")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "b.txt")
+                .await,
+            Some("a note".to_string())
+        );
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "a.txt")
+                .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn moving_a_file_carries_its_comment_to_the_new_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments_dir = tempfile::tempdir().unwrap();
+        let provider =
+            FileFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
+                .await
+                .unwrap();
+        tokio::fs::create_dir(dir.path().join("Dest"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+            .await
+            .unwrap();
+
+        provider
+            .r#move(
+                requester(),
+                &HlPath::default(),
+                "a.txt",
+                &HlPath::new(["Dest"]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::new(["Dest"]), "a.txt")
+                .await,
+            Some("a note".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_a_folder_carries_its_own_and_its_contents_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments_dir = tempfile::tempdir().unwrap();
+        let provider =
+            FileFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
+                .await
+                .unwrap();
+        tokio::fs::create_dir(dir.path().join("Vacation"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("Vacation/photo.png"), b"img")
+            .await
+            .unwrap();
+        provider
+            .set_comment(requester(), &HlPath::default(), "Vacation", "a folder note")
+            .await
+            .unwrap();
+        provider
+            .set_comment(
+                requester(),
+                &HlPath::new(["Vacation"]),
+                "photo.png",
+                "a photo note",
+            )
+            .await
+            .unwrap();
+
+        provider
+            .rename(requester(), &HlPath::default(), "Vacation", "Trip")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "Trip")
+                .await,
+            Some("a folder note".to_string())
+        );
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::new(["Trip"]), "photo.png")
+                .await,
+            Some("a photo note".to_string())
         );
     }
 

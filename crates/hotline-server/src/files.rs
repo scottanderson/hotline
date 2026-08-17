@@ -199,6 +199,36 @@ impl Dir {
     }
 }
 
+/// Move every comment keyed under `old_dir`/`old_name` to `new_dir`/
+/// `new_name`: the entry itself, plus (if it's a folder) every descendant
+/// comment, whose key's directory has `old_dir`/`old_name` as a prefix.
+fn rekey_comments(
+    comments: &mut HashMap<(Vec<String>, String), String>,
+    old_dir: &[String],
+    old_name: &str,
+    new_dir: &[String],
+    new_name: &str,
+) {
+    if let Some(comment) = comments.remove(&(old_dir.to_vec(), old_name.to_string())) {
+        comments.insert((new_dir.to_vec(), new_name.to_string()), comment);
+    }
+    let mut old_prefix = old_dir.to_vec();
+    old_prefix.push(old_name.to_string());
+    let mut new_prefix = new_dir.to_vec();
+    new_prefix.push(new_name.to_string());
+    let descendants: Vec<_> = comments
+        .keys()
+        .filter(|(dir, _)| dir.starts_with(&old_prefix))
+        .cloned()
+        .collect();
+    for (dir, name) in descendants {
+        let comment = comments.remove(&(dir.clone(), name.clone())).unwrap();
+        let mut rekeyed_dir = new_prefix.clone();
+        rekeyed_dir.extend_from_slice(&dir[old_prefix.len()..]);
+        comments.insert((rekeyed_dir, name), comment);
+    }
+}
+
 /// A [`FileProvider`] that keeps files in memory only, the same tree for
 /// every login; nothing survives a restart. Used as
 /// [`crate::state::SharedState`]'s default and by this crate's own
@@ -415,6 +445,13 @@ impl FileProvider for InMemoryFileProvider {
             .remove(old_name)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         d.entries.insert(new_name.to_string(), entry);
+        rekey_comments(
+            &mut self.comments.lock().unwrap(),
+            &dir.components,
+            old_name,
+            &dir.components,
+            new_name,
+        );
         Ok(())
     }
 
@@ -446,6 +483,13 @@ impl FileProvider for InMemoryFileProvider {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
         dest.entries.insert(name.to_string(), entry);
+        rekey_comments(
+            &mut self.comments.lock().unwrap(),
+            &dir.components,
+            name,
+            &to_dir.components,
+            name,
+        );
         Ok(())
     }
 
@@ -698,6 +742,106 @@ mod tests {
                 .comment(requester(), &HlPath::default(), "a.txt")
                 .await,
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_a_file_carries_its_comment_to_the_new_name() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::default(), "a.txt", *b"hi");
+        provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+            .await
+            .unwrap();
+
+        provider
+            .rename(requester(), &HlPath::default(), "a.txt", "b.txt")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "b.txt")
+                .await,
+            Some("a note".to_string())
+        );
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "a.txt")
+                .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn moving_a_file_carries_its_comment_to_the_new_directory() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::default(), "a.txt", *b"hi");
+        provider
+            .mkdir(requester(), &HlPath::default(), "Dest")
+            .await
+            .unwrap();
+        provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+            .await
+            .unwrap();
+
+        provider
+            .r#move(
+                requester(),
+                &HlPath::default(),
+                "a.txt",
+                &HlPath::new(["Dest"]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::new(["Dest"]), "a.txt")
+                .await,
+            Some("a note".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_a_folder_carries_its_own_and_its_contents_comments() {
+        let provider = InMemoryFileProvider::default();
+        provider
+            .mkdir(requester(), &HlPath::default(), "Vacation")
+            .await
+            .unwrap();
+        provider.seed(&HlPath::new(["Vacation"]), "photo.png", *b"img");
+        provider
+            .set_comment(requester(), &HlPath::default(), "Vacation", "a folder note")
+            .await
+            .unwrap();
+        provider
+            .set_comment(
+                requester(),
+                &HlPath::new(["Vacation"]),
+                "photo.png",
+                "a photo note",
+            )
+            .await
+            .unwrap();
+
+        provider
+            .rename(requester(), &HlPath::default(), "Vacation", "Trip")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "Trip")
+                .await,
+            Some("a folder note".to_string())
+        );
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::new(["Trip"]), "photo.png")
+                .await,
+            Some("a photo note".to_string())
         );
     }
 
