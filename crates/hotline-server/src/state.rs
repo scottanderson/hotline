@@ -476,14 +476,14 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<u64, &'static str> {
-        if dropbox_blocked(dir, Some(name), access) {
-            return Err("You are not allowed to do that.");
-        }
-        self.files
+    ) -> Result<u64, String> {
+        dropbox_access(dir, Some(name), access)?;
+        let size = self
+            .files
             .size(requester, dir, name)
             .await
-            .ok_or("file or folder not found.")
+            .ok_or("file or folder not found.")?;
+        Ok(size)
     }
 
     /// Whether a file or folder already exists at this path.
@@ -544,14 +544,14 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<FileNameWithInfo, &'static str> {
-        if dropbox_blocked(dir, Some(name), access) {
-            return Err("You are not allowed to do that.");
-        }
-        self.files
+    ) -> Result<FileNameWithInfo, String> {
+        dropbox_access(dir, Some(name), access)?;
+        let info = self
+            .files
             .info(requester, dir, name)
             .await
-            .ok_or("file or folder not found.")
+            .ok_or("file or folder not found.")?;
+        Ok(info)
     }
 
     /// Delete a file, or a folder and everything under it, after
@@ -589,9 +589,7 @@ impl SharedState {
         name: &str,
         access: Access,
     ) -> Result<(), String> {
-        if dropbox_blocked(dir, Some(name), access) {
-            return Err("You are not allowed to do that.".to_string());
-        }
+        dropbox_access(dir, Some(name), access)?;
         self.files
             .mkdir(requester, dir, name)
             .await
@@ -608,9 +606,7 @@ impl SharedState {
         new_name: &str,
         access: Access,
     ) -> Result<(), String> {
-        if dropbox_blocked(dir, Some(name), access) {
-            return Err("You are not allowed to do that.".to_string());
-        }
+        dropbox_access(dir, Some(name), access)?;
         let info = self
             .files
             .info(requester, dir, name)

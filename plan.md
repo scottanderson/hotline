@@ -590,23 +590,28 @@ recommendation either way.
     `dropbox_access` helper wraps the existing `dropbox_blocked` check
     with `access.require(Access::VIEW_DROP_BOXES)` so the denial reads
     "You are not allowed to view drop boxes." through the same mechanism
-    item 39 wired up for every other single-flag denial. Both comment
-    stores key by path (`InMemoryFileProvider` by `(dir components, name)`,
-    `FileFileProvider` by those same components joined into one string),
-    matching how a real HFS-comment-store implementation of this same
-    feature identifies an entry, rather than by an inode/file-identity
-    number: portable across `tokio::fs`-backed and pure in-memory backends
-    alike, at the cost of a comment needing to be explicitly carried
-    forward on rename/move instead of surviving for free. `rename`/
-    `r#move` on both providers now do exactly that: `FileProvider::rename`/
-    `r#move` re-key the renamed/moved entry's own comment, plus (if it's a
-    folder) every descendant comment whose key had the old path as a
-    prefix, so a comment no longer goes silently orphaned under its old
-    path. Deleting a file or folder still leaves any of its comments in
-    the store rather than pruning them, a known asymmetry: harmless
-    (an orphaned comment is just inert data) unless a new, unrelated
-    file or folder is later created at that exact same path, which would
-    then inherit it. Not fixed here; flagged for a follow-up.
+    item 39 wired up for every other single-flag denial. `file_size`/
+    `file_info`/`mkdir`/`rename_file` had the same `dropbox_blocked`-plus-
+    hardcoded-string pattern from before this item (not newly introduced
+    by it); they now route through `dropbox_access` too, for the same
+    wording (`list_files` excepted, which silently empties instead of
+    erroring, so has nothing to word). Both comment stores key by path
+    (`InMemoryFileProvider` by `(dir components, name)`, `FileFileProvider`
+    by those same components joined into one string), matching how a real
+    HFS-comment-store implementation of this same feature identifies an
+    entry, rather than by an inode/file-identity number: portable across
+    `tokio::fs`-backed and pure in-memory backends alike, at the cost of a
+    comment needing to be explicitly carried forward on rename/move
+    instead of surviving for free. `rename`/`r#move` on both providers now
+    do exactly that: `FileProvider::rename`/`r#move` re-key the
+    renamed/moved entry's own comment, plus (if it's a folder) every
+    descendant comment whose key had the old path as a prefix, so a
+    comment no longer goes silently orphaned under its old path. Deleting
+    a file or folder still leaves any of its comments in the store rather
+    than pruning them, a known asymmetry: harmless (an orphaned comment is
+    just inert data) unless a new, unrelated file or folder is later
+    created at that exact same path, which would then inherit it. Not
+    fixed here; flagged for a follow-up.
 41. ~~Neither classic nor threaded news is persisted anywhere.~~
     **Resolved.** Added `NewsProvider` (`crate::news`), following the same
     plug-in shape as `AccountProvider`/`FileProvider`: `hotline-server`
