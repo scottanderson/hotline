@@ -758,7 +758,9 @@ impl SharedState {
         let mut new_flat = String::with_capacity(entry.len() + flat.len());
         new_flat.push_str(&entry);
         new_flat.push_str(&flat);
-        self.news_provider.save_flat(new_flat.into()).await;
+        self.news_provider
+            .save_flat(Arc::new(new_flat.into_boxed_str()))
+            .await;
         entry
     }
 

@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use hotline_proto::types::HlDate;
 use serde::{Deserialize, Serialize};
@@ -498,8 +499,8 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// threaded tree are independent load/save pairs, not one snapshot.
 #[async_trait]
 pub trait NewsProvider: Send + Sync {
-    async fn load_flat(&self) -> Arc<str>;
-    async fn save_flat(&self, flat: Arc<str>);
+    async fn load_flat(&self) -> Arc<Box<str>>;
+    async fn save_flat(&self, flat: Arc<Box<str>>);
     async fn load_tree(&self) -> Arc<NewsBundle>;
     async fn save_tree(&self, tree: Arc<NewsBundle>);
 }
@@ -507,26 +508,26 @@ pub trait NewsProvider: Send + Sync {
 /// A [`NewsProvider`] that keeps news in memory only; nothing survives a restart.
 #[derive(Debug, Default)]
 pub struct InMemoryNewsProvider {
-    flat: tokio::sync::RwLock<Arc<str>>,
-    tree: tokio::sync::RwLock<Arc<NewsBundle>>,
+    flat: ArcSwap<Box<str>>,
+    tree: ArcSwap<NewsBundle>,
 }
 
 #[async_trait]
 impl NewsProvider for InMemoryNewsProvider {
-    async fn load_flat(&self) -> Arc<str> {
-        self.flat.read().await.clone()
+    async fn load_flat(&self) -> Arc<Box<str>> {
+        self.flat.load_full()
     }
 
-    async fn save_flat(&self, flat: Arc<str>) {
-        *self.flat.write().await = flat;
+    async fn save_flat(&self, flat: Arc<Box<str>>) {
+        self.flat.store(flat);
     }
 
     async fn load_tree(&self) -> Arc<NewsBundle> {
-        self.tree.read().await.clone()
+        self.tree.load_full()
     }
 
     async fn save_tree(&self, tree: Arc<NewsBundle>) {
-        *self.tree.write().await = tree;
+        self.tree.store(tree);
     }
 }
 

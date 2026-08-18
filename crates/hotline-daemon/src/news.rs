@@ -3,16 +3,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use hotline_server::{NewsBundle, NewsProvider};
-use tokio::sync::RwLock;
 
 /// Flat news as a plain text file, the threaded tree as a separate JSON file.
 pub struct FileNewsProvider {
     flat_path: PathBuf,
     tree_path: PathBuf,
-    flat_cache: RwLock<Arc<str>>,
-    tree_cache: RwLock<Arc<NewsBundle>>,
+    flat_cache: ArcSwap<Box<str>>,
+    tree_cache: ArcSwap<NewsBundle>,
 }
 
 impl FileNewsProvider {
@@ -39,27 +39,27 @@ impl FileNewsProvider {
         Ok(Self {
             flat_path,
             tree_path,
-            flat_cache: RwLock::new(flat.into()),
-            tree_cache: RwLock::new(Arc::new(tree)),
+            flat_cache: ArcSwap::from_pointee(flat.into_boxed_str()),
+            tree_cache: ArcSwap::from_pointee(tree),
         })
     }
 }
 
 #[async_trait]
 impl NewsProvider for FileNewsProvider {
-    async fn load_flat(&self) -> Arc<str> {
-        self.flat_cache.read().await.clone()
+    async fn load_flat(&self) -> Arc<Box<str>> {
+        self.flat_cache.load_full()
     }
 
-    async fn save_flat(&self, flat: Arc<str>) {
+    async fn save_flat(&self, flat: Arc<Box<str>>) {
         if let Err(e) = tokio::fs::write(&self.flat_path, flat.as_bytes()).await {
             tracing::error!(error = %e, "failed to persist flat news");
         }
-        *self.flat_cache.write().await = flat;
+        self.flat_cache.store(flat);
     }
 
     async fn load_tree(&self) -> Arc<NewsBundle> {
-        self.tree_cache.read().await.clone()
+        self.tree_cache.load_full()
     }
 
     async fn save_tree(&self, tree: Arc<NewsBundle>) {
@@ -71,7 +71,7 @@ impl NewsProvider for FileNewsProvider {
             }
             Err(e) => tracing::error!(error = %e, "failed to serialize news tree"),
         }
-        *self.tree_cache.write().await = tree;
+        self.tree_cache.store(tree);
     }
 }
 
@@ -88,13 +88,13 @@ mod tests {
             .await
             .unwrap();
 
-        provider.save_flat("hello world".into()).await;
+        provider.save_flat(Arc::new("hello world".into())).await;
 
         assert_eq!(
             tokio::fs::read_to_string(&flat_path).await.unwrap(),
             "hello world"
         );
-        assert_eq!(provider.load_flat().await.as_ref(), "hello world");
+        assert_eq!(provider.load_flat().await.as_ref().as_ref(), "hello world");
     }
 
     #[tokio::test]
@@ -106,7 +106,7 @@ mod tests {
             let provider = FileNewsProvider::open(&flat_path, &tree_path)
                 .await
                 .unwrap();
-            provider.save_flat("hello".into()).await;
+            provider.save_flat(Arc::new("hello".into())).await;
             let mut tree = NewsBundle::default();
             tree.mkdir(&[], "General").unwrap();
             provider.save_tree(Arc::new(tree)).await;
@@ -116,7 +116,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(reopened.load_flat().await.as_ref(), "hello");
+        assert_eq!(reopened.load_flat().await.as_ref().as_ref(), "hello");
         assert_eq!(reopened.load_tree().await.entries.len(), 1);
     }
 
@@ -130,7 +130,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(provider.load_flat().await.as_ref(), "");
+        assert_eq!(provider.load_flat().await.as_ref().as_ref(), "");
         assert_eq!(provider.load_tree().await.entries.len(), 0);
     }
 }

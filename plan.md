@@ -753,6 +753,15 @@ recommendation either way.
     not a redundant permission. Not a bug, a primary/secondary divergence
     like item 18: the primary reference has no such fallback since it has
     no `AccessExtra` concept at all.
+49. `NewsProvider`'s tree/flat caches (`RwLock<Arc<NewsBundle>>`/
+    `RwLock<Arc<str>>`) switched to `arc_swap::ArcSwap`. `RwLock` implied
+    concurrent readers, but the caches are read far more than written;
+    `ArcSwap` gives lock-free reads that never block a writer and vice
+    versa, which fits that shape better than `RwLock`/`Mutex`. Flat news
+    moved to `Arc<Box<str>>` at the same time, since `arc_swap::ArcSwap<T>`
+    needs `T: Sized`; `Box<str>` over `Arc<String>` since the cache is
+    replaced wholesale, never mutated in place, so it doesn't need
+    `String`'s spare capacity or growth methods.
 
 ## Needs manual verification against the real client
 
