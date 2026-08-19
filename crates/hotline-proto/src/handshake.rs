@@ -54,12 +54,14 @@ impl ClientHandshake {
 
     /// Decode a 12-byte client handshake.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        let buf: [u8; Self::LEN] = buf.get(..Self::LEN).and_then(|b| b.try_into().ok()).ok_or(
-            ProtoError::UnexpectedEof {
+        let buf: [u8; Self::LEN] = buf
+            .get(..Self::LEN)
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
+            .ok_or(ProtoError::UnexpectedEof {
                 needed: Self::LEN,
                 available: buf.len(),
-            },
-        )?;
+            })?;
         let mut r = PacketReader::new(buf);
         let protocol = r.take::<4>();
         let sub_protocol = r.take::<4>();
@@ -107,12 +109,14 @@ impl ServerHandshake {
     /// Decode an 8-byte server handshake. Returns `Err(ProtoError::Rejected)`
     /// if the server reported a nonzero error code.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        let buf: [u8; Self::LEN] = buf.get(..Self::LEN).and_then(|b| b.try_into().ok()).ok_or(
-            ProtoError::UnexpectedEof {
+        let buf: [u8; Self::LEN] = buf
+            .get(..Self::LEN)
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
+            .ok_or(ProtoError::UnexpectedEof {
                 needed: Self::LEN,
                 available: buf.len(),
-            },
-        )?;
+            })?;
         let mut r = PacketReader::new(buf);
         let magic = r.take::<4>();
         let error_code = r.u32();

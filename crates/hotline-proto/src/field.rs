@@ -14,7 +14,7 @@ use std::borrow::Cow;
 
 use crate::error::{ProtoError, Result};
 use crate::numbers::{decode as decode_number, encode};
-use crate::wire::VecWriter;
+use crate::wire::{PacketReader, VecWriter};
 
 /// A field's payload. Locally-built fields carry their real type end to
 /// end; decoded fields start as [`FieldValue::Bytes`] until a typed
@@ -211,18 +211,27 @@ impl Field {
             .finish())
     }
 
+    /// Byte length of the fixed prefix before a field's variable-length
+    /// data: `field_id(2) | field_size(2)`.
+    const PREFIX_LEN: usize = 4;
+
     /// Decode one field from the front of `buf`, returning the field and
     /// the number of bytes consumed. Always produces [`FieldValue::Bytes`].
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
-        if buf.len() < 4 {
-            return Err(ProtoError::UnexpectedEof {
-                needed: 4,
+        let prefix: [u8; Self::PREFIX_LEN] = buf
+            .get(..Self::PREFIX_LEN)
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
+            .ok_or(ProtoError::UnexpectedEof {
+                needed: Self::PREFIX_LEN,
                 available: buf.len(),
-            });
-        }
-        let id = u16::from_be_bytes([buf[0], buf[1]]);
-        let size = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-        let total = 4 + size;
+            })?;
+        let mut r = PacketReader::new(prefix);
+        let id = r.u16();
+        let size = r.u16() as usize;
+        r.finish();
+
+        let total = Self::PREFIX_LEN + size;
         if buf.len() < total {
             return Err(ProtoError::UnexpectedEof {
                 needed: total,
@@ -232,7 +241,7 @@ impl Field {
         Ok((
             Field {
                 id,
-                value: FieldValue::Bytes(buf[4..total].to_vec()),
+                value: FieldValue::Bytes(buf[Self::PREFIX_LEN..total].to_vec()),
             },
             total,
         ))

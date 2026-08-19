@@ -309,17 +309,24 @@ impl Transaction {
             .finish())
     }
 
+    /// Byte length of the `count` prefix before a field list's own fields.
+    const COUNT_LEN: usize = 2;
+
     /// Decode the `count`-prefixed field list [`Transaction::encode_field_list`] produces.
     pub fn decode_field_list(body: &[u8]) -> Result<Vec<Field>> {
-        if body.len() < 2 {
-            return Err(ProtoError::UnexpectedEof {
-                needed: 2,
+        let prefix: [u8; Self::COUNT_LEN] = body
+            .get(..Self::COUNT_LEN)
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
+            .ok_or(ProtoError::UnexpectedEof {
+                needed: Self::COUNT_LEN,
                 available: body.len(),
-            });
-        }
-        let count = u16::from_be_bytes([body[0], body[1]]);
+            })?;
+        let mut r = PacketReader::new(prefix);
+        let count = r.u16();
+        r.finish();
 
-        let mut offset = 2;
+        let mut offset = Self::COUNT_LEN;
         let mut fields = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let (field, consumed) = Field::decode(&body[offset..])?;
@@ -349,7 +356,8 @@ impl Transaction {
     ) -> Result<Self> {
         let prefix: &[u8; TransactionHeader::LEN] = buf
             .get(..TransactionHeader::LEN)
-            .and_then(|s| s.try_into().ok())
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
             .ok_or(ProtoError::UnexpectedEof {
                 needed: TransactionHeader::LEN,
                 available: buf.len(),

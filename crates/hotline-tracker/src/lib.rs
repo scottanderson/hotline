@@ -39,13 +39,15 @@ pub fn encode_client_request_v1() -> [u8; 6] {
 /// Decode the fixed 6-byte header a tracker reply starts with, checking
 /// the magic and returning the version.
 pub fn decode_reply_header(buf: &[u8]) -> Result<u16> {
-    let prefix: [u8; 6] =
-        buf.get(..6)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(TrackerError::UnexpectedEof {
-                needed: 6,
-                available: buf.len(),
-            })?;
+    const HEADER_LEN: usize = 6;
+    let prefix: [u8; HEADER_LEN] = buf
+        .get(..HEADER_LEN)
+        .map(TryInto::try_into)
+        .and_then(std::result::Result::ok)
+        .ok_or(TrackerError::UnexpectedEof {
+            needed: HEADER_LEN,
+            available: buf.len(),
+        })?;
 
     let mut reader = PacketReader::new(prefix);
     let magic = reader.take::<4>();
@@ -96,16 +98,22 @@ impl TrackedServer {
     /// entry and bytes consumed.
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
         // ip(4) port(2) users(2) reserved(2) name_len(1) name desc_len(1) desc
-        if buf.len() < 10 {
-            return Err(TrackerError::UnexpectedEof {
-                needed: 10,
+        const PREFIX_LEN: usize = 10;
+        let prefix: [u8; PREFIX_LEN] = buf
+            .get(..PREFIX_LEN)
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
+            .ok_or(TrackerError::UnexpectedEof {
+                needed: PREFIX_LEN,
                 available: buf.len(),
-            });
-        }
-        let ip = [buf[0], buf[1], buf[2], buf[3]];
-        let port = u16::from_be_bytes([buf[4], buf[5]]);
-        let user_count = u16::from_be_bytes([buf[6], buf[7]]);
-        let (name, offset) = read_pstring(buf, 10)?;
+            })?;
+        let mut r = PacketReader::new(prefix);
+        let ip = r.take::<4>();
+        let port = r.u16();
+        let user_count = r.u16();
+        let _reserved = r.u16();
+        r.finish();
+        let (name, offset) = read_pstring(buf, PREFIX_LEN)?;
         let (description, offset) = read_pstring(buf, offset)?;
 
         Ok((

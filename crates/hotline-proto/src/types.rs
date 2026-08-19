@@ -32,12 +32,14 @@ impl HlDate {
 
     /// Decode from an 8-byte buffer.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        let buf: [u8; Self::LEN] = buf.get(..Self::LEN).and_then(|b| b.try_into().ok()).ok_or(
-            ProtoError::UnexpectedEof {
+        let buf: [u8; Self::LEN] = buf
+            .get(..Self::LEN)
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
+            .ok_or(ProtoError::UnexpectedEof {
                 needed: Self::LEN,
                 available: buf.len(),
-            },
-        )?;
+            })?;
         let mut r = PacketReader::new(buf);
         let year = r.u16();
         let milliseconds = r.u16();
@@ -87,20 +89,25 @@ impl HlPath {
 
     /// Decode a path from a field's raw data.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 2 {
-            return Err(ProtoError::UnexpectedEof {
-                needed: 2,
+        const LEVELS_LEN: usize = 2;
+        let prefix: [u8; LEVELS_LEN] = buf
+            .get(..LEVELS_LEN)
+            .map(TryInto::try_into)
+            .and_then(std::result::Result::ok)
+            .ok_or(ProtoError::UnexpectedEof {
+                needed: LEVELS_LEN,
                 available: buf.len(),
-            });
-        }
-        let levels = u16::from_be_bytes([buf[0], buf[1]]) as usize;
+            })?;
+        let mut r = PacketReader::new(prefix);
+        let levels = r.u16() as usize;
+        r.finish();
         if levels > Self::MAX_COMPONENTS {
             return Err(ProtoError::Malformed(format!(
                 "path has {levels} components, more than the max of {}",
                 Self::MAX_COMPONENTS
             )));
         }
-        let mut offset = 2;
+        let mut offset = LEVELS_LEN;
         let mut components = Vec::with_capacity(levels);
         for _ in 0..levels {
             if buf.len() < offset + 3 {
