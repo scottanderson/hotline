@@ -1830,7 +1830,7 @@ impl Session {
     /// `HTLC_HDR_GET_USER_LIST` (348): every account at once, for the
     /// bulk account editor. Each account is one `Text` (101) field
     /// wrapping its own nested `Name`/`Login`/`Password`/`Access` field
-    /// list, the same `hc`-prefixed shape a transaction body uses.
+    /// list, the same `count`-prefixed shape a transaction body uses.
     async fn on_get_user_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];

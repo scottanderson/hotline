@@ -8,14 +8,14 @@
 //!   4    4    trans    transaction ID
 //!   8    4    flag     bit 0 = error; rest reserved/unused on the wire
 //!  12    4    len      total size across every part of a split transaction
-//!  16    4    len2     hc below plus every field's bytes, this frame only
-//!  20    2    hc       number of field chunks that follow (== fields.len())
-//!  22    …    fields   `hc` back-to-back `Field` chunks: tag(2) len(2) data(len)
+//!  16    4    len2     count below plus every field's bytes, this frame only
+//!  20    2    count    number of field chunks that follow (== fields.len())
+//!  22    …    fields   `count` back-to-back `Field` chunks: tag(2) len(2) data(len)
 //! ```
 //!
 //! `Transaction` holds `opcode`, `trans`, `flag`, and `fields`; `len`/`len2`
 //! aren't kept since [`Transaction::encode`] recomputes them from `fields`
-//! every time. `hc` isn't stored either; it's always `fields.len()`.
+//! every time. `count` isn't stored either; it's always `fields.len()`.
 //!
 //! Streaming decode needs `len2` *before* the fields are readable, so
 //! [`TransactionHeader`] holds just the raw prefix. Reading proceeds
@@ -39,7 +39,7 @@ use crate::wire::{PacketReader, VecWriter};
 use crate::Access;
 
 /// A complete transaction: fixed fields plus its field list. `fields.len()`
-/// *is* the wire's `hc`; there is no separate count to keep in sync.
+/// *is* the wire's `count`; there is no separate count to keep in sync.
 /// Assumes a single-part transaction (`len == len2` on the wire); see the
 /// [module docs](self) for `len`/`len2` and [`TransactionHeader`].
 #[derive(Clone, PartialEq, Eq)]
@@ -283,7 +283,7 @@ impl Transaction {
         )
     }
 
-    /// Encode `fields` as an `hc`-prefixed field list: a transaction's
+    /// Encode `fields` as a `count`-prefixed field list: a transaction's
     /// own body shape, and also the shape of one nested account record
     /// inside `HTLC_HDR_GET_USER_LIST` (348) / `HTLC_HDR_SET_USER_LIST`
     /// (349).
@@ -291,10 +291,10 @@ impl Transaction {
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
     pub fn encode_field_list(fields: &[Field]) -> crate::error::Result<Vec<u8>> {
-        let hc = fields.len();
-        let hc = u16::try_from(hc).map_err(|_| ProtoError::TooLong {
+        let count = fields.len();
+        let count = u16::try_from(count).map_err(|_| ProtoError::TooLong {
             what: "field count",
-            len: hc,
+            len: count,
         })?;
 
         let encoded: Vec<u8> = fields
@@ -304,12 +304,12 @@ impl Transaction {
             .concat();
 
         Ok(VecWriter::with_capacity(2 + encoded.len())
-            .u16(hc)
+            .u16(count)
             .bytes(&encoded)
             .finish())
     }
 
-    /// Decode the `hc`-prefixed field list [`Transaction::encode_field_list`] produces.
+    /// Decode the `count`-prefixed field list [`Transaction::encode_field_list`] produces.
     pub fn decode_field_list(body: &[u8]) -> Result<Vec<Field>> {
         if body.len() < 2 {
             return Err(ProtoError::UnexpectedEof {
@@ -317,11 +317,11 @@ impl Transaction {
                 available: body.len(),
             });
         }
-        let hc = u16::from_be_bytes([body[0], body[1]]);
+        let count = u16::from_be_bytes([body[0], body[1]]);
 
         let mut offset = 2;
-        let mut fields = Vec::with_capacity(hc as usize);
-        for _ in 0..hc {
+        let mut fields = Vec::with_capacity(count as usize);
+        for _ in 0..count {
             let (field, consumed) = Field::decode(&body[offset..])?;
             offset += consumed;
             fields.push(field);
@@ -490,7 +490,7 @@ mod tests {
     fn prefix_is_20_bytes_full_frame_is_more() {
         let tx = Transaction::request(ClientOpcode::Ping, 1, vec![]);
         assert_eq!(TransactionHeader::LEN, 20);
-        // Full wire output is prefix(20) + hc(2) + fields(0 here).
+        // Full wire output is prefix(20) + count(2) + fields(0 here).
         assert_eq!(tx.encode().unwrap().len(), TransactionHeader::LEN + 2);
     }
 
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(
             bytes.len(),
             TransactionHeader::LEN + header.remaining_len() as usize,
-            "remaining_len() (== len2) must equal hc(2) + all field bytes"
+            "remaining_len() (== len2) must equal count(2) + all field bytes"
         );
 
         let decoded = Transaction::decode_from_client(&bytes).unwrap();
