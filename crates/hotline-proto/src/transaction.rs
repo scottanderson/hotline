@@ -144,27 +144,23 @@ impl Transaction {
     }
 
     /// Find the first field with the given ID, if present.
-    pub fn field(&self, id: impl Into<u16>) -> Option<&Field> {
+    pub fn field(&self, id: FieldId) -> Option<&Field> {
         self.fields.field(id)
     }
 
     /// `id`'s field as text, if present.
-    pub fn string(&self, id: impl Into<u16>, encoding: &'static Encoding) -> Option<String> {
+    pub fn string(&self, id: FieldId, encoding: &'static Encoding) -> Option<String> {
         self.fields.string(id, encoding)
     }
 
     /// `id`'s field as text plus its `encoding` byte length, if present.
     /// See [`Field::as_string_len`].
-    pub fn string_len(
-        &self,
-        id: impl Into<u16>,
-        encoding: &'static Encoding,
-    ) -> Option<(String, usize)> {
+    pub fn string_len(&self, id: FieldId, encoding: &'static Encoding) -> Option<(String, usize)> {
         self.fields.string_len(id, encoding)
     }
 
     /// Find all fields with the given ID.
-    pub fn fields(&self, id: impl Into<u16>) -> impl Iterator<Item = &Field> {
+    pub fn fields(&self, id: FieldId) -> impl Iterator<Item = &Field> {
         self.fields.fields(id)
     }
 
@@ -473,7 +469,7 @@ impl fmt::Debug for Transaction {
             &self
                 .fields
                 .iter()
-                .map(|field| (field.id, FieldId::name_for_raw(field.id), &field.value))
+                .map(|field| (field.id, field.id.original_name(), &field.value))
                 .collect::<Vec<_>>(),
         )
         .finish()

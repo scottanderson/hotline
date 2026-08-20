@@ -1,9 +1,9 @@
 //! `Field`: the `(id, size, data)` records that make up a transaction's
 //! parameter list.
 //!
-//! Field tags live in [`crate::field_id`] as [`crate::field_id::FieldId`];
-//! `Field` itself stores a raw `u16` id, since direction is a property of
-//! the transaction, not the field.
+//! Field tags live in [`crate::field_id`] as [`crate::field_id::FieldId`],
+//! which `Field` stores directly; direction is a property of the
+//! transaction, not the field.
 //!
 //! The payload is [`FieldValue`], not a bare `Vec<u8>`, so `Debug` shows
 //! the actual typed value. A field just decoded off the wire is
@@ -13,12 +13,13 @@
 use std::borrow::Cow;
 
 use crate::error::{ProtoError, Result};
+use crate::field_id::FieldId;
 use crate::numbers::{decode as decode_number, encode};
 use crate::text_encoding::{self, Encoding};
 use crate::wire::{PacketReader, VecWriter};
 
-/// A field's payload. Locally-built fields carry their real type end to
-/// end; decoded fields start as [`FieldValue::Bytes`] until a typed
+/// A field's payload. Locally-built fields carry their real type until
+/// encoded; decoded fields start as [`FieldValue::Bytes`] until a typed
 /// accessor interprets them (see the [module docs](self)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldValue {
@@ -56,41 +57,35 @@ impl FieldValue {
 /// A single transaction parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
-    /// Field tag. Pass a [`crate::field_id::FieldId`] constant to any
-    /// constructor here (it converts via `Into<u16>`); stored as a plain
-    /// `u16` since that's what's actually on the wire and what decoding
-    /// produces before direction is known.
-    pub id: u16,
+    /// Field tag.
+    pub id: FieldId,
     /// The typed payload. See [`FieldValue`].
     pub value: FieldValue,
 }
 
 impl Field {
     /// Build a field from an already-typed value.
-    fn new(id: impl Into<u16>, value: FieldValue) -> Self {
-        Self {
-            id: id.into(),
-            value,
-        }
+    const fn new(id: FieldId, value: FieldValue) -> Self {
+        Self { id, value }
     }
 
     /// Build a field from raw bytes, e.g. a packed record
     /// (`FILE_NAME_WITH_INFO`, `USER_NAME_WITH_INFO`) that has its own
     /// internal encoding.
-    pub fn bytes(id: impl Into<u16>, data: impl Into<Vec<u8>>) -> Self {
+    pub fn bytes(id: FieldId, data: impl Into<Vec<u8>>) -> Self {
         Self::new(id, FieldValue::Bytes(data.into()))
     }
 
     /// Build a 16-bit integer field (`UID`, `ICON`, `CHAT_SUBJECT` length
     /// prefixes, etc). Used where the exact wire width is confirmed fixed.
-    pub fn u16(id: impl Into<u16>, value: u16) -> Self {
+    pub const fn u16(id: FieldId, value: u16) -> Self {
         Self::new(id, FieldValue::U16(value))
     }
 
     /// Build the 64-bit `USER_ACCESS` bitmask field. Not a "number" in
     /// the [`Field::u32`] sense (it's a bitmap, not a magnitude), so it
     /// doesn't go through [`crate::numbers`].
-    pub fn u64(id: impl Into<u16>, value: u64) -> Self {
+    pub const fn u64(id: FieldId, value: u64) -> Self {
         Self::new(id, FieldValue::U64(value))
     }
 
@@ -99,20 +94,20 @@ impl Field {
     /// 4-byte representation. Use for anything wider than 16 bits (a
     /// chat/thread ID, a file size, ...); use [`Field::u16`] instead for
     /// a field confirmed fixed at exactly 2 bytes.
-    pub fn u32(id: impl Into<u16>, value: u32) -> Self {
+    pub const fn u32(id: FieldId, value: u32) -> Self {
         Self::new(id, FieldValue::U32(value))
     }
 
     /// Build a string field. See [`Field::as_string`] for the encoding
     /// used to write it to the wire.
-    pub fn string(id: impl Into<u16>, value: impl Into<String>) -> Self {
+    pub fn string(id: FieldId, value: impl Into<String>) -> Self {
         Self::new(id, FieldValue::Text(value.into()))
     }
 
     /// Build a `LOGIN`/`PASSWORD`-style field: text obfuscated with
     /// Hotline's symmetric XOR-0xFF transform (`hl_code` in the
     /// reference C implementation).
-    pub fn obfuscated_string(id: impl Into<u16>, value: impl Into<String>) -> Self {
+    pub fn obfuscated_string(id: FieldId, value: impl Into<String>) -> Self {
         Self::new(id, FieldValue::ObfuscatedText(value.into()))
     }
 
@@ -211,7 +206,7 @@ impl Field {
             len: data.len(),
         })?;
         Ok(VecWriter::with_capacity(4 + data.len())
-            .u16(self.id)
+            .u16(self.id.into())
             .u16(len)
             .bytes(&data)
             .finish())
@@ -246,7 +241,7 @@ impl Field {
         }
         Ok((
             Field {
-                id,
+                id: FieldId::from(id),
                 value: FieldValue::Bytes(buf[Self::PREFIX_LEN..total].to_vec()),
             },
             total,
@@ -268,29 +263,23 @@ impl FieldList {
     }
 
     /// Find the first field with the given ID, if present.
-    pub fn field(&self, id: impl Into<u16>) -> Option<&Field> {
-        let id = id.into();
+    pub fn field(&self, id: FieldId) -> Option<&Field> {
         self.0.iter().find(|f| f.id == id)
     }
 
     /// Find all fields with the given ID.
-    pub fn fields(&self, id: impl Into<u16>) -> impl Iterator<Item = &Field> {
-        let id = id.into();
+    pub fn fields(&self, id: FieldId) -> impl Iterator<Item = &Field> {
         self.0.iter().filter(move |f| f.id == id)
     }
 
     /// `id`'s field as text, if present.
-    pub fn string(&self, id: impl Into<u16>, encoding: &'static Encoding) -> Option<String> {
+    pub fn string(&self, id: FieldId, encoding: &'static Encoding) -> Option<String> {
         self.field(id).map(|f| f.as_string(encoding))
     }
 
     /// `id`'s field as text plus its `encoding` byte length, if present.
     /// See [`Field::as_string_len`].
-    pub fn string_len(
-        &self,
-        id: impl Into<u16>,
-        encoding: &'static Encoding,
-    ) -> Option<(String, usize)> {
+    pub fn string_len(&self, id: FieldId, encoding: &'static Encoding) -> Option<(String, usize)> {
         self.field(id).map(|f| f.as_string_len(encoding))
     }
 }
@@ -420,6 +409,13 @@ mod tests {
 
     #[test]
     fn field_id_name_lookup() {
-        assert_eq!(FieldId::Name.name(), "myField_UserName");
+        assert_eq!(FieldId::Name.original_name(), "myField_UserName");
+    }
+
+    #[test]
+    fn decoding_an_unrecognized_field_id_preserves_its_wire_value() {
+        let f = Field::bytes(FieldId::Unknown(9999), vec![1, 2, 3]);
+        let (decoded, _) = Field::decode(&f.encode(text_encoding::DEFAULT).unwrap()).unwrap();
+        assert_eq!(decoded.id, FieldId::Unknown(9999));
     }
 }

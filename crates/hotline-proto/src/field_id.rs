@@ -16,10 +16,12 @@
 //! idiomatic multi-word Rust names, so a variant is always one grep away
 //! from its source.
 
+use num_enum::{FromPrimitive, IntoPrimitive};
+
 /// A field tag, as sent by either a client or a server.
 #[repr(u16)]
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, FromPrimitive, IntoPrimitive)]
 pub enum FieldId {
     /// Error message text, server-only.
     ///
@@ -260,82 +262,15 @@ pub enum FieldId {
     ///
     /// Original: `myField_NewsArtRecurseDel`.
     NewsArtRecurseDel = 337,
+    /// Not recognized by this build. Carries the raw wire value so
+    /// callers can still log/forward it.
+    #[num_enum(catch_all)]
+    Unknown(u16),
 }
 
 impl FieldId {
-    /// Look up the variant for a raw wire value, if any field uses it.
-    pub const fn from_u16(id: u16) -> Option<Self> {
-        Some(match id {
-            100 => Self::ErrorText,
-            101 => Self::Text,
-            102 => Self::Name,
-            103 => Self::UserId,
-            104 => Self::Icon,
-            105 => Self::Login,
-            106 => Self::Password,
-            107 => Self::TransferId,
-            108 => Self::TransferSize,
-            109 => Self::Style,
-            110 => Self::Access,
-            111 => Self::UserAlias,
-            112 => Self::Color,
-            113 => Self::Options,
-            114 => Self::ChatId,
-            115 => Self::ChatSubject,
-            116 => Self::QueuePosition,
-            151 => Self::Banner,
-            152 => Self::BannerType,
-            153 => Self::BannerUrl,
-            154 => Self::Noagreement,
-            160 => Self::Version,
-            161 => Self::Bannerid,
-            162 => Self::Servername,
-            200 => Self::FileList,
-            201 => Self::FileName,
-            202 => Self::FilePath,
-            203 => Self::ResumeFileTransfer,
-            204 => Self::FileXferOptions,
-            205 => Self::FileType,
-            206 => Self::FileCreator,
-            207 => Self::FileSize,
-            208 => Self::FileDateCreate,
-            209 => Self::FileDateModify,
-            210 => Self::FileComment,
-            211 => Self::FileNewName,
-            212 => Self::FileNewPath,
-            213 => Self::FileIcon,
-            214 => Self::QuotingMsg,
-            215 => Self::AutomaticResponse,
-            220 => Self::FolderItemCount,
-            300 => Self::UserList,
-            320 => Self::NewsCatListData,
-            321 => Self::NewsArtListData,
-            322 => Self::NewsCatName,
-            323 => Self::NewsDirlistExtended,
-            325 => Self::NewsPath,
-            326 => Self::NewsArtId,
-            327 => Self::NewsArtDataFlavor,
-            328 => Self::NewsArtTitle,
-            329 => Self::NewsArtPoster,
-            330 => Self::NewsArtDate,
-            331 => Self::NewsArtPrevArt,
-            332 => Self::NewsArtNextArt,
-            333 => Self::NewsArtData,
-            334 => Self::NewsArtFlags,
-            335 => Self::NewsArtParentArt,
-            336 => Self::NewsArt1stChildArt,
-            337 => Self::NewsArtRecurseDel,
-            _ => return None,
-        })
-    }
-
-    /// The wire value.
-    pub const fn as_u16(self) -> u16 {
-        self as u16
-    }
-
     /// The original constant name.
-    pub const fn name(self) -> &'static str {
+    pub const fn original_name(self) -> &'static str {
         match self {
             Self::ErrorText => "myField_ErrorText",
             Self::Text => "myField_Data",
@@ -396,21 +331,16 @@ impl FieldId {
             Self::NewsArtParentArt => "myField_NewsArtParentArt",
             Self::NewsArt1stChildArt => "myField_NewsArt1stChildArt",
             Self::NewsArtRecurseDel => "myField_NewsArtRecurseDel",
-        }
-    }
-
-    /// The original constant name for a raw wire value, known or not.
-    pub const fn name_for_raw(id: u16) -> &'static str {
-        match Self::from_u16(id) {
-            Some(known) => known.name(),
-            None => "(unrecognized field id)",
+            Self::Unknown(_) => "(unrecognized field)",
         }
     }
 }
 
-impl From<FieldId> for u16 {
-    fn from(id: FieldId) -> u16 {
-        id.as_u16()
+impl std::fmt::Debug for FieldId {
+    /// Prints the wire value and the original constant name, e.g.
+    /// `102 myField_UserName`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", u16::from(*self), self.original_name())
     }
 }
 
@@ -420,20 +350,44 @@ mod tests {
 
     #[test]
     fn from_u16_round_trips() {
-        assert_eq!(FieldId::from_u16(102), Some(FieldId::Name));
+        assert_eq!(FieldId::from(102), FieldId::Name);
         assert_eq!(u16::from(FieldId::Name), 102);
-        assert_eq!(FieldId::from_u16(65535), None);
+        assert_eq!(FieldId::from(65535), FieldId::Unknown(65535));
     }
 
     #[test]
-    fn name_for_raw_handles_unknown_values() {
-        assert_eq!(FieldId::name_for_raw(65535), "(unrecognized field id)");
-        assert_eq!(FieldId::name_for_raw(102), "myField_UserName");
+    fn name_handles_unknown_values() {
+        assert_eq!(FieldId::from(65535).original_name(), "(unrecognized field)");
+        assert_eq!(FieldId::from(102).original_name(), "myField_UserName");
     }
 
     #[test]
     fn file_icon_213_does_not_collide_with_file_type_205() {
-        assert_eq!(FieldId::from_u16(213), Some(FieldId::FileIcon));
-        assert_eq!(FieldId::from_u16(205), Some(FieldId::FileType));
+        assert_eq!(FieldId::from(213), FieldId::FileIcon);
+        assert_eq!(FieldId::from(205), FieldId::FileType);
+    }
+
+    #[test]
+    fn debug_reconstructs_every_fields_original_name() {
+        use FieldId::*;
+        let cases = [
+            ("100 myField_ErrorText", ErrorText),
+            ("101 myField_Data", Text),
+            ("102 myField_UserName", Name),
+            ("110 myField_UserAccess", Access),
+            ("113 myField_Options", Options),
+            ("151 myField_ServerBanner", Banner),
+            ("162 myField_ServerName", Servername),
+            ("200 myField_FileNameWithInfo", FileList),
+            ("205 myField_FileTypeString", FileType),
+            ("213 myField_FileType", FileIcon),
+            ("300 myField_UserNameWithInfo", UserList),
+            ("326 myField_NewsArtID", NewsArtId),
+            ("337 myField_NewsArtRecurseDel", NewsArtRecurseDel),
+            ("57005 (unrecognized field)", Unknown(0xDEAD)),
+        ];
+        for (expected, field_id) in cases {
+            assert_eq!(format!("{field_id:?}"), expected);
+        }
     }
 }
