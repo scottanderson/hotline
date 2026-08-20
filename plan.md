@@ -655,19 +655,21 @@ recommendation either way.
     random UUIDv4 (the `uuid` crate) rather than a process-local
     incrementing counter reinterpreted as 16 bytes, stored as the
     canonical hyphenated string.
-42. **All wire text is decoded as lossy UTF-8, not the classic client's
-    actual encoding.** `Field::as_string` (`crates/hotline-proto/src/field.rs`)
-    and the name-decoding paths in `types.rs` (`FileNameWithInfo`,
-    `UserNameWithInfo`, ...) all go through `String::from_utf8_lossy`;
-    `Field::as_string`'s own doc comment already flags this ("a legacy
-    client's own encoding won't round-trip correctly here"). Real Mac
-    clients send names/messages/news text in Mac OS Roman (`MacRoman`),
-    not UTF-8, so any byte outside 7-bit ASCII (curly quotes, accented
-    letters, the bullet/degree/etc. characters in that range) currently
-    comes out as U+FFFD replacement characters instead of the correct
-    Unicode codepoint. Needs a real MacRoman-to-UTF-8 (and back, for
-    encoding outgoing fields) table-based transcoding, or at minimum
-    stop silently mangling non-ASCII bytes via lossy UTF-8 decoding.
+42. ~~**All wire text is decoded as lossy UTF-8, not the classic client's
+    actual encoding.**~~ **Resolved.** Added `hotline_proto::text_encoding`
+    (built on `encoding_rs`): `DEFAULT` is a real Mac OS Roman transcoding,
+    and any other WHATWG label (`utf-8`, `shift-jis`, `latin1`, ...) works
+    via `Encoding::for_label`. Every `Field`/`Transaction`/`HlPath`/
+    `FileNameWithInfo`/`UserNameWithInfo`/`NewsCategoryListEntry`/
+    `NewsArticleListData` method that turns wire bytes into text or back,
+    and `PacketBuilder::pstring` (via a `with_encoding` typestate), now
+    takes the encoding explicitly, so a call site that forgets it fails to
+    compile instead of writing the wrong wire bytes. The encoding is
+    per-connection and live, not a fixed default: `hotline_codec::TransactionCodec`
+    holds an `EncodingHandle` (`Arc<ArcSwap<&'static Encoding>>`, same
+    shape as item 49) that `Session`/`HotlineClient` seed from `DEFAULT`
+    at connect and read at every text call site. Nothing yet changes the
+    encoding after connect; the hook is in place for whatever adds that.
 43. ~~**No pluggable ban/mute list.**~~ **Resolved.** Added a
     `BanProvider` trait (`is_banned`/`ban`/`unban`, mirroring
     `AccountProvider`'s plug-in shape) and its in-memory default,

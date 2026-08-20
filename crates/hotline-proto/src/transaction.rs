@@ -31,9 +31,10 @@
 use std::{debug_assert_matches, fmt};
 
 use crate::error::{ProtoError, Result};
-use crate::field::Field;
+use crate::field::{Field, FieldList};
 use crate::field_id::{ClientFieldId, ServerFieldId};
 use crate::opcode::{ClientOpcode, ServerOpcode, TransactionType};
+use crate::text_encoding::Encoding;
 use crate::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
 use crate::wire::{PacketReader, VecWriter};
 use crate::Access;
@@ -42,6 +43,8 @@ use crate::Access;
 /// *is* the wire's `count`; there is no separate count to keep in sync.
 /// Assumes a single-part transaction (`len == len2` on the wire); see the
 /// [module docs](self) for `len`/`len2` and [`TransactionHeader`].
+///
+/// Carries no text encoding of its own; callers supply one per read/write call.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Transaction {
     /// The wire `type` value, already resolved to which direction sent
@@ -53,7 +56,7 @@ pub struct Transaction {
     /// Bit 0 is the error flag; the rest is reserved on the wire.
     flag: u32,
     /// The fields themselves.
-    pub fields: Vec<Field>,
+    pub fields: FieldList,
 }
 
 /// A transaction's raw 20-byte wire prefix, decoded before its fields are
@@ -113,7 +116,7 @@ impl Transaction {
             r#type,
             trans,
             flag,
-            fields,
+            fields: FieldList::new(fields),
         }
     }
 
@@ -142,56 +145,74 @@ impl Transaction {
 
     /// Find the first field with the given ID, if present.
     pub fn field(&self, id: impl Into<u16>) -> Option<&Field> {
-        let id = id.into();
-        self.fields.iter().find(|f| f.id == id)
+        self.fields.field(id)
+    }
+
+    /// `id`'s field as text, if present.
+    pub fn string(&self, id: impl Into<u16>, encoding: &'static Encoding) -> Option<String> {
+        self.fields.string(id, encoding)
+    }
+
+    /// `id`'s field as text plus its `encoding` byte length, if present.
+    /// See [`Field::as_string_len`].
+    pub fn string_len(
+        &self,
+        id: impl Into<u16>,
+        encoding: &'static Encoding,
+    ) -> Option<(String, usize)> {
+        self.fields.string_len(id, encoding)
     }
 
     /// Find all fields with the given ID.
     pub fn fields(&self, id: impl Into<u16>) -> impl Iterator<Item = &Field> {
-        let id = id.into();
-        self.fields.iter().filter(move |f| f.id == id)
+        self.fields.fields(id)
     }
 
     /// The first `USER_LIST` (300) field, decoded (`None` if absent, `Some(Err(_))` if malformed).
-    pub fn user_list_entry(&self) -> Option<Result<UserNameWithInfo>> {
+    pub fn user_list_entry(&self, encoding: &'static Encoding) -> Option<Result<UserNameWithInfo>> {
         self.field(ServerFieldId::UserList)
-            .map(|f| UserNameWithInfo::decode(&f.as_bytes()))
+            .map(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding))
     }
 
     /// Every `USER_LIST` (300) field, decoded; fails on the first that doesn't decode.
-    pub fn user_list_entries(&self) -> Result<Vec<UserNameWithInfo>> {
+    pub fn user_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<UserNameWithInfo>> {
         self.fields(ServerFieldId::UserList)
-            .map(|f| UserNameWithInfo::decode(&f.as_bytes()))
+            .map(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding))
             .collect()
     }
 
     /// Every `FILE_LIST` (200) field, decoded; fails on the first that doesn't decode.
-    pub fn file_list_entries(&self) -> Result<Vec<FileNameWithInfo>> {
+    pub fn file_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<FileNameWithInfo>> {
         self.fields(ServerFieldId::FileList)
-            .map(|f| FileNameWithInfo::decode(&f.as_bytes()))
+            .map(|f| FileNameWithInfo::decode(&f.as_bytes(encoding), encoding))
             .collect()
     }
 
     /// A `FILE_PATH`-shaped field (`FilePath`/`FileNewPath`), decoded.
-    pub fn file_path(&self, id: ClientFieldId) -> Option<Result<HlPath>> {
-        self.field(id).map(|f| HlPath::decode(&f.as_bytes()))
+    pub fn file_path(
+        &self,
+        id: ClientFieldId,
+        encoding: &'static Encoding,
+    ) -> Option<Result<HlPath>> {
+        self.field(id)
+            .map(|f| HlPath::decode(&f.as_bytes(encoding), encoding))
     }
 
     /// The `LOGIN` field, deobfuscated, if present.
-    pub fn login(&self) -> Option<String> {
+    pub fn login(&self, encoding: &'static Encoding) -> Option<String> {
         self.field(ClientFieldId::Login)
-            .map(Field::as_deobfuscated_string)
+            .map(|f| f.as_deobfuscated_string(encoding))
     }
 
     /// The `PASSWORD` field, deobfuscated, if present.
-    pub fn password(&self) -> Option<String> {
+    pub fn password(&self, encoding: &'static Encoding) -> Option<String> {
         self.field(ClientFieldId::Password)
-            .map(Field::as_deobfuscated_string)
+            .map(|f| f.as_deobfuscated_string(encoding))
     }
 
     /// The `NAME` field, if present.
-    pub fn name(&self) -> Option<String> {
-        self.field(ClientFieldId::Name).map(Field::as_string)
+    pub fn name(&self, encoding: &'static Encoding) -> Option<String> {
+        self.string(ClientFieldId::Name, encoding)
     }
 
     /// The `ICON` field, if present.
@@ -200,8 +221,8 @@ impl Transaction {
     }
 
     /// The `HTLC_DATA_NEWS_DIR` (325) field, decoded.
-    pub fn news_path(&self) -> Option<Result<HlPath>> {
-        self.file_path(ClientFieldId::NewsPath)
+    pub fn news_path(&self, encoding: &'static Encoding) -> Option<Result<HlPath>> {
+        self.file_path(ClientFieldId::NewsPath, encoding)
     }
 
     /// The `HTLC_DATA_NEWS_THREADID` (326) field, if present.
@@ -210,20 +231,18 @@ impl Transaction {
     }
 
     /// The `HTLC_DATA_NEWS_CATNAME` (322) field, if present.
-    pub fn news_category_name(&self) -> Option<String> {
-        self.field(ClientFieldId::NewsCatName).map(Field::as_string)
+    pub fn news_category_name(&self, encoding: &'static Encoding) -> Option<String> {
+        self.string(ClientFieldId::NewsCatName, encoding)
     }
 
     /// The `HTLC_DATA_NEWS_SUBJECT` (328) field, if present.
-    pub fn news_article_title(&self) -> Option<String> {
-        self.field(ClientFieldId::NewsArtTitle)
-            .map(Field::as_string)
+    pub fn news_article_title(&self, encoding: &'static Encoding) -> Option<String> {
+        self.string(ClientFieldId::NewsArtTitle, encoding)
     }
 
     /// The `HTLC_DATA_NEWS_MIMETYPE` (327) field, if present.
-    pub fn news_article_flavor(&self) -> Option<String> {
-        self.field(ClientFieldId::NewsArtDataFlavor)
-            .map(Field::as_string)
+    pub fn news_article_flavor(&self, encoding: &'static Encoding) -> Option<String> {
+        self.string(ClientFieldId::NewsArtDataFlavor, encoding)
     }
 
     /// The `HTLC_DATA_NEWS_FLAGS` (334) field, if present.
@@ -242,9 +261,9 @@ impl Transaction {
     }
 
     /// The `HTLC_DATA_NEWS_POST` (333) field's raw bytes, if present.
-    pub fn news_article_data(&self) -> Option<Vec<u8>> {
+    pub fn news_article_data(&self, encoding: &'static Encoding) -> Option<Vec<u8>> {
         self.field(ClientFieldId::NewsArtData)
-            .map(|f| f.as_bytes().into_owned())
+            .map(|f| f.as_bytes(encoding).into_owned())
     }
 
     /// The `HTLC_DATA_ACCESS` field, if present.
@@ -264,8 +283,8 @@ impl Transaction {
     ///
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
-    pub fn encode(&self) -> crate::error::Result<Vec<u8>> {
-        let body = Self::encode_field_list(&self.fields)?;
+    pub fn encode(&self, encoding: &'static Encoding) -> crate::error::Result<Vec<u8>> {
+        let body = Self::encode_field_list(&self.fields, encoding)?;
         let len = u32::try_from(body.len()).map_err(|_| ProtoError::TooLong {
             what: "fields len",
             len: body.len(),
@@ -290,7 +309,10 @@ impl Transaction {
     ///
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
-    pub fn encode_field_list(fields: &[Field]) -> crate::error::Result<Vec<u8>> {
+    pub fn encode_field_list(
+        fields: &[Field],
+        encoding: &'static Encoding,
+    ) -> crate::error::Result<Vec<u8>> {
         let count = fields.len();
         let count = u16::try_from(count).map_err(|_| ProtoError::TooLong {
             what: "field count",
@@ -299,7 +321,7 @@ impl Transaction {
 
         let encoded: Vec<u8> = fields
             .iter()
-            .map(Field::encode)
+            .map(|f| f.encode(encoding))
             .collect::<Result<Vec<_>>>()?
             .concat();
 
@@ -313,7 +335,7 @@ impl Transaction {
     const COUNT_LEN: usize = 2;
 
     /// Decode the `count`-prefixed field list [`Transaction::encode_field_list`] produces.
-    pub fn decode_field_list(body: &[u8]) -> Result<Vec<Field>> {
+    pub fn decode_field_list(body: &[u8]) -> Result<FieldList> {
         let prefix: [u8; Self::COUNT_LEN] = body
             .get(..Self::COUNT_LEN)
             .map(TryInto::try_into)
@@ -333,7 +355,7 @@ impl Transaction {
             offset += consumed;
             fields.push(field);
         }
-        Ok(fields)
+        Ok(FieldList::new(fields))
     }
 
     /// Decode a complete, single-part transaction (prefix + body) from
@@ -493,29 +515,36 @@ mod tests {
     use super::*;
     use crate::field_id::{ClientFieldId, ServerFieldId};
     use crate::opcode::ClientOpcode;
+    use crate::text_encoding;
 
     #[test]
     fn prefix_is_20_bytes_full_frame_is_more() {
+        let encoding = text_encoding::DEFAULT;
         let tx = Transaction::request(ClientOpcode::Ping, 1, vec![]);
         assert_eq!(TransactionHeader::LEN, 20);
         // Full wire output is prefix(20) + count(2) + fields(0 here).
-        assert_eq!(tx.encode().unwrap().len(), TransactionHeader::LEN + 2);
+        assert_eq!(
+            tx.encode(encoding).unwrap().len(),
+            TransactionHeader::LEN + 2
+        );
     }
 
     #[test]
     fn field_count_is_never_stored_only_derived() {
+        let encoding = text_encoding::DEFAULT;
         for n in [0, 1, 5] {
             let fields = (0..n)
                 .map(|i| Field::string(ClientFieldId::Text, format!("msg{i}")))
                 .collect::<Vec<_>>();
             let tx = Transaction::request(ClientOpcode::Chat, 1, fields);
-            let decoded = Transaction::decode_from_client(&tx.encode().unwrap()).unwrap();
+            let decoded = Transaction::decode_from_client(&tx.encode(encoding).unwrap()).unwrap();
             assert_eq!(decoded.fields.len(), n);
         }
     }
 
     #[test]
     fn transaction_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let tx = Transaction::request(
             ClientOpcode::Login,
             1,
@@ -525,7 +554,7 @@ mod tests {
                 Field::u16(ClientFieldId::Version, 151),
             ],
         );
-        let bytes = tx.encode().unwrap();
+        let bytes = tx.encode(encoding).unwrap();
         let prefix: [u8; TransactionHeader::LEN] =
             bytes[..TransactionHeader::LEN].try_into().unwrap();
         let header = TransactionHeader::decode_from_client(&prefix);
@@ -542,7 +571,7 @@ mod tests {
         assert_eq!(
             decoded
                 .field(ClientFieldId::Login)
-                .map(Field::as_deobfuscated_string)
+                .map(|f| f.as_deobfuscated_string(encoding))
                 .as_deref(),
             Some("guest")
         );
@@ -550,12 +579,13 @@ mod tests {
 
     #[test]
     fn streaming_decode_matches_one_shot_decode() {
+        let encoding = text_encoding::DEFAULT;
         let tx = Transaction::request(
             ClientOpcode::Chat,
             7,
             vec![Field::string(ClientFieldId::Text, "hello")],
         );
-        let bytes = tx.encode().unwrap();
+        let bytes = tx.encode(encoding).unwrap();
 
         let prefix: [u8; TransactionHeader::LEN] =
             bytes[..TransactionHeader::LEN].try_into().unwrap();
@@ -577,13 +607,16 @@ mod tests {
 
     #[test]
     fn error_reply_shape() {
+        let encoding = text_encoding::DEFAULT;
         let request = Transaction::request(ClientOpcode::Ping, 42, vec![]);
         let tx = request.reply_error("nope");
         assert_eq!(tx.trans, 42);
         assert!(tx.is_error());
         assert!(tx.is_reply());
         assert_eq!(
-            tx.field(ServerFieldId::ErrorText).unwrap().as_string(),
+            tx.field(ServerFieldId::ErrorText)
+                .unwrap()
+                .as_string(encoding),
             "nope"
         );
     }
@@ -592,6 +625,7 @@ mod tests {
     /// relayed field that isn't; `encode()` must fail, not truncate.
     #[test]
     fn oversized_relay_field_fails_to_encode_instead_of_corrupting_the_wire() {
+        let encoding = text_encoding::DEFAULT;
         let long_nick = "n".repeat(60_000);
         let long_message = "m".repeat(60_000);
         let relay = format!("{long_nick}: {long_message}");
@@ -602,7 +636,7 @@ mod tests {
             vec![Field::string(ServerFieldId::Text, relay)],
         );
         assert!(matches!(
-            tx.encode(),
+            tx.encode(encoding),
             Err(ProtoError::TooLong {
                 what: "field data",
                 ..
@@ -611,13 +645,14 @@ mod tests {
     }
 
     #[test]
-    fn len2_includes_the_hc_field_itself() {
+    fn len2_includes_the_count_field_itself() {
+        let encoding = text_encoding::DEFAULT;
         let tx = Transaction::request(
             ClientOpcode::Chat,
             1,
             vec![Field::string(ClientFieldId::Text, "hi")],
         );
-        let bytes = tx.encode().unwrap();
+        let bytes = tx.encode(encoding).unwrap();
         let prefix: [u8; TransactionHeader::LEN] =
             bytes[..TransactionHeader::LEN].try_into().unwrap();
         let header = TransactionHeader::decode_from_client(&prefix);

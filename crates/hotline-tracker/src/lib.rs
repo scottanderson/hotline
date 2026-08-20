@@ -3,6 +3,7 @@
 //! separate from `hotline-proto`'s transaction framing, a different wire
 //! shape entirely, but reuses its `PacketWriter`/`PacketReader`/`VecWriter`.
 
+use hotline_proto::text_encoding::Encoding;
 use hotline_proto::wire::{PStringTooLong, PacketReader, PacketWriter, VecWriter};
 use thiserror::Error;
 
@@ -152,13 +153,14 @@ pub struct ServerBeacon {
 impl ServerBeacon {
     /// Encode the UDP payload sent to the tracker. Fails if any of
     /// `name`/`description`/`login`/`password` is longer than 255 bytes.
-    pub fn encode(&self) -> Result<Vec<u8>> {
+    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         Ok(VecWriter::new()
             .u16(1)
             .u16(self.port)
             .u16(self.user_count)
             .u16(0)
             .u32(self.pass_id)
+            .with_encoding(encoding)
             .pstring(&self.name)?
             .pstring(&self.description)?
             .pstring(&self.login)?
@@ -170,14 +172,17 @@ impl ServerBeacon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hotline_proto::text_encoding;
 
     #[test]
     fn tracked_server_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let buf = VecWriter::new()
             .bytes(&[127, 0, 0, 1])
             .u16(5500)
             .u16(3)
             .u16(0)
+            .with_encoding(encoding)
             .pstring("Test Server")
             .unwrap()
             .pstring("A description")
@@ -194,6 +199,7 @@ mod tests {
 
     #[test]
     fn server_beacon_round_trips_through_encode() {
+        let encoding = text_encoding::DEFAULT;
         let beacon = ServerBeacon {
             port: 5500,
             user_count: 2,
@@ -203,13 +209,14 @@ mod tests {
             login: "".to_string(),
             password: "".to_string(),
         };
-        let bytes = beacon.encode().unwrap();
+        let bytes = beacon.encode(encoding).unwrap();
         assert_eq!(u16::from_be_bytes([bytes[0], bytes[1]]), 1); // beacon version
         assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), 5500);
     }
 
     #[test]
     fn server_beacon_encode_rejects_an_oversized_field() {
+        let encoding = text_encoding::DEFAULT;
         let beacon = ServerBeacon {
             port: 0,
             user_count: 0,
@@ -220,7 +227,7 @@ mod tests {
             password: String::new(),
         };
         assert!(matches!(
-            beacon.encode(),
+            beacon.encode(encoding),
             Err(TrackerError::StringTooLong(_))
         ));
     }

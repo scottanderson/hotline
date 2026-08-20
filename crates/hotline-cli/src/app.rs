@@ -5,6 +5,7 @@
 use hotline_client::HotlineClient;
 use hotline_proto::field_id::ServerFieldId;
 use hotline_proto::opcode::{ServerOpcode, TransactionType};
+use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::{Access, Field, Transaction};
 
@@ -49,10 +50,12 @@ pub struct App {
     pub input: String,
     pub should_quit: bool,
     pub access: Access,
+    /// This connection's active text encoding, shared with the client's codec.
+    encoding: EncodingHandle,
 }
 
 impl App {
-    pub fn new(nick: String, icon: u16) -> Self {
+    pub fn new(nick: String, icon: u16, encoding: EncodingHandle) -> Self {
         Self {
             nick,
             icon,
@@ -65,6 +68,7 @@ impl App {
             input: String::new(),
             should_quit: false,
             access: Access::empty(),
+            encoding,
         }
     }
 
@@ -121,7 +125,8 @@ impl App {
     // Text means show it and wait for acceptance; no text means there's
     // nothing to accept, so the caller should accept right away.
     fn apply_agreement(&mut self, tx: &Transaction) -> EventOutcome {
-        match tx.field(ServerFieldId::Text).map(Field::as_string) {
+        let encoding = self.encoding.get();
+        match tx.string(ServerFieldId::Text, encoding) {
             Some(text) => {
                 self.show_agreement(text);
                 EventOutcome::Applied
@@ -132,8 +137,9 @@ impl App {
 
     // 104
     fn apply_msg(&mut self, tx: &Transaction) {
-        let text = tx.field(ServerFieldId::Text).map(Field::as_string);
-        let from = tx.field(ServerFieldId::Name).map(Field::as_string);
+        let encoding = self.encoding.get();
+        let text = tx.string(ServerFieldId::Text, encoding);
+        let from = tx.string(ServerFieldId::Name, encoding);
         match (from, text) {
             // A private message carries the sender's name; a
             // permission-denied or admin broadcast notice
@@ -153,16 +159,17 @@ impl App {
 
     // 106
     fn apply_chat(&mut self, tx: &Transaction) {
-        if let Some(text) = tx.field(ServerFieldId::Text) {
-            self.push(display_text(&text.as_string()), LineKind::Chat);
+        let encoding = self.encoding.get();
+        if let Some(text) = tx.string(ServerFieldId::Text, encoding) {
+            self.push(display_text(&text), LineKind::Chat);
         }
     }
 
     // 111
     fn apply_politequit(&mut self, tx: &Transaction) {
+        let encoding = self.encoding.get();
         let reason = tx
-            .field(ServerFieldId::Text)
-            .map(Field::as_string)
+            .string(ServerFieldId::Text, encoding)
             .unwrap_or_else(|| "disconnected by the server".to_string());
         self.push(display_text(&reason), LineKind::Error);
         self.quit();
@@ -170,9 +177,9 @@ impl App {
 
     // 113
     fn apply_chat_invite(&mut self, tx: &Transaction) {
+        let encoding = self.encoding.get();
         let from = tx
-            .field(ServerFieldId::Name)
-            .map(Field::as_string)
+            .string(ServerFieldId::Name, encoding)
             .unwrap_or_else(|| "someone".to_string());
         let chat_id = tx.field(ServerFieldId::ChatId).and_then(Field::as_u32);
         self.push(
@@ -189,10 +196,8 @@ impl App {
         let Some(user_id) = tx.field(ServerFieldId::UserId).and_then(Field::as_u16) else {
             return;
         };
-        let name = tx
-            .field(ServerFieldId::Name)
-            .map(Field::as_string)
-            .unwrap_or_default();
+        let encoding = self.encoding.get();
+        let name = tx.string(ServerFieldId::Name, encoding).unwrap_or_default();
         let icon = tx
             .field(ServerFieldId::Icon)
             .and_then(Field::as_u16)
@@ -246,7 +251,8 @@ impl App {
         self.access = tx.access().unwrap_or(self.access);
 
         // This session's own uid/icon/name.
-        if let Some(result) = tx.user_list_entry() {
+        let encoding = self.encoding.get();
+        if let Some(result) = tx.user_list_entry(encoding) {
             match result {
                 Ok(entry) => match self.users.iter_mut().find(|u| u.user_id == entry.user_id) {
                     Some(existing) => *existing = entry,
@@ -318,7 +324,7 @@ mod tests {
         use hotline_proto::field_id::ServerFieldId;
         use hotline_proto::opcode::ServerOpcode;
 
-        let mut app = App::new("me".to_string(), 0);
+        let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let invite = Transaction::push(
             ServerOpcode::ChatInvite,
             vec![
@@ -338,7 +344,7 @@ mod tests {
         use hotline_proto::opcode::ServerOpcode;
         use hotline_proto::types::UserFlags;
 
-        let mut app = App::new("me".to_string(), 0);
+        let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let admin_change = Transaction::push(
             ServerOpcode::UserChange,
             vec![
@@ -374,7 +380,7 @@ mod tests {
         use hotline_proto::field_id::ServerFieldId;
         use hotline_proto::opcode::ServerOpcode;
 
-        let mut app = App::new("me".to_string(), 0);
+        let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let joined = Transaction::push(
             ServerOpcode::UserChange,
             vec![

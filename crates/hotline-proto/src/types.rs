@@ -2,6 +2,7 @@
 //! the packed file/user list-entry records.
 
 use crate::error::{ProtoError, Result};
+use crate::text_encoding::{self, Encoding};
 use crate::wire::{PacketReader, PacketWriter, VecWriter};
 
 /// A Hotline date: `year(2) | milliseconds(2) | seconds-since-midnight(4)`.
@@ -77,10 +78,13 @@ impl HlPath {
     }
 
     /// Encode to bytes suitable for a `FILE_PATH` / `NEWS_PATH` field.
+    ///
     /// Fails if any component name is longer than 255 bytes, since each
     /// is written with a 1-byte length prefix.
-    pub fn encode(&self) -> Result<Vec<u8>> {
-        let mut w = VecWriter::new().u16(self.components.len() as u16);
+    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
+        let mut w = VecWriter::new()
+            .u16(self.components.len() as u16)
+            .with_encoding(encoding);
         for name in &self.components {
             w = w.u16(0).pstring(name)?;
         }
@@ -88,7 +92,7 @@ impl HlPath {
     }
 
     /// Decode a path from a field's raw data.
-    pub fn decode(buf: &[u8]) -> Result<Self> {
+    pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
         const LEVELS_LEN: usize = 2;
         let prefix: [u8; LEVELS_LEN] = buf
             .get(..LEVELS_LEN)
@@ -125,7 +129,7 @@ impl HlPath {
                     available: buf.len(),
                 });
             }
-            let name = String::from_utf8_lossy(&buf[offset..offset + name_len]).into_owned();
+            let name = text_encoding::decode(encoding, &buf[offset..offset + name_len]);
             components.push(name);
             offset += name_len;
         }
@@ -154,8 +158,8 @@ impl FileNameWithInfo {
     const LEN: usize = 20;
 
     /// Encode to the packed wire representation.
-    pub fn encode(&self) -> Vec<u8> {
-        let name_bytes = self.name.as_bytes();
+    pub fn encode(&self, encoding: &'static Encoding) -> Vec<u8> {
+        let name_bytes = text_encoding::encode(encoding, &self.name);
         VecWriter::with_capacity(Self::LEN + name_bytes.len())
             .bytes(&self.file_type)
             .bytes(&self.creator)
@@ -163,12 +167,12 @@ impl FileNameWithInfo {
             .u32(0) // reserved
             .u16(0) // name script
             .u16(name_bytes.len() as u16)
-            .bytes(name_bytes)
+            .bytes(&name_bytes)
             .finish()
     }
 
     /// Decode from a field's raw data.
-    pub fn decode(buf: &[u8]) -> Result<Self> {
+    pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
         if buf.len() < Self::LEN {
             return Err(ProtoError::UnexpectedEof {
                 needed: Self::LEN,
@@ -194,7 +198,7 @@ impl FileNameWithInfo {
                 available: buf.len(),
             });
         }
-        let name = String::from_utf8_lossy(&buf[Self::LEN..name_end]).into_owned();
+        let name = text_encoding::decode(encoding, &buf[Self::LEN..name_end]);
         Ok(Self {
             file_type,
             creator,
@@ -228,19 +232,19 @@ impl UserNameWithInfo {
     const LEN: usize = 8;
 
     /// Encode to the packed wire representation.
-    pub fn encode(&self) -> Vec<u8> {
-        let name_bytes = self.name.as_bytes();
+    pub fn encode(&self, encoding: &'static Encoding) -> Vec<u8> {
+        let name_bytes = text_encoding::encode(encoding, &self.name);
         VecWriter::with_capacity(Self::LEN + name_bytes.len())
             .u16(self.user_id)
             .u16(self.icon)
             .u16(self.flags)
             .u16(name_bytes.len() as u16)
-            .bytes(name_bytes)
+            .bytes(&name_bytes)
             .finish()
     }
 
     /// Decode from a field's raw data.
-    pub fn decode(buf: &[u8]) -> Result<Self> {
+    pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
         if buf.len() < Self::LEN {
             return Err(ProtoError::UnexpectedEof {
                 needed: Self::LEN,
@@ -262,7 +266,7 @@ impl UserNameWithInfo {
                 available: buf.len(),
             });
         }
-        let name = String::from_utf8_lossy(&buf[Self::LEN..end]).into_owned();
+        let name = text_encoding::decode(encoding, &buf[Self::LEN..end]);
         Ok(Self {
             user_id,
             icon,
@@ -301,11 +305,14 @@ pub enum NewsCategoryListEntry {
 
 impl NewsCategoryListEntry {
     /// Encode to the packed wire representation.
-    pub fn encode(&self) -> Result<Vec<u8>> {
+    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         Ok(match self {
-            Self::Bundle { count, name } => {
-                VecWriter::new().u16(2).u16(*count).pstring(name)?.finish()
-            }
+            Self::Bundle { count, name } => VecWriter::new()
+                .u16(2)
+                .u16(*count)
+                .with_encoding(encoding)
+                .pstring(name)?
+                .finish(),
             Self::Category {
                 count,
                 guid,
@@ -318,6 +325,7 @@ impl NewsCategoryListEntry {
                 .bytes(guid)
                 .u32(*add_sn)
                 .u32(*del_sn)
+                .with_encoding(encoding)
                 .pstring(name)?
                 .finish(),
         })
@@ -346,14 +354,16 @@ pub struct NewsArticleSummary {
 }
 
 impl NewsArticleSummary {
-    /// Encode to the packed wire representation.
-    fn encode(&self) -> Result<Vec<u8>> {
+    /// Encode to the packed wire representation; only `title`/`poster`/
+    /// `flavor` are text.
+    fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         Ok(VecWriter::new()
             .u32(self.id)
             .bytes(&self.date.encode())
             .u32(self.parent_id)
             .u32(self.flags)
             .u16(1) // flavor count: this server stores one flavor per article
+            .with_encoding(encoding)
             .pstring(&self.title)?
             .pstring(&self.poster)?
             .pstring(&self.flavor)?
@@ -372,14 +382,15 @@ pub struct NewsArticleListData {
 
 impl NewsArticleListData {
     /// Encode to the packed wire representation.
-    pub fn encode(&self) -> Result<Vec<u8>> {
+    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         let mut w = VecWriter::new()
             .u32(0) // category ID, unused by the client
             .u32(self.articles.len() as u32)
+            .with_encoding(encoding)
             .pstring("")? // name, unused by the client
             .pstring("")?; // description, unused by the client
         for article in &self.articles {
-            w = w.bytes(&article.encode()?);
+            w = w.bytes(&article.encode(encoding)?);
         }
         Ok(w.finish())
     }
@@ -410,67 +421,101 @@ mod tests {
 
     #[test]
     fn path_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let path = HlPath::new(["Games", "Emulators"]);
-        let bytes = path.encode().unwrap();
-        assert_eq!(HlPath::decode(&bytes).unwrap(), path);
+        let bytes = path.encode(encoding).unwrap();
+        assert_eq!(HlPath::decode(&bytes, encoding).unwrap(), path);
     }
 
     #[test]
     fn empty_path_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let path = HlPath::default();
-        assert_eq!(HlPath::decode(&path.encode().unwrap()).unwrap(), path);
+        assert_eq!(
+            HlPath::decode(&path.encode(encoding).unwrap(), encoding).unwrap(),
+            path
+        );
     }
 
     #[test]
     fn path_encode_rejects_an_oversized_component() {
+        let encoding = text_encoding::DEFAULT;
         let path = HlPath::new(["x".repeat(256)]);
-        assert!(matches!(path.encode(), Err(ProtoError::StringTooLong(_))));
+        assert!(matches!(
+            path.encode(encoding),
+            Err(ProtoError::StringTooLong(_))
+        ));
     }
 
     #[test]
     fn path_decode_rejects_too_many_components() {
+        let encoding = text_encoding::DEFAULT;
         let mut buf = ((HlPath::MAX_COMPONENTS + 1) as u16).to_be_bytes().to_vec();
         buf.extend(std::iter::repeat_n(0u8, HlPath::MAX_COMPONENTS + 1));
         assert!(matches!(
-            HlPath::decode(&buf),
+            HlPath::decode(&buf, encoding),
             Err(ProtoError::Malformed(_))
         ));
     }
 
     #[test]
     fn user_name_with_info_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let user = UserNameWithInfo {
             user_id: 7,
             icon: 128,
             flags: UserFlags::AWAY.bits(),
             name: "Virtual1".to_string(),
         };
-        let bytes = user.encode();
-        assert_eq!(UserNameWithInfo::decode(&bytes).unwrap(), user);
+        let bytes = user.encode(encoding);
+        assert_eq!(UserNameWithInfo::decode(&bytes, encoding).unwrap(), user);
     }
 
     #[test]
-    fn user_name_with_info_decodes_multi_byte_utf8() {
+    fn user_name_with_info_round_trips_mac_roman_accented_name() {
+        let encoding = text_encoding::DEFAULT;
+        // e-acute (0x8E) exists in Mac OS Roman, so it round-trips exactly.
+        let user = UserNameWithInfo {
+            user_id: 1,
+            icon: 0,
+            flags: 0,
+            name: "Ren\u{e9}".to_string(),
+        };
+        let bytes = user.encode(encoding);
+        assert_eq!(
+            UserNameWithInfo::decode(&bytes, encoding).unwrap().name,
+            "Ren\u{e9}"
+        );
+    }
+
+    #[test]
+    fn user_name_with_info_falls_back_for_text_outside_mac_roman() {
+        let encoding = text_encoding::DEFAULT;
+        // CJK text doesn't exist in Mac OS Roman, so each character is lossy.
         let user = UserNameWithInfo {
             user_id: 1,
             icon: 0,
             flags: 0,
             name: "日本語".to_string(),
         };
-        let bytes = user.encode();
-        assert_eq!(UserNameWithInfo::decode(&bytes).unwrap().name, "日本語");
+        let bytes = user.encode(encoding);
+        assert_eq!(
+            UserNameWithInfo::decode(&bytes, encoding).unwrap().name,
+            "???"
+        );
     }
 
     #[test]
     fn file_name_with_info_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let file = FileNameWithInfo {
             file_type: *b"fldr",
             creator: *b"\0\0\0\0",
             size: 0,
             name: "Uploads".to_string(),
         };
-        let bytes = file.encode();
-        let decoded = FileNameWithInfo::decode(&bytes).unwrap();
+        let bytes = file.encode(encoding);
+        let decoded = FileNameWithInfo::decode(&bytes, encoding).unwrap();
         assert_eq!(decoded, file);
         assert!(decoded.is_folder());
     }

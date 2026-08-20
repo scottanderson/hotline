@@ -6,8 +6,16 @@
 //! [`PacketWriter`]/[`VecWriter`] are the two instantiations most call
 //! sites actually name.
 //!
+//! A second, typestate type parameter tracks whether a text encoding has
+//! been attached: [`PacketBuilder::pstring`] only exists once
+//! [`PacketBuilder::with_encoding`] has run, so a chain that writes a
+//! `pstring` without ever choosing an encoding is a compile error rather
+//! than a silent default.
+//!
 //! [`PacketReader`] is the read-side counterpart, always fixed-size,
 //! since you always know how many bytes you're about to read.
+
+use crate::text_encoding;
 
 /// Where a [`PacketBuilder`] writes its bytes.
 pub trait Storage: Default {
@@ -37,8 +45,9 @@ impl<const N: usize> Default for Fixed<N> {
 
 impl<const N: usize> Storage for Fixed<N> {
     fn append(&mut self, bytes: &[u8]) {
-        self.buf[self.pos..self.pos + bytes.len()].copy_from_slice(bytes);
-        self.pos += bytes.len();
+        let len = bytes.len();
+        self.buf[self.pos..self.pos + len].copy_from_slice(bytes);
+        self.pos += len;
     }
 }
 
@@ -53,16 +62,29 @@ impl Storage for Growable {
     }
 }
 
+/// [`PacketBuilder`]'s `E` state before [`PacketBuilder::with_encoding`]
+/// has run: `pstring` isn't available yet.
+#[derive(Debug, Default)]
+pub struct NoEncoding;
+
+/// [`PacketBuilder`]'s `E` state once [`PacketBuilder::with_encoding`] has
+/// run: unlocks `pstring`.
+#[derive(Debug, Clone, Copy)]
+pub struct WithEncoding(&'static text_encoding::Encoding);
+
 /// A sequential, consuming-builder-style writer: `w.u32(x).u16(y).finish()`
 /// rather than `&mut self` methods, so a chain reads top-to-bottom as the
 /// wire layout itself. Generic over [`Storage`], see the [module
-/// docs](self) for [`Fixed`] vs. [`Growable`].
+/// docs](self) for [`Fixed`] vs. [`Growable`]. The `E` parameter is a
+/// typestate for whether [`PacketBuilder::with_encoding`] has run yet, see
+/// the [module docs](self).
 #[derive(Debug)]
-pub struct PacketBuilder<S> {
+pub struct PacketBuilder<S, E = NoEncoding> {
     storage: S,
+    encoding: E,
 }
 
-impl<S: Storage> PacketBuilder<S> {
+impl<S: Storage, E> PacketBuilder<S, E> {
     /// Write a big-endian `u8`.
     pub fn u8(mut self, value: u8) -> Self {
         self.storage.append(&value.to_be_bytes());
@@ -93,14 +115,32 @@ impl<S: Storage> PacketBuilder<S> {
         self.storage.append(bytes);
         self
     }
+}
 
+impl<S: Storage> PacketBuilder<S, NoEncoding> {
+    /// Attach the text encoding `pstring` writes with for the rest of
+    /// this builder's chain.
+    pub fn with_encoding(
+        self,
+        encoding: &'static text_encoding::Encoding,
+    ) -> PacketBuilder<S, WithEncoding> {
+        PacketBuilder {
+            storage: self.storage,
+            encoding: WithEncoding(encoding),
+        }
+    }
+}
+
+impl<S: Storage> PacketBuilder<S, WithEncoding> {
     /// Write a Pascal-style string: a 1-byte length prefix followed by
-    /// `s`'s UTF-8 bytes. Fails if `s` is longer than 255 bytes.
-    pub fn pstring(mut self, s: &str) -> Result<Self, PStringTooLong> {
-        let len = u8::try_from(s.len()).map_err(|_| PStringTooLong { len: s.len() })?;
-        self.storage.append(&[len]);
-        self.storage.append(s.as_bytes());
-        Ok(self)
+    /// `s` encoded as the encoding [`PacketBuilder::with_encoding`]
+    /// attached. Fails if the encoded bytes are longer than 255 bytes.
+    pub fn pstring(self, s: &str) -> Result<Self, PStringTooLong> {
+        let encoding = self.encoding.0;
+        let bytes = text_encoding::encode(encoding, s);
+        let len = bytes.len();
+        let len = u8::try_from(len).map_err(|_| PStringTooLong { len })?;
+        Ok(self.u8(len).bytes(&bytes))
     }
 }
 
@@ -111,16 +151,19 @@ pub type PacketWriter<const N: usize> = PacketBuilder<Fixed<N>>;
 /// A sequential, builder-style writer that produces a `Vec<u8>`, for
 /// wire structures whose total size isn't known until you've written a
 /// variable number of pieces into it.
-pub type VecWriter = PacketBuilder<Growable>;
+pub type VecWriter<E = NoEncoding> = PacketBuilder<Growable, E>;
 
 impl<const N: usize> PacketWriter<N> {
     /// Start a new writer over an all-zero `N`-byte buffer.
     pub fn new() -> Self {
         Self {
             storage: Fixed::default(),
+            encoding: NoEncoding,
         }
     }
+}
 
+impl<const N: usize, E> PacketBuilder<Fixed<N>, E> {
     /// Finish and return the completed buffer.
     ///
     /// # Panics
@@ -147,6 +190,7 @@ impl VecWriter {
     pub fn new() -> Self {
         Self {
             storage: Growable::default(),
+            encoding: NoEncoding,
         }
     }
 
@@ -155,9 +199,12 @@ impl VecWriter {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             storage: Growable(Vec::with_capacity(capacity)),
+            encoding: NoEncoding,
         }
     }
+}
 
+impl<E> PacketBuilder<Growable, E> {
     /// Finish and return the completed buffer.
     pub fn finish(self) -> Vec<u8> {
         self.storage.0
@@ -303,11 +350,13 @@ mod tests {
 
     #[test]
     fn vec_writer_builds_variable_length_buffers() {
+        let encoding = text_encoding::DEFAULT;
         let buf = VecWriter::new()
             .bytes(&[127, 0, 0, 1])
             .u16(5500)
             .u16(3)
             .u16(0)
+            .with_encoding(encoding)
             .pstring("Test Server")
             .unwrap()
             .pstring("A description")
@@ -322,17 +371,25 @@ mod tests {
 
     #[test]
     fn pstring_rejects_a_string_over_255_bytes() {
+        let encoding = text_encoding::DEFAULT;
         let too_long = "x".repeat(256);
         assert_eq!(
-            VecWriter::new().pstring(&too_long).unwrap_err(),
+            VecWriter::new()
+                .with_encoding(encoding)
+                .pstring(&too_long)
+                .unwrap_err(),
             PStringTooLong { len: 256 }
         );
     }
 
     #[test]
     fn pstring_accepts_exactly_255_bytes() {
+        let encoding = text_encoding::DEFAULT;
         let exactly_max = "x".repeat(255);
-        assert!(VecWriter::new().pstring(&exactly_max).is_ok());
+        assert!(VecWriter::new()
+            .with_encoding(encoding)
+            .pstring(&exactly_max)
+            .is_ok());
     }
 
     #[test]

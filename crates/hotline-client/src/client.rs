@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
+use hotline_proto::text_encoding::EncodingHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -50,6 +51,7 @@ pub struct HotlineClient {
     writer: Arc<Mutex<SplitSink<Conn, Transaction>>>,
     pending: PendingMap,
     next_id: Arc<AtomicU32>,
+    encoding: EncodingHandle,
 }
 
 impl HotlineClient {
@@ -72,7 +74,9 @@ impl HotlineClient {
         stream.read_exact(&mut handshake_buf).await?;
         ServerHandshake::decode(&handshake_buf)?;
 
-        let (writer, reader) = Framed::new(stream, TransactionCodec::for_client()).split();
+        let encoding = EncodingHandle::default();
+        let codec = TransactionCodec::for_client(encoding.clone());
+        let (writer, reader) = Framed::new(stream, codec).split();
         let pending: PendingMap = Arc::new(Mutex::new(PendingState::Open(HashMap::new())));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
@@ -83,9 +87,17 @@ impl HotlineClient {
                 writer: Arc::new(Mutex::new(writer)),
                 pending,
                 next_id: Arc::new(AtomicU32::new(1)),
+                encoding,
             },
             event_rx,
         ))
+    }
+
+    /// This connection's active text encoding, shared with the codec
+    /// that reads/writes it and any caller (e.g. the event stream
+    /// consumer) that needs to interpret a pushed [`Transaction`] itself.
+    pub fn encoding(&self) -> EncodingHandle {
+        self.encoding.clone()
     }
 
     /// Send a request transaction and wait for its matching reply.
@@ -114,9 +126,9 @@ impl HotlineClient {
 
         let reply = reply_rx.await.map_err(|_| ClientError::ConnectionClosed)?;
         if reply.is_error() {
+            let encoding = self.encoding.get();
             let msg = reply
-                .field(ServerFieldId::ErrorText)
-                .map(Field::as_string)
+                .string(ServerFieldId::ErrorText, encoding)
                 .unwrap_or_else(|| "unknown error".to_string());
             return Err(ClientError::Server(msg));
         }
@@ -143,12 +155,13 @@ impl HotlineClient {
             )
             .await?;
 
+        let encoding = self.encoding.get();
         Ok(LoginResult {
             version: reply
                 .field(ServerFieldId::Serverversion)
                 .and_then(Field::as_u16),
             banner_id: reply.field(ServerFieldId::Bannerid).and_then(Field::as_u16),
-            server_name: reply.field(ServerFieldId::Servername).map(Field::as_string),
+            server_name: reply.string(ServerFieldId::Servername, encoding),
         })
     }
 
@@ -180,13 +193,15 @@ impl HotlineClient {
     /// Fetch the connected-user list (`HTLC_HDR_USER_GETLIST`, 300).
     pub async fn get_user_name_list(&self) -> Result<Vec<UserNameWithInfo>> {
         let reply = self.request(ClientOpcode::UserGetlist, vec![]).await?;
-        Ok(reply.user_list_entries()?)
+        let encoding = self.encoding.get();
+        Ok(reply.user_list_entries(encoding)?)
     }
 
     /// Fetch the root folder's file listing (`HTLC_HDR_FILE_LIST`, 200).
     pub async fn get_file_name_list(&self) -> Result<Vec<FileNameWithInfo>> {
         let reply = self.request(ClientOpcode::FileList, vec![]).await?;
-        Ok(reply.file_list_entries()?)
+        let encoding = self.encoding.get();
+        Ok(reply.file_list_entries(encoding)?)
     }
 }
 

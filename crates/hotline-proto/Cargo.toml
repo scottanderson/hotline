@@ -11,6 +11,8 @@ rust-version.workspace = true
 bitflags = { workspace = true }
 thiserror = { workspace = true }
 num_enum = { workspace = true }
+encoding_rs = { workspace = true }
+arc-swap = { workspace = true }
 
 [lints.rust]
 missing_docs = "warn"

@@ -51,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     let (client, mut events) = HotlineClient::connect(&addr).await?;
     client.login(&args.login, &args.password).await?;
 
-    let mut app = App::new(args.nick, args.icon);
+    let mut app = App::new(args.nick, args.icon, client.encoding());
 
     let mut terminal = setup_terminal()?;
     let result = run(&mut terminal, &mut app, &client, &mut events).await;

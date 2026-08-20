@@ -14,6 +14,7 @@ use std::borrow::Cow;
 
 use crate::error::{ProtoError, Result};
 use crate::numbers::{decode as decode_number, encode};
+use crate::text_encoding::{self, Encoding};
 use crate::wire::{PacketReader, VecWriter};
 
 /// A field's payload. Locally-built fields carry their real type end to
@@ -21,7 +22,8 @@ use crate::wire::{PacketReader, VecWriter};
 /// accessor interprets them (see the [module docs](self)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldValue {
-    /// UTF-8 text (see [`Field::as_string`] for the encoding rationale).
+    /// Text, held as UTF-8, written on the wire as whatever encoding the
+    /// caller passes to [`Field::encode`] (see [`Field::as_string`]).
     Text(String),
     /// XOR-0xFF obfuscated text, used for `LOGIN`/`PASSWORD` on the wire.
     ObfuscatedText(String),
@@ -38,27 +40,15 @@ pub enum FieldValue {
 }
 
 impl FieldValue {
-    /// Encode to wire bytes.
-    fn encode(&self) -> Vec<u8> {
+    /// Encode to wire bytes; text fields are encoded as `encoding`.
+    fn encode(&self, encoding: &'static Encoding) -> Vec<u8> {
         match self {
-            Self::Text(s) => s.as_bytes().to_vec(),
-            Self::ObfuscatedText(s) => xor_ff(s.as_bytes()),
+            Self::Text(s) => text_encoding::encode(encoding, s),
+            Self::ObfuscatedText(s) => xor_ff(&text_encoding::encode(encoding, s)),
             Self::U16(v) => v.to_be_bytes().to_vec(),
             Self::U32(v) => encode(*v).to_vec(),
             Self::U64(v) => v.to_be_bytes().to_vec(),
             Self::Bytes(b) => b.clone(),
-        }
-    }
-
-    /// Byte length this value encodes to, without allocating.
-    fn encoded_len(&self) -> usize {
-        match self {
-            Self::Text(s) => s.len(),
-            Self::ObfuscatedText(s) => s.len(),
-            Self::U16(_) => 2,
-            Self::U32(v) => encode(*v).len(),
-            Self::U64(_) => 8,
-            Self::Bytes(b) => b.len(),
         }
     }
 }
@@ -114,8 +104,8 @@ impl Field {
         Self::new(id, FieldValue::U32(value))
     }
 
-    /// Build a string field, encoded as UTF-8 (see [`Field::as_string`]
-    /// for why that's a reasonable choice here).
+    /// Build a string field. See [`Field::as_string`] for the encoding
+    /// used to write it to the wire.
     pub fn string(id: impl Into<u16>, value: impl Into<String>) -> Self {
         Self::new(id, FieldValue::Text(value.into()))
     }
@@ -129,11 +119,11 @@ impl Field {
 
     /// Interpret this field as deobfuscated text, regardless of how it
     /// was actually constructed or decoded.
-    pub fn as_deobfuscated_string(&self) -> String {
+    pub fn as_deobfuscated_string(&self, encoding: &'static Encoding) -> String {
         match &self.value {
             FieldValue::ObfuscatedText(s) => s.clone(),
-            FieldValue::Bytes(b) => String::from_utf8_lossy(&xor_ff(b)).into_owned(),
-            other => String::from_utf8_lossy(&xor_ff(&other.encode())).into_owned(),
+            FieldValue::Bytes(b) => text_encoding::decode(encoding, &xor_ff(b)),
+            other => text_encoding::decode(encoding, &xor_ff(&other.encode(encoding))),
         }
     }
 
@@ -175,22 +165,39 @@ impl Field {
         }
     }
 
-    /// Interpret this field's data as UTF-8 text (lossy). The wire has
-    /// no mandated text encoding; a legacy client's own encoding won't
-    /// round-trip correctly here.
-    pub fn as_string(&self) -> String {
+    /// Interpret this field's data as text, decoding raw bytes as
+    /// `encoding`. The wire has no mandated text encoding; a legacy
+    /// client picks its own, communicated out of band from the field
+    /// itself (see `hotline_codec::TransactionCodec`).
+    pub fn as_string(&self, encoding: &'static Encoding) -> String {
         match &self.value {
             FieldValue::Text(s) | FieldValue::ObfuscatedText(s) => s.clone(),
-            FieldValue::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
-            other => String::from_utf8_lossy(&other.encode()).into_owned(),
+            FieldValue::Bytes(b) => text_encoding::decode(encoding, b),
+            other => text_encoding::decode(encoding, &other.encode(encoding)),
+        }
+    }
+
+    /// [`Field::as_string`] plus the byte length of its `encoding`
+    /// representation on the wire, from the same bytes rather than two
+    /// separate passes over them.
+    pub fn as_string_len(&self, encoding: &'static Encoding) -> (String, usize) {
+        match &self.value {
+            FieldValue::Text(s) | FieldValue::ObfuscatedText(s) => {
+                (s.clone(), text_encoding::encode(encoding, s).len())
+            }
+            FieldValue::Bytes(b) => (text_encoding::decode(encoding, b), b.len()),
+            other => {
+                let bytes = other.encode(encoding);
+                (text_encoding::decode(encoding, &bytes), bytes.len())
+            }
         }
     }
 
     /// Raw bytes, borrowed when already `FieldValue::Bytes`, encoded fresh otherwise.
-    pub fn as_bytes(&self) -> Cow<'_, [u8]> {
+    pub fn as_bytes(&self, encoding: &'static Encoding) -> Cow<'_, [u8]> {
         match &self.value {
             FieldValue::Bytes(b) => Cow::Borrowed(b),
-            other => Cow::Owned(other.encode()),
+            other => Cow::Owned(other.encode(encoding)),
         }
     }
 
@@ -198,16 +205,16 @@ impl Field {
     ///
     /// Fails if the encoded value is longer than 65535 bytes (the length
     /// prefix is a `u16`), reachable with attacker-controlled input.
-    pub fn encode(&self) -> crate::error::Result<Vec<u8>> {
-        let data_len = self.value.encoded_len();
-        let len = u16::try_from(data_len).map_err(|_| ProtoError::TooLong {
+    pub fn encode(&self, encoding: &'static Encoding) -> crate::error::Result<Vec<u8>> {
+        let data = self.value.encode(encoding);
+        let len = u16::try_from(data.len()).map_err(|_| ProtoError::TooLong {
             what: "field data",
-            len: data_len,
+            len: data.len(),
         })?;
-        Ok(VecWriter::with_capacity(4 + data_len)
+        Ok(VecWriter::with_capacity(4 + data.len())
             .u16(self.id)
             .u16(len)
-            .bytes(&self.value.encode())
+            .bytes(&data)
             .finish())
     }
 
@@ -248,6 +255,55 @@ impl Field {
     }
 }
 
+/// A list of fields: a transaction's body, or the shape of one nested
+/// account record inside `HTLC_HDR_GET_USER_LIST` (348) /
+/// `HTLC_HDR_SET_USER_LIST` (349) (see
+/// [`crate::transaction::Transaction::encode_field_list`]). `Deref`s to
+/// `[Field]` for anything not covered by its own lookup methods below.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FieldList(Vec<Field>);
+
+impl FieldList {
+    pub(crate) const fn new(fields: Vec<Field>) -> Self {
+        Self(fields)
+    }
+
+    /// Find the first field with the given ID, if present.
+    pub fn field(&self, id: impl Into<u16>) -> Option<&Field> {
+        let id = id.into();
+        self.0.iter().find(|f| f.id == id)
+    }
+
+    /// Find all fields with the given ID.
+    pub fn fields(&self, id: impl Into<u16>) -> impl Iterator<Item = &Field> {
+        let id = id.into();
+        self.0.iter().filter(move |f| f.id == id)
+    }
+
+    /// `id`'s field as text, if present.
+    pub fn string(&self, id: impl Into<u16>, encoding: &'static Encoding) -> Option<String> {
+        self.field(id).map(|f| f.as_string(encoding))
+    }
+
+    /// `id`'s field as text plus its `encoding` byte length, if present.
+    /// See [`Field::as_string_len`].
+    pub fn string_len(
+        &self,
+        id: impl Into<u16>,
+        encoding: &'static Encoding,
+    ) -> Option<(String, usize)> {
+        self.field(id).map(|f| f.as_string_len(encoding))
+    }
+}
+
+impl std::ops::Deref for FieldList {
+    type Target = [Field];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// XOR every byte with `0xFF`. Symmetric, so the same function encodes
 /// and decodes.
 fn xor_ff(bytes: &[u8]) -> Vec<u8> {
@@ -261,25 +317,38 @@ mod tests {
 
     #[test]
     fn field_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let f = Field::string(ClientFieldId::Name, "RustHL");
-        let encoded = f.encode().unwrap();
+        let encoded = f.encode(encoding).unwrap();
         let (decoded, consumed) = Field::decode(&encoded).unwrap();
         assert_eq!(consumed, encoded.len());
-        assert_eq!(decoded.as_string(), "RustHL");
+        assert_eq!(decoded.as_string(encoding), "RustHL");
     }
 
     #[test]
-    fn multi_byte_utf8_round_trips() {
-        let f = Field::string(ClientFieldId::Text, "h\u{e9}llo \u{1f389}");
-        let (decoded, _) = Field::decode(&f.encode().unwrap()).unwrap();
-        assert_eq!(decoded.as_string(), "h\u{e9}llo \u{1f389}");
+    fn mac_roman_mappable_text_round_trips() {
+        let encoding = text_encoding::DEFAULT;
+        // e-acute exists in Mac OS Roman, so it round-trips exactly.
+        let f = Field::string(ClientFieldId::Text, "h\u{e9}llo");
+        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
+        assert_eq!(decoded.as_string(encoding), "h\u{e9}llo");
+    }
+
+    #[test]
+    fn text_outside_mac_roman_falls_back_to_question_mark() {
+        let encoding = text_encoding::DEFAULT;
+        // An emoji has no Mac OS Roman encoding, so it's lossy.
+        let f = Field::string(ClientFieldId::Text, "hello \u{1f389}");
+        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
+        assert_eq!(decoded.as_string(encoding), "hello ?");
     }
 
     #[test]
     fn encode_rejects_data_over_65535_bytes_instead_of_truncating() {
+        let encoding = text_encoding::DEFAULT;
         let f = Field::bytes(ClientFieldId::Text, vec![0u8; 65536]);
         assert!(matches!(
-            f.encode(),
+            f.encode(encoding),
             Err(ProtoError::TooLong {
                 what: "field data",
                 len: 65536
@@ -302,12 +371,13 @@ mod tests {
 
     #[test]
     fn u32_field_picks_smallest_unsigned_width() {
+        let encoding = text_encoding::DEFAULT;
         let small = Field::u32(ServerFieldId::ChatId, 7);
-        assert_eq!(small.encode().unwrap().len(), 4 + 2);
+        assert_eq!(small.encode(encoding).unwrap().len(), 4 + 2);
         assert_eq!(small.as_u32(), Some(7));
 
         let large = Field::u32(ServerFieldId::FileSize, u32::MAX);
-        assert_eq!(large.encode().unwrap().len(), 4 + 4);
+        assert_eq!(large.encode(encoding).unwrap().len(), 4 + 4);
         assert_eq!(large.as_u32(), Some(u32::MAX));
     }
 
@@ -324,16 +394,18 @@ mod tests {
 
     #[test]
     fn obfuscated_string_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let f = Field::obfuscated_string(ClientFieldId::Login, "guest");
         // On the wire it must NOT be the plaintext bytes.
-        assert_ne!(f.encode().unwrap()[4..], *b"guest");
-        assert_eq!(f.as_deobfuscated_string(), "guest");
+        assert_ne!(f.encode(encoding).unwrap()[4..], *b"guest");
+        assert_eq!(f.as_deobfuscated_string(encoding), "guest");
     }
 
     #[test]
     fn decoded_field_debug_shows_raw_bytes_not_a_guess() {
+        let encoding = text_encoding::DEFAULT;
         let f = Field::string(ClientFieldId::Name, "x");
-        let (decoded, _) = Field::decode(&f.encode().unwrap()).unwrap();
+        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
         let debug = format!("{decoded:?}");
         // Decode can't know this was text - it's honestly Bytes until
         // something calls as_string() on it.

@@ -11,8 +11,9 @@ use hotline_codec::TransactionCodec;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::field_id::{ClientFieldId, ServerFieldId};
 use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
+use hotline_proto::text_encoding::{Encoding, EncodingHandle};
 use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
-use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
+use hotline_proto::{ClientHandshake, Field, FieldList, ServerHandshake, Transaction};
 
 use crate::accounts::{AccessExtra, Account};
 use crate::error::{Result, ServerError};
@@ -113,6 +114,8 @@ pub struct Session {
     remote_addr: SocketAddr,
     /// When this connection was accepted.
     connected_at: Instant,
+    /// This connection's active text encoding, shared with the write half's `TransactionCodec`.
+    encoding: EncodingHandle,
 }
 
 impl Session {
@@ -125,6 +128,9 @@ impl Session {
     ) -> Result<()> {
         let remote_addr = stream.peer_addr()?;
         Self::handshake(&mut stream).await?;
+
+        let encoding = EncodingHandle::default();
+        let codec = TransactionCodec::for_server(encoding.clone());
 
         let user_id = state.next_user_id();
         let mut session = Session {
@@ -143,9 +149,10 @@ impl Session {
             automatic_response: None,
             remote_addr,
             connected_at: Instant::now(),
+            encoding,
         };
 
-        let (mut writer, mut reader) = Framed::new(stream, TransactionCodec::for_server()).split();
+        let (mut writer, mut reader) = Framed::new(stream, codec).split();
         let mut rx = state.register_recipient(user_id).await;
         let idle_sleep = tokio::time::sleep(IDLE_THRESHOLD);
         tokio::pin!(idle_sleep);
@@ -346,8 +353,9 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
-        let login = tx.login();
-        let password = tx.password();
+        let encoding = self.encoding();
+        let login = tx.login(encoding);
+        let password = tx.password(encoding);
 
         // An empty login field means "guest", same as the client omitting it.
         let login = login
@@ -399,8 +407,9 @@ impl Session {
 
         // A name plus non-zero icon in Login, or a pre-150 client, joins right away.
         let icon = tx.icon().unwrap_or(0);
-        if (tx.name().is_some() && icon != 0) || !modern {
-            let selfinfo = self.complete_join(tx.name(), icon, state).await;
+        let name = tx.name(encoding);
+        if (name.is_some() && icon != 0) || !modern {
+            let selfinfo = self.complete_join(name, icon, state).await;
             replies.push(selfinfo);
         }
 
@@ -431,7 +440,9 @@ impl Session {
     /// Complete login after the client accepts the agreement (`HTLC_HDR_AGREED`, 121).
     async fn on_agreed(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let icon = tx.icon().unwrap_or(0);
-        let selfinfo = self.complete_join(tx.name(), icon, state).await;
+        let encoding = self.encoding();
+        let name = tx.name(encoding);
+        let selfinfo = self.complete_join(name, icon, state).await;
         vec![tx.reply(vec![]), selfinfo]
     }
 
@@ -461,13 +472,14 @@ impl Session {
             ServerOpcode::UserSelfinfo,
             vec![
                 Field::u64(ServerFieldId::Access, self.access.bits()),
-                Field::bytes(ServerFieldId::UserList, self_entry.encode()),
+                Field::bytes(ServerFieldId::UserList, self_entry.encode(self.encoding())),
             ],
         )
     }
 
     async fn on_user_change(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        if let Some(name) = tx.name() {
+        let encoding = self.encoding();
+        if let Some(name) = tx.name(encoding) {
             self.name = name;
         }
         let icon = tx.icon().unwrap_or(0);
@@ -479,8 +491,7 @@ impl Session {
         self.refuses_pm = options.contains(UserChangeOptions::REFUSE_PM);
         self.refuses_chat = options.contains(UserChangeOptions::REFUSE_CHAT);
         self.automatic_response = options.contains(UserChangeOptions::AUTO_RESPONSE).then(|| {
-            tx.field(ClientFieldId::AutomaticResponse)
-                .map(Field::as_string)
+            tx.string(ClientFieldId::AutomaticResponse, encoding)
                 .filter(|text| !text.is_empty())
                 .unwrap_or_else(|| {
                     "I'm not able to respond right now. Please try later!".to_string()
@@ -569,6 +580,11 @@ impl Session {
             .await;
     }
 
+    /// This connection's active text encoding.
+    fn encoding(&self) -> &'static Encoding {
+        self.encoding.get()
+    }
+
     /// This session's own admin + away flags, for `UserChange`/`UserSelfinfo`.
     fn user_flags(&self) -> UserFlags {
         let is_admin = self.access.contains(Access::DISCON_USER);
@@ -595,17 +611,18 @@ impl Session {
             )];
         }
 
-        let Some(message) = tx.field(ClientFieldId::Text) else {
-            return Vec::new();
-        };
         let chat_id = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32);
         let style = tx.field(ClientFieldId::Style).and_then(Field::as_u16);
+        let encoding = self.encoding();
+        let Some(message) = tx.string(ClientFieldId::Text, encoding) else {
+            return Vec::new();
+        };
 
         // Default chat_format: "\r%13.13s:  %s"; style 1 is the emote/action format.
         let text = if style == Some(1) {
-            format!("\r *** {} {}", self.name, message.as_string())
+            format!("\r *** {} {message}", self.name)
         } else {
-            format!("\r{:>13}:  {}", self.name, message.as_string())
+            format!("\r{:>13}:  {message}", self.name)
         };
         let mut fields = vec![Field::string(ServerFieldId::Text, text)];
         if let Some(chat_id) = chat_id {
@@ -633,6 +650,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::USER_GETLIST) {
             return vec![tx.reply_error(reason)];
         }
+        let encoding = self.encoding();
         let fields = state
             .users()
             .await
@@ -643,7 +661,7 @@ impl Session {
                 flags: u.flags(),
                 name: u.name,
             })
-            .map(|entry| Field::bytes(ServerFieldId::UserList, entry.encode()))
+            .map(|entry| Field::bytes(ServerFieldId::UserList, entry.encode(encoding)))
             .collect();
         vec![tx.reply(fields)]
     }
@@ -772,7 +790,8 @@ impl Session {
         let Some(target_id) = tx.field(ClientFieldId::Uid).and_then(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
-        let Some(message) = tx.field(ClientFieldId::Text) else {
+        let encoding = self.encoding();
+        let Some(message) = tx.string(ClientFieldId::Text, encoding) else {
             return vec![tx.reply_error("missing message")];
         };
         let options = tx
@@ -796,12 +815,12 @@ impl Session {
                 Field::u16(ServerFieldId::UserId, self.user_id),
                 Field::string(ServerFieldId::Name, self.name.clone()),
                 Field::u16(ServerFieldId::Options, options),
-                Field::string(ServerFieldId::Text, message.as_string()),
+                Field::string(ServerFieldId::Text, message),
             ];
             if let Some(quote) = tx.field(ClientFieldId::QuotingMsg) {
                 fields.push(Field::bytes(
                     ServerFieldId::QuotingMsg,
-                    quote.as_bytes().into_owned(),
+                    quote.as_bytes(encoding).into_owned(),
                 ));
             }
             state
@@ -859,7 +878,8 @@ impl Session {
         if let Err(reason) = self.access.require(Access::BROADCAST) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(message) = tx.field(ClientFieldId::Text) else {
+        let encoding = self.encoding();
+        let Some(message) = tx.string(ClientFieldId::Text, encoding) else {
             return vec![tx.reply_error("missing message")];
         };
 
@@ -870,7 +890,7 @@ impl Session {
                     ServerOpcode::MsgBroadcast,
                     vec![
                         Field::u16(ServerFieldId::UserId, self.user_id),
-                        Field::string(ServerFieldId::Text, message.as_string()),
+                        Field::string(ServerFieldId::Text, message),
                         Field::string(ServerFieldId::Name, self.name.clone()),
                     ],
                 ),
@@ -891,7 +911,8 @@ impl Session {
 
         // FILE_PATH (202) is optional in the request; root is assumed
         // when absent.
-        let dir = match tx.file_path(ClientFieldId::FilePath) {
+        let encoding = self.encoding();
+        let dir = match tx.file_path(ClientFieldId::FilePath, encoding) {
             Some(Ok(dir)) => dir,
             Some(Err(_)) => return vec![tx.reply_error("bad path")],
             None => HlPath::default(),
@@ -903,7 +924,7 @@ impl Session {
         };
         let fields = entries
             .into_iter()
-            .map(|entry| Field::bytes(ServerFieldId::FileList, entry.encode()))
+            .map(|entry| Field::bytes(ServerFieldId::FileList, entry.encode(encoding)))
             .collect();
         vec![tx.reply(fields)]
     }
@@ -915,7 +936,11 @@ impl Session {
         tx: &Transaction,
         id: ClientFieldId,
     ) -> std::result::Result<HlPath, &'static str> {
-        match tx.field(id).map(|field| HlPath::decode(&field.as_bytes())) {
+        let encoding = self.encoding();
+        match tx
+            .field(id)
+            .map(|field| HlPath::decode(&field.as_bytes(encoding), encoding))
+        {
             Some(Ok(path)) => Ok(path),
             Some(Err(_)) => Err("malformed file path"),
             None => Ok(HlPath::default()),
@@ -927,10 +952,10 @@ impl Session {
         &self,
         tx: &Transaction,
     ) -> std::result::Result<(String, HlPath), &'static str> {
+        let encoding = self.encoding();
         let name = tx
-            .field(ClientFieldId::FileName)
-            .ok_or("missing file name")?
-            .as_string();
+            .string(ClientFieldId::FileName, encoding)
+            .ok_or("missing file name")?;
         let dir = self.path_field(tx, ClientFieldId::FilePath)?;
         Ok((name, dir))
     }
@@ -974,8 +999,10 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
 
+        let encoding = self.encoding();
         let resume_offset = match tx.field(ClientFieldId::ResumeFileTransfer) {
-            Some(field) => match hotline_proto::htxf::decode_resume_data(&field.as_bytes()) {
+            Some(field) => match hotline_proto::htxf::decode_resume_data(&field.as_bytes(encoding))
+            {
                 Ok(already_have) => (already_have as u64).min(data_size),
                 Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
             },
@@ -1121,8 +1148,9 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let new_name = tx.field(ClientFieldId::FileNewName).map(Field::as_string);
-        let comment = tx.field(ClientFieldId::FileComment).map(Field::as_string);
+        let encoding = self.encoding();
+        let new_name = tx.string(ClientFieldId::FileNewName, encoding);
+        let comment = tx.string(ClientFieldId::FileComment, encoding);
         if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
         }
@@ -1181,9 +1209,9 @@ impl Session {
             Ok(dir) => dir,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let encoding = self.encoding();
         let link_name = tx
-            .field(ClientFieldId::FileNewName)
-            .map(Field::as_string)
+            .string(ClientFieldId::FileNewName, encoding)
             .unwrap_or_else(|| name.clone());
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
@@ -1209,13 +1237,14 @@ impl Session {
         if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(text) = tx.field(ClientFieldId::Text) else {
+        let encoding = self.encoding();
+        let Some((text, len)) = tx.string_len(ClientFieldId::Text, encoding) else {
             return vec![tx.reply_error("missing post text")];
         };
-        if text.as_bytes().len() > 8192 {
+        if len > 8192 {
             return vec![tx.reply_error("Your news post was not accepted because it was too big.")];
         }
-        let entry = state.post_news(&self.name, &text.as_string()).await;
+        let entry = state.post_news(&self.name, &text).await;
 
         state
             .publish(Transaction::push(
@@ -1227,8 +1256,9 @@ impl Session {
     }
 
     /// A `HTLC_DATA_NEWS_DIR` (325) field, decoded, or root if absent.
-    fn news_path(tx: &Transaction) -> std::result::Result<HlPath, &'static str> {
-        match tx.news_path() {
+    fn news_path(&self, tx: &Transaction) -> std::result::Result<HlPath, &'static str> {
+        let encoding = self.encoding();
+        match tx.news_path(encoding) {
             Some(Ok(path)) => Ok(path),
             Some(Err(_)) => Err("bad path"),
             None => Ok(HlPath::default()),
@@ -1237,7 +1267,7 @@ impl Session {
 
     /// 370: list a threaded news bundle's own contents.
     async fn on_news_listdir(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1245,9 +1275,10 @@ impl Session {
             Ok(entries) => entries,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let encoding = self.encoding();
         let mut fields = Vec::with_capacity(entries.len());
         for entry in entries {
-            match entry.encode() {
+            match entry.encode(encoding) {
                 Ok(bytes) => fields.push(Field::bytes(ServerFieldId::NewsDirlistExtended, bytes)),
                 Err(_) => return vec![tx.reply_error("news listing too large to encode")],
             }
@@ -1261,7 +1292,7 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1269,7 +1300,7 @@ impl Session {
             Ok(listing) => listing,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let bytes = match listing.encode() {
+        let bytes = match listing.encode(self.encoding()) {
             Ok(bytes) => bytes,
             Err(_) => return vec![tx.reply_error("news listing too large to encode")],
         };
@@ -1278,7 +1309,7 @@ impl Session {
 
     /// 380: delete a threaded news bundle or category.
     async fn on_news_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1293,10 +1324,11 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_FLDR) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(name) = tx.field(ClientFieldId::FileName).map(Field::as_string) else {
+        let encoding = self.encoding();
+        let Some(name) = tx.string(ClientFieldId::FileName, encoding) else {
             return vec![tx.reply_error("missing name")];
         };
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1311,10 +1343,11 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_CAT) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(name) = tx.news_category_name() else {
+        let encoding = self.encoding();
+        let Some(name) = tx.news_category_name(encoding) else {
             return vec![tx.reply_error("missing name")];
         };
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1329,7 +1362,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1352,7 +1385,8 @@ impl Session {
         ];
         // The reply always echoes back the requested flavor, but only
         // includes the article body when it matches what's stored.
-        let requested_flavor = tx.news_article_flavor().unwrap_or_default();
+        let encoding = self.encoding();
+        let requested_flavor = tx.news_article_flavor(encoding).unwrap_or_default();
         fields.push(Field::string(
             ServerFieldId::NewsMimetype,
             requested_flavor.clone(),
@@ -1368,14 +1402,15 @@ impl Session {
         if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let Some(title) = tx.news_article_title() else {
+        let encoding = self.encoding();
+        let Some(title) = tx.news_article_title(encoding) else {
             return vec![tx.reply_error("missing title")];
         };
-        let Some(data) = tx.news_article_data() else {
+        let Some(data) = tx.news_article_data(encoding) else {
             return vec![tx.reply_error("missing article data")];
         };
         let parent_id = tx.news_article_id().unwrap_or(0);
@@ -1384,7 +1419,7 @@ impl Session {
         // this field; a real client always sends it, so defaulting to a
         // real MIME type here instead is a deliberate divergence.
         let flavor = tx
-            .news_article_flavor()
+            .news_article_flavor(encoding)
             .unwrap_or_else(|| "text/plain".to_string());
 
         if let Err(reason) = state
@@ -1413,7 +1448,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_DELETE_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let path = match Self::news_path(tx) {
+        let path = match self.news_path(tx) {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -1530,9 +1565,9 @@ impl Session {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
+        let encoding = self.encoding();
         let password = tx
-            .field(ClientFieldId::Password)
-            .map(Field::as_string)
+            .string(ClientFieldId::Password, encoding)
             .unwrap_or_default();
         if let Err(reason) = state.join_chat_room(chat_id, self.user_id, &password).await {
             return tx.reply_error(reason);
@@ -1565,7 +1600,7 @@ impl Session {
                         flags: entry.flags(),
                         name: entry.name,
                     }
-                    .encode(),
+                    .encode(encoding),
                 ));
             }
         }
@@ -1631,8 +1666,9 @@ impl Session {
         let Some(chat_id) = tx.field(ClientFieldId::ChatId).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
-        let subject = tx.field(ClientFieldId::ChatSubject).map(Field::as_string);
-        let password = tx.field(ClientFieldId::Password).map(Field::as_string);
+        let encoding = self.encoding();
+        let subject = tx.string(ClientFieldId::ChatSubject, encoding);
+        let password = tx.string(ClientFieldId::Password, encoding);
         if subject.is_none() && password.is_none() {
             return vec![tx.reply_error("missing subject or password")];
         }
@@ -1703,7 +1739,8 @@ impl Session {
         if let Err(reason) = self.access.require(Access::DELETE_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(login) = tx.login() else {
+        let encoding = self.encoding();
+        let Some(login) = tx.login(encoding) else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
@@ -1739,7 +1776,8 @@ impl Session {
         if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(login) = tx.field(ClientFieldId::Login).map(Field::as_string) else {
+        let encoding = self.encoding();
+        let Some(login) = tx.string(ClientFieldId::Login, encoding) else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
@@ -1770,22 +1808,23 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        let Some(login) = tx.login() else {
+        let encoding = self.encoding();
+        let Some(login) = tx.login(encoding) else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
         let existing = state.account(&login).await;
         // Absent PASSWORD clears it; raw byte 0x00 means unchanged.
         let password = match tx.field(ClientFieldId::Password) {
-            Some(field) if field.as_bytes().as_ref() == [0u8] => existing
+            Some(field) if field.as_bytes(encoding).as_ref() == [0u8] => existing
                 .as_ref()
                 .map(|a| a.password.clone())
                 .unwrap_or_default(),
-            Some(field) => field.as_deobfuscated_string(),
+            Some(field) => field.as_deobfuscated_string(encoding),
             None => String::new(),
         };
         let name = tx
-            .name()
+            .name(encoding)
             .or_else(|| existing.as_ref().map(|a| a.name.clone()))
             .unwrap_or_default();
         // No wire field for this; unset on create means the default.
@@ -1835,17 +1874,21 @@ impl Session {
         if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
+        let encoding = self.encoding();
         let fields = state
             .list_accounts()
             .await
             .into_iter()
             .filter_map(|(login, account)| {
-                Transaction::encode_field_list(&[
-                    Field::string(ServerFieldId::Name, account.name),
-                    Field::obfuscated_string(ServerFieldId::Login, login),
-                    Self::redacted_password_field(&account.password),
-                    Field::u64(ServerFieldId::Access, account.access.bits()),
-                ])
+                Transaction::encode_field_list(
+                    &[
+                        Field::string(ServerFieldId::Name, account.name),
+                        Field::obfuscated_string(ServerFieldId::Login, login),
+                        Self::redacted_password_field(&account.password),
+                        Field::u64(ServerFieldId::Access, account.access.bits()),
+                    ],
+                    encoding,
+                )
                 .ok()
             })
             .map(|record| Field::bytes(ServerFieldId::Text, record))
@@ -1861,9 +1904,10 @@ impl Session {
     /// stops and reports immediately on a hard (permission) failure,
     /// matching the reference.
     async fn on_set_user_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+        let encoding = self.encoding();
         let mut save_error = false;
         for field in tx.fields(ClientFieldId::Text) {
-            let Ok(record) = Transaction::decode_field_list(&field.as_bytes()) else {
+            let Ok(record) = Transaction::decode_field_list(&field.as_bytes(encoding)) else {
                 save_error = true;
                 continue;
             };
@@ -1891,19 +1935,22 @@ impl Session {
     /// a hard (permission) failure that aborts the whole request.
     async fn apply_user_list_record(
         &self,
-        record: &[Field],
+        record: &FieldList,
         state: &SharedState,
     ) -> std::result::Result<bool, String> {
-        let field = |id: ClientFieldId| record.iter().find(|f| f.id == u16::from(id));
-        let old_login = field(ClientFieldId::Text)
-            .map(Field::as_deobfuscated_string)
+        let encoding = self.encoding();
+        let as_deobfuscated_string = |f: &Field| f.as_deobfuscated_string(encoding);
+        let old_login = record
+            .field(ClientFieldId::Text)
+            .map(as_deobfuscated_string)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_lowercase());
-        let name = field(ClientFieldId::Name)
-            .map(Field::as_string)
+        let name = record
+            .string(ClientFieldId::Name, encoding)
             .unwrap_or_default();
-        let login = field(ClientFieldId::Login)
-            .map(Field::as_deobfuscated_string)
+        let login = record
+            .field(ClientFieldId::Login)
+            .map(as_deobfuscated_string)
             .unwrap_or_default()
             .to_lowercase();
 
@@ -1921,8 +1968,8 @@ impl Session {
             };
         }
 
-        let password = match field(ClientFieldId::Password) {
-            Some(f) if f.as_bytes().as_ref() == [0u8] => {
+        let password = match record.field(ClientFieldId::Password) {
+            Some(f) if f.as_bytes(encoding).as_ref() == [0u8] => {
                 let Some(old_login) = &old_login else {
                     return Ok(false);
                 };
@@ -1931,10 +1978,11 @@ impl Session {
                     None => return Ok(false),
                 }
             }
-            Some(f) => f.as_deobfuscated_string(),
+            Some(f) => as_deobfuscated_string(f),
             None => String::new(),
         };
-        let access = field(ClientFieldId::Access)
+        let access = record
+            .field(ClientFieldId::Access)
             .and_then(Field::as_u64)
             .map(Access::from_bits_truncate)
             .unwrap_or_else(Access::empty);
@@ -2006,6 +2054,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hotline_proto::text_encoding;
     use tokio::sync::mpsc;
 
     fn test_session(name: &str, access: Access) -> Session {
@@ -2024,6 +2073,7 @@ mod tests {
             automatic_response: None,
             remote_addr: "127.0.0.1:0".parse().unwrap(),
             connected_at: Instant::now(),
+            encoding: EncodingHandle::default(),
         }
     }
 
@@ -2107,7 +2157,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_get_list_encodes_entries_using_the_sessions_active_encoding() {
+        let session = test_session("Alice", Access::all());
+        let sjis = hotline_proto::Encoding::for_label(b"shift-jis").unwrap();
+        session.encoding.set(sjis);
+        let state = SharedState::default();
+        let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}"; // "こんにちは"
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: "bob".to_string(),
+                account_name: konnichiwa.to_string(),
+                name: konnichiwa.to_string(),
+                icon: 0,
+                client_version: None,
+                access: Access::all(),
+                access_extra: AccessExtra::default(),
+                remote_addr: "192.0.2.1:5500".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
+            })
+            .await;
+        let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
+
+        let reply = &session.on_user_get_list(&request, &state).await[0];
+        let entry = reply
+            .field(ServerFieldId::UserList)
+            .map(|f| UserNameWithInfo::decode(&f.as_bytes(sjis), sjis).unwrap())
+            .expect("expected bob's user list entry");
+        assert_eq!(entry.name, konnichiwa);
+    }
+
+    #[tokio::test]
     async fn user_get_info_reports_the_reference_shaped_text_block() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -2135,9 +2221,9 @@ mod tests {
         );
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
-        assert_eq!(reply.field(ServerFieldId::Name).unwrap().as_string(), "Bob");
+        assert_eq!(reply.string(ServerFieldId::Name, encoding).unwrap(), "Bob");
         assert!(reply.field(ServerFieldId::UserId).is_none());
-        let text = reply.field(ServerFieldId::Text).unwrap().as_string();
+        let text = reply.string(ServerFieldId::Text, encoding).unwrap();
         assert!(text.contains("Nickname:   Bob"));
         assert!(text.contains("Name:       Bobby"));
         assert!(text.contains("Account:    bob"));
@@ -2155,6 +2241,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_get_info_defaults_login_and_account_name_when_empty() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -2182,7 +2269,7 @@ mod tests {
         );
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
-        let text = reply.field(ServerFieldId::Text).unwrap().as_string();
+        let text = reply.string(ServerFieldId::Text, encoding).unwrap();
         assert!(text.contains("Account:    (guest)"));
         assert!(text.contains("Name:       (none)"));
         assert!(!text.contains("Version:"));
@@ -2190,6 +2277,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_relay_starts_with_cr_for_scrollback_clients() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::default());
         let state = SharedState::default();
         let request = Transaction::request(
@@ -2206,14 +2294,14 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
-            .field(ServerFieldId::Text)
-            .unwrap()
-            .as_string();
+            .string(ServerFieldId::Text, encoding)
+            .unwrap();
         assert_eq!(text, "\r        Alice:  hi");
     }
 
     #[tokio::test]
     async fn chat_relay_uses_emote_format_for_style_1() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::default());
         let state = SharedState::default();
         let request = Transaction::request(
@@ -2233,14 +2321,14 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
-            .field(ServerFieldId::Text)
-            .unwrap()
-            .as_string();
+            .string(ServerFieldId::Text, encoding)
+            .unwrap();
         assert_eq!(text, "\r *** Alice waves");
     }
 
     #[tokio::test]
     async fn chat_relay_keeps_normal_format_for_non_emote_style() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::default());
         let state = SharedState::default();
         let request = Transaction::request(
@@ -2260,9 +2348,8 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
-            .field(ServerFieldId::Text)
-            .unwrap()
-            .as_string();
+            .string(ServerFieldId::Text, encoding)
+            .unwrap();
         assert_eq!(text, "\r        Alice:  hi");
     }
 
@@ -2302,6 +2389,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_reply_sends_empty_server_name_when_unconfigured() {
+        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig {
@@ -2313,15 +2401,14 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0]
-                .field(ServerFieldId::Servername)
-                .map(Field::as_string),
+            replies[0].string(ServerFieldId::Servername, encoding),
             Some(String::new())
         );
     }
 
     #[tokio::test]
     async fn login_with_name_registers_and_broadcasts_join_immediately() {
+        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -2345,7 +2432,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
         assert_eq!(
-            notify.field(ServerFieldId::Name).unwrap().as_string(),
+            notify.string(ServerFieldId::Name, encoding).unwrap(),
             "Alice"
         );
         assert_eq!(
@@ -2562,6 +2649,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_without_name_defers_join_until_agreed() {
+        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -2594,7 +2682,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("agreed should announce a join");
         assert_eq!(
-            notify.field(ServerFieldId::Name).unwrap().as_string(),
+            notify.string(ServerFieldId::Name, encoding).unwrap(),
             "Alice"
         );
         assert!(matches!(session.state, SessionState::Joined));
@@ -2805,6 +2893,7 @@ mod tests {
             automatic_response: None,
             remote_addr: "127.0.0.1:0".parse().unwrap(),
             connected_at: Instant::now(),
+            encoding: EncodingHandle::default(),
         };
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -2821,6 +2910,7 @@ mod tests {
 
     #[tokio::test]
     async fn agreed_selfinfo_carries_the_joiners_own_user_list_entry() {
+        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
 
@@ -2840,7 +2930,7 @@ mod tests {
             .expect("on_agreed should push UserSelfinfo");
         let entry = selfinfo
             .field(ServerFieldId::UserList)
-            .and_then(|f| UserNameWithInfo::decode(&f.as_bytes()).ok())
+            .and_then(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding).ok())
             .expect("UserSelfinfo should carry the joiner's own UserList entry");
         assert_eq!(entry.user_id, 1); // test_session()'s fixed user_id
         assert_eq!(entry.name, "Alice");
@@ -3057,6 +3147,7 @@ mod tests {
 
     #[tokio::test]
     async fn newsfile_round_trips_through_post_and_get() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
@@ -3070,7 +3161,7 @@ mod tests {
         let get = Transaction::request(ClientOpcode::NewsfileGet, 2, vec![]);
         let reply = session.on_newsfile_get(&get, &state).await;
         let [reply] = reply.try_into().unwrap();
-        let news = reply.field(ServerFieldId::Text).unwrap().as_string();
+        let news = reply.string(ServerFieldId::Text, encoding).unwrap();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
     }
@@ -3101,6 +3192,7 @@ mod tests {
 
     #[tokio::test]
     async fn newsfile_post_rejects_oversized_text() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut rx = state.register_recipient(1).await;
@@ -3114,9 +3206,7 @@ mod tests {
         assert_eq!(replies.len(), 1);
         assert!(replies[0].is_error());
         assert_eq!(
-            replies[0]
-                .field(ServerFieldId::ErrorText)
-                .map(Field::as_string),
+            replies[0].string(ServerFieldId::ErrorText, encoding),
             Some("Your news post was not accepted because it was too big.".to_string())
         );
         assert!(state.news().await.is_empty(), "oversized post not stored");
@@ -3158,6 +3248,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_with_permanent_ban_option_bans_the_target_address() {
+        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target = test_user(2, "Bob");
@@ -3188,7 +3279,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Politequit push notifying the target of the ban");
         assert_eq!(
-            notice.field(ServerFieldId::Text).unwrap().as_string(),
+            notice.string(ServerFieldId::Text, encoding).unwrap(),
             "You are permanently banned on this server."
         );
         assert_eq!(
@@ -3199,6 +3290,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_with_temporary_ban_option_sends_the_temporary_ban_notice() {
+        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target = test_user(2, "Bob");
@@ -3230,7 +3322,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Politequit push notifying the target of the ban");
         assert_eq!(
-            notice.field(ServerFieldId::Text).unwrap().as_string(),
+            notice.string(ServerFieldId::Text, encoding).unwrap(),
             "You are temporarily banned on this server."
         );
     }
@@ -3247,6 +3339,7 @@ mod tests {
 
     #[tokio::test]
     async fn private_message_delivered_only_to_target() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
@@ -3269,7 +3362,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Msg push");
         assert_eq!(
-            delivered.field(ServerFieldId::Text).unwrap().as_string(),
+            delivered.string(ServerFieldId::Text, encoding).unwrap(),
             "hi there"
         );
         assert!(
@@ -3309,6 +3402,7 @@ mod tests {
 
     #[tokio::test]
     async fn private_message_bounces_and_is_not_delivered_when_target_refuses() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -3332,7 +3426,7 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].field(ServerFieldId::Text).unwrap().as_string(),
+            replies[0].string(ServerFieldId::Text, encoding).unwrap(),
             "Bob does not accept private messages."
         );
         assert_eq!(
@@ -3348,6 +3442,7 @@ mod tests {
 
     #[tokio::test]
     async fn private_message_delivers_and_bounces_an_automatic_response() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -3371,7 +3466,7 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].field(ServerFieldId::Text).unwrap().as_string(),
+            replies[0].string(ServerFieldId::Text, encoding).unwrap(),
             "At lunch, back soon."
         );
         assert_eq!(
@@ -3384,7 +3479,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("automatic response still lets the message through");
         assert_eq!(
-            delivered.field(ServerFieldId::Text).unwrap().as_string(),
+            delivered.string(ServerFieldId::Text, encoding).unwrap(),
             "hi there"
         );
     }
@@ -3504,6 +3599,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_broadcast_reaches_everyone_except_sender() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut sender_rx = state.register_recipient(session.user_id).await;
@@ -3527,7 +3623,7 @@ mod tests {
             TransactionType::Push(ServerOpcode::MsgBroadcast)
         );
         assert_eq!(
-            sent.field(ServerFieldId::Text).unwrap().as_string(),
+            sent.field(ServerFieldId::Text).unwrap().as_string(encoding),
             "server going down"
         );
 
@@ -3550,6 +3646,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_create_then_read_round_trips() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
 
@@ -3574,7 +3671,7 @@ mod tests {
         let replies = session.on_account_read(&read, &state).await;
         assert!(!replies[0].is_error());
         assert_eq!(
-            replies[0].field(ServerFieldId::Name).unwrap().as_string(),
+            replies[0].string(ServerFieldId::Name, encoding).unwrap(),
             "Bob"
         );
         assert_eq!(
@@ -3702,6 +3799,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_read_never_echoes_the_real_password() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -3746,7 +3844,7 @@ mod tests {
             with_password
                 .field(ServerFieldId::Password)
                 .unwrap()
-                .as_bytes()
+                .as_bytes(encoding)
                 .as_ref(),
             b"x"
         );
@@ -3760,7 +3858,7 @@ mod tests {
             without_password
                 .field(ServerFieldId::Password)
                 .unwrap()
-                .as_bytes()
+                .as_bytes(encoding)
                 .as_ref(),
             b""
         );
@@ -3966,6 +4064,7 @@ mod tests {
         password: Field,
         access: Access,
     ) -> Field {
+        let encoding = text_encoding::DEFAULT;
         let mut fields = Vec::new();
         if let Some(old_login) = old_login {
             fields.push(Field::obfuscated_string(ClientFieldId::Text, old_login));
@@ -3980,7 +4079,7 @@ mod tests {
         fields.push(Field::u64(ClientFieldId::Access, access.bits()));
         Field::bytes(
             ClientFieldId::Text,
-            Transaction::encode_field_list(&fields).unwrap(),
+            Transaction::encode_field_list(&fields, encoding).unwrap(),
         )
     }
 
@@ -3994,6 +4093,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_user_list_returns_every_account_with_a_redacted_password() {
+        let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -4022,24 +4122,16 @@ mod tests {
 
         let bob = records
             .iter()
-            .map(|f| Transaction::decode_field_list(&f.as_bytes()).unwrap())
-            .find(|fields| {
-                fields
-                    .iter()
-                    .any(|f| f.id == u16::from(ServerFieldId::Name) && f.as_string() == "Bob")
-            })
+            .map(|f| Transaction::decode_field_list(&f.as_bytes(encoding)).unwrap())
+            .find(|fields| fields.string(ServerFieldId::Name, encoding).as_deref() == Some("Bob"))
             .expect("bob's record");
         let login = bob
-            .iter()
-            .find(|f| f.id == u16::from(ServerFieldId::Login))
+            .field(ServerFieldId::Login)
             .unwrap()
-            .as_deobfuscated_string();
+            .as_deobfuscated_string(encoding);
         assert_eq!(login, "bob");
-        let password = bob
-            .iter()
-            .find(|f| f.id == u16::from(ServerFieldId::Password))
-            .unwrap();
-        assert_eq!(password.as_bytes().as_ref(), b"x");
+        let password = bob.field(ServerFieldId::Password).unwrap();
+        assert_eq!(password.as_bytes(encoding).as_ref(), b"x");
     }
 
     #[tokio::test]
@@ -4226,6 +4318,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_room_create_invite_and_room_scoped_chat() {
+        let encoding = text_encoding::DEFAULT;
         let creator = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -4297,10 +4390,12 @@ mod tests {
         );
         let join_reply = bob.on_chat_join(&join, &state).await;
         let user_list_ids: Vec<u16> = join_reply
-            .fields
-            .iter()
-            .filter(|f| f.id == u16::from(ServerFieldId::UserList))
-            .map(|f| UserNameWithInfo::decode(&f.as_bytes()).unwrap().user_id)
+            .fields(ServerFieldId::UserList)
+            .map(|f| {
+                UserNameWithInfo::decode(&f.as_bytes(encoding), encoding)
+                    .unwrap()
+                    .user_id
+            })
             .collect();
         assert_eq!(
             user_list_ids,
@@ -4309,9 +4404,8 @@ mod tests {
         );
         assert_eq!(
             join_reply
-                .field(ServerFieldId::ChatSubject)
-                .unwrap()
-                .as_string(),
+                .string(ServerFieldId::ChatSubject, encoding)
+                .unwrap(),
             ""
         );
 
@@ -4336,7 +4430,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a room-chat push");
         assert_eq!(
-            delivered.field(ServerFieldId::Text).unwrap().as_string(),
+            delivered.string(ServerFieldId::Text, encoding).unwrap(),
             "\r        Alice:  room only"
         );
         assert!(
@@ -4503,6 +4597,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_member_can_set_a_private_rooms_password() {
+        let encoding = text_encoding::DEFAULT;
         let member = test_session("Alice", Access::all());
         let state = SharedState::default();
         let chat_id = state.create_chat_room(member.user_id).await;
@@ -4526,7 +4621,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a ChatSubject push");
         assert_eq!(
-            notify.field(ServerFieldId::Password).map(Field::as_string),
+            notify.string(ServerFieldId::Password, encoding),
             Some("hunter2".to_string())
         );
     }
@@ -4551,6 +4646,7 @@ mod tests {
 
     #[tokio::test]
     async fn setting_the_global_room_subject_broadcasts_to_everyone() {
+        let encoding = text_encoding::DEFAULT;
         let mut admin = test_session("Admin", Access::empty());
         admin.access_extra.insert(AccessExtra::SET_SUBJECT);
         let state = SharedState::default();
@@ -4578,9 +4674,7 @@ mod tests {
             Some(0)
         );
         assert_eq!(
-            notify
-                .field(ServerFieldId::ChatSubject)
-                .map(Field::as_string),
+            notify.string(ServerFieldId::ChatSubject, encoding),
             Some("Welcome".to_string())
         );
     }
@@ -4706,6 +4800,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_invite_bounces_and_is_not_delivered_when_target_refuses() {
+        let encoding = text_encoding::DEFAULT;
         let alice = test_session("Alice", Access::all());
         let state = SharedState::default();
         state
@@ -4729,7 +4824,7 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].field(ServerFieldId::Text).unwrap().as_string(),
+            replies[0].string(ServerFieldId::Text, encoding).unwrap(),
             "Bob does not accept private chats."
         );
         assert_eq!(
@@ -4787,6 +4882,7 @@ mod tests {
 
     #[tokio::test]
     async fn declining_notifies_the_room() {
+        let encoding = text_encoding::DEFAULT;
         let state = SharedState::default();
         let chat_id = state.create_chat_room(1).await;
         state.invite(chat_id, 2).await;
@@ -4811,7 +4907,7 @@ mod tests {
             .expect("expected a Chat push notifying the room");
         assert_eq!(notify.r#type(), TransactionType::Push(ServerOpcode::Chat));
         assert_eq!(
-            notify.field(ServerFieldId::Text).unwrap().as_string(),
+            notify.string(ServerFieldId::Text, encoding).unwrap(),
             "\r<<< \"Bob\" declined invitation to chat >>>"
         );
         assert_eq!(
@@ -5001,6 +5097,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_list_of_a_dropbox_is_empty_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -5013,7 +5110,7 @@ mod tests {
             1,
             vec![Field::bytes(
                 ClientFieldId::FilePath,
-                HlPath::new(["Drop Box"]).encode().unwrap(),
+                HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
             )],
         );
         let [reply] = session
@@ -5027,6 +5124,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_list_of_a_dropbox_is_visible_with_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -5037,7 +5135,7 @@ mod tests {
             1,
             vec![Field::bytes(
                 ClientFieldId::FilePath,
-                HlPath::new(["Drop Box"]).encode().unwrap(),
+                HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
             )],
         );
         let [reply] = session
@@ -5051,6 +5149,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_get_from_a_dropbox_is_denied_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -5065,7 +5164,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "secret.txt"),
                 Field::bytes(
                     ClientFieldId::FilePath,
-                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5075,6 +5174,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_delete_in_a_dropbox_succeeds_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -5089,7 +5189,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "secret.txt"),
                 Field::bytes(
                     ClientFieldId::FilePath,
-                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5109,6 +5209,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_getinfo_in_a_dropbox_is_denied_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -5124,7 +5225,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "secret.txt"),
                 Field::bytes(
                     ClientFieldId::FilePath,
-                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5138,6 +5239,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_mkdir_in_a_dropbox_is_denied_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
         let mut access = Access::all();
         access.remove(Access::VIEW_DROP_BOXES);
@@ -5148,7 +5250,10 @@ mod tests {
             1,
             vec![
                 Field::string(ClientFieldId::FileName, "Drop Box"),
-                Field::bytes(ClientFieldId::FilePath, HlPath::default().encode().unwrap()),
+                Field::bytes(
+                    ClientFieldId::FilePath,
+                    HlPath::default().encode(encoding).unwrap(),
+                ),
             ],
         );
         let [reply] = session
@@ -5161,6 +5266,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_setinfo_in_a_dropbox_is_denied_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -5176,7 +5282,7 @@ mod tests {
                 Field::string(ClientFieldId::FileNewName, "renamed.txt"),
                 Field::bytes(
                     ClientFieldId::FilePath,
-                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5190,6 +5296,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_move_into_a_dropbox_succeeds_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         files.seed(&HlPath::new(["Drop Box"]), "placeholder.txt", *b"hi");
@@ -5205,7 +5312,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "a.txt"),
                 Field::bytes(
                     ClientFieldId::FileNewPath,
-                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5225,6 +5332,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_symlink_of_a_dropbox_target_succeeds_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
         let state = state_with_files(files);
@@ -5239,11 +5347,11 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "secret.txt"),
                 Field::bytes(
                     ClientFieldId::FilePath,
-                    HlPath::new(["Drop Box"]).encode().unwrap(),
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
                 ),
                 Field::bytes(
                     ClientFieldId::FileNewPath,
-                    HlPath::default().encode().unwrap(),
+                    HlPath::default().encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5273,6 +5381,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_put_into_a_dropbox_is_allowed_without_upload_anywhere() {
+        let encoding = text_encoding::DEFAULT;
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
         let mut access = Access::all();
         access.remove(Access::UPLOAD_ANYWHERE);
@@ -5286,7 +5395,7 @@ mod tests {
                 Field::bytes(
                     ClientFieldId::FilePath,
                     hotline_proto::types::HlPath::new(["Uploads"])
-                        .encode()
+                        .encode(encoding)
                         .unwrap(),
                 ),
             ],
@@ -5460,6 +5569,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_getinfo_returns_name_and_size() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
@@ -5478,7 +5588,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert_eq!(
-            reply.field(ServerFieldId::FileName).unwrap().as_string(),
+            reply.string(ServerFieldId::FileName, encoding).unwrap(),
             "a.txt"
         );
         assert_eq!(
@@ -5495,6 +5605,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_getinfo_derives_name_from_file_path_when_file_name_is_absent() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
@@ -5506,7 +5617,7 @@ mod tests {
             1,
             vec![Field::bytes(
                 ClientFieldId::FilePath,
-                HlPath::new(["a.txt"]).encode().unwrap(),
+                HlPath::new(["a.txt"]).encode(encoding).unwrap(),
             )],
         );
         let [reply] = session
@@ -5516,7 +5627,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert_eq!(
-            reply.field(ServerFieldId::FileName).unwrap().as_string(),
+            reply.string(ServerFieldId::FileName, encoding).unwrap(),
             "a.txt"
         );
     }
@@ -5608,6 +5719,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_setinfo_sets_a_comment_returned_by_getinfo() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -5640,9 +5752,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(
-            reply
-                .field(ServerFieldId::FileComment)
-                .map(Field::as_string),
+            reply.string(ServerFieldId::FileComment, encoding),
             Some("a note".to_string())
         );
     }
@@ -5699,6 +5809,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_mkdir_derives_name_from_file_path_when_file_name_is_absent() {
+        let encoding = text_encoding::DEFAULT;
         let state = state_with_files(crate::files::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
@@ -5707,7 +5818,7 @@ mod tests {
             1,
             vec![Field::bytes(
                 ClientFieldId::FilePath,
-                HlPath::new(["NewFolder"]).encode().unwrap(),
+                HlPath::new(["NewFolder"]).encode(encoding).unwrap(),
             )],
         );
         let [reply] = session
@@ -5725,6 +5836,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_move_relocates_a_file() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         files.seed(&HlPath::new(["Sub"]), ".keep", *b"");
@@ -5738,7 +5850,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "a.txt"),
                 Field::bytes(
                     ClientFieldId::FileNewPath,
-                    HlPath::new(["Sub"]).encode().unwrap(),
+                    HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5763,6 +5875,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_move_to_root_treats_an_absent_new_path_as_root() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Sub"]), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -5775,7 +5888,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "a.txt"),
                 Field::bytes(
                     ClientFieldId::FilePath,
-                    HlPath::new(["Sub"]).encode().unwrap(),
+                    HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
                 // No FileNewPath field: the destination is the root directory.
             ],
@@ -5801,6 +5914,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_move_denied_without_move_files() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -5815,7 +5929,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "a.txt"),
                 Field::bytes(
                     ClientFieldId::FileNewPath,
-                    HlPath::new(["Sub"]).encode().unwrap(),
+                    HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5829,6 +5943,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_symlink_denied_without_make_aliases() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -5843,7 +5958,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "a.txt"),
                 Field::bytes(
                     ClientFieldId::FileNewPath,
-                    HlPath::new(["Sub"]).encode().unwrap(),
+                    HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5857,6 +5972,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_symlink_creates_an_alias_reachable_at_the_new_location() {
+        let encoding = text_encoding::DEFAULT;
         let files = crate::files::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -5869,7 +5985,7 @@ mod tests {
                 Field::string(ClientFieldId::FileName, "a.txt"),
                 Field::bytes(
                     ClientFieldId::FileNewPath,
-                    HlPath::new(["Sub"]).encode().unwrap(),
+                    HlPath::new(["Sub"]).encode(encoding).unwrap(),
                 ),
             ],
         );
@@ -5947,6 +6063,7 @@ mod tests {
 
     #[tokio::test]
     async fn news_delete_removes_a_bundle_and_requires_news_delete_fldr() {
+        let encoding = text_encoding::DEFAULT;
         let state = SharedState::default();
         let session = test_session("Alice", Access::all());
         state
@@ -5962,7 +6079,7 @@ mod tests {
             1,
             vec![Field::bytes(
                 ClientFieldId::NewsPath,
-                HlPath::new(["Bundle"]).encode().unwrap(),
+                HlPath::new(["Bundle"]).encode(encoding).unwrap(),
             )],
         );
         let [reply] = denied_session
@@ -5989,6 +6106,7 @@ mod tests {
 
     #[tokio::test]
     async fn news_postthread_getthread_and_listcategory_round_trip_an_article() {
+        let encoding = text_encoding::DEFAULT;
         let state = SharedState::default();
         let session = test_session("Alice", Access::all());
         state
@@ -5998,7 +6116,7 @@ mod tests {
         let path_field = || {
             Field::bytes(
                 ClientFieldId::NewsPath,
-                HlPath::new(["General"]).encode().unwrap(),
+                HlPath::new(["General"]).encode(encoding).unwrap(),
             )
         };
 
@@ -6046,12 +6164,10 @@ mod tests {
         assert!(!reply.is_error());
         let data = reply
             .field(ServerFieldId::NewsPost)
-            .map(|f| f.as_bytes().into_owned());
+            .map(|f| f.as_bytes(encoding).into_owned());
         assert_eq!(data, Some(b"body text".to_vec()));
         assert_eq!(
-            reply
-                .field(ServerFieldId::NewsSubject)
-                .map(Field::as_string),
+            reply.string(ServerFieldId::NewsSubject, encoding),
             Some("Hello".to_string())
         );
 
@@ -6078,6 +6194,7 @@ mod tests {
 
     #[tokio::test]
     async fn news_postthread_denied_without_post_news_art() {
+        let encoding = text_encoding::DEFAULT;
         let state = SharedState::default();
         let mut access = Access::all();
         access.remove(Access::POST_NEWS_ART);
@@ -6093,7 +6210,7 @@ mod tests {
             vec![
                 Field::bytes(
                     ClientFieldId::NewsPath,
-                    HlPath::new(["General"]).encode().unwrap(),
+                    HlPath::new(["General"]).encode(encoding).unwrap(),
                 ),
                 Field::string(ClientFieldId::NewsArtTitle, "Hello"),
                 Field::bytes(ClientFieldId::NewsArtData, b"x".to_vec()),
