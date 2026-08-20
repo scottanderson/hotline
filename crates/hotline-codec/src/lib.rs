@@ -132,12 +132,12 @@ impl Encoder<Transaction> for TransactionCodec {
 mod tests {
     use super::*;
     use hotline_proto::field_id::FieldId;
-    use hotline_proto::opcode::{ClientOpcode, ServerOpcode};
+    use hotline_proto::opcode::Opcode;
     use hotline_proto::Field;
 
     #[test]
     fn server_codec_stamps_each_push_with_an_increasing_trans() {
-        let push = Transaction::push(ServerOpcode::Chat, vec![]);
+        let push = Transaction::push(Opcode::ChatMsg, vec![]);
 
         let mut buf = BytesMut::new();
         let mut server = TransactionCodec::for_server(EncodingHandle::default());
@@ -163,7 +163,7 @@ mod tests {
         // Encoded and decoded as Mac OS Roman by default: lossy.
         let mut buf = BytesMut::new();
         let tx = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             1,
             vec![Field::string(FieldId::Text, konnichiwa)],
         );
@@ -178,7 +178,7 @@ mod tests {
         handle.set(sjis);
         let mut buf = BytesMut::new();
         let tx = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             2,
             vec![Field::string(FieldId::Text, konnichiwa)],
         );
@@ -194,7 +194,7 @@ mod tests {
     fn round_trips_a_whole_transaction_in_one_go() {
         let encoding = hotline_proto::text_encoding::DEFAULT;
         let tx = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             1,
             vec![Field::string(FieldId::Text, "hello")],
         );
@@ -239,7 +239,7 @@ mod tests {
     fn decodes_correctly_when_bytes_arrive_one_at_a_time() {
         let encoding = hotline_proto::text_encoding::DEFAULT;
         let tx = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             7,
             vec![
                 Field::string(FieldId::Name, "RustHL"),
@@ -264,9 +264,9 @@ mod tests {
     #[test]
     fn decodes_two_back_to_back_transactions_from_one_buffer() {
         let encoding = hotline_proto::text_encoding::DEFAULT;
-        let first = Transaction::request(ClientOpcode::Ping, 1, vec![]);
+        let first = Transaction::request(Opcode::Ping, 1, vec![]);
         let second = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             2,
             vec![Field::string(FieldId::Text, "second frame")],
         );

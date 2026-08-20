@@ -131,9 +131,9 @@ debug-logged reason rather than failing the request.
      `on_user_get_info` file-transfer sections are waiting on; until it
      exists, those five sections always read `"None."`, with no
      in-progress transfers ever reported.
-   - Folder transfers (`HTLC_HDR_FILE_GETFOLDER`/`_PUTFOLDER`, a separate
-     `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the transfer
-     connection): not implemented, not started.
+   - Folder transfers (`myTran_DownloadFldr` (210)/`myTran_UploadFldr`
+     (213), a separate `FILE_NEXT`/`FILE_SEND`/`FILE_RESUME` loop on the
+     transfer connection): not implemented, not started.
    - ~~Resource-fork (`"MACR"`) data.~~ **Resolved, no code change
      needed.** The upload receive path (`receive_file` in `server.rs`)
      already discards any fork it doesn't recognize by tag rather than
@@ -290,12 +290,39 @@ debug-logged reason rather than failing the request.
     identical both ways or simply unused in the other direction (per
     `field_id.rs`'s own module docs, e.g. `ErrorText` server-only,
     `Options` client-only) — **except `Options` itself, per item 8 above**,
-    found after this item was originally written. Touches `field_id.rs`,
-    `opcode.rs`, `transaction.rs`'s `Debug` impl, and every
-    `ClientFieldId::X`/`ServerFieldId::X`/`ClientOpcode::X`/
-    `ServerOpcode::X` reference across the workspace. Re-confirm the "no
-    real collision" premise (now known to have at least one exception)
-    before starting.
+    found after this item was originally written.~~ **Resolved.**
+    `FieldId` and `Opcode` each replace their client/server pair;
+    `Options` (113) stays a single variant since `ClientFieldId`/
+    `ServerFieldId` never encoded its two meanings as distinct values to
+    begin with, callers already interpreted the raw bits per transaction.
+    Merging `Opcode` surfaced five real name collisions the split types
+    had been hiding: `Chat`, `Msg`, `ChatSubject`, `NewsfilePost`, and
+    `UserChange` each meant a *different* numeric opcode depending on
+    direction (e.g. client
+    `Chat` is `myTran_ChatSend` (105), server `Chat` is `myTran_ChatMsg`
+    (106)); each pair is now two distinctly-named variants
+    (`ChatSend`/`ChatMsg`, `SendInstantMsg`/`ServerMsg`,
+    `SetChatSubject`/`NotifyChatSubject`, `OldPostNews`/`NewMsg`,
+    `SetClientUserInfo`/`NotifyChangeUser`), named after each one's own
+    `myTran_*` tail. `ClientFieldId`/`ServerFieldId` had three of these
+    too (`Uid`/`UserId` -> `UserId`, `Version`/`Serverversion` ->
+    `Version`, `FolderItemCount`/`FileCount` -> `FolderItemCount`), plus
+    the whole News* block, where the client and server sides had picked
+    entirely different Rust names for the same field; all resolved the
+    same way.
+    `transaction.rs`'s `Debug` impl no longer branches on direction at
+    all, since one `FieldId` table now answers both. One accepted,
+    minor trade-off: `TransactionType::from_client_wire`/`from_server_wire`
+    now resolve *any* known `Opcode` value regardless of which
+    direction actually uses it, so a wire value that's only ever
+    legitimate from the other direction (e.g. a client sending `104`,
+    the server-only `ServerMsg` push opcode) now decodes to a named
+    opcode instead of `Unknown(104)`. Session/app dispatch is
+    unaffected (both already match an explicit allow-list of legitimate
+    opcodes per direction and fall through to their existing
+    unrecognized-opcode handling for anything else), so this only
+    costs a little diagnostic precision in a log line for
+    already-nonconforming traffic.
 17. ~~Consider `Cow<'_, str>` in place of `String` on the workspace's many
     string fields to cut needless clones, e.g. `UserEntry`/`Session`
     duplicating `name`/`login`/`automatic_response`, or the field decode
@@ -389,7 +416,7 @@ debug-logged reason rather than failing the request.
 25. ~~`on_get_file_name_list` requires `Access::DOWNLOAD_FILE`, a bit
     unrelated to listing in either reference.~~ **Resolved.** The
     secondary reference gates this same opcode
-    (`HTLC_HDR_FILE_LIST`) on a dedicated `access_extra.file_list` bit;
+    (`myTran_GetFileNameList`) on a dedicated `access_extra.file_list` bit;
     this server already defined `AccessExtra::FILE_LIST` for exactly this
     purpose (sibling of `FILE_GETINFO`/`FILE_HASH`) but never referenced
     it anywhere. `on_get_file_name_list` now checks `AccessExtra::FILE_LIST`

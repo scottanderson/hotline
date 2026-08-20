@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use hotline_proto::consts::{Access, RequireFlags};
-use hotline_proto::opcode::ClientOpcode;
+use hotline_proto::opcode::Opcode;
 use hotline_proto::types::{
     FileNameWithInfo, HlDate, HlPath, NewsArticleListData, NewsArticleSummary,
     NewsCategoryListEntry, UserFlags,
@@ -194,7 +194,7 @@ pub struct PendingTransfer {
     pub client_ip: IpAddr,
 }
 
-/// One threaded news article's full data, for a `HTLC_HDR_NEWS_GETTHREAD`
+/// One threaded news article's full data, for a `myTran_GetNewsArtData`
 /// (400) reply.
 #[derive(Debug, Clone)]
 pub struct NewsArticleDetail {
@@ -1157,7 +1157,7 @@ impl SharedState {
 
     /// Record one transaction from `user_id` and decide what happens to
     /// it; see [`crate::FloodPolicy::check`].
-    pub async fn check_flood(&self, user_id: u16, opcode: ClientOpcode) -> FloodDecision {
+    pub async fn check_flood(&self, user_id: u16, opcode: Opcode) -> FloodDecision {
         self.flood.check(user_id, opcode).await
     }
 
@@ -1176,7 +1176,7 @@ impl SharedState {
     }
 
     /// Every account, login and details together, sorted by login for a
-    /// deterministic listing order (`HTLC_HDR_GET_USER_LIST`, 348).
+    /// deterministic listing order (`myTran_GetUserList`, 348).
     pub async fn list_accounts(&self) -> Vec<(String, Account)> {
         let mut accounts = self.accounts.list().await;
         accounts.sort_by(|(a, _), (b, _)| a.cmp(b));

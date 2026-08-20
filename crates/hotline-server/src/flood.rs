@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use hotline_proto::opcode::ClientOpcode;
+use hotline_proto::opcode::Opcode;
 
 /// What a session should do after [`FloodPolicy::check`] records one more
 /// transaction.
@@ -32,7 +32,7 @@ pub enum FloodDecision {
 pub trait FloodPolicy: Send + Sync {
     /// Record one `opcode` transaction from `user_id` and decide what
     /// happens to it.
-    async fn check(&self, user_id: u16, opcode: ClientOpcode) -> FloodDecision;
+    async fn check(&self, user_id: u16, opcode: Opcode) -> FloodDecision;
     /// Forget any accumulated state for `user_id`, called on disconnect.
     async fn reset(&self, user_id: u16);
 }
@@ -43,7 +43,7 @@ pub struct NoFloodPolicy;
 
 #[async_trait]
 impl FloodPolicy for NoFloodPolicy {
-    async fn check(&self, _user_id: u16, _opcode: ClientOpcode) -> FloodDecision {
+    async fn check(&self, _user_id: u16, _opcode: Opcode) -> FloodDecision {
         FloodDecision::Allow
     }
 
@@ -55,7 +55,7 @@ impl FloodPolicy for NoFloodPolicy {
 pub struct FloodConfig {
     /// Points added per transaction, absent a more specific override.
     pub default_points: u32,
-    /// Points added for `HTLC_HDR_CHAT` (105) and `HTLC_HDR_MSG` (108),
+    /// Points added for `myTran_ChatSend` (105) and `myTran_SendInstantMsg` (108),
     /// the two opcodes most likely to be used to spam other users.
     pub chat_points: u32,
     /// How long it takes one accumulated point to fully decay.
@@ -102,9 +102,9 @@ impl InMemoryFloodPolicy {
         }
     }
 
-    fn points_for(&self, opcode: ClientOpcode) -> u32 {
+    fn points_for(&self, opcode: Opcode) -> u32 {
         match opcode {
-            ClientOpcode::Chat | ClientOpcode::Msg => self.config.chat_points,
+            Opcode::ChatSend | Opcode::SendInstantMsg => self.config.chat_points,
             _ => self.config.default_points,
         }
     }
@@ -118,7 +118,7 @@ impl Default for InMemoryFloodPolicy {
 
 #[async_trait]
 impl FloodPolicy for InMemoryFloodPolicy {
-    async fn check(&self, user_id: u16, opcode: ClientOpcode) -> FloodDecision {
+    async fn check(&self, user_id: u16, opcode: Opcode) -> FloodDecision {
         let decay_per_sec = 1.0 / self.config.decay.as_secs_f64();
         let now = Instant::now();
         let mut states = self.states.write().unwrap();
@@ -159,18 +159,9 @@ mod tests {
             kick_threshold: 25,
         });
 
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Allow
-        );
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Throttle
-        );
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Kick
-        );
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Allow);
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Throttle);
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Kick);
     }
 
     #[tokio::test]
@@ -182,24 +173,12 @@ mod tests {
             throttle_threshold: 15,
             kick_threshold: 25,
         });
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Allow
-        );
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Throttle
-        );
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Kick
-        );
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Allow);
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Throttle);
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Kick);
 
         policy.reset(1).await;
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Allow
-        );
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Allow);
     }
 
     #[tokio::test]
@@ -208,13 +187,7 @@ mod tests {
             default_points: 30,
             ..FloodConfig::default()
         });
-        assert_eq!(
-            policy.check(1, ClientOpcode::Ping).await,
-            FloodDecision::Kick
-        );
-        assert_eq!(
-            policy.check(2, ClientOpcode::Ping).await,
-            FloodDecision::Kick
-        );
+        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Kick);
+        assert_eq!(policy.check(2, Opcode::Ping).await, FloodDecision::Kick);
     }
 }

@@ -12,7 +12,7 @@ use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
-use hotline_proto::{ClientHandshake, ClientOpcode, Field, FieldId, ServerHandshake, Transaction};
+use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
 
 use crate::error::{ClientError, Result};
 
@@ -28,7 +28,7 @@ enum PendingState {
 
 type PendingMap = Arc<Mutex<PendingState>>;
 
-/// Fields returned by a successful login, per the `HTLC_HDR_LOGIN` (107) reply.
+/// Fields returned by a successful login, per the `myTran_Login` (107) reply.
 #[derive(Debug, Clone, Default)]
 pub struct LoginResult {
     /// Server's protocol version, echoed back.
@@ -99,7 +99,7 @@ impl HotlineClient {
 
     /// Send a request transaction and wait for its matching reply.
     /// Returns `Err` if the server replied with the error bit set.
-    pub async fn request(&self, opcode: ClientOpcode, fields: Vec<Field>) -> Result<Transaction> {
+    pub async fn request(&self, opcode: Opcode, fields: Vec<Field>) -> Result<Transaction> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(opcode, id, fields);
 
@@ -132,18 +132,18 @@ impl HotlineClient {
         Ok(reply)
     }
 
-    /// Log in with the given credentials (`HTLC_HDR_LOGIN`, 107). `login`
+    /// Log in with the given credentials (`myTran_Login`, 107). `login`
     /// and `password` are obfuscated with Hotline's XOR-0xFF transform
     /// before going on the wire.
     ///
-    /// The server follows the reply with an `HTLS_HDR_AGREEMENT` (109)
+    /// The server follows the reply with a `myTran_ShowAgreement` (109)
     /// push on the event stream returned by [`Self::connect`], carrying
     /// either agreement text or a no-agreement marker. Call [`Self::agree`]
     /// with the caller's name/icon after handling it to complete login.
     pub async fn login(&self, login: &str, password: &str) -> Result<LoginResult> {
         let reply = self
             .request(
-                ClientOpcode::Login,
+                Opcode::Login,
                 vec![
                     Field::obfuscated_string(FieldId::Login, login),
                     Field::obfuscated_string(FieldId::Password, password),
@@ -160,10 +160,10 @@ impl HotlineClient {
         })
     }
 
-    /// Accept the server's agreement, completing login (`HTLC_HDR_AGREED`, 121).
+    /// Accept the server's agreement, completing login (`myTran_Agreed`, 121).
     pub async fn agree(&self, nick: &str, icon: u16) -> Result<()> {
         self.request(
-            ClientOpcode::Agreed,
+            Opcode::Agreed,
             vec![
                 Field::string(FieldId::Name, nick),
                 Field::u16(FieldId::Icon, icon),
@@ -173,11 +173,11 @@ impl HotlineClient {
         Ok(())
     }
 
-    /// Send a public chat message (`HTLC_HDR_CHAT`, 105).
+    /// Send a public chat message (`myTran_ChatSend`, 105).
     pub async fn send_chat(&self, message: &str) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             id,
             vec![Field::string(FieldId::Text, message)],
         );
@@ -185,16 +185,16 @@ impl HotlineClient {
         Ok(())
     }
 
-    /// Fetch the connected-user list (`HTLC_HDR_USER_GETLIST`, 300).
+    /// Fetch the connected-user list (`myTran_GetUserNameList`, 300).
     pub async fn get_user_name_list(&self) -> Result<Vec<UserNameWithInfo>> {
-        let reply = self.request(ClientOpcode::UserGetlist, vec![]).await?;
+        let reply = self.request(Opcode::UserGetlist, vec![]).await?;
         let encoding = self.encoding.get();
         Ok(reply.user_list_entries(encoding)?)
     }
 
-    /// Fetch the root folder's file listing (`HTLC_HDR_FILE_LIST`, 200).
+    /// Fetch the root folder's file listing (`myTran_GetFileNameList`, 200).
     pub async fn get_file_name_list(&self) -> Result<Vec<FileNameWithInfo>> {
-        let reply = self.request(ClientOpcode::FileList, vec![]).await?;
+        let reply = self.request(Opcode::FileList, vec![]).await?;
         let encoding = self.encoding.get();
         Ok(reply.file_list_entries(encoding)?)
     }

@@ -4,7 +4,7 @@
 
 use hotline_client::HotlineClient;
 use hotline_proto::field_id::FieldId;
-use hotline_proto::opcode::{ServerOpcode, TransactionType};
+use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::{Access, Field, Transaction};
@@ -77,7 +77,7 @@ impl App {
         self.mode = Mode::Agreement(text);
     }
 
-    /// Accept the agreement (`HTLC_HDR_AGREED`, 121) and switch to chat.
+    /// Accept the agreement (`myTran_Agreed`, 121) and switch to chat.
     pub async fn accept_agreement(&mut self, client: &HotlineClient) {
         if let Err(e) = client.agree(&self.nick, self.icon).await {
             self.push(format!("failed to complete login: {e}"), LineKind::Error);
@@ -103,14 +103,14 @@ impl App {
             return EventOutcome::Applied;
         };
         match opcode {
-            /* 104 */ ServerOpcode::Msg => self.apply_msg(tx),
-            /* 106 */ ServerOpcode::Chat => self.apply_chat(tx),
-            /* 109 */ ServerOpcode::Agreement => return self.apply_agreement(tx),
-            /* 111 */ ServerOpcode::Politequit => self.apply_politequit(tx),
-            /* 113 */ ServerOpcode::ChatInvite => self.apply_chat_invite(tx),
-            /* 301 */ ServerOpcode::UserChange => self.apply_user_change(tx),
-            /* 302 */ ServerOpcode::UserPart => self.apply_user_part(tx),
-            /* 354 */ ServerOpcode::UserSelfinfo => self.apply_user_selfinfo(tx),
+            /* 104 */ Opcode::ServerMsg => self.apply_msg(tx),
+            /* 106 */ Opcode::ChatMsg => self.apply_chat(tx),
+            /* 109 */ Opcode::Agreement => return self.apply_agreement(tx),
+            /* 111 */ Opcode::Politequit => self.apply_politequit(tx),
+            /* 113 */ Opcode::ChatInvite => self.apply_chat_invite(tx),
+            /* 301 */ Opcode::NotifyChangeUser => self.apply_user_change(tx),
+            /* 302 */ Opcode::UserPart => self.apply_user_part(tx),
+            /* 354 */ Opcode::UserSelfinfo => self.apply_user_selfinfo(tx),
             _ => {
                 for line in format!("Unrecognized opcode for transaction: {tx:#?}").lines() {
                     self.push(line, LineKind::Error);
@@ -316,17 +316,17 @@ mod tests {
         assert_eq!(display_text("Alice: hi"), "Alice: hi");
     }
 
-    /// `113` (`HTLC_HDR_CHAT_INVITE`/`HTLS_HDR_CHAT_INVITE`) exists in
-    /// both opcode tables; a value-based classification would misread
-    /// this push and silently drop it here.
+    /// `113` (`myTran_InviteToChat`) is both the client's invite request
+    /// and the server's resulting push; a value-based classification
+    /// would misread this push and silently drop it here.
     #[test]
     fn chat_invite_push_is_recognized_despite_sharing_its_wire_value_with_a_client_opcode() {
         use hotline_proto::field_id::FieldId;
-        use hotline_proto::opcode::ServerOpcode;
+        use hotline_proto::opcode::Opcode;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let invite = Transaction::push(
-            ServerOpcode::ChatInvite,
+            Opcode::ChatInvite,
             vec![
                 Field::string(FieldId::Name, "Alice"),
                 Field::u32(FieldId::ChatId, 7),
@@ -341,12 +341,12 @@ mod tests {
     #[test]
     fn apply_user_change_carries_admin_color_for_new_and_existing_users() {
         use hotline_proto::field_id::FieldId;
-        use hotline_proto::opcode::ServerOpcode;
+        use hotline_proto::opcode::Opcode;
         use hotline_proto::types::UserFlags;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let admin_change = Transaction::push(
-            ServerOpcode::UserChange,
+            Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserId, 2),
                 Field::u16(FieldId::Icon, 0),
@@ -362,7 +362,7 @@ mod tests {
 
         // Existing user: a later update should still reflect current flags.
         let demoted = Transaction::push(
-            ServerOpcode::UserChange,
+            Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserId, 2),
                 Field::u16(FieldId::Icon, 0),
@@ -378,11 +378,11 @@ mod tests {
     #[test]
     fn apply_user_change_notes_a_rename() {
         use hotline_proto::field_id::FieldId;
-        use hotline_proto::opcode::ServerOpcode;
+        use hotline_proto::opcode::Opcode;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let joined = Transaction::push(
-            ServerOpcode::UserChange,
+            Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserId, 2),
                 Field::u16(FieldId::Icon, 0),
@@ -393,7 +393,7 @@ mod tests {
         let _ = app.apply_server_event(&joined);
 
         let renamed = Transaction::push(
-            ServerOpcode::UserChange,
+            Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserId, 2),
                 Field::u16(FieldId::Icon, 0),

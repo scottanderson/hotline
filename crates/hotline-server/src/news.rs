@@ -228,7 +228,7 @@ impl NewsBundle {
     }
 
     /// One article's data, plus its sibling/child linkage for a
-    /// `HTLC_HDR_NEWS_GETTHREAD` (400) reply.
+    /// `myTran_GetNewsArtData` (400) reply.
     pub fn article(&self, components: &[String], id: u32) -> Option<ArticleView<'_>> {
         let category = self.category(components)?;
         let article = category.articles.get(&id)?;
@@ -284,7 +284,7 @@ impl From<&NewsNode> for NewsListKind {
 }
 
 /// One article's data plus its resolved sibling links, for a
-/// `HTLC_HDR_NEWS_GETTHREAD` (400) reply.
+/// `myTran_GetNewsArtData` (400) reply.
 pub struct ArticleView<'a> {
     pub article: &'a NewsArticle,
     pub prev_id: u32,

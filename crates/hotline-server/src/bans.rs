@@ -46,7 +46,7 @@ mod until_rfc3339 {
 }
 
 /// Ban storage, checked on connect and written by the kick-to-ban `Options`
-/// bit on `HTLC_HDR_USER_KICK` (110).
+/// bit on `myTran_DisconnectUser` (110).
 #[async_trait]
 pub trait BanProvider: Send + Sync {
     /// The active ban on `ip`, or `None` if it isn't banned or its ban

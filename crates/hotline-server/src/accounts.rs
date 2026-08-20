@@ -34,7 +34,7 @@ bitflags::bitflags! {
         /// Get a file's hash.
         /// Config key: `file_hash`.
         const FILE_HASH          = 1 << 5;
-        /// May process `HTLC_HDR_LOGIN`; cleared once logged in.
+        /// May process `myTran_Login`; cleared once logged in.
         /// Config key: `can_login`.
         const CAN_LOGIN          = 1 << 6;
         /// May be hidden from `GETLIST` while invisible.
@@ -156,7 +156,7 @@ pub struct Account {
 }
 
 /// Account storage: looked up on login, mutated by the account CRUD
-/// opcodes (`HTLC_HDR_ACCOUNT_CREATE`/`_READ`/`_MODIFY`/`_DELETE`).
+/// opcodes (`myTran_NewUser`/`_READ`/`_MODIFY`/`_DELETE`).
 #[async_trait]
 pub trait AccountProvider: Send + Sync {
     /// Look up an account by login.
@@ -166,7 +166,7 @@ pub trait AccountProvider: Send + Sync {
     /// Delete an account. `false` if it didn't exist.
     async fn delete(&self, login: &str) -> Result<bool, String>;
     /// Every account, login and details together, for bulk listing
-    /// (`HTLC_HDR_GET_USER_LIST`, 348).
+    /// (`myTran_GetUserList`, 348).
     async fn list(&self) -> Vec<(String, Account)>;
 }
 

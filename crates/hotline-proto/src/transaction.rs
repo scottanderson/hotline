@@ -33,7 +33,7 @@ use std::{debug_assert_matches, fmt};
 use crate::error::{ProtoError, Result};
 use crate::field::{Field, FieldList};
 use crate::field_id::FieldId;
-use crate::opcode::{ClientOpcode, ServerOpcode, TransactionType};
+use crate::opcode::{Opcode, TransactionType};
 use crate::text_encoding::Encoding;
 use crate::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
 use crate::wire::{PacketReader, VecWriter};
@@ -72,7 +72,7 @@ pub struct TransactionHeader {
 
 impl Transaction {
     /// Build a request transaction from a set of fields.
-    pub const fn request(opcode: ClientOpcode, trans: u32, fields: Vec<Field>) -> Self {
+    pub const fn request(opcode: Opcode, trans: u32, fields: Vec<Field>) -> Self {
         Self::assemble(TransactionType::Request(opcode), trans, 0, fields)
     }
 
@@ -83,7 +83,7 @@ impl Transaction {
     }
 
     /// Build a server-initiated transaction.
-    pub const fn push(opcode: ServerOpcode, fields: Vec<Field>) -> Self {
+    pub const fn push(opcode: Opcode, fields: Vec<Field>) -> Self {
         Self::assemble(TransactionType::Push(opcode), 0, 0, fields)
     }
 
@@ -299,7 +299,7 @@ impl Transaction {
 
     /// Encode `fields` as a `count`-prefixed field list: a transaction's
     /// own body shape, and also the shape of one nested account record
-    /// inside `HTLC_HDR_GET_USER_LIST` (348) / `HTLC_HDR_SET_USER_LIST`
+    /// inside `myTran_GetUserList` (348) / `myTran_SetUserList`
     /// (349).
     ///
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
@@ -484,13 +484,13 @@ impl fmt::Debug for Transaction {
 mod tests {
     use super::*;
     use crate::field_id::FieldId;
-    use crate::opcode::ClientOpcode;
+    use crate::opcode::Opcode;
     use crate::text_encoding;
 
     #[test]
     fn prefix_is_20_bytes_full_frame_is_more() {
         let encoding = text_encoding::DEFAULT;
-        let tx = Transaction::request(ClientOpcode::Ping, 1, vec![]);
+        let tx = Transaction::request(Opcode::Ping, 1, vec![]);
         assert_eq!(TransactionHeader::LEN, 20);
         // Full wire output is prefix(20) + count(2) + fields(0 here).
         assert_eq!(
@@ -506,7 +506,7 @@ mod tests {
             let fields = (0..n)
                 .map(|i| Field::string(FieldId::Text, format!("msg{i}")))
                 .collect::<Vec<_>>();
-            let tx = Transaction::request(ClientOpcode::Chat, 1, fields);
+            let tx = Transaction::request(Opcode::ChatSend, 1, fields);
             let decoded = Transaction::decode_from_client(&tx.encode(encoding).unwrap()).unwrap();
             assert_eq!(decoded.fields.len(), n);
         }
@@ -516,7 +516,7 @@ mod tests {
     fn transaction_round_trips() {
         let encoding = text_encoding::DEFAULT;
         let tx = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "guest"),
@@ -551,7 +551,7 @@ mod tests {
     fn streaming_decode_matches_one_shot_decode() {
         let encoding = text_encoding::DEFAULT;
         let tx = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             7,
             vec![Field::string(FieldId::Text, "hello")],
         );
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn reply_carries_task_reply_sentinel_not_zero() {
-        let request = Transaction::request(ClientOpcode::Ping, 42, vec![]);
+        let request = Transaction::request(Opcode::Ping, 42, vec![]);
         let tx = request.reply(vec![]);
         assert_eq!(tx.r#type(), TransactionType::Reply);
         assert!(tx.is_reply());
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn error_reply_shape() {
         let encoding = text_encoding::DEFAULT;
-        let request = Transaction::request(ClientOpcode::Ping, 42, vec![]);
+        let request = Transaction::request(Opcode::Ping, 42, vec![]);
         let tx = request.reply_error("nope");
         assert_eq!(tx.trans, 42);
         assert!(tx.is_error());
@@ -599,10 +599,7 @@ mod tests {
         let relay = format!("{long_nick}: {long_message}");
         assert!(relay.len() > u16::MAX as usize);
 
-        let tx = Transaction::push(
-            ServerOpcode::Chat,
-            vec![Field::string(FieldId::Text, relay)],
-        );
+        let tx = Transaction::push(Opcode::ChatMsg, vec![Field::string(FieldId::Text, relay)]);
         assert!(matches!(
             tx.encode(encoding),
             Err(ProtoError::TooLong {
@@ -616,7 +613,7 @@ mod tests {
     fn len2_includes_the_count_field_itself() {
         let encoding = text_encoding::DEFAULT;
         let tx = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             1,
             vec![Field::string(FieldId::Text, "hi")],
         );
@@ -631,7 +628,7 @@ mod tests {
     #[test]
     fn transaction_debug_shows_known_field_names_regardless_of_direction() {
         let request = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::FileSetinfo,
             1,
             vec![Field::string(FieldId::FileNewName, "new.txt")],
         );

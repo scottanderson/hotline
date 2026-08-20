@@ -24,7 +24,7 @@ pub use field::{Field, FieldList, FieldValue};
 pub use field_id::FieldId;
 pub use handshake::{ClientHandshake, ServerHandshake, SUB_PROTOCOL_HOTLINE};
 pub use htxf::{ForkHeader, HtxfHeader, HtxfType};
-pub use opcode::{ClientOpcode, ServerOpcode, TransactionType};
+pub use opcode::{Opcode, TransactionType};
 pub use text_encoding::Encoding;
 pub use transaction::{Transaction, TransactionHeader};
 pub use wire::{PStringTooLong, PacketWriter, VecWriter};

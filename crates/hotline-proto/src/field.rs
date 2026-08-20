@@ -255,8 +255,8 @@ impl Field {
 }
 
 /// A list of fields: a transaction's body, or the shape of one nested
-/// account record inside `HTLC_HDR_GET_USER_LIST` (348) /
-/// `HTLC_HDR_SET_USER_LIST` (349) (see
+/// account record inside `myTran_GetUserList` (348) /
+/// `myTran_SetUserList` (349) (see
 /// [`crate::transaction::Transaction::encode_field_list`]). `Deref`s to
 /// `[Field]` for anything not covered by its own lookup methods below.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

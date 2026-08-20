@@ -10,7 +10,7 @@ use tokio_util::codec::Framed;
 use hotline_codec::TransactionCodec;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::field_id::FieldId;
-use hotline_proto::opcode::{ClientOpcode, ServerOpcode, TransactionType};
+use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
 use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldList, ServerHandshake, Transaction};
@@ -26,9 +26,9 @@ use crate::state::{
 };
 
 bitflags::bitflags! {
-    /// `Options` (113) bit meanings when `HTLC_HDR_USER_CHANGE` (304) sends
+    /// `Options` (113) bit meanings when `myTran_SetClientUserInfo` (304) sends
     /// a persisted preference bitmap, distinct from the sequential values
-    /// carried in `HTLC_HDR_MSG` (108)/`HTLS_HDR_MSG` (104) (see [`MsgOption`]).
+    /// carried in `myTran_SendInstantMsg` (108)/`myTran_ServerMsg` (104) (see [`MsgOption`]).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct UserChangeOptions: u16 {
         const REFUSE_PM       = 0x01;
@@ -37,7 +37,7 @@ bitflags::bitflags! {
     }
 }
 
-/// `Options` (113) values on `HTLC_HDR_MSG` (108)/`HTLS_HDR_MSG` (104):
+/// `Options` (113) values on `myTran_SendInstantMsg` (108)/`myTran_ServerMsg` (104):
 /// which kind of instant message this is, or which kind of bounce a
 /// refusal/automatic-response reply carries.
 #[non_exhaustive]
@@ -54,7 +54,7 @@ enum MsgOption {
     Unknown(u16),
 }
 
-/// `Options` (113) values on `HTLC_HDR_USER_KICK` (110): whether the kick
+/// `Options` (113) values on `myTran_DisconnectUser` (110): whether the kick
 /// also imposes an address ban, and for how long.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KickBan {
@@ -79,7 +79,7 @@ const TEMP_BAN_DURATION: Duration = Duration::from_secs(30 * 60);
 
 /// Which opcodes a session may currently send.
 enum SessionState {
-    /// Before `HTLC_HDR_LOGIN` (107) or `HTLC_HDR_AGREED` (121) complete login.
+    /// Before `myTran_Login` (107) or `myTran_Agreed` (121) complete login.
     Agreement,
     /// Login has completed.
     Joined,
@@ -105,9 +105,9 @@ pub struct Session {
     state: SessionState,
     /// Whether the last broadcast `UserChange` marked this session away.
     is_away: bool,
-    /// Refuses incoming private messages, set via `HTLC_HDR_USER_CHANGE` (304).
+    /// Refuses incoming private messages, set via `myTran_SetClientUserInfo` (304).
     refuses_pm: bool,
-    /// Refuses incoming private chat invites, set via `HTLC_HDR_USER_CHANGE` (304).
+    /// Refuses incoming private chat invites, set via `myTran_SetClientUserInfo` (304).
     refuses_chat: bool,
     /// Custom automatic-response text sent to private-message senders, `None` when off.
     automatic_response: Option<String>,
@@ -181,7 +181,7 @@ impl Session {
                     match msg {
                         Some(RecipientMessage::Push(tx)) => {
                             let opcode = tx.r#type();
-                            let is_kick = opcode == TransactionType::Push(ServerOpcode::Politequit);
+                            let is_kick = opcode == TransactionType::Push(Opcode::Politequit);
                             if session.may_receive(opcode) {
                                 writer.send(tx).await?;
                             }
@@ -204,7 +204,7 @@ impl Session {
         state.reset_flood(session.user_id).await;
         for (chat_id, remaining) in state.leave_all_chat_rooms(session.user_id).await {
             let notify = Transaction::push(
-                ServerOpcode::ChatUserPart,
+                Opcode::ChatUserPart,
                 vec![
                     Field::u32(FieldId::ChatId, chat_id),
                     Field::u16(FieldId::UserId, session.user_id),
@@ -215,7 +215,7 @@ impl Session {
             }
         }
         let leave = Transaction::push(
-            ServerOpcode::UserPart,
+            Opcode::UserPart,
             vec![Field::u16(FieldId::UserId, session.user_id)],
         );
         state.publish(leave).await;
@@ -240,14 +240,12 @@ impl Session {
     /// on its own privileges. Pushes not listed here are unfiltered.
     fn may_receive(&self, opcode: TransactionType) -> bool {
         match opcode {
-            TransactionType::Push(ServerOpcode::UserChange)
-            | TransactionType::Push(ServerOpcode::UserPart) => {
+            TransactionType::Push(Opcode::NotifyChangeUser)
+            | TransactionType::Push(Opcode::UserPart) => {
                 self.access_extra.contains(AccessExtra::USER_GETLIST)
             }
-            TransactionType::Push(ServerOpcode::Chat) => self.access.contains(Access::READ_CHAT),
-            TransactionType::Push(ServerOpcode::NewsfilePost) => {
-                self.access.contains(Access::NEWS_READ_ART)
-            }
+            TransactionType::Push(Opcode::ChatMsg) => self.access.contains(Access::READ_CHAT),
+            TransactionType::Push(Opcode::NewMsg) => self.access.contains(Access::NEWS_READ_ART),
             _ => true,
         }
     }
@@ -274,7 +272,7 @@ impl Session {
             FloodDecision::Throttle => {
                 if let Err(reason) = self.access_extra.require(AccessExtra::CAN_SPAM) {
                     return vec![Transaction::push(
-                        ServerOpcode::Msg,
+                        Opcode::ServerMsg,
                         vec![Field::string(FieldId::Text, reason)],
                     )];
                 }
@@ -291,15 +289,15 @@ impl Session {
     /// Opcodes valid before login completes.
     async fn handle_agreement(
         &mut self,
-        opcode: ClientOpcode,
+        opcode: Opcode,
         tx: &Transaction,
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
         match opcode {
-            /* 107 */ ClientOpcode::Login => self.on_login(tx, state, config).await,
-            /* 121 */ ClientOpcode::Agreed => self.on_agreed(tx, state).await,
-            /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
+            /* 107 */ Opcode::Login => self.on_login(tx, state, config).await,
+            /* 121 */ Opcode::Agreed => self.on_agreed(tx, state).await,
+            /* 500 */ Opcode::Ping => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "opcode not allowed before login completes");
                 vec![tx.reply_error("please finish logging in first")]
@@ -310,56 +308,56 @@ impl Session {
     /// Opcodes valid once a session has joined.
     async fn handle_joined(
         &mut self,
-        opcode: ClientOpcode,
+        opcode: Opcode,
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
         match opcode {
-            /* 101 */ ClientOpcode::NewsfileGet => self.on_newsfile_get(tx, state).await,
-            /* 103 */ ClientOpcode::NewsfilePost => self.on_newsfile_post(tx, state).await,
-            /* 105 */ ClientOpcode::Chat => self.on_chat(tx, state).await,
-            /* 107 */ ClientOpcode::Login => vec![tx.reply_error("already logged in")],
-            /* 108 */ ClientOpcode::Msg => self.on_private_msg(tx, state).await,
-            /* 110 */ ClientOpcode::UserKick => self.on_user_kick(tx, state).await,
-            /* 112 */ ClientOpcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
-            /* 113 */ ClientOpcode::ChatInvite => self.on_chat_invite(tx, state).await,
-            /* 114 */ ClientOpcode::ChatDecline => self.on_chat_decline(tx, state).await,
-            /* 115 */ ClientOpcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
-            /* 116 */ ClientOpcode::ChatPart => self.on_chat_part(tx, state).await,
-            /* 120 */ ClientOpcode::ChatSubject => self.on_chat_subject(tx, state).await,
-            /* 121 */ ClientOpcode::Agreed => vec![tx.reply_error("already logged in")],
-            /* 200 */ ClientOpcode::FileList => self.on_get_file_name_list(tx, state).await,
-            /* 202 */ ClientOpcode::FileGet => self.on_file_get(tx, state).await,
-            /* 203 */ ClientOpcode::FilePut => self.on_file_put(tx, state).await,
-            /* 204 */ ClientOpcode::FileDelete => self.on_file_delete(tx, state).await,
-            /* 205 */ ClientOpcode::FileMkdir => self.on_file_mkdir(tx, state).await,
-            /* 206 */ ClientOpcode::FileGetinfo => self.on_file_getinfo(tx, state).await,
-            /* 207 */ ClientOpcode::FileSetinfo => self.on_file_setinfo(tx, state).await,
-            /* 208 */ ClientOpcode::FileMove => self.on_file_move(tx, state).await,
-            /* 209 */ ClientOpcode::FileSymlink => self.on_file_symlink(tx, state).await,
-            /* 300 */ ClientOpcode::UserGetlist => self.on_user_get_list(tx, state).await,
-            /* 370 */ ClientOpcode::NewsListdir => self.on_news_listdir(tx, state).await,
+            /* 101 */ Opcode::NewsfileGet => self.on_newsfile_get(tx, state).await,
+            /* 103 */ Opcode::OldPostNews => self.on_newsfile_post(tx, state).await,
+            /* 105 */ Opcode::ChatSend => self.on_chat(tx, state).await,
+            /* 107 */ Opcode::Login => vec![tx.reply_error("already logged in")],
+            /* 108 */ Opcode::SendInstantMsg => self.on_private_msg(tx, state).await,
+            /* 110 */ Opcode::UserKick => self.on_user_kick(tx, state).await,
+            /* 112 */ Opcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
+            /* 113 */ Opcode::ChatInvite => self.on_chat_invite(tx, state).await,
+            /* 114 */ Opcode::ChatDecline => self.on_chat_decline(tx, state).await,
+            /* 115 */ Opcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
+            /* 116 */ Opcode::ChatPart => self.on_chat_part(tx, state).await,
+            /* 120 */ Opcode::SetChatSubject => self.on_chat_subject(tx, state).await,
+            /* 121 */ Opcode::Agreed => vec![tx.reply_error("already logged in")],
+            /* 200 */ Opcode::FileList => self.on_get_file_name_list(tx, state).await,
+            /* 202 */ Opcode::FileGet => self.on_file_get(tx, state).await,
+            /* 203 */ Opcode::FilePut => self.on_file_put(tx, state).await,
+            /* 204 */ Opcode::FileDelete => self.on_file_delete(tx, state).await,
+            /* 205 */ Opcode::FileMkdir => self.on_file_mkdir(tx, state).await,
+            /* 206 */ Opcode::FileGetinfo => self.on_file_getinfo(tx, state).await,
+            /* 207 */ Opcode::FileSetinfo => self.on_file_setinfo(tx, state).await,
+            /* 208 */ Opcode::FileMove => self.on_file_move(tx, state).await,
+            /* 209 */ Opcode::FileSymlink => self.on_file_symlink(tx, state).await,
+            /* 300 */ Opcode::UserGetlist => self.on_user_get_list(tx, state).await,
+            /* 370 */ Opcode::NewsListdir => self.on_news_listdir(tx, state).await,
             /* 371 */
-            ClientOpcode::NewsListcategory => self.on_news_listcategory(tx, state).await,
-            /* 380 */ ClientOpcode::NewsDelete => self.on_news_delete(tx, state).await,
-            /* 381 */ ClientOpcode::NewsMkdir => self.on_news_mkdir(tx, state).await,
+            Opcode::NewsListcategory => self.on_news_listcategory(tx, state).await,
+            /* 380 */ Opcode::NewsDelete => self.on_news_delete(tx, state).await,
+            /* 381 */ Opcode::NewsMkdir => self.on_news_mkdir(tx, state).await,
             /* 382 */
-            ClientOpcode::NewsMkcategory => self.on_news_mkcategory(tx, state).await,
-            /* 400 */ ClientOpcode::NewsGetthread => self.on_news_getthread(tx, state).await,
+            Opcode::NewsMkcategory => self.on_news_mkcategory(tx, state).await,
+            /* 400 */ Opcode::NewsGetthread => self.on_news_getthread(tx, state).await,
             /* 410 */
-            ClientOpcode::NewsPostthread => self.on_news_postthread(tx, state).await,
+            Opcode::NewsPostthread => self.on_news_postthread(tx, state).await,
             /* 411 */
-            ClientOpcode::NewsDeletethread => self.on_news_deletethread(tx, state).await,
-            /* 303 */ ClientOpcode::UserGetinfo => self.on_user_get_info(tx, state).await,
-            /* 304 */ ClientOpcode::UserChange => self.on_user_change(tx, state).await,
-            /* 348 */ ClientOpcode::GetUserList => self.on_get_user_list(tx, state).await,
-            /* 349 */ ClientOpcode::SetUserList => self.on_set_user_list(tx, state).await,
-            /* 350 */ ClientOpcode::AccountCreate => self.on_account_create(tx, state).await,
-            /* 351 */ ClientOpcode::AccountDelete => self.on_account_delete(tx, state).await,
-            /* 352 */ ClientOpcode::AccountRead => self.on_account_read(tx, state).await,
-            /* 353 */ ClientOpcode::AccountModify => self.on_account_modify(tx, state).await,
-            /* 355 */ ClientOpcode::MsgBroadcast => self.on_msg_broadcast(tx, state).await,
-            /* 500 */ ClientOpcode::Ping => vec![tx.reply(vec![])],
+            Opcode::NewsDeletethread => self.on_news_deletethread(tx, state).await,
+            /* 303 */ Opcode::UserGetinfo => self.on_user_get_info(tx, state).await,
+            /* 304 */ Opcode::SetClientUserInfo => self.on_user_change(tx, state).await,
+            /* 348 */ Opcode::GetUserList => self.on_get_user_list(tx, state).await,
+            /* 349 */ Opcode::SetUserList => self.on_set_user_list(tx, state).await,
+            /* 350 */ Opcode::AccountCreate => self.on_account_create(tx, state).await,
+            /* 351 */ Opcode::AccountDelete => self.on_account_delete(tx, state).await,
+            /* 352 */ Opcode::AccountRead => self.on_account_read(tx, state).await,
+            /* 353 */ Opcode::AccountModify => self.on_account_modify(tx, state).await,
+            /* 355 */ Opcode::MsgBroadcast => self.on_msg_broadcast(tx, state).await,
+            /* 500 */ Opcode::Ping => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "unhandled opcode");
                 vec![tx.reply_error("not implemented")]
@@ -415,12 +413,12 @@ impl Session {
         let have_agreement = !config.agreement.is_empty();
         if show_agreement && have_agreement {
             replies.push(Transaction::push(
-                ServerOpcode::Agreement,
+                Opcode::Agreement,
                 vec![Field::string(FieldId::Text, config.agreement.clone())],
             ));
         } else if modern {
             replies.push(Transaction::push(
-                ServerOpcode::Agreement,
+                Opcode::Agreement,
                 vec![Field::bytes(FieldId::Noagreement, vec![0, 1])],
             ));
         }
@@ -449,7 +447,7 @@ impl Session {
             .send_to(
                 self.user_id,
                 Transaction::push(
-                    ServerOpcode::Politequit,
+                    Opcode::Politequit,
                     vec![Field::string(FieldId::Text, reason)],
                 ),
             )
@@ -457,7 +455,7 @@ impl Session {
         vec![tx.reply_error(reason)]
     }
 
-    /// Complete login after the client accepts the agreement (`HTLC_HDR_AGREED`, 121).
+    /// Complete login after the client accepts the agreement (`myTran_Agreed`, 121).
     async fn on_agreed(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let icon = tx.icon().unwrap_or(0);
         let encoding = self.encoding();
@@ -489,7 +487,7 @@ impl Session {
         };
 
         Transaction::push(
-            ServerOpcode::UserSelfinfo,
+            Opcode::UserSelfinfo,
             vec![
                 Field::u64(FieldId::Access, self.access.bits()),
                 Field::bytes(FieldId::UserList, self_entry.encode(self.encoding())),
@@ -545,7 +543,7 @@ impl Session {
             .await;
 
         let notify = Transaction::push(
-            ServerOpcode::UserChange,
+            Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserId, self.user_id),
                 Field::u16(FieldId::Icon, icon),
@@ -589,7 +587,7 @@ impl Session {
         };
         state
             .publish(Transaction::push(
-                ServerOpcode::UserChange,
+                Opcode::NotifyChangeUser,
                 vec![
                     Field::u16(FieldId::UserId, self.user_id),
                     Field::u16(FieldId::Icon, entry.icon),
@@ -626,7 +624,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::SEND_CHAT) {
             // Sent only to the denied client; CHAT_SEND has no reply mechanism.
             return vec![Transaction::push(
-                ServerOpcode::Msg,
+                Opcode::ServerMsg,
                 vec![Field::string(FieldId::Text, reason)],
             )];
         }
@@ -648,7 +646,7 @@ impl Session {
         if let Some(chat_id) = chat_id {
             fields.push(Field::u32(FieldId::ChatId, chat_id));
         }
-        let relay = Transaction::push(ServerOpcode::Chat, fields);
+        let relay = Transaction::push(Opcode::ChatMsg, fields);
 
         match chat_id {
             // Room chat: only members should see it.
@@ -788,7 +786,7 @@ impl Session {
                     .send_to(
                         target_id,
                         Transaction::push(
-                            ServerOpcode::Politequit,
+                            Opcode::Politequit,
                             vec![Field::string(FieldId::Text, reason)],
                         ),
                     )
@@ -844,7 +842,7 @@ impl Session {
                 ));
             }
             state
-                .send_to(target_id, Transaction::push(ServerOpcode::Msg, fields))
+                .send_to(target_id, Transaction::push(Opcode::ServerMsg, fields))
                 .await;
         }
         replies.push(tx.reply(vec![]));
@@ -883,7 +881,7 @@ impl Session {
             ),
         };
         Some(Transaction::push(
-            ServerOpcode::Msg,
+            Opcode::ServerMsg,
             vec![
                 Field::u16(FieldId::UserId, target_id),
                 Field::string(FieldId::Name, target.name.clone()),
@@ -907,7 +905,7 @@ impl Session {
             .announce(
                 self.user_id,
                 Transaction::push(
-                    ServerOpcode::MsgBroadcast,
+                    Opcode::MsgBroadcast,
                     vec![
                         Field::u16(FieldId::UserId, self.user_id),
                         Field::string(FieldId::Text, message),
@@ -1268,7 +1266,7 @@ impl Session {
 
         state
             .publish(Transaction::push(
-                ServerOpcode::NewsfilePost,
+                Opcode::NewMsg,
                 vec![Field::string(FieldId::Text, entry)],
             ))
             .await;
@@ -1510,7 +1508,7 @@ impl Session {
                 .send_to(
                     target_id,
                     Transaction::push(
-                        ServerOpcode::ChatInvite,
+                        Opcode::ChatInvite,
                         vec![
                             Field::u32(FieldId::ChatId, chat_id),
                             Field::u16(FieldId::UserId, self.user_id),
@@ -1562,7 +1560,7 @@ impl Session {
                     .send_to(
                         target_id,
                         Transaction::push(
-                            ServerOpcode::ChatInvite,
+                            Opcode::ChatInvite,
                             vec![
                                 Field::u32(FieldId::ChatId, chat_id),
                                 Field::u16(FieldId::UserId, self.user_id),
@@ -1593,7 +1591,7 @@ impl Session {
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
 
         let notify = Transaction::push(
-            ServerOpcode::ChatUserChange,
+            Opcode::ChatUserChange,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
                 Field::u16(FieldId::UserId, self.user_id),
@@ -1638,7 +1636,7 @@ impl Session {
         state.leave_chat_room(chat_id, self.user_id).await;
 
         let notify = Transaction::push(
-            ServerOpcode::ChatUserPart,
+            Opcode::ChatUserPart,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
                 Field::u16(FieldId::UserId, self.user_id),
@@ -1659,7 +1657,7 @@ impl Session {
             state.invite_declined(chat_id, self.user_id).await;
             if let Some(members) = state.chat_room_members(chat_id).await {
                 let notify = Transaction::push(
-                    ServerOpcode::Chat,
+                    Opcode::ChatMsg,
                     vec![
                         Field::string(
                             FieldId::Text,
@@ -1732,7 +1730,7 @@ impl Session {
         field: Field,
     ) {
         let notify = Transaction::push(
-            ServerOpcode::ChatSubject,
+            Opcode::NotifyChatSubject,
             vec![Field::u32(FieldId::ChatId, chat_id), field],
         );
         if is_global {
@@ -1744,7 +1742,7 @@ impl Session {
         }
     }
 
-    /// `HTLC_HDR_ACCOUNT_CREATE` (350)
+    /// `myTran_NewUser` (350)
     async fn on_account_create(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
@@ -1752,7 +1750,7 @@ impl Session {
         self.on_account_create_or_modify(tx, state).await
     }
 
-    /// `HTLC_HDR_ACCOUNT_DELETE` (351)
+    /// `myTran_DeleteUser` (351)
     async fn on_account_delete(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DELETE_USER) {
             return vec![tx.reply_error(reason)];
@@ -1778,7 +1776,7 @@ impl Session {
                 .send_to(
                     target,
                     Transaction::push(
-                        ServerOpcode::Politequit,
+                        Opcode::Politequit,
                         vec![Field::string(
                             FieldId::Text,
                             "You are logged in with an account which was deleted.",
@@ -1789,7 +1787,7 @@ impl Session {
         }
     }
 
-    /// `HTLC_HDR_ACCOUNT_READ` (352)
+    /// `myTran_GetUser` (352)
     async fn on_account_read(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
@@ -1810,7 +1808,7 @@ impl Session {
         ])]
     }
 
-    /// `HTLC_HDR_ACCOUNT_MODIFY` (353)
+    /// `myTran_SetUser` (353)
     async fn on_account_modify(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
@@ -1819,8 +1817,8 @@ impl Session {
     }
 
     /// Implementation for
-    /// `HTLC_HDR_ACCOUNT_CREATE` (350) and
-    /// `HTLC_HDR_ACCOUNT_MODIFY` (353).
+    /// `myTran_NewUser` (350) and
+    /// `myTran_SetUser` (353).
     async fn on_account_create_or_modify(
         &self,
         tx: &Transaction,
@@ -1874,8 +1872,8 @@ impl Session {
         vec![reply]
     }
 
-    /// The password field as sent back for `HTLC_HDR_ACCOUNT_READ` (352)
-    /// and each record of `HTLC_HDR_GET_USER_LIST` (348): empty if unset,
+    /// The password field as sent back for `myTran_GetUser` (352)
+    /// and each record of `myTran_GetUserList` (348): empty if unset,
     /// a single `x` otherwise, so the real password is never echoed.
     fn redacted_password_field(password: &str) -> Field {
         Field::string(
@@ -1884,7 +1882,7 @@ impl Session {
         )
     }
 
-    /// `HTLC_HDR_GET_USER_LIST` (348): every account at once, for the
+    /// `myTran_GetUserList` (348): every account at once, for the
     /// bulk account editor. Each account is one `Text` (101) field
     /// wrapping its own nested `Name`/`Login`/`Password`/`Access` field
     /// list, the same `count`-prefixed shape a transaction body uses.
@@ -1914,9 +1912,9 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// `HTLC_HDR_SET_USER_LIST` (349): save a bulk-edited account list.
+    /// `myTran_SetUserList` (349): save a bulk-edited account list.
     /// Each `Text` (101) field is one nested account record in the same
-    /// shape `HTLC_HDR_GET_USER_LIST` sent; see
+    /// shape `myTran_GetUserList` sent; see
     /// [`Session::apply_user_list_record`] for the per-record rules.
     /// Processes every record even after a soft (storage) failure, but
     /// stops and reports immediately on a hard (permission) failure,
@@ -1941,7 +1939,7 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// Apply one `HTLC_HDR_SET_USER_LIST` record: `Text` (101), if
+    /// Apply one `myTran_SetUserList` record: `Text` (101), if
     /// present, is the account's login before this edit (deobfuscated,
     /// scrambled the same way as `Login`), absent for a brand new record.
     /// An empty name and login means delete; otherwise this is a rename
@@ -2037,7 +2035,7 @@ impl Session {
                 .send_to(
                     self.user_id,
                     Transaction::push(
-                        ServerOpcode::Msg,
+                        Opcode::ServerMsg,
                         vec![Field::string(
                             FieldId::Text,
                             format!(
@@ -2119,33 +2117,33 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::USER_GETLIST);
 
-        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::UserChange)));
-        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::UserPart)));
-        assert!(session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
+        assert!(!session.may_receive(TransactionType::Push(Opcode::NotifyChangeUser)));
+        assert!(!session.may_receive(TransactionType::Push(Opcode::UserPart)));
+        assert!(session.may_receive(TransactionType::Push(Opcode::ChatMsg)));
 
         session.access_extra.insert(AccessExtra::USER_GETLIST);
-        assert!(session.may_receive(TransactionType::Push(ServerOpcode::UserChange)));
-        assert!(session.may_receive(TransactionType::Push(ServerOpcode::UserPart)));
+        assert!(session.may_receive(TransactionType::Push(Opcode::NotifyChangeUser)));
+        assert!(session.may_receive(TransactionType::Push(Opcode::UserPart)));
     }
 
     #[test]
     fn may_receive_gates_chat_on_read_chat() {
         let mut session = test_session("Alice", Access::all());
         session.access.remove(Access::READ_CHAT);
-        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
+        assert!(!session.may_receive(TransactionType::Push(Opcode::ChatMsg)));
 
         session.access.insert(Access::READ_CHAT);
-        assert!(session.may_receive(TransactionType::Push(ServerOpcode::Chat)));
+        assert!(session.may_receive(TransactionType::Push(Opcode::ChatMsg)));
     }
 
     #[test]
     fn may_receive_gates_newsfile_post_on_read_news() {
         let mut session = test_session("Alice", Access::all());
         session.access.remove(Access::NEWS_READ_ART);
-        assert!(!session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
+        assert!(!session.may_receive(TransactionType::Push(Opcode::NewMsg)));
 
         session.access.insert(Access::NEWS_READ_ART);
-        assert!(session.may_receive(TransactionType::Push(ServerOpcode::NewsfilePost)));
+        assert!(session.may_receive(TransactionType::Push(Opcode::NewMsg)));
     }
 
     /// Drains `rx` until an `AccessUpdate` arrives, skipping the
@@ -2155,7 +2153,7 @@ mod tests {
             match rx.try_recv().expect("expected an access update") {
                 RecipientMessage::AccessUpdate(update) => return update,
                 RecipientMessage::Push(tx) => {
-                    assert_eq!(tx.r#type(), TransactionType::Push(ServerOpcode::UserChange));
+                    assert_eq!(tx.r#type(), TransactionType::Push(Opcode::NotifyChangeUser));
                 }
                 RecipientMessage::Disconnect => panic!("unexpected disconnect"),
             }
@@ -2167,7 +2165,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::USER_GETLIST);
         let state = SharedState::default();
-        let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
+        let request = Transaction::request(Opcode::UserGetlist, 1, vec![]);
 
         assert!(session.on_user_get_list(&request, &state).await[0].is_error());
     }
@@ -2197,7 +2195,7 @@ mod tests {
                 automatic_response: None,
             })
             .await;
-        let request = Transaction::request(ClientOpcode::UserGetlist, 1, vec![]);
+        let request = Transaction::request(Opcode::UserGetlist, 1, vec![]);
 
         let reply = &session.on_user_get_list(&request, &state).await[0];
         let entry = reply
@@ -2230,11 +2228,8 @@ mod tests {
                 automatic_response: None,
             })
             .await;
-        let request = Transaction::request(
-            ClientOpcode::UserGetinfo,
-            1,
-            vec![Field::u16(FieldId::UserId, 2)],
-        );
+        let request =
+            Transaction::request(Opcode::UserGetinfo, 1, vec![Field::u16(FieldId::UserId, 2)]);
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
         assert_eq!(reply.string(FieldId::Name, encoding).unwrap(), "Bob");
@@ -2278,11 +2273,8 @@ mod tests {
                 automatic_response: None,
             })
             .await;
-        let request = Transaction::request(
-            ClientOpcode::UserGetinfo,
-            1,
-            vec![Field::u16(FieldId::UserId, 2)],
-        );
+        let request =
+            Transaction::request(Opcode::UserGetinfo, 1, vec![Field::u16(FieldId::UserId, 2)]);
 
         let reply = &session.on_user_get_info(&request, &state).await[0];
         let text = reply.string(FieldId::Text, encoding).unwrap();
@@ -2297,7 +2289,7 @@ mod tests {
         let session = test_session("Alice", Access::default());
         let state = SharedState::default();
         let request = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             1,
             vec![Field::string(FieldId::Text, "hi")],
         );
@@ -2321,7 +2313,7 @@ mod tests {
         let session = test_session("Alice", Access::default());
         let state = SharedState::default();
         let request = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             1,
             vec![
                 Field::string(FieldId::Text, "waves"),
@@ -2348,7 +2340,7 @@ mod tests {
         let session = test_session("Alice", Access::default());
         let state = SharedState::default();
         let request = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             1,
             vec![
                 Field::string(FieldId::Text, "hi"),
@@ -2375,7 +2367,7 @@ mod tests {
         let state = SharedState::default();
         let config = ServerConfig::default();
 
-        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let login = Transaction::request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
@@ -2390,7 +2382,7 @@ mod tests {
         let state = SharedState::default();
         let config = ServerConfig::default();
 
-        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let login = Transaction::request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
@@ -2409,7 +2401,7 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let login = Transaction::request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
@@ -2429,7 +2421,7 @@ mod tests {
 
         // Name/Icon can arrive directly in Login, not just SET_CLIENT_USER_INFO.
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::string(FieldId::Name, "Alice"),
@@ -2478,7 +2470,7 @@ mod tests {
             .unwrap();
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "alice"),
@@ -2510,7 +2502,7 @@ mod tests {
             .unwrap();
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "ALICE"),
@@ -2542,7 +2534,7 @@ mod tests {
             .unwrap();
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![Field::obfuscated_string(FieldId::Login, "alice")],
         );
@@ -2571,7 +2563,7 @@ mod tests {
         let mut rx = state.register_recipient(session.user_id).await;
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "alice"),
@@ -2586,10 +2578,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Politequit push");
-        assert_eq!(
-            kick.r#type(),
-            TransactionType::Push(ServerOpcode::Politequit)
-        );
+        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::Politequit));
     }
 
     #[tokio::test]
@@ -2611,7 +2600,7 @@ mod tests {
             .unwrap();
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "alice"),
@@ -2631,7 +2620,7 @@ mod tests {
         let mut rx = state.register_recipient(session.user_id).await;
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![Field::obfuscated_string(FieldId::Login, "nobody")],
         );
@@ -2649,7 +2638,7 @@ mod tests {
         let config = ServerConfig::default();
         let mut rx = state.register_recipient(session.user_id).await;
 
-        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let login = Transaction::request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(replies[0].is_error());
@@ -2665,18 +2654,14 @@ mod tests {
         let mut bystander = state.register_recipient(2).await;
 
         session.state = SessionState::Agreement;
-        let login = Transaction::request(
-            ClientOpcode::Login,
-            1,
-            vec![Field::u16(FieldId::Version, 151)],
-        );
+        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Version, 151)]);
         session.on_login(&login, &state, &config).await;
 
         assert!(bystander.try_recv().is_err());
         assert!(matches!(session.state, SessionState::Agreement));
 
         let agreed = Transaction::request(
-            ClientOpcode::Agreed,
+            Opcode::Agreed,
             2,
             vec![
                 Field::string(FieldId::Name, "Alice"),
@@ -2703,7 +2688,7 @@ mod tests {
 
         session.state = SessionState::Agreement;
         // No Version field: counts as pre-150.
-        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let login = Transaction::request(Opcode::Login, 1, vec![]);
         session.on_login(&login, &state, &config).await;
 
         assert!(
@@ -2722,7 +2707,7 @@ mod tests {
 
         session.state = SessionState::Agreement;
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::u16(FieldId::Version, 151),
@@ -2747,7 +2732,7 @@ mod tests {
 
         session.state = SessionState::Agreement;
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::u16(FieldId::Version, 151),
@@ -2773,16 +2758,12 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(
-            ClientOpcode::Login,
-            1,
-            vec![Field::u16(FieldId::Version, 151)],
-        );
+        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Version, 151)]);
         let replies = session.on_login(&login, &state, &config).await;
 
         let agreement = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement))
             .expect("modern client should get a Noagreement marker");
         assert!(agreement.field(FieldId::Noagreement).is_some());
     }
@@ -2796,13 +2777,13 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(ClientOpcode::Login, 1, vec![]);
+        let login = Transaction::request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(
             !replies
                 .iter()
-                .any(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement)),
+                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement)),
             "pre-150 clients don't understand the agreement handshake at all"
         );
     }
@@ -2829,7 +2810,7 @@ mod tests {
         };
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "skipper"),
@@ -2840,7 +2821,7 @@ mod tests {
 
         let agreement = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement))
             .expect("modern client still gets a no-agreement marker");
         assert!(
             agreement.field(FieldId::Noagreement).is_some(),
@@ -2871,7 +2852,7 @@ mod tests {
         };
 
         let login = Transaction::request(
-            ClientOpcode::Login,
+            Opcode::Login,
             1,
             vec![Field::obfuscated_string(FieldId::Login, "skipper")],
         );
@@ -2879,7 +2860,7 @@ mod tests {
 
         assert!(!replies
             .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::Agreement)),);
+            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement)),);
     }
 
     #[tokio::test]
@@ -2905,7 +2886,7 @@ mod tests {
         let config = ServerConfig::default();
 
         let request = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             1,
             vec![Field::string(FieldId::Text, "hi")],
         );
@@ -2921,7 +2902,7 @@ mod tests {
         let state = SharedState::default();
 
         let agreed = Transaction::request(
-            ClientOpcode::Agreed,
+            Opcode::Agreed,
             1,
             vec![
                 Field::string(FieldId::Name, "Alice"),
@@ -2932,7 +2913,7 @@ mod tests {
 
         let selfinfo = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::UserSelfinfo))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserSelfinfo))
             .expect("on_agreed should push UserSelfinfo");
         let entry = selfinfo
             .field(FieldId::UserList)
@@ -2949,7 +2930,7 @@ mod tests {
         let state = SharedState::default();
 
         let agreed = Transaction::request(
-            ClientOpcode::Agreed,
+            Opcode::Agreed,
             1,
             vec![
                 Field::string(FieldId::Name, "Alice"),
@@ -2960,7 +2941,7 @@ mod tests {
 
         let selfinfo = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(ServerOpcode::UserSelfinfo))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserSelfinfo))
             .expect("on_agreed should push UserSelfinfo");
         assert_eq!(
             selfinfo.field(FieldId::Access).and_then(Field::as_u64),
@@ -2989,11 +2970,8 @@ mod tests {
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
 
-        let login = Transaction::request(
-            ClientOpcode::Login,
-            1,
-            vec![Field::string(FieldId::Name, "Mod")],
-        );
+        let login =
+            Transaction::request(Opcode::Login, 1, vec![Field::string(FieldId::Name, "Mod")]);
         session.on_login(&login, &state, &config).await;
 
         let notify = bystander
@@ -3081,7 +3059,7 @@ mod tests {
         let state = SharedState::default();
 
         let request = Transaction::request(
-            ClientOpcode::UserChange,
+            Opcode::SetClientUserInfo,
             1,
             vec![
                 Field::string(FieldId::Name, "Alice".to_string()),
@@ -3107,7 +3085,7 @@ mod tests {
         let state = SharedState::default();
 
         let request = Transaction::request(
-            ClientOpcode::UserChange,
+            Opcode::SetClientUserInfo,
             1,
             vec![
                 Field::string(FieldId::Name, "Alice".to_string()),
@@ -3127,7 +3105,7 @@ mod tests {
         let state = SharedState::default();
 
         let request = Transaction::request(
-            ClientOpcode::UserChange,
+            Opcode::SetClientUserInfo,
             1,
             vec![
                 Field::string(FieldId::Name, "Alice".to_string()),
@@ -3150,13 +3128,13 @@ mod tests {
         let state = SharedState::default();
 
         let post = Transaction::request(
-            ClientOpcode::NewsfilePost,
+            Opcode::OldPostNews,
             1,
             vec![Field::string(FieldId::Text, "hello news")],
         );
         session.on_newsfile_post(&post, &state).await;
 
-        let get = Transaction::request(ClientOpcode::NewsfileGet, 2, vec![]);
+        let get = Transaction::request(Opcode::NewsfileGet, 2, vec![]);
         let reply = session.on_newsfile_get(&get, &state).await;
         let [reply] = reply.try_into().unwrap();
         let news = reply.string(FieldId::Text, encoding).unwrap();
@@ -3170,7 +3148,7 @@ mod tests {
         let state = SharedState::default();
         let mut rx = state.register_recipient(1).await;
         let post = Transaction::request(
-            ClientOpcode::NewsfilePost,
+            Opcode::OldPostNews,
             1,
             vec![Field::string(FieldId::Text, "hello news")],
         );
@@ -3181,10 +3159,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a NewsfilePost push");
-        assert_eq!(
-            notify.r#type(),
-            TransactionType::Push(ServerOpcode::NewsfilePost)
-        );
+        assert_eq!(notify.r#type(), TransactionType::Push(Opcode::NewMsg));
         assert!(rx.try_recv().is_err(), "published only once");
     }
 
@@ -3195,7 +3170,7 @@ mod tests {
         let state = SharedState::default();
         let mut rx = state.register_recipient(1).await;
         let post = Transaction::request(
-            ClientOpcode::NewsfilePost,
+            Opcode::OldPostNews,
             1,
             vec![Field::string(FieldId::Text, "a".repeat(8193))],
         );
@@ -3215,11 +3190,8 @@ mod tests {
     async fn kick_denied_without_privilege() {
         let mut session = test_session("Alice", Access::empty());
         let state = SharedState::default();
-        let request = Transaction::request(
-            ClientOpcode::UserKick,
-            1,
-            vec![Field::u16(FieldId::UserId, 2)],
-        );
+        let request =
+            Transaction::request(Opcode::UserKick, 1, vec![Field::u16(FieldId::UserId, 2)]);
         let replies = session.on_user_kick(&request, &state).await;
         assert_eq!(replies.len(), 1);
         assert!(replies[0].is_error());
@@ -3230,11 +3202,8 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(2).await;
-        let request = Transaction::request(
-            ClientOpcode::UserKick,
-            1,
-            vec![Field::u16(FieldId::UserId, 2)],
-        );
+        let request =
+            Transaction::request(Opcode::UserKick, 1, vec![Field::u16(FieldId::UserId, 2)]);
         let replies = session.on_user_kick(&request, &state).await;
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
@@ -3256,7 +3225,7 @@ mod tests {
         let mut target_rx = state.register_recipient(2).await;
 
         let request = Transaction::request(
-            ClientOpcode::UserKick,
+            Opcode::UserKick,
             1,
             vec![
                 Field::u16(FieldId::UserId, 2),
@@ -3280,10 +3249,7 @@ mod tests {
             notice.string(FieldId::Text, encoding).unwrap(),
             "You are permanently banned on this server."
         );
-        assert_eq!(
-            notice.r#type(),
-            TransactionType::Push(ServerOpcode::Politequit)
-        );
+        assert_eq!(notice.r#type(), TransactionType::Push(Opcode::Politequit));
     }
 
     #[tokio::test]
@@ -3298,7 +3264,7 @@ mod tests {
         let mut target_rx = state.register_recipient(2).await;
 
         let request = Transaction::request(
-            ClientOpcode::UserKick,
+            Opcode::UserKick,
             1,
             vec![
                 Field::u16(FieldId::UserId, 2),
@@ -3329,7 +3295,7 @@ mod tests {
     async fn kick_with_missing_uid_replies_success() {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
-        let request = Transaction::request(ClientOpcode::UserKick, 1, vec![]);
+        let request = Transaction::request(Opcode::UserKick, 1, vec![]);
         let replies = session.on_user_kick(&request, &state).await;
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
@@ -3356,7 +3322,7 @@ mod tests {
         });
         let mut session = test_session("Alice", Access::all());
         let mut rx = state.register_recipient(session.user_id).await;
-        let ping = || Transaction::request(ClientOpcode::Ping, 1, vec![]);
+        let ping = || Transaction::request(Opcode::Ping, 1, vec![]);
         let config = ServerConfig::default();
 
         // First request: 10 points, under both thresholds.
@@ -3370,7 +3336,7 @@ mod tests {
         assert_eq!(replies.len(), 1);
         assert_eq!(
             replies[0].r#type(),
-            TransactionType::Push(ServerOpcode::Msg)
+            TransactionType::Push(Opcode::ServerMsg)
         );
 
         // Third request: 30 points, over kick_threshold; disconnected.
@@ -3398,7 +3364,7 @@ mod tests {
         for _ in 0..5 {
             let replies = session
                 .handle(
-                    &Transaction::request(ClientOpcode::Ping, 1, vec![]),
+                    &Transaction::request(Opcode::Ping, 1, vec![]),
                     &state,
                     &config,
                 )
@@ -3421,7 +3387,7 @@ mod tests {
         let mut sender_rx = state.register_recipient(session.user_id).await;
 
         let request = Transaction::request(
-            ClientOpcode::Msg,
+            Opcode::SendInstantMsg,
             1,
             vec![
                 Field::u16(FieldId::UserId, 42),
@@ -3453,7 +3419,7 @@ mod tests {
         let mut target_rx = state.register_recipient(42).await;
 
         let request = Transaction::request(
-            ClientOpcode::Msg,
+            Opcode::SendInstantMsg,
             1,
             vec![
                 Field::u16(FieldId::UserId, 42),
@@ -3489,7 +3455,7 @@ mod tests {
         let mut target_rx = state.register_recipient(42).await;
 
         let request = Transaction::request(
-            ClientOpcode::Msg,
+            Opcode::SendInstantMsg,
             1,
             vec![
                 Field::u16(FieldId::UserId, 42),
@@ -3529,7 +3495,7 @@ mod tests {
         let mut target_rx = state.register_recipient(42).await;
 
         let request = Transaction::request(
-            ClientOpcode::Msg,
+            Opcode::SendInstantMsg,
             1,
             vec![
                 Field::u16(FieldId::UserId, 42),
@@ -3572,7 +3538,7 @@ mod tests {
             .await;
 
         let request = Transaction::request(
-            ClientOpcode::Msg,
+            Opcode::SendInstantMsg,
             1,
             vec![
                 Field::u16(FieldId::UserId, 42),
@@ -3594,7 +3560,7 @@ mod tests {
         let mut target_rx = state.register_recipient(42).await;
 
         let request = Transaction::request(
-            ClientOpcode::Msg,
+            Opcode::SendInstantMsg,
             1,
             vec![
                 Field::u16(FieldId::UserId, 42),
@@ -3613,7 +3579,7 @@ mod tests {
         let state = SharedState::default();
 
         let request = Transaction::request(
-            ClientOpcode::Msg,
+            Opcode::SendInstantMsg,
             1,
             vec![
                 Field::u16(FieldId::UserId, 42),
@@ -3631,7 +3597,7 @@ mod tests {
         let state = SharedState::default();
 
         let invite = Transaction::request(
-            ClientOpcode::ChatInvite,
+            Opcode::ChatInvite,
             1,
             vec![
                 Field::u32(FieldId::ChatId, 1),
@@ -3640,29 +3606,18 @@ mod tests {
         );
         assert!(session.on_chat_invite(&invite, &state).await[0].is_error());
 
-        let join = Transaction::request(
-            ClientOpcode::ChatJoin,
-            1,
-            vec![Field::u32(FieldId::ChatId, 1)],
-        );
+        let join = Transaction::request(Opcode::ChatJoin, 1, vec![Field::u32(FieldId::ChatId, 1)]);
         assert!(session.on_chat_join(&join, &state).await.is_error());
 
-        let part = Transaction::request(
-            ClientOpcode::ChatPart,
-            1,
-            vec![Field::u32(FieldId::ChatId, 1)],
-        );
+        let part = Transaction::request(Opcode::ChatPart, 1, vec![Field::u32(FieldId::ChatId, 1)]);
         assert!(session.on_chat_part(&part, &state).await[0].is_error());
 
-        let decline = Transaction::request(
-            ClientOpcode::ChatDecline,
-            1,
-            vec![Field::u32(FieldId::ChatId, 1)],
-        );
+        let decline =
+            Transaction::request(Opcode::ChatDecline, 1, vec![Field::u32(FieldId::ChatId, 1)]);
         assert!(session.on_chat_decline(&decline, &state).await[0].is_error());
 
         let subject = Transaction::request(
-            ClientOpcode::ChatSubject,
+            Opcode::SetChatSubject,
             1,
             vec![
                 Field::u32(FieldId::ChatId, 1),
@@ -3681,7 +3636,7 @@ mod tests {
         let mut rx = state.register_recipient(2).await;
 
         let request = Transaction::request(
-            ClientOpcode::MsgBroadcast,
+            Opcode::MsgBroadcast,
             1,
             vec![Field::string(FieldId::Text, "server going down")],
         );
@@ -3693,10 +3648,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a MsgBroadcast push");
-        assert_eq!(
-            sent.r#type(),
-            TransactionType::Push(ServerOpcode::MsgBroadcast)
-        );
+        assert_eq!(sent.r#type(), TransactionType::Push(Opcode::MsgBroadcast));
         assert_eq!(
             sent.field(FieldId::Text).unwrap().as_string(encoding),
             "server going down"
@@ -3711,7 +3663,7 @@ mod tests {
         let state = SharedState::default();
 
         let request = Transaction::request(
-            ClientOpcode::MsgBroadcast,
+            Opcode::MsgBroadcast,
             1,
             vec![Field::string(FieldId::Text, "hi")],
         );
@@ -3726,7 +3678,7 @@ mod tests {
         let state = SharedState::default();
 
         let create = Transaction::request(
-            ClientOpcode::AccountCreate,
+            Opcode::AccountCreate,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "bob"),
@@ -3739,7 +3691,7 @@ mod tests {
         assert!(!replies[0].is_error());
 
         let read = Transaction::request(
-            ClientOpcode::AccountRead,
+            Opcode::AccountRead,
             2,
             vec![Field::obfuscated_string(FieldId::Login, "bob")],
         );
@@ -3758,7 +3710,7 @@ mod tests {
         let state = SharedState::default();
 
         let create = Transaction::request(
-            ClientOpcode::AccountCreate,
+            Opcode::AccountCreate,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "Bob"),
@@ -3791,7 +3743,7 @@ mod tests {
             .unwrap();
 
         let delete = Transaction::request(
-            ClientOpcode::AccountDelete,
+            Opcode::AccountDelete,
             1,
             vec![Field::obfuscated_string(FieldId::Login, "BOB")],
         );
@@ -3818,7 +3770,7 @@ mod tests {
 
         // Password unchanged via the sentinel, not by omitting the field.
         let modify = Transaction::request(
-            ClientOpcode::AccountModify,
+            Opcode::AccountModify,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "bob"),
@@ -3854,7 +3806,7 @@ mod tests {
         // No PASSWORD field at all, not the "unchanged" sentinel: this
         // clears the password, matching the reference's own behavior.
         let modify = Transaction::request(
-            ClientOpcode::AccountModify,
+            Opcode::AccountModify,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "bob"),
@@ -3899,7 +3851,7 @@ mod tests {
 
         let read = |login: &str| {
             Transaction::request(
-                ClientOpcode::AccountRead,
+                Opcode::AccountRead,
                 1,
                 vec![Field::obfuscated_string(FieldId::Login, login)],
             )
@@ -3975,7 +3927,7 @@ mod tests {
         let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let modify = Transaction::request(
-            ClientOpcode::AccountModify,
+            Opcode::AccountModify,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "bob"),
@@ -4045,7 +3997,7 @@ mod tests {
         let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let revoke = Transaction::request(
-            ClientOpcode::AccountModify,
+            Opcode::AccountModify,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "bob"),
@@ -4061,7 +4013,7 @@ mod tests {
         bob.name = "Bobby Returns".to_string();
         bob.access = Access::ANY_NAME;
         let regrant = Transaction::request(
-            ClientOpcode::AccountModify,
+            Opcode::AccountModify,
             1,
             vec![
                 Field::obfuscated_string(FieldId::Login, "bob"),
@@ -4095,7 +4047,7 @@ mod tests {
             .unwrap();
 
         let delete = Transaction::request(
-            ClientOpcode::AccountDelete,
+            Opcode::AccountDelete,
             1,
             vec![Field::obfuscated_string(FieldId::Login, "bob")],
         );
@@ -4110,22 +4062,20 @@ mod tests {
         let state = SharedState::default();
         let login_field = Field::obfuscated_string(FieldId::Login, "bob");
 
-        let create =
-            Transaction::request(ClientOpcode::AccountCreate, 1, vec![login_field.clone()]);
+        let create = Transaction::request(Opcode::AccountCreate, 1, vec![login_field.clone()]);
         assert!(session.on_account_create(&create, &state).await[0].is_error());
 
-        let read = Transaction::request(ClientOpcode::AccountRead, 2, vec![login_field.clone()]);
+        let read = Transaction::request(Opcode::AccountRead, 2, vec![login_field.clone()]);
         assert!(session.on_account_read(&read, &state).await[0].is_error());
 
-        let modify =
-            Transaction::request(ClientOpcode::AccountModify, 3, vec![login_field.clone()]);
+        let modify = Transaction::request(Opcode::AccountModify, 3, vec![login_field.clone()]);
         assert!(session.on_account_modify(&modify, &state).await[0].is_error());
 
-        let delete = Transaction::request(ClientOpcode::AccountDelete, 4, vec![login_field]);
+        let delete = Transaction::request(Opcode::AccountDelete, 4, vec![login_field]);
         assert!(session.on_account_delete(&delete, &state).await[0].is_error());
     }
 
-    /// One `HTLC_HDR_SET_USER_LIST` record: `old_login` is the account's
+    /// One `myTran_SetUserList` record: `old_login` is the account's
     /// login before this edit, `None` for a brand new record.
     fn user_list_record(
         old_login: Option<&str>,
@@ -4157,7 +4107,7 @@ mod tests {
     async fn get_user_list_denied_without_open_user() {
         let session = test_session("Alice", Access::empty());
         let state = SharedState::default();
-        let request = Transaction::request(ClientOpcode::GetUserList, 1, vec![]);
+        let request = Transaction::request(Opcode::GetUserList, 1, vec![]);
         assert!(session.on_get_user_list(&request, &state).await[0].is_error());
     }
 
@@ -4179,7 +4129,7 @@ mod tests {
             .await
             .unwrap();
 
-        let request = Transaction::request(ClientOpcode::GetUserList, 1, vec![]);
+        let request = Transaction::request(Opcode::GetUserList, 1, vec![]);
         let [reply] = session
             .on_get_user_list(&request, &state)
             .await
@@ -4216,7 +4166,7 @@ mod tests {
             Field::obfuscated_string(FieldId::Password, "secret"),
             Access::SEND_CHAT,
         );
-        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
         let replies = session.on_set_user_list(&request, &state).await;
         assert!(!replies[0].is_error());
 
@@ -4238,7 +4188,7 @@ mod tests {
             Field::obfuscated_string(FieldId::Password, "secret"),
             Access::all(),
         );
-        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
         let replies = session.on_set_user_list(&request, &state).await;
         assert!(replies[0].is_error());
         assert!(state.account("bob").await.is_none());
@@ -4269,7 +4219,7 @@ mod tests {
             Field::obfuscated_string(FieldId::Password, "new"),
             Access::SEND_CHAT,
         );
-        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
         let replies = session.on_set_user_list(&request, &state).await;
         assert!(!replies[0].is_error());
         // Untouched: the collision is a notice, not an applied overwrite.
@@ -4301,7 +4251,7 @@ mod tests {
             Field::bytes(FieldId::Password, vec![0u8]),
             Access::SEND_CHAT,
         );
-        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
         let replies = session.on_set_user_list(&request, &state).await;
         assert!(!replies[0].is_error());
 
@@ -4354,7 +4304,7 @@ mod tests {
             Field::bytes(FieldId::Password, vec![]),
             Access::empty(),
         );
-        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![record]);
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
         let replies = session.on_set_user_list(&request, &state).await;
         assert!(!replies[0].is_error());
         assert!(state.account("bob").await.is_none());
@@ -4364,10 +4314,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Politequit push");
-        assert_eq!(
-            kick.r#type(),
-            TransactionType::Push(ServerOpcode::Politequit)
-        );
+        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::Politequit));
     }
 
     #[tokio::test]
@@ -4382,7 +4329,7 @@ mod tests {
             Field::obfuscated_string(FieldId::Password, "secret"),
             Access::empty(),
         );
-        let request = Transaction::request(ClientOpcode::SetUserList, 1, vec![create]);
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![create]);
         assert!(session.on_set_user_list(&request, &state).await[0].is_error());
     }
 
@@ -4429,11 +4376,8 @@ mod tests {
             .await;
 
         let mut bob_rx = state.register_recipient(2).await;
-        let create = Transaction::request(
-            ClientOpcode::ChatCreate,
-            1,
-            vec![Field::u16(FieldId::UserId, 2)],
-        );
+        let create =
+            Transaction::request(Opcode::ChatCreate, 1, vec![Field::u16(FieldId::UserId, 2)]);
         let reply = creator.on_chat_create(&create, &state).await;
         let chat_id = reply.field(FieldId::ChatId).unwrap().as_u32().unwrap();
 
@@ -4450,7 +4394,7 @@ mod tests {
         let bob = test_session("Bob", Access::all());
         let bob = Session { user_id: 2, ..bob };
         let join = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4479,7 +4423,7 @@ mod tests {
         // Room chat goes via targeted delivery, not the public broadcast.
         let mut creator_rx = state.register_recipient(1).await;
         let room_chat = Transaction::request(
-            ClientOpcode::Chat,
+            Opcode::ChatSend,
             2,
             vec![
                 Field::string(FieldId::Text, "room only"),
@@ -4513,7 +4457,7 @@ mod tests {
         let bob = test_session("Bob", Access::all());
         let bob = Session { user_id: 2, ..bob };
         let part = Transaction::request(
-            ClientOpcode::ChatPart,
+            Opcode::ChatPart,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4543,7 +4487,7 @@ mod tests {
         let chat_id = state.create_chat_room(1).await;
 
         let join = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4566,7 +4510,7 @@ mod tests {
         state.invite(chat_id, bob.user_id).await;
 
         let join = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4588,14 +4532,14 @@ mod tests {
             .await;
 
         let no_password = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         assert!(bob.on_chat_join(&no_password, &state).await.is_error());
 
         let wrong_password = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             2,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4605,7 +4549,7 @@ mod tests {
         assert!(bob.on_chat_join(&wrong_password, &state).await.is_error());
 
         let right_password = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             3,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4626,7 +4570,7 @@ mod tests {
         state.invite(chat_id, bob.user_id).await;
 
         let join = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4644,7 +4588,7 @@ mod tests {
         let chat_id = state.create_chat_room(1).await;
 
         let request = Transaction::request(
-            ClientOpcode::ChatSubject,
+            Opcode::SetChatSubject,
             1,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4665,7 +4609,7 @@ mod tests {
         let mut rx = state.register_recipient(member.user_id).await;
 
         let request = Transaction::request(
-            ClientOpcode::ChatSubject,
+            Opcode::SetChatSubject,
             1,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4693,7 +4637,7 @@ mod tests {
         let state = SharedState::default();
 
         let request = Transaction::request(
-            ClientOpcode::ChatSubject,
+            Opcode::SetChatSubject,
             1,
             vec![
                 Field::u32(FieldId::ChatId, 0),
@@ -4714,7 +4658,7 @@ mod tests {
         let mut rx = state.register_recipient(admin.user_id).await;
 
         let request = Transaction::request(
-            ClientOpcode::ChatSubject,
+            Opcode::SetChatSubject,
             1,
             vec![
                 Field::u32(FieldId::ChatId, 0),
@@ -4745,7 +4689,7 @@ mod tests {
         let chat_id = state.create_chat_room(1).await;
 
         let invite = Transaction::request(
-            ClientOpcode::ChatInvite,
+            Opcode::ChatInvite,
             1,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4764,14 +4708,14 @@ mod tests {
         let chat_id = state.create_chat_room(1).await;
 
         let missing_uid = Transaction::request(
-            ClientOpcode::ChatInvite,
+            Opcode::ChatInvite,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
         assert!(alice.on_chat_invite(&missing_uid, &state).await[0].is_error());
 
         let zero_chat_id = Transaction::request(
-            ClientOpcode::ChatInvite,
+            Opcode::ChatInvite,
             2,
             vec![
                 Field::u32(FieldId::ChatId, 0),
@@ -4807,7 +4751,7 @@ mod tests {
         state.add_chat_member(chat_id, 2).await;
 
         let invite = Transaction::request(
-            ClientOpcode::ChatInvite,
+            Opcode::ChatInvite,
             1,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4845,7 +4789,7 @@ mod tests {
         state.invite(chat_id, 2).await;
 
         let invite = Transaction::request(
-            ClientOpcode::ChatInvite,
+            Opcode::ChatInvite,
             1,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4872,7 +4816,7 @@ mod tests {
         let chat_id = state.create_chat_room(1).await;
 
         let invite = Transaction::request(
-            ClientOpcode::ChatInvite,
+            Opcode::ChatInvite,
             1,
             vec![
                 Field::u32(FieldId::ChatId, chat_id),
@@ -4909,7 +4853,7 @@ mod tests {
             ..test_session("Bob", Access::all())
         };
         let join = Transaction::request(
-            ClientOpcode::ChatJoin,
+            Opcode::ChatJoin,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4929,7 +4873,7 @@ mod tests {
             ..test_session("Bob", Access::all())
         };
         let decline = Transaction::request(
-            ClientOpcode::ChatDecline,
+            Opcode::ChatDecline,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4952,7 +4896,7 @@ mod tests {
             ..test_session("Bob", Access::all())
         };
         let decline = Transaction::request(
-            ClientOpcode::ChatDecline,
+            Opcode::ChatDecline,
             1,
             vec![Field::u32(FieldId::ChatId, chat_id)],
         );
@@ -4964,7 +4908,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push notifying the room");
-        assert_eq!(notify.r#type(), TransactionType::Push(ServerOpcode::Chat));
+        assert_eq!(notify.r#type(), TransactionType::Push(Opcode::ChatMsg));
         assert_eq!(
             notify.string(FieldId::Text, encoding).unwrap(),
             "\r<<< \"Bob\" declined invitation to chat >>>"
@@ -4991,7 +4935,7 @@ mod tests {
         let session = test_session("Alice", Access::empty());
 
         let get = Transaction::request(
-            ClientOpcode::FileGet,
+            Opcode::FileGet,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5007,7 +4951,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            ClientOpcode::FileGet,
+            Opcode::FileGet,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5063,7 +5007,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            ClientOpcode::FileGet,
+            Opcode::FileGet,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5104,7 +5048,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            ClientOpcode::FileGet,
+            Opcode::FileGet,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5129,7 +5073,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            ClientOpcode::FileGet,
+            Opcode::FileGet,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5147,7 +5091,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            ClientOpcode::FileGet,
+            Opcode::FileGet,
             1,
             vec![Field::string(FieldId::FileName, "missing.txt")],
         );
@@ -5166,7 +5110,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let list = Transaction::request(
-            ClientOpcode::FileList,
+            Opcode::FileList,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -5191,7 +5135,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let list = Transaction::request(
-            ClientOpcode::FileList,
+            Opcode::FileList,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -5218,7 +5162,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let get = Transaction::request(
-            ClientOpcode::FileGet,
+            Opcode::FileGet,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -5243,7 +5187,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let delete = Transaction::request(
-            ClientOpcode::FileDelete,
+            Opcode::FileDelete,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -5279,7 +5223,7 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            ClientOpcode::FileGetinfo,
+            Opcode::FileGetinfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -5306,7 +5250,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
-            ClientOpcode::FileMkdir,
+            Opcode::FileMkdir,
             1,
             vec![
                 Field::string(FieldId::FileName, "Drop Box"),
@@ -5335,7 +5279,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            ClientOpcode::FileSetinfo,
+            Opcode::FileSetinfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -5366,7 +5310,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let move_tx = Transaction::request(
-            ClientOpcode::FileMove,
+            Opcode::FileMove,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5401,7 +5345,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let symlink = Transaction::request(
-            ClientOpcode::FileSymlink,
+            Opcode::FileSymlink,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -5431,7 +5375,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let put = Transaction::request(
-            ClientOpcode::FilePut,
+            Opcode::FilePut,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5448,7 +5392,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let put = Transaction::request(
-            ClientOpcode::FilePut,
+            Opcode::FilePut,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5473,7 +5417,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let put = Transaction::request(
-            ClientOpcode::FilePut,
+            Opcode::FilePut,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5489,7 +5433,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let delete = Transaction::request(
-            ClientOpcode::FileDelete,
+            Opcode::FileDelete,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5516,7 +5460,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let delete = Transaction::request(
-            ClientOpcode::FileDelete,
+            Opcode::FileDelete,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5534,7 +5478,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let delete = Transaction::request(
-            ClientOpcode::FileDelete,
+            Opcode::FileDelete,
             1,
             vec![Field::string(FieldId::FileName, "missing.txt")],
         );
@@ -5552,7 +5496,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let mkdir = Transaction::request(
-            ClientOpcode::FileMkdir,
+            Opcode::FileMkdir,
             1,
             vec![Field::string(FieldId::FileName, "NewFolder")],
         );
@@ -5577,7 +5521,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
-            ClientOpcode::FileMkdir,
+            Opcode::FileMkdir,
             1,
             vec![Field::string(FieldId::FileName, "NewFolder")],
         );
@@ -5597,7 +5541,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::FILE_LIST);
 
-        let list = Transaction::request(ClientOpcode::FileList, 1, vec![]);
+        let list = Transaction::request(Opcode::FileList, 1, vec![]);
         let [reply] = session
             .on_get_file_name_list(&list, &state)
             .await
@@ -5615,7 +5559,7 @@ mod tests {
         session.access_extra.remove(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            ClientOpcode::FileGetinfo,
+            Opcode::FileGetinfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5637,7 +5581,7 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            ClientOpcode::FileGetinfo,
+            Opcode::FileGetinfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5670,7 +5614,7 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            ClientOpcode::FileGetinfo,
+            Opcode::FileGetinfo,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -5694,7 +5638,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let setinfo = Transaction::request(
-            ClientOpcode::FileSetinfo,
+            Opcode::FileSetinfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5730,7 +5674,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            ClientOpcode::FileSetinfo,
+            Opcode::FileSetinfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5753,7 +5697,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let setinfo = Transaction::request(
-            ClientOpcode::FileSetinfo,
+            Opcode::FileSetinfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5781,7 +5725,7 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let setinfo = Transaction::request(
-            ClientOpcode::FileSetinfo,
+            Opcode::FileSetinfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5796,7 +5740,7 @@ mod tests {
         assert!(!reply.is_error());
 
         let getinfo = Transaction::request(
-            ClientOpcode::FileGetinfo,
+            Opcode::FileGetinfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
@@ -5821,7 +5765,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            ClientOpcode::FileSetinfo,
+            Opcode::FileSetinfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5846,7 +5790,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            ClientOpcode::FileSetinfo,
+            Opcode::FileSetinfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "Folder"),
@@ -5868,7 +5812,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let mkdir = Transaction::request(
-            ClientOpcode::FileMkdir,
+            Opcode::FileMkdir,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -5898,7 +5842,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let move_tx = Transaction::request(
-            ClientOpcode::FileMove,
+            Opcode::FileMove,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5936,7 +5880,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let move_tx = Transaction::request(
-            ClientOpcode::FileMove,
+            Opcode::FileMove,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -5977,7 +5921,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let move_tx = Transaction::request(
-            ClientOpcode::FileMove,
+            Opcode::FileMove,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -6006,7 +5950,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let symlink = Transaction::request(
-            ClientOpcode::FileSymlink,
+            Opcode::FileSymlink,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -6033,7 +5977,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let symlink = Transaction::request(
-            ClientOpcode::FileSymlink,
+            Opcode::FileSymlink,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -6062,7 +6006,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let mkdir = Transaction::request(
-            ClientOpcode::NewsMkdir,
+            Opcode::NewsMkdir,
             1,
             vec![Field::string(FieldId::FileName, "Bundle")],
         );
@@ -6074,7 +6018,7 @@ mod tests {
         assert!(!reply.is_error());
 
         let mkcategory = Transaction::request(
-            ClientOpcode::NewsMkcategory,
+            Opcode::NewsMkcategory,
             2,
             vec![Field::string(FieldId::NewsCatName, "General")],
         );
@@ -6085,7 +6029,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
 
-        let listdir = Transaction::request(ClientOpcode::NewsListdir, 3, vec![]);
+        let listdir = Transaction::request(Opcode::NewsListdir, 3, vec![]);
         let [reply] = session
             .on_news_listdir(&listdir, &state)
             .await
@@ -6103,7 +6047,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
-            ClientOpcode::NewsMkdir,
+            Opcode::NewsMkdir,
             1,
             vec![Field::string(FieldId::FileName, "Bundle")],
         );
@@ -6129,7 +6073,7 @@ mod tests {
         denied_access.remove(Access::NEWS_DELETE_FLDR);
         let denied_session = test_session("Bob", denied_access);
         let delete = Transaction::request(
-            ClientOpcode::NewsDelete,
+            Opcode::NewsDelete,
             1,
             vec![Field::bytes(
                 FieldId::NewsPath,
@@ -6149,7 +6093,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let listdir = Transaction::request(ClientOpcode::NewsListdir, 2, vec![]);
+        let listdir = Transaction::request(Opcode::NewsListdir, 2, vec![]);
         let [reply] = session
             .on_news_listdir(&listdir, &state)
             .await
@@ -6175,7 +6119,7 @@ mod tests {
         };
 
         let post = Transaction::request(
-            ClientOpcode::NewsPostthread,
+            Opcode::NewsPostthread,
             1,
             vec![
                 path_field(),
@@ -6191,8 +6135,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
 
-        let listcategory =
-            Transaction::request(ClientOpcode::NewsListcategory, 2, vec![path_field()]);
+        let listcategory = Transaction::request(Opcode::NewsListcategory, 2, vec![path_field()]);
         let [reply] = session
             .on_news_listcategory(&listcategory, &state)
             .await
@@ -6202,7 +6145,7 @@ mod tests {
         assert_eq!(reply.fields.len(), 1);
 
         let getthread = Transaction::request(
-            ClientOpcode::NewsGetthread,
+            Opcode::NewsGetthread,
             3,
             vec![
                 path_field(),
@@ -6226,7 +6169,7 @@ mod tests {
         );
 
         let delete = Transaction::request(
-            ClientOpcode::NewsDeletethread,
+            Opcode::NewsDeletethread,
             4,
             vec![path_field(), Field::u32(FieldId::NewsArtId, 1)],
         );
@@ -6236,8 +6179,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let listcategory =
-            Transaction::request(ClientOpcode::NewsListcategory, 5, vec![path_field()]);
+        let listcategory = Transaction::request(Opcode::NewsListcategory, 5, vec![path_field()]);
         let [reply] = session
             .on_news_listcategory(&listcategory, &state)
             .await
@@ -6259,7 +6201,7 @@ mod tests {
             .unwrap();
 
         let post = Transaction::request(
-            ClientOpcode::NewsPostthread,
+            Opcode::NewsPostthread,
             1,
             vec![
                 Field::bytes(

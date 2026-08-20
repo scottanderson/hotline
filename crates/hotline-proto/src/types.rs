@@ -137,7 +137,7 @@ impl HlPath {
     }
 }
 
-/// The packed `FILE_NAME_WITH_INFO` (200) record from `HTLC_HDR_FILE_LIST`
+/// The packed `FILE_NAME_WITH_INFO` (200) record from `myTran_GetFileNameList`
 /// replies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileNameWithInfo {
