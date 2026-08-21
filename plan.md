@@ -834,6 +834,20 @@ debug-logged reason rather than failing the request.
     with the path folded into the message) so the printed error names
     the file and, ideally, which flag it came from.
 
+51. **Enum variant naming isn't consistently the openline constant's tail
+    yet.** `FieldId`/`Opcode` already follow this (see AGENTS.md's
+    Naming section), but other enums mirroring an openline constant
+    list (transaction/field-adjacent or not, e.g. `TransferKind`/
+    `TransferDirection` in `state.rs`, `BannerKind` in `banner.rs`,
+    `NewsItemKind`/`NewsListKind` in `news.rs`) should be audited and
+    renamed to match the part of openline's own constant name after its
+    `_` prefix, the same rule already applied to `FieldId`/`Opcode`.
+    While auditing, also check each such enum lives in `hotline-proto`
+    (wire format, no I/O) rather than `hotline-server`/`hotline-client`,
+    moving it there unless there's a good reason it needs to stay put
+    (e.g. it's embedding-specific, like `AccessExtra`, or it carries
+    behavior/state that isn't just a wire tag).
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against

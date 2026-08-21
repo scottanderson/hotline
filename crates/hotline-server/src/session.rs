@@ -662,12 +662,11 @@ impl Session {
             return Vec::new();
         };
 
-        // Default chat_format: "\r%13.13s:  %s"; style 1 is the emote/action format.
-        let text = if style == Some(1) {
-            format!("\r *** {} {message}", self.name)
-        } else {
-            format!("\r{:>13}:  {message}", self.name)
+        let prefix = match style == Some(1) {
+            true => format!("\r *** {} ", self.name),
+            false => format!("\r{:>13.13}:  ", self.name),
         };
+        let text = format!("\r{message}").replace('\r', &prefix);
         let mut fields = vec![Field::string(FieldId::Text, text)];
         if let Some(chat_id) = chat_id {
             fields.push(Field::u32(FieldId::ChatId, chat_id));
@@ -2378,6 +2377,54 @@ mod tests {
             .string(FieldId::Text, encoding)
             .unwrap();
         assert_eq!(text, "\r *** Alice waves");
+    }
+
+    #[tokio::test]
+    async fn chat_relay_prefixes_every_line_of_a_multiline_message() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::default());
+        let state = SharedState::default();
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Text, "line one\rline two")],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        assert!(session.on_chat(&request, &state).await.is_empty());
+
+        let text = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push")
+            .string(FieldId::Text, encoding)
+            .unwrap();
+        assert_eq!(text, "\r        Alice:  line one\r        Alice:  line two");
+    }
+
+    #[tokio::test]
+    async fn chat_relay_truncates_a_long_name_keeping_its_start() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("ANameThatIsWayTooLong", Access::default());
+        let state = SharedState::default();
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Text, "hi")],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        assert!(session.on_chat(&request, &state).await.is_empty());
+
+        let text = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push")
+            .string(FieldId::Text, encoding)
+            .unwrap();
+        assert_eq!(text, "\rANameThatIsWa:  hi");
     }
 
     #[tokio::test]
