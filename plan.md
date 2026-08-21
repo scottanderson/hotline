@@ -822,6 +822,18 @@ debug-logged reason rather than failing the request.
     replaced wholesale, never mutated in place, so it doesn't need
     `String`'s spare capacity or growth methods.
 
+50. **Startup file errors don't say which file.** `hotline-daemon`'s
+    provider `open()` calls (`FileAccountProvider`, `FileFileProvider`,
+    `FileNewsProvider`, `FileBanProvider`, `FileBannerProvider`) all
+    propagate a raw `io::Error` straight through `main`'s `?` to
+    `anyhow`, so a missing/unreadable `--banner`, `--accounts-dir`,
+    `--files-dir`, etc. prints just `Error: No such file or directory
+    (os error 2)` with no path and no hint which flag caused it. Each
+    `open()` should wrap its `io::Error` with the path it was trying
+    (`anyhow::Context::with_context`, or a matching `io::Error::new`
+    with the path folded into the message) so the printed error names
+    the file and, ideally, which flag it came from.
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
