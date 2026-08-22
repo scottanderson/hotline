@@ -22,8 +22,8 @@ pub use banner::{BannerKind, BannerProvider, NoBanner, UrlBannerProvider};
 pub use bans::{BanProvider, BanRecord, InMemoryBanProvider};
 pub use error::{Result, ServerError};
 pub use files::{
-    type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider, FileRequester,
-    InMemoryFileProvider,
+    partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
+    FileRequester, InMemoryFileProvider, PARTIAL_CREATOR, PARTIAL_SUFFIX, PARTIAL_TYPE,
 };
 pub use flood::{FloodConfig, FloodDecision, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
 pub use news::{InMemoryNewsProvider, NewsBundle, NewsProvider};

@@ -37,6 +37,25 @@ pub type BoxedReader = Box<dyn AsyncRead + Send + Unpin>;
 /// A boxed, already-open async byte sink. See [`BoxedReader`].
 pub type BoxedWriter = Box<dyn AsyncWrite + Send + Unpin>;
 
+/// Suffix an upload's on-disk name carries until it's finished. Matches
+/// openline's non-HFS `HTft`/`HTLC` "still uploading" marker convention,
+/// via [`type_and_creator_for_name`].
+pub const PARTIAL_SUFFIX: &str = ".hpf";
+
+/// [`type_and_creator_for_name`]'s result for [`PARTIAL_SUFFIX`], the
+/// marker a real client's own directory listing checks to decide
+/// whether to offer resuming an upload.
+pub const PARTIAL_TYPE: [u8; 4] = *b"HTft";
+
+/// See [`PARTIAL_TYPE`].
+pub const PARTIAL_CREATOR: [u8; 4] = *b"HTLC";
+
+/// The on-disk name `name`'s upload is stored under until
+/// [`FileProvider::finish_upload`] renames it. See [`PARTIAL_SUFFIX`].
+pub fn partial_upload_name(name: &str) -> String {
+    format!("{name}{PARTIAL_SUFFIX}")
+}
+
 /// `file_type`/`creator` inferred from a file's extension, the same
 /// fallback the reference server's non-HFS (Windows) build uses in place
 /// of real Mac type/creator metadata (`_FSWinExtToMacTypeCode` in
@@ -51,6 +70,7 @@ pub fn type_and_creator_for_name(name: &str) -> ([u8; 4], [u8; 4]) {
         "ZIP" => (*b"ZIP ", *b"ZIP "),
         "DOC" => (*b"W6BN", *b"MSWD"),
         "CPP" | "C" | "CP" | "H" | "HPP" => (*b"TEXT", *b"CWIE"),
+        "HPF" => (PARTIAL_TYPE, PARTIAL_CREATOR),
         "HBM" => (*b"HTbm", *b"HTLC"),
         "HNZ" => (*b"HLNZ", *b"HTLC"),
         "GIF" => (*b"GIFf", *b"GKON"),
@@ -111,13 +131,49 @@ pub trait FileProvider: Send + Sync {
         name: &str,
     ) -> io::Result<BoxedReader>;
 
-    /// Create a file for writing, for a `FILE_PUT` upload.
+    /// Create a file for writing, for a `FILE_PUT` upload. Writes to
+    /// [`partial_upload_name`] until [`Self::finish_upload`] renames it
+    /// to `name`.
     async fn create_write(
         &self,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
     ) -> io::Result<BoxedWriter>;
+
+    /// Open an in-progress upload for writing from `at` onward, resuming
+    /// an interrupted `FILE_PUT`. Seeks to `at`, truncating anything past
+    /// it. `Err` if there isn't an in-progress upload to resume.
+    async fn open_write_resume(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> io::Result<BoxedWriter>;
+
+    /// Bytes already written to `name`'s in-progress upload, or `None` if
+    /// there isn't one (nothing there, or a completed file).
+    async fn partial_upload_size(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<u64> {
+        self.size(requester, dir, &partial_upload_name(name)).await
+    }
+
+    /// Finish `name`'s upload, once every byte has arrived: rename it
+    /// from [`partial_upload_name`] to its real name.
+    async fn finish_upload(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> io::Result<()> {
+        self.rename(requester, dir, &partial_upload_name(name), name)
+            .await
+    }
 
     /// One file or folder's listing metadata, or `None` if it doesn't
     /// exist (or isn't visible to `requester`). Whether it's a folder is
@@ -314,6 +370,12 @@ impl MemWriter {
         }
         Self { root, dir, name }
     }
+
+    /// Like [`Self::new`], but appends to the file's existing bytes
+    /// instead of truncating them.
+    fn append(root: Arc<Mutex<Dir>>, dir: Vec<String>, name: String) -> Self {
+        Self { root, dir, name }
+    }
 }
 
 impl AsyncWrite for MemWriter {
@@ -412,8 +474,44 @@ impl FileProvider for InMemoryFileProvider {
         Ok(Box::new(MemWriter::new(
             self.root.clone(),
             dir.components.clone(),
-            name.to_string(),
+            partial_upload_name(name),
         )))
+    }
+
+    async fn open_write_resume(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> io::Result<BoxedWriter> {
+        let partial_name = partial_upload_name(name);
+        let mut root = self.root.lock().unwrap();
+        let d = root
+            .get_dir_mut_existing(&dir.components)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        match d.entries.get_mut(&partial_name) {
+            Some(Entry::File(data)) => {
+                if data.len() as u64 != at {
+                    tracing::debug!(
+                        name,
+                        current_len = data.len(),
+                        at,
+                        "resuming upload: on-disk length didn't match the negotiated offset"
+                    );
+                }
+                // Matches a real seek-and-write: a gap reads back as zeros.
+                data.resize(at as usize, 0);
+                drop(root);
+                Ok(Box::new(MemWriter::append(
+                    self.root.clone(),
+                    dir.components.clone(),
+                    partial_name,
+                )))
+            }
+            Some(Entry::Dir(_)) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
+            None => Err(io::Error::from(io::ErrorKind::NotFound)),
+        }
     }
 
     async fn info(
@@ -653,10 +751,110 @@ mod tests {
 
         assert_eq!(
             provider
+                .partial_upload_size(requester(), &HlPath::default(), "b.txt")
+                .await,
+            Some(5)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_in_progress_upload_is_listed_under_its_real_hpf_name() {
+        let provider = InMemoryFileProvider::default();
+        let mut writer = provider
+            .create_write(requester(), &HlPath::default(), "b.txt")
+            .await
+            .unwrap();
+        writer.write_all(b"world").await.unwrap();
+
+        let entries = provider
+            .list(requester(), &HlPath::default())
+            .await
+            .unwrap();
+        assert_eq!(entries[0].name, "b.txt.hpf");
+        assert_eq!(entries[0].file_type, PARTIAL_TYPE);
+        assert_eq!(entries[0].creator, PARTIAL_CREATOR);
+
+        provider
+            .finish_upload(requester(), &HlPath::default(), "b.txt")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
                 .size(requester(), &HlPath::default(), "b.txt")
                 .await,
             Some(5)
         );
+        let entries = provider
+            .list(requester(), &HlPath::default())
+            .await
+            .unwrap();
+        assert_eq!(entries[0].name, "b.txt");
+        assert_ne!(entries[0].file_type, PARTIAL_TYPE);
+    }
+
+    #[tokio::test]
+    async fn open_write_resume_appends_to_an_existing_file() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(
+            &HlPath::default(),
+            &partial_upload_name("b.txt"),
+            *b"hello ",
+        );
+        let mut writer = provider
+            .open_write_resume(requester(), &HlPath::default(), "b.txt", 6)
+            .await
+            .unwrap();
+        writer.write_all(b"world").await.unwrap();
+
+        assert_eq!(
+            provider
+                .partial_upload_size(requester(), &HlPath::default(), "b.txt")
+                .await,
+            Some(11)
+        );
+    }
+
+    #[tokio::test]
+    async fn open_write_resume_truncates_bytes_written_past_the_resume_offset() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(
+            &HlPath::default(),
+            &partial_upload_name("b.txt"),
+            *b"hello world",
+        );
+        let mut writer = provider
+            .open_write_resume(requester(), &HlPath::default(), "b.txt", 6)
+            .await
+            .unwrap();
+        writer.write_all(b"there").await.unwrap();
+
+        assert_eq!(
+            provider
+                .partial_upload_size(requester(), &HlPath::default(), "b.txt")
+                .await,
+            Some(11)
+        );
+        let mut reader = provider
+            .open_read(
+                requester(),
+                &HlPath::default(),
+                &partial_upload_name("b.txt"),
+            )
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, b"hello there");
+    }
+
+    #[tokio::test]
+    async fn open_write_resume_errors_when_the_file_does_not_exist() {
+        let provider = InMemoryFileProvider::default();
+        assert!(provider
+            .open_write_resume(requester(), &HlPath::default(), "missing.txt", 0)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

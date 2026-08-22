@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 use hotline_server::{
-    type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider, FileRequester,
+    partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
+    FileRequester,
 };
 use tokio::sync::RwLock;
 
@@ -179,12 +180,39 @@ impl FileProvider for FileFileProvider {
         name: &str,
     ) -> io::Result<BoxedWriter> {
         let path = self
-            .resolve_file(dir, name)
+            .resolve_file(dir, &partial_upload_name(name))
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         Ok(Box::new(tokio::fs::File::create(path).await?))
+    }
+
+    async fn open_write_resume(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> io::Result<BoxedWriter> {
+        use tokio::io::AsyncSeekExt;
+
+        let path = self
+            .resolve_file(dir, &partial_upload_name(name))
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        let mut file = tokio::fs::OpenOptions::new().write(true).open(path).await?;
+        let current_len = file.metadata().await?.len();
+        if current_len != at {
+            tracing::debug!(
+                name,
+                current_len,
+                at,
+                "resuming upload: on-disk length didn't match the negotiated offset"
+            );
+        }
+        file.set_len(at).await?;
+        file.seek(io::SeekFrom::Start(at)).await?;
+        Ok(Box::new(file))
     }
 
     async fn info(
@@ -409,6 +437,10 @@ mod tests {
             .unwrap();
         writer.write_all(b"hello").await.unwrap();
         writer.shutdown().await.unwrap();
+        provider
+            .finish_upload(requester(), &HlPath::default(), "a.txt")
+            .await
+            .unwrap();
 
         assert!(
             provider
@@ -429,6 +461,88 @@ mod tests {
         let mut buf = Vec::new();
         reader.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf, b"hello");
+    }
+
+    #[tokio::test]
+    async fn open_write_resume_appends_to_an_existing_file() {
+        use tokio::io::AsyncWriteExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+
+        let mut writer = provider
+            .create_write(requester(), &HlPath::default(), "a.txt")
+            .await
+            .unwrap();
+        writer.write_all(b"hello ").await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        let mut resumed = provider
+            .open_write_resume(requester(), &HlPath::default(), "a.txt", 6)
+            .await
+            .unwrap();
+        resumed.write_all(b"world").await.unwrap();
+        resumed.shutdown().await.unwrap();
+
+        assert_eq!(
+            provider
+                .partial_upload_size(requester(), &HlPath::default(), "a.txt")
+                .await,
+            Some(11)
+        );
+    }
+
+    #[tokio::test]
+    async fn open_write_resume_truncates_bytes_written_past_the_resume_offset() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+
+        let mut writer = provider
+            .create_write(requester(), &HlPath::default(), "a.txt")
+            .await
+            .unwrap();
+        writer.write_all(b"hello world").await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        let mut resumed = provider
+            .open_write_resume(requester(), &HlPath::default(), "a.txt", 6)
+            .await
+            .unwrap();
+        resumed.write_all(b"there").await.unwrap();
+        resumed.shutdown().await.unwrap();
+
+        assert_eq!(
+            provider
+                .partial_upload_size(requester(), &HlPath::default(), "a.txt")
+                .await,
+            Some(11)
+        );
+        let mut reader = provider
+            .open_read(requester(), &HlPath::default(), "a.txt.hpf")
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, b"hello there");
+    }
+
+    #[tokio::test]
+    async fn open_write_resume_errors_when_the_file_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+
+        assert!(provider
+            .open_write_resume(requester(), &HlPath::default(), "missing.txt", 0)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

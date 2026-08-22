@@ -1,3 +1,4 @@
+use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -216,21 +217,36 @@ async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result
 /// Receive a `FILE_PUT` upload: parse the client's flattened-file-object
 /// framing, writing the `DATA` fork's bytes to storage and discarding
 /// any other fork (e.g. a resource fork this server doesn't keep).
+/// `transfer.resume_offset > 0` seeks the destination to that offset
+/// instead of creating it fresh. Renames the upload to its real name
+/// (see [`SharedState::finish_upload`]) on success; an error leaves it
+/// under its working name for a later resume.
 async fn receive_file(
     stream: &mut TcpStream,
     transfer: &PendingTransfer,
     state: &SharedState,
 ) -> Result<()> {
-    let mut prefix = [0u8; htxf::FLAT_FILE_PREFIX_LEN];
-    stream.read_exact(&mut prefix).await?;
-    let fork_count = htxf::decode_flat_file_prefix(&prefix)?;
-
     let requester = FileRequester {
         login: &transfer.login,
     };
-    let mut out = state
-        .create_file_for_write(requester, &transfer.dir, &transfer.name)
-        .await?;
+    let mut out = if transfer.resume_offset > 0 {
+        state
+            .resume_file_for_write(
+                requester,
+                &transfer.dir,
+                &transfer.name,
+                transfer.resume_offset,
+            )
+            .await?
+    } else {
+        state
+            .create_file_for_write(requester, &transfer.dir, &transfer.name)
+            .await?
+    };
+
+    let mut prefix = [0u8; htxf::FLAT_FILE_PREFIX_LEN];
+    stream.read_exact(&mut prefix).await?;
+    let fork_count = htxf::decode_flat_file_prefix(&prefix)?;
 
     for _ in 0..fork_count {
         let mut fork_header_buf = [0u8; ForkHeader::LEN];
@@ -240,7 +256,10 @@ async fn receive_file(
         let mut remaining = fork_header.data_size as u64;
         if &fork_header.fork_type == b"DATA" {
             let mut limited = stream.take(remaining);
-            tokio::io::copy(&mut limited, &mut out).await?;
+            let copied = tokio::io::copy(&mut limited, &mut out).await?;
+            if copied != remaining {
+                return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
+            }
         } else {
             let mut discard_buf = [0u8; 4096];
             while remaining > 0 {
@@ -251,5 +270,128 @@ async fn receive_file(
         }
     }
     out.shutdown().await?;
+    state
+        .finish_upload(requester, &transfer.dir, &transfer.name)
+        .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::accounts::InMemoryAccountProvider;
+    use crate::banner::NoBanner;
+    use crate::bans::InMemoryBanProvider;
+    use crate::files::{FileRequester, InMemoryFileProvider};
+    use crate::flood::NoFloodPolicy;
+    use crate::news::InMemoryNewsProvider;
+    use hotline_proto::consts::Access;
+    use hotline_proto::types::HlPath;
+    use tokio::io::AsyncWriteExt;
+
+    fn state_with_files(files: InMemoryFileProvider) -> SharedState {
+        SharedState::new(
+            Arc::new(InMemoryAccountProvider::default()),
+            Arc::new(files),
+            Arc::new(InMemoryNewsProvider::default()),
+            Arc::new(InMemoryBanProvider::default()),
+            Arc::new(NoFloodPolicy),
+            Arc::new(NoBanner),
+        )
+    }
+
+    /// `tokio::io::copy` returns early on a closed connection the same
+    /// way it would at a clean EOF, so a cancelled upload must not be
+    /// renamed to its real name.
+    #[tokio::test]
+    async fn a_cancelled_upload_is_not_renamed_off_its_hpf_name() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let requester = FileRequester { login: "alice" };
+        let transfer = PendingTransfer {
+            kind: TransferKind::File,
+            direction: TransferDirection::Put,
+            login: "alice".to_string(),
+            dir: HlPath::default(),
+            name: "a.txt".to_string(),
+            size: 11,
+            resume_offset: 0,
+            raw: false,
+            client_ip: "127.0.0.1".parse().unwrap(),
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (mut server_stream, _) = listener.accept().await.unwrap();
+
+        let full = htxf::encode_flat_file(b"hello world");
+        client.write_all(&full[..full.len() - 1]).await.unwrap();
+        drop(client);
+
+        let result = receive_file(&mut server_stream, &transfer, &state).await;
+        assert!(result.is_err());
+
+        assert_eq!(
+            state
+                .file_size(requester, &HlPath::default(), "a.txt.hpf", Access::all())
+                .await,
+            Ok(10)
+        );
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+    }
+
+    /// `resume_file_for_write` seeks to `resume_offset` before the
+    /// client's bytes land, so a longer working file from an earlier
+    /// attempt doesn't leave stale bytes past what the client resends.
+    #[tokio::test]
+    async fn resuming_an_upload_discards_bytes_already_written_past_the_resume_offset() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt.hpf", *b"hello world");
+        let state = state_with_files(files);
+        let requester = FileRequester { login: "alice" };
+        let transfer = PendingTransfer {
+            kind: TransferKind::File,
+            direction: TransferDirection::Put,
+            login: "alice".to_string(),
+            dir: HlPath::default(),
+            name: "a.txt".to_string(),
+            size: 11,
+            resume_offset: 6,
+            raw: false,
+            client_ip: "127.0.0.1".parse().unwrap(),
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (mut server_stream, _) = listener.accept().await.unwrap();
+
+        let resumed = htxf::encode_flat_file(b"there");
+        client.write_all(&resumed).await.unwrap();
+        drop(client);
+
+        receive_file(&mut server_stream, &transfer, &state)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state
+                .file_size(requester, &HlPath::default(), "a.txt", Access::all())
+                .await,
+            Ok(11)
+        );
+        let mut reader = state
+            .open_file_for_read(requester, &HlPath::default(), "a.txt")
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf, b"hello there");
+    }
 }

@@ -10,9 +10,10 @@ use tokio_util::codec::Framed;
 use hotline_codec::TransactionCodec;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::field_id::FieldId;
+use hotline_proto::htxf;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
-use hotline_proto::types::{HlDate, HlPath, UserFlags, UserNameWithInfo};
+use hotline_proto::types::{self, HlDate, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldList, ServerHandshake, Transaction};
 
 use crate::accounts::{AccessExtra, Account};
@@ -1050,19 +1051,14 @@ impl Session {
             (0, data_size)
         } else {
             let resume_offset = match tx.field(FieldId::ResumeFileTransfer) {
-                Some(field) => {
-                    match hotline_proto::htxf::decode_resume_data(&field.as_bytes(encoding)) {
-                        Ok(already_have) => (already_have as u64).min(data_size),
-                        Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
-                    }
-                }
+                Some(field) => match types::decode_resume_data(&field.as_bytes(encoding)) {
+                    Ok(already_have) => (already_have as u64).min(data_size),
+                    Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
+                },
                 None => 0,
             };
             let remaining = data_size - resume_offset;
-            (
-                resume_offset,
-                remaining + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64,
-            )
+            (resume_offset, remaining + htxf::FLAT_FILE_HEADER_LEN as u64)
         };
         let reference = state
             .register_transfer(PendingTransfer {
@@ -1105,8 +1101,10 @@ impl Session {
 
     /// 203: start an upload. The destination must be under a folder
     /// named "Upload" or "Drop Box" unless the account can upload
-    /// anywhere; an existing file at the destination is rejected (resume
-    /// isn't supported yet).
+    /// anywhere. `FileXferOptions` (204) == 1 resumes an interrupted
+    /// upload instead of rejecting an existing file at the destination;
+    /// the reply then also carries `FileResumeData` (203) telling the
+    /// client how many bytes to skip.
     async fn on_file_put(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::UPLOAD_FILE) {
             return vec![tx.reply_error(reason)];
@@ -1117,12 +1115,14 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        if let Err(reason) = state
-            .authorize_upload(requester, &dir, &name, self.access)
+        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
+        let resume_offset = match state
+            .authorize_upload(requester, &dir, &name, self.access, resume)
             .await
         {
-            return vec![tx.reply_error(reason)];
-        }
+            Ok(offset) => offset,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
 
         let size = tx
             .field(FieldId::TransferSize)
@@ -1136,13 +1136,20 @@ impl Session {
                 dir,
                 name,
                 size: size as u64,
-                resume_offset: 0,
+                resume_offset,
                 raw: false,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
 
-        vec![tx.reply(vec![Field::u32(FieldId::TransferId, reference)])]
+        let mut fields = vec![Field::u32(FieldId::TransferId, reference)];
+        if resume {
+            fields.push(Field::bytes(
+                FieldId::ResumeFileTransfer,
+                types::encode_resume_data(resume_offset as u32).to_vec(),
+            ));
+        }
+        vec![tx.reply(fields)]
     }
 
     /// 204: delete a file, or a folder and everything under it.
@@ -5294,10 +5301,7 @@ mod tests {
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
-        assert_eq!(
-            total_size,
-            5 + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32
-        );
+        assert_eq!(total_size, 5 + htxf::FLAT_FILE_HEADER_LEN as u32);
         let file_size = reply
             .field(FieldId::FileSize)
             .and_then(Field::as_u32)
@@ -5309,22 +5313,6 @@ mod tests {
         assert_eq!(transfer.direction, TransferDirection::Get);
         assert_eq!(transfer.size, 5);
         assert_eq!(transfer.resume_offset, 0);
-    }
-
-    /// Builds a `FileResumeData` (`myField_FileResumeData`) blob claiming
-    /// `already_have` bytes of the `DATA` fork, matching the wire shape
-    /// [`hotline_proto::htxf::decode_resume_data`] parses.
-    fn resume_data(already_have: u32) -> [u8; 58] {
-        hotline_proto::wire::PacketWriter::new()
-            .bytes(b"RFLT")
-            .u16(1)
-            .bytes(&[0; 34])
-            .u16(1)
-            .bytes(b"DATA")
-            .u32(already_have)
-            .u32(0)
-            .u32(0)
-            .finish()
     }
 
     #[tokio::test]
@@ -5339,7 +5327,7 @@ mod tests {
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
-                Field::bytes(FieldId::ResumeFileTransfer, resume_data(6)),
+                Field::bytes(FieldId::ResumeFileTransfer, types::encode_resume_data(6)),
             ],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
@@ -5349,10 +5337,7 @@ mod tests {
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
-        assert_eq!(
-            total_size,
-            5 + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32
-        );
+        assert_eq!(total_size, 5 + htxf::FLAT_FILE_HEADER_LEN as u32);
         let file_size = reply
             .field(FieldId::FileSize)
             .and_then(Field::as_u32)
@@ -5380,7 +5365,7 @@ mod tests {
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
-                Field::bytes(FieldId::ResumeFileTransfer, resume_data(999)),
+                Field::bytes(FieldId::ResumeFileTransfer, types::encode_resume_data(999)),
             ],
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
@@ -5390,7 +5375,7 @@ mod tests {
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
-        assert_eq!(total_size, hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u32);
+        assert_eq!(total_size, htxf::FLAT_FILE_HEADER_LEN as u32);
     }
 
     #[tokio::test]
@@ -5748,6 +5733,158 @@ mod tests {
             Opcode::FilePut,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_put_resumes_into_a_partial_upload() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(
+            &HlPath::default(),
+            &crate::files::partial_upload_name("a.txt"),
+            *b"hello",
+        );
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = Transaction::request(
+            Opcode::FilePut,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::u16(FieldId::FileXferOptions, 1),
+            ],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(!reply.is_error());
+        let reference = reply
+            .field(FieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+
+        let resume_field = reply.field(FieldId::ResumeFileTransfer).unwrap();
+        let already_have =
+            types::decode_resume_data(&resume_field.as_bytes(text_encoding::DEFAULT)).unwrap();
+        assert_eq!(already_have, 5);
+
+        let transfer = state.take_transfer(reference).await.unwrap();
+        assert_eq!(transfer.direction, TransferDirection::Put);
+        assert_eq!(transfer.resume_offset, 5);
+    }
+
+    #[tokio::test]
+    async fn file_put_resume_of_a_completed_upload_is_an_error() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = Transaction::request(
+            Opcode::FilePut,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::u16(FieldId::FileXferOptions, 1),
+            ],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn file_put_resume_of_an_empty_partial_upload_still_sends_resume_data() {
+        let files = crate::files::InMemoryFileProvider::default();
+        files.seed(
+            &HlPath::default(),
+            &crate::files::partial_upload_name("a.txt"),
+            *b"",
+        );
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = Transaction::request(
+            Opcode::FilePut,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::u16(FieldId::FileXferOptions, 1),
+            ],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(!reply.is_error());
+        assert!(reply.field(FieldId::ResumeFileTransfer).is_some());
+    }
+
+    #[tokio::test]
+    async fn file_put_resumes_an_upload_left_partial_by_an_earlier_attempt() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+        let requester = crate::files::FileRequester { login: "Alice" };
+
+        // Simulate an interrupted first attempt: bytes were written but
+        // the upload never finished, so it's still under its `.hpf`
+        // working name.
+        {
+            let mut writer = state
+                .create_file_for_write(requester, &HlPath::default(), "a.txt")
+                .await
+                .unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut writer, b"hello")
+                .await
+                .unwrap();
+        }
+
+        let info = state
+            .file_info(requester, &HlPath::default(), "a.txt.hpf", Access::all())
+            .await
+            .unwrap();
+        assert_eq!(info.file_type, crate::files::PARTIAL_TYPE);
+        assert_eq!(info.creator, crate::files::PARTIAL_CREATOR);
+
+        let put = Transaction::request(
+            Opcode::FilePut,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::u16(FieldId::FileXferOptions, 1),
+            ],
+        );
+        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        assert!(!reply.is_error());
+        let already_have = types::decode_resume_data(
+            &reply
+                .field(FieldId::ResumeFileTransfer)
+                .unwrap()
+                .as_bytes(text_encoding::DEFAULT),
+        )
+        .unwrap();
+        assert_eq!(already_have, 5);
+
+        state
+            .finish_upload(requester, &HlPath::default(), "a.txt")
+            .await
+            .unwrap();
+        let info = state
+            .file_info(requester, &HlPath::default(), "a.txt", Access::all())
+            .await
+            .unwrap();
+        assert_ne!(info.file_type, crate::files::PARTIAL_TYPE);
+    }
+
+    #[tokio::test]
+    async fn file_put_resume_of_a_missing_file_is_an_error() {
+        let state = state_with_files(crate::files::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+
+        let put = Transaction::request(
+            Opcode::FilePut,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::u16(FieldId::FileXferOptions, 1),
+            ],
         );
         let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
         assert!(reply.is_error());

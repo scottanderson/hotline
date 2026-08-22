@@ -98,31 +98,48 @@ debug-logged reason rather than failing the request.
    Four largely independent pieces:
    - ~~Resume support (client-sent `RFLT` blob).~~ **Resolved for
      downloads.** `FILE_GET` (202) now reads `myField_FileResumeData`
-     (203) when present: `hotline_proto::htxf::decode_resume_data` finds
+     (203) when present: `hotline_proto::types::decode_resume_data` finds
      the `DATA` fork entry's already-transferred byte count (any other
      fork entry, e.g. a resource-fork position, is ignored, matching the
      single-fork model below), the offset is clamped to the file's size
      rather than rejected (an offset past EOF just yields zero bytes left
-     to send, matching the reference's own clamp), and `PendingTransfer`
+     to send, matching openline's own clamp), and `PendingTransfer`
      carries it through to the data connection: the flattened-object
      header is always resent in full, but its `DATA` fork now declares
      only the remaining size, and the reader skips the already-sent
      leading bytes before copying the rest. **Upload resume (`FILE_PUT`'s
-     `opts == 1`, replying with a fresh `RFLT` via
-     `myField_FileResumeData`) is not implemented and is a blocker, not
-     just deferred work:** the
-     reference only allows resuming into a file it recognizes as one of
-     its own interrupted uploads, checked via a type/creator marker
-     persisted on the partial file itself; this server's `FileProvider`
-     trait has no equivalent (its own `info`/`size` calls have no way to
-     distinguish "an interrupted upload this server started" from "an
-     unrelated file that happens to have this name"), so implementing
-     upload resume without that check would let a client "resume" into
-     any existing file by name and append or overwrite its bytes. Closing
-     the gap needs either a breaking addition to `FileProvider` (a
-     marker-aware create/open call) or a server-side bookkeeping table
-     that doesn't survive a restart, either of which is a real design
-     decision, not a guess.
+     `opts == 1`) resolved**, following openline's own non-HFS (Windows)
+     codepath rather than its HFS one: on a real Mac volume openline
+     checks a type/creator marker stored as actual filesystem metadata,
+     which this server's `FileProvider` has no equivalent of, but
+     `UFileSys(W).cp`/`HotlineServTrans.cp`'s `#if WIN32` paths (and,
+     independently, mhxd) fake that marker the same way we now do:
+     `FieldId::FileXferOptions` (204) `== 1` now resumes into an existing
+     file (`SharedState::authorize_upload` gained a `resume: bool` that
+     requires, rather than forbids, an existing destination and returns
+     its size as the resume offset, echoed back via the new
+     `hotline_proto::types::encode_resume_data`, which always encodes
+     two fork entries, `DATA` and an always-empty `MACR`, not just one,
+     matching both references' own `RFLT` reply bytes). A real
+     client only offers to resume when it sees the `HTft`/`HTLC` "still
+     uploading" marker on the destination, so `FileProvider` now writes
+     every in-progress upload under a `.hpf`-suffixed working name
+     (`partial_upload_name`) that `type_and_creator_for_name`'s existing
+     extension table already maps to that marker (`case '.HPF':` in
+     openline's own `UFileSys(W).cp`), renamed to its real name by the
+     new `FileProvider::finish_upload` once every fork copies
+     successfully. `receive_file` (`server.rs`) creates that working file
+     before reading the client's flat-file-object prefix, so a cancelled
+     handshake still leaves a resumable `.hpf` file. It also checks
+     `tokio::io::copy`'s returned byte count against each fork's declared
+     size, since a closed connection otherwise looks like a clean EOF to
+     `copy`, so a cancelled or truncated upload never gets renamed.
+     Same trade-off both references accept: any account that can upload
+     to a destination can resume into any existing file there by name,
+     not just one it left partway uploaded itself. **Known gap:**
+     `delete`/`rename`/`r#move`/`symlink` all resolve only the exact name
+     passed in, so a still-uploading file can't be touched by its plain
+     name until it finishes.
    - Transfer queue (`HTLS_DATA_QUEUE_POSITION`, `HTLS_HDR_QUEUE_UPDATE`
      equivalents (`WaitingCount` (116), the `DownloadInfo` push)): not
      implemented. Needs a concurrent-download cap in `ServerConfig` and a

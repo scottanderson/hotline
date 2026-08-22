@@ -199,9 +199,10 @@ pub struct PendingTransfer {
     /// Download: the file's size in bytes. Upload: the size the client
     /// declared it will send.
     pub size: u64,
-    /// Download only: bytes into the file to start sending from, when the
-    /// client already has a leading portion from an earlier attempt.
-    /// Always `0` for an upload or a non-resumed download.
+    /// Bytes already stored, to be skipped rather than resent: for a
+    /// download, what the client already has; for an upload, the
+    /// destination file's current size. Always `0` for a non-resumed
+    /// transfer.
     pub resume_offset: u64,
     /// `FILE_GET` only: `FileXferOptions` (204) `== 2`, requesting the
     /// raw file bytes with no flattened-file-object framing and no
@@ -537,24 +538,36 @@ impl SharedState {
         self.files.exists(requester, dir, name).await
     }
 
-    /// Whether `requester` may start a `FILE_PUT` upload of `name` under
-    /// `dir`: the destination must be under an "Upload"/"Drop Box" folder
-    /// unless `upload_anywhere`, and nothing may already exist there (no
-    /// resume support yet).
+    /// Whether `requester` may start (or resume) a `FILE_PUT` upload of
+    /// `name` under `dir`: the destination must be under an "Upload"/"Drop
+    /// Box" folder unless `upload_anywhere`, and a finished file already at
+    /// `name` always rejects the request. With `resume` false that's the
+    /// only check; with `resume` true, an in-progress upload is also
+    /// required, and its current size is returned as the resume offset
+    /// (`0` otherwise).
     pub async fn authorize_upload(
         &self,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<(), Cow<'static, str>> {
+        resume: bool,
+    ) -> Result<u64, Cow<'static, str>> {
         if !is_dropbox_path(dir) {
             access.require(Access::UPLOAD_ANYWHERE)?;
         }
         if self.files.exists(requester, dir, name).await {
             Err("file already exists.")?;
         }
-        Ok(())
+        if resume {
+            Ok(self
+                .files
+                .partial_upload_size(requester, dir, name)
+                .await
+                .ok_or("file or folder not found.")?)
+        } else {
+            Ok(0)
+        }
     }
 
     /// Open a file for reading, for a `FILE_GET` download.
@@ -575,6 +588,18 @@ impl SharedState {
         name: &str,
     ) -> std::io::Result<BoxedWriter> {
         self.files.create_write(requester, dir, name).await
+    }
+
+    /// Open an existing file for writing from `at` onward, continuing a
+    /// resumed `FILE_PUT` upload.
+    pub async fn resume_file_for_write(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> std::io::Result<BoxedWriter> {
+        self.files.open_write_resume(requester, dir, name, at).await
     }
 
     /// One file or folder's listing metadata. `Err` if missing or
@@ -773,6 +798,16 @@ impl SharedState {
     /// is still waiting. Consumes it: a reference is only good once.
     pub async fn take_transfer(&self, reference: u32) -> Option<PendingTransfer> {
         self.transfers.write().await.remove(&reference)
+    }
+
+    /// Finish `dir`/`name`'s upload, once every byte has arrived.
+    pub async fn finish_upload(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> std::io::Result<()> {
+        self.files.finish_upload(requester, dir, name).await
     }
 
     /// The currently configured banner, for the login-time `myTran_ServerBanner`
@@ -1410,6 +1445,55 @@ mod tests {
         assert_eq!(entries[0].size, 2);
         assert_eq!(entries[1].name, "sub");
         assert_eq!(&entries[1].file_type, b"fldr");
+    }
+
+    #[tokio::test]
+    async fn an_in_progress_upload_is_listed_under_its_real_hpf_name() {
+        let files = Arc::new(InMemoryFileProvider::default());
+        let state = SharedState::new(
+            Arc::new(InMemoryAccountProvider::default()),
+            files,
+            Arc::new(crate::news::InMemoryNewsProvider::default()),
+            Arc::new(InMemoryBanProvider::default()),
+            Arc::new(NoFloodPolicy),
+            Arc::new(NoBanner),
+        );
+        let requester = FileRequester { login: "alice" };
+
+        {
+            let mut writer = state
+                .create_file_for_write(requester, &HlPath::default(), "a.txt")
+                .await
+                .unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut writer, b"hi")
+                .await
+                .unwrap();
+        }
+
+        let entries = state
+            .list_files(requester, &HlPath::default(), Access::all())
+            .await
+            .unwrap();
+        assert_eq!(entries[0].name, "a.txt.hpf");
+        assert_eq!(entries[0].file_type, crate::files::PARTIAL_TYPE);
+        assert_eq!(entries[0].creator, crate::files::PARTIAL_CREATOR);
+
+        let info = state
+            .file_info(requester, &HlPath::default(), "a.txt.hpf", Access::all())
+            .await
+            .unwrap();
+        assert_eq!(info.file_type, crate::files::PARTIAL_TYPE);
+        assert_eq!(info.creator, crate::files::PARTIAL_CREATOR);
+
+        state
+            .finish_upload(requester, &HlPath::default(), "a.txt")
+            .await
+            .unwrap();
+        let info = state
+            .file_info(requester, &HlPath::default(), "a.txt", Access::all())
+            .await
+            .unwrap();
+        assert_ne!(info.file_type, crate::files::PARTIAL_TYPE);
     }
 
     #[tokio::test]
