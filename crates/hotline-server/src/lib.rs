@@ -21,7 +21,10 @@ pub use accounts::{AccessExtra, Account, AccountProvider, InMemoryAccountProvide
 pub use banner::{BannerKind, BannerProvider, NoBanner, UrlBannerProvider};
 pub use bans::{BanProvider, BanRecord, InMemoryBanProvider};
 pub use error::{Result, ServerError};
-pub use files::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
+pub use files::{
+    type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider, FileRequester,
+    InMemoryFileProvider,
+};
 pub use flood::{FloodConfig, FloodDecision, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
 pub use news::{InMemoryNewsProvider, NewsBundle, NewsProvider};
 pub use server::{Server, ServerConfig};

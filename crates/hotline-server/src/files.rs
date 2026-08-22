@@ -37,6 +37,51 @@ pub type BoxedReader = Box<dyn AsyncRead + Send + Unpin>;
 /// A boxed, already-open async byte sink. See [`BoxedReader`].
 pub type BoxedWriter = Box<dyn AsyncWrite + Send + Unpin>;
 
+/// `file_type`/`creator` inferred from a file's extension, the same
+/// fallback the reference server's non-HFS (Windows) build uses in place
+/// of real Mac type/creator metadata (`_FSWinExtToMacTypeCode` in
+/// `UFileSys(W).cp`).
+pub fn type_and_creator_for_name(name: &str) -> ([u8; 4], [u8; 4]) {
+    let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext);
+    match ext.to_ascii_uppercase().as_str() {
+        "TXT" => (*b"TEXT", *b"ttxt"),
+        "SIT" => (*b"SITD", *b"SIT!"),
+        "DAT" => (*b"BINA", *b"hDmp"),
+        "EXE" => (*b"DEXE", *b"CWIE"),
+        "ZIP" => (*b"ZIP ", *b"ZIP "),
+        "DOC" => (*b"W6BN", *b"MSWD"),
+        "CPP" | "C" | "CP" | "H" | "HPP" => (*b"TEXT", *b"CWIE"),
+        "HBM" => (*b"HTbm", *b"HTLC"),
+        "HNZ" => (*b"HLNZ", *b"HTLC"),
+        "GIF" => (*b"GIFf", *b"GKON"),
+        "JPG" => (*b"JPEG", *b"GKON"),
+        "DIB" | "BMP" => (*b"BMP ", *b"GKON"),
+        "PCT" => (*b"PICT", *b"GKON"),
+        "FPX" => (*b"FPix", *b"TVOD"),
+        "MAC" | "PNT" => (*b"PNTG", *b"TVOD"),
+        "PSD" => (*b"8BPS", *b"TVOD"),
+        "PNG" => (*b"PNGf", *b"TVOD"),
+        "SGI" => (*b"SGI ", *b"TVOD"),
+        "TGA" => (*b"TPIC", *b"TVOD"),
+        "TIF" => (*b"TIFF", *b"GKON"),
+        "QT" | "MOV" => (*b"MooV", *b"TVOD"),
+        "MPA" | "MP2" | "MPG" => (*b"MPEG", *b"TVOD"),
+        "AVI" => (*b"VfW ", *b"TVOD"),
+        "DV" | "DIF" => (*b"dvc!", *b"TVOD"),
+        "SWF" => (*b"SWFL", *b"SWF2"),
+        "FLC" | "FLI" => (*b"FLI ", *b"TVOD"),
+        "QD3" | "3DM" => (*b"3DMF", *b"TVOD"),
+        "MP3" => (*b"MP3 ", *b"MAmp"),
+        "RAM" | "RM" | "RA" | "RAE" => (*b"RAE ", *b"REAL"),
+        "AIF" => (*b"AIFF", *b"TVOD"),
+        "AU" | "SND" | "ULW" => (*b"ULAW", *b"TVOD"),
+        "WAV" => (*b"WAVE", *b"TVOD"),
+        "SD2" => (*b"Sd2f", *b"TVOD"),
+        "SMF" | "KAR" | "MID" => (*b"MiDi", *b"TVOD"),
+        _ => (*b"BINA", *b"dosa"),
+    }
+}
+
 /// Storage backing `FILE_LIST`/`FILE_GET`/`FILE_PUT`. `hotline-server`
 /// doesn't own file storage any more than it owns account storage (see
 /// [`crate::AccountProvider`]'s module docs); the embedding application
@@ -306,19 +351,20 @@ impl FileProvider for InMemoryFileProvider {
         let mut entries: Vec<FileNameWithInfo> = d
             .entries
             .iter()
-            .map(|(name, entry)| match entry {
-                Entry::Dir(_) => FileNameWithInfo {
-                    file_type: *b"fldr",
-                    creator: *b"\0\0\0\0",
-                    size: 0,
+            .map(|(name, entry)| {
+                let (file_type, creator, size) = match entry {
+                    Entry::Dir(_) => (*b"fldr", *b"\0\0\0\0", 0),
+                    Entry::File(f) => {
+                        let (file_type, creator) = type_and_creator_for_name(name);
+                        (file_type, creator, f.len() as u32)
+                    }
+                };
+                FileNameWithInfo {
+                    file_type,
+                    creator,
+                    size,
                     name: name.clone(),
-                },
-                Entry::File(data) => FileNameWithInfo {
-                    file_type: *b"\0\0\0\0",
-                    creator: *b"\0\0\0\0",
-                    size: data.len() as u32,
-                    name: name.clone(),
-                },
+                }
             })
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -352,7 +398,8 @@ impl FileProvider for InMemoryFileProvider {
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         match d.entries.get(name) {
             Some(Entry::File(data)) => Ok(Box::new(std::io::Cursor::new(data.clone()))),
-            _ => Err(io::Error::from(io::ErrorKind::NotFound)),
+            Some(Entry::Dir(_)) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
+            None => Err(io::Error::from(io::ErrorKind::NotFound)),
         }
     }
 
@@ -384,12 +431,15 @@ impl FileProvider for InMemoryFileProvider {
                 size: 0,
                 name: name.to_string(),
             },
-            Entry::File(data) => FileNameWithInfo {
-                file_type: *b"\0\0\0\0",
-                creator: *b"\0\0\0\0",
-                size: data.len() as u32,
-                name: name.to_string(),
-            },
+            Entry::File(data) => {
+                let (file_type, creator) = type_and_creator_for_name(name);
+                FileNameWithInfo {
+                    file_type,
+                    creator,
+                    size: data.len() as u32,
+                    name: name.to_string(),
+                }
+            }
         })
     }
 

@@ -13,7 +13,9 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
-use hotline_server::{BoxedReader, BoxedWriter, FileProvider, FileRequester};
+use hotline_server::{
+    type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider, FileRequester,
+};
 use tokio::sync::RwLock;
 
 /// Serves one directory on disk, the same for every login.
@@ -124,19 +126,21 @@ impl FileProvider for FileFileProvider {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
-            entries.push(FileNameWithInfo {
-                file_type: if metadata.is_dir() {
-                    *b"fldr"
-                } else {
-                    *b"\0\0\0\0"
-                },
-                creator: *b"\0\0\0\0",
-                size: if metadata.is_dir() {
-                    0
-                } else {
-                    metadata.len() as u32
-                },
-                name,
+            entries.push(if metadata.is_dir() {
+                FileNameWithInfo {
+                    file_type: *b"fldr",
+                    creator: *b"\0\0\0\0",
+                    size: 0,
+                    name,
+                }
+            } else {
+                let (file_type, creator) = type_and_creator_for_name(&name);
+                FileNameWithInfo {
+                    file_type,
+                    creator,
+                    size: metadata.len() as u32,
+                    name,
+                }
             });
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -191,18 +195,19 @@ impl FileProvider for FileFileProvider {
     ) -> Option<FileNameWithInfo> {
         let path = self.resolve_file(dir, name)?;
         let metadata = tokio::fs::metadata(&path).await.ok()?;
+        if metadata.is_dir() {
+            return Some(FileNameWithInfo {
+                file_type: *b"fldr",
+                creator: *b"\0\0\0\0",
+                size: 0,
+                name: name.to_string(),
+            });
+        }
+        let (file_type, creator) = type_and_creator_for_name(name);
         Some(FileNameWithInfo {
-            file_type: if metadata.is_dir() {
-                *b"fldr"
-            } else {
-                *b"\0\0\0\0"
-            },
-            creator: *b"\0\0\0\0",
-            size: if metadata.is_dir() {
-                0
-            } else {
-                metadata.len() as u32
-            },
+            file_type,
+            creator,
+            size: metadata.len() as u32,
             name: name.to_string(),
         })
     }
