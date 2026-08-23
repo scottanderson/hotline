@@ -94,13 +94,13 @@ impl HtxfHeader {
     }
 }
 
-/// Byte length of the `INFO` fork's data (platform through name size, no
-/// name): `4+4+4+4+4+32+8+8+2+2`.
-const INFO_DATA_LEN: usize = 72;
+/// Byte length of the `INFO` fork's data (platform through comment size,
+/// no name or comment): `4+4+4+4+4+32+8+8+2+2+2`.
+const INFO_DATA_LEN: usize = 74;
 
 /// Fixed byte length of [`flat_file_header`]'s output: `FILP` header
-/// (24 bytes) + `INFO` fork header (16) + `INFO` fork data (72, no name)
-/// + `DATA` fork header (16).
+/// (24 bytes) + `INFO` fork header (16) + `INFO` fork data (74, no name
+/// or comment) + `DATA` fork header (16).
 pub const FLAT_FILE_HEADER_LEN: usize = 24 + 16 + INFO_DATA_LEN + 16;
 
 /// Build the flattened-file-object header written before a file's raw
@@ -134,6 +134,7 @@ pub fn flat_file_header(data_size: u32) -> [u8; FLAT_FILE_HEADER_LEN] {
         .u16(0) // name script
         .u16(0) // name size (name omitted, matching the reference's
         // placeholder-only INFO fork for a plain file transfer)
+        .u16(0) // comment size (comment omitted)
         // DATA fork header.
         .bytes(b"DATA")
         .u32(0) // compression type
@@ -324,8 +325,8 @@ mod tests {
         assert_eq!(&header[0..4], b"FILP");
         assert_eq!(u16::from_be_bytes([header[22], header[23]]), 2);
         assert_eq!(&header[24..28], b"INFO");
-        assert_eq!(&header[112..116], b"DATA");
-        assert_eq!(u32::from_be_bytes(header[124..128].try_into().unwrap()), 5);
+        assert_eq!(&header[114..118], b"DATA");
+        assert_eq!(u32::from_be_bytes(header[126..130].try_into().unwrap()), 5);
     }
 
     #[test]
