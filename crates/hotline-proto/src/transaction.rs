@@ -274,7 +274,7 @@ impl Transaction {
     ///
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
-    pub fn encode(&self, encoding: &'static Encoding) -> crate::error::Result<Vec<u8>> {
+    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         let body = FieldList::encode(&self.fields, encoding)?;
         let len = u32::try_from(body.len()).map_err(|_| ProtoError::TooLong {
             what: "fields len",

@@ -1203,14 +1203,14 @@ impl SharedState {
     }
 
     /// The active ban on `ip`, if any; see [`crate::BanProvider::is_banned`].
-    pub async fn is_banned(&self, ip: std::net::IpAddr) -> Option<BanRecord> {
+    pub async fn is_banned(&self, ip: IpAddr) -> Option<BanRecord> {
         self.bans.is_banned(ip).await
     }
 
     /// Ban `ip` until `until`, or permanently if `None`.
     pub async fn ban(
         &self,
-        ip: std::net::IpAddr,
+        ip: IpAddr,
         until: Option<std::time::SystemTime>,
     ) -> Result<(), String> {
         self.bans.ban(ip, until).await

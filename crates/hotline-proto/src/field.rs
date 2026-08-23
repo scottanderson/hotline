@@ -199,7 +199,7 @@ impl Field {
     ///
     /// Fails if the encoded value is longer than 65535 bytes (the length
     /// prefix is a `u16`), reachable with attacker-controlled input.
-    pub fn encode(&self, encoding: &'static Encoding) -> crate::error::Result<Vec<u8>> {
+    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         let data = self.value.encode(encoding);
         let len = u16::try_from(data.len()).map_err(|_| ProtoError::TooLong {
             what: "field data",

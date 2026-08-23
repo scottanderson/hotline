@@ -397,7 +397,7 @@ impl FileProvider for InMemoryFileProvider {
             .get_dir(&dir.components)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         match d.entries.get(name) {
-            Some(Entry::File(data)) => Ok(Box::new(std::io::Cursor::new(data.clone()))),
+            Some(Entry::File(data)) => Ok(Box::new(io::Cursor::new(data.clone()))),
             Some(Entry::Dir(_)) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
             None => Err(io::Error::from(io::ErrorKind::NotFound)),
         }
