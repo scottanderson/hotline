@@ -159,6 +159,16 @@ async fn handle_htxf_connection(
 async fn send_banner(stream: &mut TcpStream, state: &SharedState) -> Result<()> {
     let mut reader = state.open_banner_read().await?;
     tokio::io::copy(&mut reader, stream).await?;
+    drain_stream(stream).await
+}
+
+/// Read (discarding) until the client closes, instead of closing our
+/// side first. A client may still be draining its last buffered chunk
+/// when a server-initiated close arrives, and reports that as a failed
+/// transfer even after reading every byte.
+async fn drain_stream(stream: &mut TcpStream) -> Result<()> {
+    let mut discard = [0u8; 4096];
+    while stream.read(&mut discard).await? != 0 {}
     Ok(())
 }
 
@@ -185,7 +195,7 @@ async fn send_file(
         skip_bytes(&mut reader, transfer.resume_offset).await?;
     }
     tokio::io::copy(&mut reader, stream).await?;
-    Ok(())
+    drain_stream(stream).await
 }
 
 /// Discard the first `n` bytes read from `reader`, for starting a resumed
