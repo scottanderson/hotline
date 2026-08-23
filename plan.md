@@ -848,6 +848,33 @@ debug-logged reason rather than failing the request.
     (e.g. it's embedding-specific, like `AccessExtra`, or it carries
     behavior/state that isn't just a wire tag).
 
+52. **A polite kick (`Politequit` push, `on_user_kick`'s ban path) closes
+    the connection immediately after sending the notice, with no chance
+    for the client to drain it first.** `Session::run`'s select loop
+    (`session.rs`) does `writer.send(tx).await?` then `break`s straight
+    into dropping the socket, the exact shape that caused item 6's
+    `FILE_GET`/`BANNER_GET` "connection closed before transfer complete"
+    bug (confirmed against a real client, fixed by waiting for the
+    client's own close instead of closing first). Unlike that fix,
+    `drain_stream`'s unconditional wait for the peer to close isn't safe
+    to reuse verbatim here: a kicked client may be exactly the
+    unresponsive/misbehaving case an admin is disconnecting, so waiting
+    forever would leak a hung connection per stuck kick. Needs a bounded
+    wait (drain with a short timeout, then force-close regardless), not
+    the indefinite version. The silent-kick path (`RecipientMessage::Disconnect`)
+    is unaffected: it sends nothing before closing, matching the
+    reference's own immediate `Disconnect()` (used deliberately, not
+    `StartDisconnect()`, for exactly this reason).
+
+53. **Folder transfer (`myTran_DownloadFldr`/`UploadFldr`) isn't
+    implemented at all**, referenced but not tracked as its own item by
+    item 40. Needs new opcodes, a `TransferKind::Folder` (or equivalent),
+    and the `dlFldrAction_SendFile`/`_ResumeFile`/`_NextFile` (1/2/3,
+    `HotlineClientServerCommon.h`) action field the client sends on the
+    HTXF connection to step through a folder's files one at a time.
+    Independently visible feature, large enough for its own commit(s)
+    once picked up, not a small addition to fold into other work.
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
