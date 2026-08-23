@@ -173,9 +173,10 @@ async fn drain_stream(stream: &mut TcpStream) -> Result<()> {
 }
 
 /// Send a `FILE_GET` download: the flattened-file-object header, then
-/// the file's raw bytes. `transfer.resume_offset` skips that many leading
-/// bytes of the data fork, reducing the header's declared size to match,
-/// for a client resuming an interrupted download.
+/// the file's raw bytes. `transfer.raw` sends the raw bytes alone, with
+/// no header, like [`send_banner`]. `transfer.resume_offset` skips that
+/// many leading bytes of the data fork, reducing the header's declared
+/// size to match, for a client resuming an interrupted download.
 async fn send_file(
     stream: &mut TcpStream,
     transfer: &PendingTransfer,
@@ -187,12 +188,14 @@ async fn send_file(
     let mut reader = state
         .open_file_for_read(requester, &transfer.dir, &transfer.name)
         .await?;
-    let remaining = transfer.size - transfer.resume_offset;
-    stream
-        .write_all(&htxf::flat_file_header(remaining as u32))
-        .await?;
-    if transfer.resume_offset > 0 {
-        skip_bytes(&mut reader, transfer.resume_offset).await?;
+    if !transfer.raw {
+        let remaining = transfer.size - transfer.resume_offset;
+        stream
+            .write_all(&htxf::flat_file_header(remaining as u32))
+            .await?;
+        if transfer.resume_offset > 0 {
+            skip_bytes(&mut reader, transfer.resume_offset).await?;
+        }
     }
     tokio::io::copy(&mut reader, stream).await?;
     drain_stream(stream).await

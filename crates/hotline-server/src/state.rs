@@ -203,6 +203,10 @@ pub struct PendingTransfer {
     /// client already has a leading portion from an earlier attempt.
     /// Always `0` for an upload or a non-resumed download.
     pub resume_offset: u64,
+    /// `FILE_GET` only: `FileXferOptions` (204) `== 2`, requesting the
+    /// raw file bytes with no flattened-file-object framing and no
+    /// resume support. Always `false` for an upload or the banner.
+    pub raw: bool,
     /// The control connection's remote address; the data connection must
     /// arrive from the same IP or the transfer is refused.
     pub client_ip: IpAddr,
@@ -802,6 +806,7 @@ impl SharedState {
                 name: String::new(),
                 size,
                 resume_offset: 0,
+                raw: false,
                 client_ip,
             })
             .await;
@@ -1418,6 +1423,7 @@ mod tests {
             name: "x".to_string(),
             size: 0,
             resume_offset: 0,
+            raw: false,
             client_ip: "127.0.0.1".parse().unwrap(),
         };
 

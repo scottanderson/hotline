@@ -1042,18 +1042,28 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
 
+        // `FileXferOptions` (204) == 2 requests the raw file bytes with
+        // no resume support.
+        let raw = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(2);
         let encoding = self.encoding();
-        let resume_offset = match tx.field(FieldId::ResumeFileTransfer) {
-            Some(field) => match hotline_proto::htxf::decode_resume_data(&field.as_bytes(encoding))
-            {
-                Ok(already_have) => (already_have as u64).min(data_size),
-                Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
-            },
-            None => 0,
+        let (resume_offset, total_size) = if raw {
+            (0, data_size)
+        } else {
+            let resume_offset = match tx.field(FieldId::ResumeFileTransfer) {
+                Some(field) => {
+                    match hotline_proto::htxf::decode_resume_data(&field.as_bytes(encoding)) {
+                        Ok(already_have) => (already_have as u64).min(data_size),
+                        Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
+                    }
+                }
+                None => 0,
+            };
+            let remaining = data_size - resume_offset;
+            (
+                resume_offset,
+                remaining + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64,
+            )
         };
-        let remaining = data_size - resume_offset;
-
-        let total_size = remaining + hotline_proto::htxf::FLAT_FILE_HEADER_LEN as u64;
         let reference = state
             .register_transfer(PendingTransfer {
                 kind: TransferKind::File,
@@ -1063,6 +1073,7 @@ impl Session {
                 name,
                 size: data_size,
                 resume_offset,
+                raw,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
@@ -1126,6 +1137,7 @@ impl Session {
                 name,
                 size: size as u64,
                 resume_offset: 0,
+                raw: false,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
