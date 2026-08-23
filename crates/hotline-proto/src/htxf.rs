@@ -17,7 +17,7 @@ const MAGIC: &[u8; 4] = b"HTXF";
 #[repr(u16)]
 pub enum HtxfType {
     /// A single file.
-    FileTransfer = 0,
+    File = 0,
 
     /// The server banner image (`myTran_DownloadBanner`, 212).
     Banner = 2,
@@ -37,7 +37,7 @@ pub struct HtxfHeader {
     pub reference: u32,
     /// `0` for a download; the file's byte count for an upload.
     pub len: u32,
-    /// Transfer type, e.g. [`HtxfType::FileTransfer`].
+    /// Transfer type, e.g. [`HtxfType::File`].
     pub transfer_type: HtxfType,
 }
 
@@ -233,7 +233,7 @@ mod tests {
         let header = HtxfHeader {
             reference: 0xdead_beef,
             len: 1234,
-            transfer_type: HtxfType::FileTransfer,
+            transfer_type: HtxfType::File,
         };
         let bytes = header.encode();
         assert_eq!(HtxfHeader::decode(&bytes).unwrap(), header);
@@ -244,7 +244,7 @@ mod tests {
         let mut bytes = HtxfHeader {
             reference: 1,
             len: 0,
-            transfer_type: HtxfType::FileTransfer,
+            transfer_type: HtxfType::File,
         }
         .encode();
         bytes[0] = b'X';

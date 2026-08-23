@@ -105,14 +105,23 @@ one-shared-room model.
 
 7. **Enum variant naming isn't consistently the openline constant's tail
    yet.** `FieldId`/`Opcode` already follow this (see AGENTS.md's Naming
-   section), but other enums mirroring an openline constant list
-   (`TransferKind`/`TransferDirection` in `state.rs`, `BannerKind` in
-   `banner.rs`, `NewsItemKind`/`NewsListKind` in `news.rs`) should be
-   audited and renamed to match. While auditing, also check each such enum
-   lives in `hotline-proto` (wire format, no I/O) rather than
-   `hotline-server`/`hotline-client`, moving it there unless it's
-   embedding-specific (like `AccessExtra`) or carries behavior/state
-   beyond a wire tag.
+   section); other enums need the same audit. First pass (every `pub enum`
+   in `hotline-proto`/`hotline-server`/`hotline-client`, plus session.rs's
+   private `KickBan`) found one real match and fixed it: `HtxfType::FileTransfer`
+   renamed to `HtxfType::File`, matching the secondary reference's own
+   `HTXF_TYPE_FILE` (the primary reference has no named constant for this
+   field at all; `HtxfType::Banner` already matched `HTXF_TYPE_BANNER`).
+   Everything else checked this pass — `TransferKind`/`TransferDirection`
+   (`state.rs`), `BannerKind` (`banner.rs`), `NewsItemKind`/`NewsListKind`
+   (`news.rs`), `KickBan` (`session.rs`) — turned out to be locally
+   invented bookkeeping with no openline-named constant list behind them
+   (news bundle/category distinction reuses the reference's generic
+   `fsItemType_Folder`/`fsItemType_File` filesystem enum, which would be
+   actively misleading to copy here), so left as is; same reasoning kept
+   each of them in its current crate rather than moving to `hotline-proto`.
+   Left open rather than marked resolved: re-run this audit once the rest
+   of the backlog lands, since later items are likely to add more enums
+   this pass didn't have to consider.
 
 ## Resolved
 
