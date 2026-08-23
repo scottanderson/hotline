@@ -1941,7 +1941,7 @@ impl Session {
             .await
             .into_iter()
             .filter_map(|(login, account)| {
-                Transaction::encode_field_list(
+                FieldList::encode(
                     &[
                         Field::string(FieldId::Name, account.name),
                         Field::obfuscated_string(FieldId::Login, login),
@@ -1968,7 +1968,7 @@ impl Session {
         let encoding = self.encoding();
         let mut save_error = false;
         for field in tx.fields(FieldId::Text) {
-            let Ok(record) = Transaction::decode_field_list(&field.as_bytes(encoding)) else {
+            let Ok(record) = FieldList::decode(&field.as_bytes(encoding)) else {
                 save_error = true;
                 continue;
             };
@@ -4415,10 +4415,7 @@ mod tests {
         }
         fields.push(password);
         fields.push(Field::u64(FieldId::Access, access.bits()));
-        Field::bytes(
-            FieldId::Text,
-            Transaction::encode_field_list(&fields, encoding).unwrap(),
-        )
+        Field::bytes(FieldId::Text, FieldList::encode(&fields, encoding).unwrap())
     }
 
     #[tokio::test]
@@ -4460,7 +4457,7 @@ mod tests {
 
         let bob = records
             .iter()
-            .map(|f| Transaction::decode_field_list(&f.as_bytes(encoding)).unwrap())
+            .map(|f| FieldList::decode(&f.as_bytes(encoding)).unwrap())
             .find(|fields| fields.string(FieldId::Name, encoding).as_deref() == Some("Bob"))
             .expect("bob's record");
         let login = bob

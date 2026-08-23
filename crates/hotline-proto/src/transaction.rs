@@ -270,12 +270,12 @@ impl Transaction {
     }
 
     /// Encode the full transaction: 20-byte fixed prefix, then
-    /// [`Transaction::encode_field_list`]'s output as the body.
+    /// [`FieldList::encode`]'s output as the body.
     ///
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
     pub fn encode(&self, encoding: &'static Encoding) -> crate::error::Result<Vec<u8>> {
-        let body = Self::encode_field_list(&self.fields, encoding)?;
+        let body = FieldList::encode(&self.fields, encoding)?;
         let len = u32::try_from(body.len()).map_err(|_| ProtoError::TooLong {
             what: "fields len",
             len: body.len(),
@@ -291,62 +291,6 @@ impl Transaction {
                 .bytes(&body)
                 .finish(),
         )
-    }
-
-    /// Encode `fields` as a `count`-prefixed field list: a transaction's
-    /// own body shape, and also the shape of one nested account record
-    /// inside `myTran_GetUserList` (348) / `myTran_SetUserList`
-    /// (349).
-    ///
-    /// Fails if `fields.len()` or any field's data exceeds a `u16`
-    /// (65535), reachable with attacker-controlled input.
-    pub fn encode_field_list(
-        fields: &[Field],
-        encoding: &'static Encoding,
-    ) -> crate::error::Result<Vec<u8>> {
-        let count = fields.len();
-        let count = u16::try_from(count).map_err(|_| ProtoError::TooLong {
-            what: "field count",
-            len: count,
-        })?;
-
-        let encoded: Vec<u8> = fields
-            .iter()
-            .map(|f| f.encode(encoding))
-            .collect::<Result<Vec<_>>>()?
-            .concat();
-
-        Ok(VecWriter::with_capacity(2 + encoded.len())
-            .u16(count)
-            .bytes(&encoded)
-            .finish())
-    }
-
-    /// Byte length of the `count` prefix before a field list's own fields.
-    const COUNT_LEN: usize = 2;
-
-    /// Decode the `count`-prefixed field list [`Transaction::encode_field_list`] produces.
-    pub fn decode_field_list(body: &[u8]) -> Result<FieldList> {
-        let prefix: [u8; Self::COUNT_LEN] = body
-            .get(..Self::COUNT_LEN)
-            .map(TryInto::try_into)
-            .and_then(std::result::Result::ok)
-            .ok_or(ProtoError::UnexpectedEof {
-                needed: Self::COUNT_LEN,
-                available: body.len(),
-            })?;
-        let mut r = PacketReader::new(prefix);
-        let count = r.u16();
-        r.finish();
-
-        let mut offset = Self::COUNT_LEN;
-        let mut fields = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            let (field, consumed) = Field::decode(&body[offset..])?;
-            offset += consumed;
-            fields.push(field);
-        }
-        Ok(FieldList::new(fields))
     }
 
     /// Decode a complete, single-part transaction (prefix + body) from
@@ -443,7 +387,7 @@ impl TransactionHeader {
     /// [`TransactionHeader::remaining_len`] bytes, the field count
     /// followed by the fields.
     pub fn finish_decode(self, body: &[u8]) -> Result<Transaction> {
-        let fields = Transaction::decode_field_list(body)?;
+        let fields = FieldList::decode(body)?;
         Ok(Transaction {
             r#type: self.r#type,
             trans: self.trans,
