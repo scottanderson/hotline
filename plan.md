@@ -123,6 +123,143 @@ one-shared-room model.
    of the backlog lands, since later items are likely to add more enums
    this pass didn't have to consider.
 
+7. **`HTRK` tracker support stops at wire-format types.**
+   `hotline-tracker` has `encode_client_request_v1`/`decode_reply_header`/
+   `TrackedServer::decode`/`ServerBeacon::encode`, but nothing in the
+   workspace calls any of them: `hls` never sends a `ServerBeacon` to
+   register with a tracker, and `hlc` has no tracker-query mode to list
+   servers before connecting. Needs a periodic beacon task wired into
+   `hotline-daemon` (with a `--tracker` config flag) and a query command in
+   `hotline-cli` that opens the tracker's TCP port, sends the client
+   request, and decodes the `TrackedServer` list back.
+
+8. **Split transactions (`len` != `len2`, `HLProtocol.md`'s "Total size"
+   vs. "Data size") aren't reassembled.** `transaction.rs` already
+   documents this as an assumption (`len == len2` on the wire).
+   Confirmed against the reference: its transport (`UTransact.cp`)
+   really does reassemble multi-part transactions on receive, keyed by
+   `(isReply, id)`, appending each part's raw bytes until `totalSize` is
+   reached before parsing `count`/fields from the assembled buffer. But
+   no real call site (client or server) ever calls
+   `SetSessionSendSize`/sends more than one part, so `len == len2` on
+   every transaction the reference actually emits. Low priority: this
+   would only harden decoding against a hypothetical non-reference
+   sender. If picked up, needs: a reassembly map in
+   `hotline_codec::TransactionCodec`'s decoder keyed by `(is_reply, id)`
+   accumulating raw bytes per id until `len` bytes are in hand, only
+   then running today's `count`/field decode against the assembled
+   buffer; a cap on claimed `len` and on the number of concurrently
+   pending partial ids, since an unbounded version lets a peer hold
+   memory open indefinitely by trickling one byte per frame across many
+   ids. No corresponding encode-side change needed, since nothing
+   expects to receive a deliberately split transaction from us.
+
+9. **`UserNameWithInfo::flags` is a raw `u16` even though `UserFlags`
+   (`types/user_flags.rs`) exists for exactly this field** — its own doc
+   comment says "Bit meanings for `UserNameWithInfo::flags`", but every
+   caller does `.bits()`/raw `u16` math instead of using the typed flags.
+   Changing the field to `UserFlags` restores type safety but touches
+   ~23 call sites across `hotline-server`/`hotline-client`; worth a
+   standalone commit, not a quick edit. Found during the naming/structure
+   review after the one-file-per-struct reorg (commit 3c7df8b).
+
+10. **`session/connection.rs` (~6800 lines) holds one `Session` struct
+    with a single giant `impl` spanning login, chat, private messages,
+    files, news, and account-admin handlers.** AGENTS.md documents that
+    `session.rs`'s handlers belong together, but a type's `impl` blocks
+    can span multiple files in the same module: splitting into
+    `session/chat.rs`, `session/files.rs`, `session/news.rs`,
+    `session/accounts.rs`, `session/admin.rs` (each a separate
+    `impl Session { ... }`) would leave `connection.rs` with just the
+    struct definition, `run`, handshake, and the two dispatch tables.
+    Large, mechanical-but-risky diff; own reviewed PR.
+
+11. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
+    shapes**: its own doc comment admits `dir`/`name`/`login`/`raw` are
+    "unused for `TransferKind::Banner`". Cleaner shape: fold the
+    file-specific fields into `TransferKind::File { dir, name, raw }`,
+    leaving `TransferKind::Banner` bare, with `direction`/`size`/
+    `resume_offset`/`client_ip`/`login` shared at the top level. Touches
+    `state/transfer.rs`, `session/connection.rs`'s transfer-registration
+    call sites, and `server/htxf.rs`'s dispatch — a real data-shape
+    change, not a rename.
+
+12. **`ChatCommandProvider` is misnamed relative to its siblings.**
+    Unlike `AccountProvider`/`FileProvider`/`NewsProvider`/`BanProvider`/
+    `BannerProvider` (real storage backends), it dispatches `/`-prefixed
+    chat commands and provides no persistence — the same reasoning that
+    already pulled `FloodPolicy` out of the `*Provider` family (commit
+    48ae74d). Candidate rename: `ChatCommandDispatcher`/
+    `ConsoleCommandHandler`, likely paired with renaming the `commands/`
+    module itself (ambiguous against "commands" meaning wire
+    transactions) to something like `console/`. Touches ~8 files; a
+    naming/design call, not mechanical.
+
+13. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
+    self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
+    clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
+    serializes flag names by their Rust identifier directly into
+    on-disk account JSON (`"ALL"` or `["MSG", ...]`), so renaming the
+    constant breaks any already-persisted account store. Needs a
+    deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
+    read-side compat shim), not a code-only rename.
+
+15. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
+    `state/shared.rs`) are missing the timestamp the reference includes.**
+    The reference's `AddToMsgBoard` (`HotlineServ.cp`) header format is
+    `"From %#s (%s%2.2hu %2.2hu:%2.2hu):\r\r"` — poster name followed by
+    `(Mon day hour:minute):`, e.g. `From Alice (Jan 5 14:32):`. Our
+    `post_news` writes `From {poster}\r\r` with no date/time at all.
+    Separately, the reference's divider is a *footer* appended after each
+    message (`"\x3c\r______...\r"`, prefixed by a `<` byte), not a header
+    prepended before the next one like our `DIVIDER` constant. Needs a
+    fix that reproduces the reference's exact header/footer shape
+    (including its `<` marker byte, whose purpose isn't yet understood —
+    ask before guessing) rather than a quick timestamp bolt-on.
+
+16. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
+    stores classic news entries joined with bare `\r` (Mac Classic line
+    endings), inherited from the wire's own `\r`-separated text.** This
+    matches what the client displays, but on disk it reads as one giant
+    line in most modern editors/tools that only recognize `\n`/`\r\n` —
+    a `.txt` file people may reasonably expect to be openable normally.
+    Worth deciding deliberately (translate to native line endings on
+    disk and back on load, or at least document it prominently) rather
+    than leaving it as an accidental Mac-only artifact; the reference has
+    no equivalent question since its `MessageBoard.txt` only ever ran on
+    classic Mac OS itself.
+
+17. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
+    terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
+    `mode`/`users`/`lines`/`access`/`encoding` are session state, while
+    `input`/`should_quit` are terminal-interaction state, despite
+    `App`'s own doc comment describing it as pure update logic over
+    data. Splitting into a `Session` (domain) + input-handling pair (or
+    moving `input`/`should_quit` into `main.rs`'s own loop state) would
+    make that true. Touches `main.rs`'s event loop wiring; own reviewed
+    change.
+
+18. **Threaded news storage does not match the reference's on-disk
+    binary database format.** The reference stores each news category
+    in its own file. Each file starts with an `HLNZ` header (version 2,
+    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
+    ID-to-offset hash table (`_NZ_SHashInfo`/`_NZ_SIDOffset`). Each
+    article is a chain of fixed-size blocks: one `_NZ_SNewsItemBlock`
+    index block, plus one `_NZ_SGenericBlock` block for each stored MIME
+    type. Files sit at `<bundle>/<category>` on disk. A real sample file
+    confirms this: it starts with `HLNZ`, version 2, block size 256.
+    This server stores the whole news tree in one `news.json` file
+    instead (`hotline-daemon/src/news.rs`,
+    `FileNewsProvider`/`NewsProvider`). A matching format needs three
+    new parts: a binary codec (in `hotline-proto`'s style, pure
+    encode/decode, no I/O, testable without a filesystem), a block
+    allocator that can split and merge blocks when an article grows past
+    one block, and a new `NewsProvider` backend. This work mirrors
+    `HotlineServNewsDatabase.cp`. It is a large, standalone effort, not a
+    quick change. No known client reads the file format directly; only
+    the wire protocol matters for interop. This task stays low priority
+    for now.
+
 ## Resolved
 
 1. `UserSelfinfo`'s `Access` field now sends the session's real privileges
