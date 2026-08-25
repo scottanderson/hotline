@@ -50,7 +50,7 @@ pub fn decode(encoding: &'static Encoding, bytes: &[u8]) -> String {
 }
 
 /// Encode `s` as `encoding`. An unmappable codepoint becomes a single
-/// [`FALLBACK_BYTE`], not `encoding_rs`'s own multi-byte numeric
+/// `FALLBACK_BYTE`, not `encoding_rs`'s own multi-byte numeric
 /// reference (`"&#127881;"`).
 pub fn encode(encoding: &'static Encoding, s: &str) -> Vec<u8> {
     let mut encoder = encoding.new_encoder();

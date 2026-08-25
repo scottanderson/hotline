@@ -15,6 +15,7 @@ use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
 
 use crate::error::{ClientError, Result};
+use crate::login_result::LoginResult;
 
 type Conn = Framed<TcpStream, TransactionCodec>;
 
@@ -28,20 +29,9 @@ enum PendingState {
 
 type PendingMap = Arc<Mutex<PendingState>>;
 
-/// Fields returned by a successful login, per the `myTran_Login` (107) reply.
-#[derive(Debug, Clone, Default)]
-pub struct LoginResult {
-    /// Server's protocol version, echoed back.
-    pub version: Option<u16>,
-    /// Banner ID, used to fetch the banner over HTTP (version >= 151 only).
-    pub banner_id: Option<u16>,
-    /// Human-readable server name (version >= 151 only).
-    pub server_name: Option<String>,
-}
-
 /// A connected, logged-in-or-not Hotline client session. Cloning is
 /// cheap: it shares the same connection and pending-request table. The
-/// read half runs on its own spawned task ([`read_loop`]); this struct
+/// read half runs on its own spawned task (`read_loop`); this struct
 /// only touches the write half.
 #[derive(Clone)]
 pub struct HotlineClient {

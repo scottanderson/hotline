@@ -3,11 +3,13 @@
 //! logic.
 
 use hotline_client::HotlineClient;
-use hotline_proto::field_id::FieldId;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::UserNameWithInfo;
+use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
+
+use crate::line::{Line, LineKind};
 
 /// Where the UI is: still showing the server's agreement, or fully
 /// logged in and chatting.
@@ -25,20 +27,6 @@ pub enum EventOutcome {
     /// Nothing to show for the agreement; the caller should call
     /// [`App::accept_agreement`] right away to complete login.
     NeedsAgreementAccept,
-}
-
-/// One line in the scrollback: a chat message, a system notice (user
-/// joined/left, a permission-denied notice, ...), or an error.
-pub struct Line {
-    pub text: String,
-    pub kind: LineKind,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LineKind {
-    Chat,
-    System,
-    Error,
 }
 
 pub struct App {
@@ -321,8 +309,8 @@ mod tests {
     /// would misread this push and silently drop it here.
     #[test]
     fn chat_invite_push_is_recognized_despite_sharing_its_wire_value_with_a_client_opcode() {
-        use hotline_proto::field_id::FieldId;
         use hotline_proto::opcode::Opcode;
+        use hotline_proto::FieldId;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let invite = Transaction::push(
@@ -340,9 +328,9 @@ mod tests {
 
     #[test]
     fn apply_user_change_carries_admin_color_for_new_and_existing_users() {
-        use hotline_proto::field_id::FieldId;
         use hotline_proto::opcode::Opcode;
         use hotline_proto::types::UserFlags;
+        use hotline_proto::FieldId;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let admin_change = Transaction::push(
@@ -377,8 +365,8 @@ mod tests {
 
     #[test]
     fn apply_user_change_notes_a_rename() {
-        use hotline_proto::field_id::FieldId;
         use hotline_proto::opcode::Opcode;
+        use hotline_proto::FieldId;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
         let joined = Transaction::push(

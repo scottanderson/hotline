@@ -1,4 +1,6 @@
 mod app;
+mod args;
+mod line;
 mod ui;
 
 use clap::Parser;
@@ -12,36 +14,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use app::{App, EventOutcome, Mode};
+use args::Args;
 use hotline_client::HotlineClient;
-
-/// Terminal UI Hotline client.
-#[derive(Parser, Debug)]
-#[command(name = "hlc", version, about)]
-struct Args {
-    /// Server host.
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-
-    /// Server port.
-    #[arg(long, default_value_t = 5500)]
-    port: u16,
-
-    /// Account login (blank for guest).
-    #[arg(long, default_value = "")]
-    login: String,
-
-    /// Account password.
-    #[arg(long, default_value = "")]
-    password: String,
-
-    /// Display nickname.
-    #[arg(long, default_value = "RustHL")]
-    nick: String,
-
-    /// Icon ID.
-    #[arg(long, default_value_t = 0)]
-    icon: u16,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

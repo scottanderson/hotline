@@ -1,6 +1,6 @@
 //! Transaction opcodes.
 //!
-//! A reply carries the sentinel [`TASK_REPLY`] (`0x0001_0000`) in the
+//! A reply carries the sentinel `TASK_REPLY` (`0x0001_0000`) in the
 //! type field, matched by masking the high 16 bits (some servers OR the
 //! request's opcode into the low bits, e.g. `0x0001006b`). The specific
 //! request a reply answers is identified by transaction ID alone.
@@ -17,7 +17,7 @@
 //!
 //! Variant names track the tail of the original wire constant;
 //! `opcode_names!`'s invocation pairs each variant with that original
-//! name once, and `Debug` reads it back via [`Opcode::original_name`]
+//! name once, and `Debug` reads it back via `Opcode::original_name`
 //! rather than storing the string a second time. A few names (`ChatSend`/
 //! `ChatMsg` for the two different `Chat` opcodes, `OldPostNews`/`NewMsg`
 //! for the two different `NewsfilePost` opcodes, ...) exist only because
@@ -297,7 +297,7 @@ impl std::fmt::Debug for Opcode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionType {
     /// This transaction is a reply to an earlier request (see
-    /// [`TASK_REPLY`]); match it back to the request by transaction ID.
+    /// `TASK_REPLY`); match it back to the request by transaction ID.
     Reply,
     /// A client request opcode.
     Request(Opcode),

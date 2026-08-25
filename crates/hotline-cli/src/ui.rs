@@ -7,7 +7,8 @@ use ratatui::text::{Line as UiLine, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, LineKind, Mode};
+use crate::app::{App, Mode};
+use crate::line::LineKind;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     if let Mode::Agreement(text) = &app.mode {
