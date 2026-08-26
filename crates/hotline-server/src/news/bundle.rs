@@ -8,6 +8,7 @@ use crate::news::{
 
 /// A folder containing other bundles/categories, keyed by name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct NewsBundle {
     pub entries: HashMap<String, NewsNode>,
 }
@@ -210,6 +211,19 @@ impl NewsBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bundle_serializes_as_a_bare_map_with_no_entries_wrapper() {
+        let mut root = NewsBundle::default();
+        root.mkdir(&[], "Games").unwrap();
+
+        let json = serde_json::to_value(&root).unwrap();
+
+        assert!(json.get("entries").is_none(), "{json}");
+        assert!(json.get("Games").is_some(), "{json}");
+        let round_tripped: NewsBundle = serde_json::from_value(json).unwrap();
+        assert!(round_tripped.entries.contains_key("Games"));
+    }
 
     #[test]
     fn mkdir_and_mkcategory_reject_a_duplicate_name() {
