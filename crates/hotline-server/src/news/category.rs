@@ -68,7 +68,7 @@ impl NewsCategory {
         title: String,
         poster: String,
         flags: u32,
-        flavor: String,
+        mime_type: String,
         data: Vec<u8>,
     ) -> u32 {
         let id = self.next_article_id;
@@ -81,8 +81,7 @@ impl NewsCategory {
                 date: now_as_hl_date(),
                 title,
                 poster,
-                flavor,
-                data,
+                data: [(mime_type, data)].into(),
                 children: Vec::new(),
             },
         );

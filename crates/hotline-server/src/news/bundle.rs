@@ -155,7 +155,7 @@ impl NewsBundle {
         title: String,
         poster: String,
         flags: u32,
-        flavor: String,
+        mime_type: String,
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
         // Each is wire-encoded with a 1-byte length prefix in the
@@ -164,7 +164,7 @@ impl NewsBundle {
         // truncates silently rather than rejecting; this server accepts
         // up to the wire format's real 255-byte limit and errors past
         // it, a deliberate, more permissive divergence.
-        if title.len() > 255 || poster.len() > 255 || flavor.len() > 255 {
+        if title.len() > 255 || poster.len() > 255 || mime_type.len() > 255 {
             return Err("post data too long");
         }
         let category = self
@@ -173,7 +173,7 @@ impl NewsBundle {
         if parent_id != 0 && !category.articles.contains_key(&parent_id) {
             return Err("no such parent article");
         }
-        Ok(category.add_article(parent_id, title, poster, flags, flavor, data))
+        Ok(category.add_article(parent_id, title, poster, flags, mime_type, data))
     }
 
     /// Delete an article from the category at `components`. If

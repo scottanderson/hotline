@@ -664,15 +664,18 @@ impl SharedState {
         Ok(NewsArticleListData {
             articles: articles
                 .into_iter()
-                .map(|(id, article)| NewsArticleSummary {
-                    id,
-                    date: article.date,
-                    parent_id: article.parent_id,
-                    flags: article.flags,
-                    title: article.title.clone(),
-                    poster: article.poster.clone(),
-                    flavor: article.flavor.clone(),
-                    flavor_size: article.data.len() as u16,
+                .map(|(id, article)| {
+                    let (mime_type, data) = article.primary_flavor();
+                    NewsArticleSummary {
+                        id,
+                        date: article.date,
+                        parent_id: article.parent_id,
+                        flags: article.flags,
+                        title: article.title.clone(),
+                        poster: article.poster.clone(),
+                        flavor: mime_type.to_string(),
+                        flavor_size: data.len() as u16,
+                    }
                 })
                 .collect(),
         })
@@ -697,7 +700,6 @@ impl SharedState {
             next_id: view.next_id,
             parent_id: view.article.parent_id,
             first_child_id: view.article.children.first().copied().unwrap_or(0),
-            flavor: view.article.flavor.clone(),
             data: view.article.data.clone(),
         })
     }
@@ -756,7 +758,7 @@ impl SharedState {
         title: String,
         poster: String,
         flags: u32,
-        flavor: String,
+        mime_type: String,
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
         let _guard = self.news_tree_lock.lock().await;
@@ -767,7 +769,7 @@ impl SharedState {
             title,
             poster,
             flags,
-            flavor,
+            mime_type,
             data,
         )?;
         self.news_provider.save_tree(Arc::new(tree)).await;

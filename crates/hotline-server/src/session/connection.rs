@@ -1463,8 +1463,8 @@ impl Session {
             FieldId::NewsArtDataFlavor,
             requested_flavor.clone(),
         ));
-        if requested_flavor == detail.flavor {
-            fields.push(Field::bytes(FieldId::NewsArtData, detail.data));
+        if let Some(data) = detail.data.get(&requested_flavor) {
+            fields.push(Field::bytes(FieldId::NewsArtData, data.clone()));
         }
         vec![tx.reply(fields)]
     }
@@ -1490,7 +1490,7 @@ impl Session {
         // Openline stores an empty-string flavor when the client omits
         // this field; a real client always sends it, so defaulting to a
         // real MIME type here instead is a deliberate divergence.
-        let flavor = tx
+        let mime_type = tx
             .news_article_flavor(encoding)
             .unwrap_or_else(|| "text/plain".to_string());
 
@@ -1501,7 +1501,7 @@ impl Session {
                 title,
                 self.name.clone(),
                 flags,
-                flavor,
+                mime_type,
                 data,
             )
             .await

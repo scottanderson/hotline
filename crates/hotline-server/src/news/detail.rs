@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use hotline_proto::types::HlDate;
 
 /// One threaded news article's full data, for a `myTran_GetNewsArtData`
@@ -11,6 +13,6 @@ pub struct NewsArticleDetail {
     pub next_id: u32,
     pub parent_id: u32,
     pub first_child_id: u32,
-    pub flavor: String,
-    pub data: Vec<u8>,
+    /// This article's stored bodies, keyed by MIME type.
+    pub data: BTreeMap<String, Vec<u8>>,
 }

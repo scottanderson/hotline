@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::news::iso_date;
@@ -15,8 +17,7 @@ pub(crate) struct NewsArticleReprRef<'a> {
     pub(crate) date: hotline_proto::types::HlDate,
     pub(crate) title: &'a str,
     pub(crate) poster: &'a str,
-    pub(crate) flavor: &'a str,
-    pub(crate) data: ArticleDataRef<'a>,
+    pub(crate) data: BTreeMap<&'a str, ArticleDataRef<'a>>,
     pub(crate) children: &'a [u32],
 }
 
