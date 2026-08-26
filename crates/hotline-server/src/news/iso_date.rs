@@ -1,8 +1,11 @@
-//! `serde` support for [`HlDate`] as an ISO 8601 string, e.g.
-//! `"2024-01-15T12:34:56.789Z"`. Plug in via `#[serde(with = "iso_date")]`.
+//! Convert [`HlDate`] to and from an ISO 8601 string, e.g.
+//! `"2024-01-15T12:34:56.789Z"`. Plug the read side in with
+//! `#[serde(with = "iso_date")]`. [`to_string`] is the plain,
+//! `serde`-free form [`deserialize`] builds on. Call `to_string`
+//! directly on the write side.
 
 use hotline_proto::types::HlDate;
-use serde::{Deserialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer};
 
 /// Days since 1970-01-01 for a proleptic Gregorian `(year, month, day)`.
 /// Howard Hinnant's `days_from_civil`, a standard, well known algorithm.
@@ -32,15 +35,16 @@ pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-pub(crate) fn serialize<S: Serializer>(date: &HlDate, serializer: S) -> Result<S::Ok, S::Error> {
+/// Format `date` as an ISO 8601 string.
+pub(crate) fn to_string(date: &HlDate) -> String {
     let days = date.seconds / 86400;
     let secs_of_day = date.seconds % 86400;
     let (_, month, day) = civil_from_days(days_from_civil(date.year as i64, 1, 1) + days as i64);
     let (hour, minute, second) = (secs_of_day / 3600, secs_of_day / 60 % 60, secs_of_day % 60);
-    serializer.serialize_str(&format!(
+    format!(
         "{:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
         date.year, date.milliseconds,
-    ))
+    )
 }
 
 pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<HlDate, D::Error> {
@@ -96,9 +100,9 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, days_from_civil, HlDate};
+    use super::{civil_from_days, days_from_civil, to_string, HlDate};
 
-    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(serde::Deserialize)]
     struct Wrapper(#[serde(with = "super")] HlDate);
 
     #[test]
@@ -124,9 +128,10 @@ mod tests {
             seconds: 64 * 86400 + 47655,
         };
 
-        let json = serde_json::to_value(Wrapper(date)).unwrap();
+        let text = to_string(&date);
 
-        assert_eq!(json, "2024-03-05T13:14:15.789Z", "{json}");
+        assert_eq!(text, "2024-03-05T13:14:15.789Z");
+        let json = serde_json::Value::String(text);
         let Wrapper(round_tripped) = serde_json::from_value(json).unwrap();
         assert_eq!(round_tripped, date);
     }

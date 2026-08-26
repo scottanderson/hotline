@@ -260,6 +260,20 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
+19. **Two open design questions from news article/category JSON
+    storage.** `NewsArticle::primary_flavor` picks
+    `self.data.iter().next()` on a `BTreeMap`, so once an article
+    legitimately holds more than one flavor, "primary" means
+    alphabetically-first MIME type, not first-posted or preferred —
+    harmless today (always exactly one entry) but worth deciding before
+    multi-flavor posting is wired up. Separately, nesting a category's
+    articles under their JSON parent made both `ArticleNodeRef::serialize`
+    and `category.rs`'s `flatten` recurse per thread-depth, where the old
+    flat-map-plus-id-links shape needed no recursion to save/load a
+    category; a pathologically deep, self-nested reply chain could now
+    stack-overflow the server on save or load. Worth a depth cap or an
+    iterative rewrite if deep threads ever become realistic.
+
 ## Resolved
 
 1. `UserSelfinfo`'s `Access` field now sends the session's real privileges
@@ -272,9 +286,12 @@ one-shared-room model.
 4. `on_file_mkdir`/`on_file_getinfo` support the `FileName`-absent
    fallback via `Session::file_name_and_dir_from_path_tail`.
 5. Threaded news implemented in `crate::news` (bundles/categories/
-   articles, all eight `News*` opcodes, `NEWS_*` privilege gating);
-   `NewsArticle` still single-flavor only, revisit if multi-flavor
-   posting is ever needed.
+   articles, all eight `News*` opcodes, `NEWS_*` privilege gating).
+   `NewsArticle::data` stores a map from MIME type to body, so it can
+   already hold more than one flavor. The wire protocol still posts and
+   asks for one flavor at a time; revisit `on_news_postthread`/
+   `on_news_getthread` and `NewsArticleSummary::encode`'s flavor count if
+   multi-flavor posting is ever needed.
 6. HTXF resume support: `FILE_GET` honors `FileResumeData` on download;
    `FILE_PUT`'s `opts == 1` resumes an upload via a `.hpf` working-name
    convention (`FileProvider::finish_upload`/`partial_upload_name`),

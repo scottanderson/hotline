@@ -12,13 +12,13 @@ mod article;
 mod bundle;
 mod category;
 mod detail;
+mod flavor_map;
 mod iso_date;
 mod item;
 mod listing;
 mod memory;
 mod node;
 mod provider;
-mod repr;
 mod summary;
 mod view;
 

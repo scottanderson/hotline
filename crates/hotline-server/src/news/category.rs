@@ -1,16 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::SystemTime;
 
 use hotline_proto::types::HlDate;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-use crate::news::iso_date::{civil_from_days, days_from_civil};
+use crate::news::flavor_map::{self, FlavorMapRef};
+use crate::news::iso_date::{self, civil_from_days, days_from_civil};
 use crate::news::NewsArticle;
 
 /// A leaf category: a thread of articles plus the bookkeeping mirrored
 /// into `myField_NewsCatListData15` (323).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NewsCategory {
     pub guid: Uuid,
     /// Incremented by one each time an article is added. Never reset.
@@ -153,6 +155,135 @@ impl NewsCategory {
     }
 }
 
+/// A category's JSON shape nests each article under its parent, not by
+/// id link.
+impl Serialize for NewsCategory {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut s = serializer.serialize_struct("NewsCategory", 3)?;
+        s.serialize_field("guid", &self.guid)?;
+        s.serialize_field("next_article_id", &self.next_article_id)?;
+        let roots: Vec<_> = self
+            .roots
+            .iter()
+            .filter_map(|&id| self.node_ref(id))
+            .collect();
+        s.serialize_field("articles", &roots)?;
+        s.end()
+    }
+}
+
+impl NewsCategory {
+    fn node_ref(&self, id: u32) -> Option<ArticleNodeRef<'_>> {
+        self.articles.get(&id).map(|article| ArticleNodeRef {
+            id,
+            article,
+            category: self,
+        })
+    }
+}
+
+/// One article plus its nested replies, borrowed from a [`NewsCategory`]
+/// for serialization.
+struct ArticleNodeRef<'a> {
+    id: u32,
+    article: &'a NewsArticle,
+    category: &'a NewsCategory,
+}
+
+impl Serialize for ArticleNodeRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut s = serializer.serialize_struct("NewsArticle", 7)?;
+        s.serialize_field("id", &self.id)?;
+        match self.article.flags {
+            0 => s.skip_field("flags")?,
+            flags => s.serialize_field("flags", &flags)?,
+        }
+        s.serialize_field("date", &iso_date::to_string(&self.article.date))?;
+        s.serialize_field("title", &self.article.title)?;
+        s.serialize_field("poster", &self.article.poster)?;
+        s.serialize_field("data", &FlavorMapRef(&self.article.data))?;
+        let children: Vec<_> = self
+            .article
+            .children
+            .iter()
+            .filter_map(|&id| self.category.node_ref(id))
+            .collect();
+        match children.is_empty() {
+            true => s.skip_field("children")?,
+            false => s.serialize_field("children", &children)?,
+        }
+        s.end()
+    }
+}
+
+/// One article node read back from JSON, nested under its parent.
+#[derive(Deserialize)]
+struct ArticleNode {
+    id: u32,
+    #[serde(default)]
+    flags: u32,
+    #[serde(with = "iso_date")]
+    date: HlDate,
+    title: String,
+    poster: String,
+    #[serde(with = "flavor_map")]
+    data: BTreeMap<String, Vec<u8>>,
+    #[serde(default)]
+    children: Vec<ArticleNode>,
+}
+
+/// Stores `node` and its descendants in `out`, setting each `parent_id`
+/// from the nesting. Returns `node`'s own id.
+fn flatten(node: ArticleNode, parent_id: u32, out: &mut HashMap<u32, NewsArticle>) -> u32 {
+    let id = node.id;
+    let children = node
+        .children
+        .into_iter()
+        .map(|child| flatten(child, id, out))
+        .collect();
+    out.insert(
+        id,
+        NewsArticle {
+            parent_id,
+            flags: node.flags,
+            date: node.date,
+            title: node.title,
+            poster: node.poster,
+            data: node.data,
+            children,
+        },
+    );
+    id
+}
+
+impl<'de> Deserialize<'de> for NewsCategory {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            guid: Uuid,
+            next_article_id: u32,
+            articles: Vec<ArticleNode>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let mut articles = HashMap::new();
+        let roots = raw
+            .articles
+            .into_iter()
+            .map(|node| flatten(node, 0, &mut articles))
+            .collect();
+        Ok(NewsCategory {
+            guid: raw.guid,
+            // add_sn always equals next_article_id; see add_article.
+            add_sn: raw.next_article_id,
+            del_sn: 1,
+            next_article_id: raw.next_article_id,
+            articles,
+            roots,
+        })
+    }
+}
+
 /// The current time as an [`HlDate`]: `year(2) | milliseconds(2) |
 /// seconds-since-midnight-Jan-1(4)`.
 fn now_as_hl_date() -> HlDate {
@@ -198,5 +329,142 @@ mod tests {
         assert_ne!(a.guid, b.guid);
         assert_eq!(a.guid.get_version_num(), 4);
         assert_eq!(b.guid.get_version_num(), 4);
+    }
+
+    #[test]
+    fn a_reply_nests_under_its_parent_in_json_instead_of_linking_by_id() {
+        let mut category = NewsCategory::new();
+        let root = category.add_article(
+            0,
+            "Root".into(),
+            "alice".into(),
+            0,
+            "text/plain".into(),
+            b"hi".to_vec(),
+        );
+        category.add_article(
+            root,
+            "Reply".into(),
+            "bob".into(),
+            0,
+            "text/plain".into(),
+            b"hey".to_vec(),
+        );
+
+        let json = serde_json::to_value(&category).unwrap();
+
+        let root_json = &json["articles"][0];
+        assert_eq!(root_json["id"], root);
+        assert_eq!(root_json["title"], "Root");
+        assert_eq!(root_json["children"][0]["title"], "Reply");
+        // No field links one article to another by id.
+        assert!(root_json.get("parent_id").is_none(), "{json}");
+        assert!(
+            root_json["children"][0].get("parent_id").is_none(),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_thread_round_trips_through_the_nested_json_shape() {
+        let mut category = NewsCategory::new();
+        let root = category.add_article(
+            0,
+            "Root".into(),
+            "alice".into(),
+            0,
+            "text/plain".into(),
+            b"hi".to_vec(),
+        );
+        let reply = category.add_article(
+            root,
+            "Reply".into(),
+            "bob".into(),
+            0,
+            "text/plain".into(),
+            b"hey".to_vec(),
+        );
+
+        let json = serde_json::to_value(&category).unwrap();
+        let round_tripped: NewsCategory = serde_json::from_value(json).unwrap();
+
+        assert_eq!(round_tripped.roots, vec![root]);
+        assert_eq!(round_tripped.articles[&root].children, vec![reply]);
+        assert_eq!(round_tripped.articles[&reply].parent_id, root);
+        assert_eq!(round_tripped.articles[&reply].title, "Reply");
+    }
+
+    #[test]
+    fn add_sn_and_del_sn_are_recovered_from_next_article_id_not_stored() {
+        let mut category = NewsCategory::new();
+        category.add_article(
+            0,
+            "Root".into(),
+            "alice".into(),
+            0,
+            "text/plain".into(),
+            b"hi".to_vec(),
+        );
+
+        let json = serde_json::to_value(&category).unwrap();
+
+        assert!(json.get("add_sn").is_none(), "{json}");
+        assert!(json.get("del_sn").is_none(), "{json}");
+        let round_tripped: NewsCategory = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped.add_sn, category.add_sn);
+        assert_eq!(round_tripped.del_sn, category.del_sn);
+    }
+
+    #[test]
+    fn a_leaf_article_with_no_flags_omits_both_from_json() {
+        let mut category = NewsCategory::new();
+        category.add_article(
+            0,
+            "Root".into(),
+            "alice".into(),
+            0,
+            "text/plain".into(),
+            b"hi".to_vec(),
+        );
+
+        let json = serde_json::to_value(&category).unwrap();
+
+        let root_json = &json["articles"][0];
+        assert!(root_json.get("flags").is_none(), "{json}");
+        assert!(root_json.get("children").is_none(), "{json}");
+        let round_tripped: NewsCategory = serde_json::from_value(json).unwrap();
+        let article = round_tripped.articles.values().next().unwrap();
+        assert_eq!(article.flags, 0);
+        assert!(article.children.is_empty());
+    }
+
+    #[test]
+    fn a_flagged_article_with_a_reply_keeps_both_in_json() {
+        let mut category = NewsCategory::new();
+        let root = category.add_article(
+            0,
+            "Root".into(),
+            "alice".into(),
+            7,
+            "text/plain".into(),
+            b"hi".to_vec(),
+        );
+        category.add_article(
+            root,
+            "Reply".into(),
+            "bob".into(),
+            0,
+            "text/plain".into(),
+            b"hey".to_vec(),
+        );
+
+        let json = serde_json::to_value(&category).unwrap();
+
+        let root_json = &json["articles"][0];
+        assert_eq!(root_json["flags"], 7);
+        assert_eq!(root_json["children"][0]["title"], "Reply");
+        let round_tripped: NewsCategory = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped.articles[&root].flags, 7);
+        assert_eq!(round_tripped.articles[&root].children, vec![root + 1]);
     }
 }
