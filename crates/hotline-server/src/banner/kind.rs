@@ -6,12 +6,15 @@ pub enum BannerKind {
     /// A fetchable image; `format` is the 4-byte type tag sent as
     /// `myField_ServerBannerType`, e.g. `*b"JPEG"`, `*b"GIFf"`, `*b"PICT"`,
     /// or `*b"BMP "`.
-    Image { format: [u8; 4] },
+    Image {
+        /// The 4-byte type tag, e.g. `*b"JPEG"`.
+        format: [u8; 4],
+    },
 }
 
 impl BannerKind {
     /// The 4-byte tag sent as `myField_ServerBannerType`.
-    pub fn type_tag(&self) -> [u8; 4] {
+    pub const fn type_tag(&self) -> [u8; 4] {
         match self {
             Self::Url(_) => *b"URL ",
             Self::Image { format } => *format,

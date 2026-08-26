@@ -271,7 +271,7 @@ impl App {
         Some(std::mem::take(&mut self.input))
     }
 
-    pub fn quit(&mut self) {
+    pub const fn quit(&mut self) {
         self.should_quit = true;
     }
 

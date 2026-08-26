@@ -10,6 +10,7 @@ use crate::news::{
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NewsBundle {
+    /// This bundle's own bundles/categories, keyed by name.
     pub entries: HashMap<String, NewsNode>,
 }
 

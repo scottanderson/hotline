@@ -12,3 +12,6 @@ hotline-proto = { workspace = true }
 tokio-util = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
+
+[lints]
+workspace = true

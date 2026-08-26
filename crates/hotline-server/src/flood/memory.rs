@@ -19,6 +19,7 @@ pub struct InMemoryFloodPolicy {
 }
 
 impl InMemoryFloodPolicy {
+    /// Creates a policy with no accumulated points for any user.
     pub fn new(config: FloodConfig) -> Self {
         Self {
             config,
@@ -26,7 +27,7 @@ impl InMemoryFloodPolicy {
         }
     }
 
-    fn points_for(&self, opcode: Opcode) -> u32 {
+    const fn points_for(&self, opcode: Opcode) -> u32 {
         match opcode {
             Opcode::ChatSend | Opcode::SendInstantMsg => self.config.chat_points,
             _ => self.config.default_points,

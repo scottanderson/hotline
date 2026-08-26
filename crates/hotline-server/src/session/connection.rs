@@ -230,7 +230,7 @@ impl Session {
 
     /// Whether this session should receive a broadcast/announce push, based
     /// on its own privileges. Pushes not listed here are unfiltered.
-    fn may_receive(&self, opcode: TransactionType) -> bool {
+    const fn may_receive(&self, opcode: TransactionType) -> bool {
         match opcode {
             TransactionType::Push(Opcode::NotifyChangeUser)
             | TransactionType::Push(Opcode::UserPart) => {

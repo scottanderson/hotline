@@ -9,8 +9,12 @@ use super::NewsBundle;
 /// threaded tree are independent load/save pairs, not one snapshot.
 #[async_trait]
 pub trait NewsProvider: Send + Sync {
+    /// Loads the flat news text.
     async fn load_flat(&self) -> Arc<Box<str>>;
+    /// Saves the flat news text.
     async fn save_flat(&self, flat: Arc<Box<str>>);
+    /// Loads the threaded news tree.
     async fn load_tree(&self) -> Arc<NewsBundle>;
+    /// Saves the threaded news tree.
     async fn save_tree(&self, tree: Arc<NewsBundle>);
 }

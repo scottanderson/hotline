@@ -13,6 +13,7 @@ pub struct UrlBannerProvider {
 }
 
 impl UrlBannerProvider {
+    /// Creates a provider that always reports `url`.
     pub fn new(url: impl Into<String>) -> Self {
         Self { url: url.into() }
     }

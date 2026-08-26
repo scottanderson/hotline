@@ -1,3 +1,5 @@
+//! `hlc`, a terminal Hotline client built on `hotline-client`.
+
 mod app;
 mod args;
 mod line;

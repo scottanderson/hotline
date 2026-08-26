@@ -1,3 +1,5 @@
+//! `hls`, a Hotline server daemon built on `hotline-server`.
+
 mod accounts;
 mod args;
 mod banner;

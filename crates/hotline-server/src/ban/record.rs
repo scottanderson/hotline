@@ -4,6 +4,7 @@ use std::time::SystemTime;
 /// One address's ban: when it was imposed and, unless permanent, when it lifts.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BanRecord {
+    /// The banned address.
     pub ip: IpAddr,
     /// `None` means the ban never expires.
     #[serde(with = "until_rfc3339")]

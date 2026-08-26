@@ -28,7 +28,7 @@ impl MemWriter {
 
     /// Like [`Self::new`], but appends to the file's existing bytes
     /// instead of truncating them.
-    pub(crate) fn append(root: Arc<Mutex<Dir>>, dir: Vec<String>, name: String) -> Self {
+    pub(crate) const fn append(root: Arc<Mutex<Dir>>, dir: Vec<String>, name: String) -> Self {
         Self { root, dir, name }
     }
 }

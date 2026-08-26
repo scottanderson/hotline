@@ -14,8 +14,5 @@ num_enum = { workspace = true }
 encoding_rs = { workspace = true }
 arc-swap = { workspace = true }
 
-[lints.rust]
-missing_docs = "warn"
-
-[lints.clippy]
-missing_const_for_fn = "warn"
+[lints]
+workspace = true

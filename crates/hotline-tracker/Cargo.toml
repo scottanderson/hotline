@@ -10,3 +10,6 @@ rust-version.workspace = true
 [dependencies]
 hotline-proto = { workspace = true }
 thiserror = { workspace = true }
+
+[lints]
+workspace = true

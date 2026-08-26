@@ -17,6 +17,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/scottanderson/hotline"
 rust-version = "1.83"
 
+[workspace.lints.rust]
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+missing_const_for_fn = "warn"
+
 [workspace.dependencies]
 hotline-proto = { path = "crates/hotline-proto" }
 hotline-codec = { path = "crates/hotline-codec" }

@@ -21,7 +21,9 @@ pub struct Account {
     /// Compared for exact equality against the submitted password; an
     /// empty stored password requires an empty submission too.
     pub password: String,
+    /// Display name shown to other users.
     pub name: String,
+    /// Privileges granted on successful login.
     #[serde(with = "crate::bitflags_serde")]
     pub access: Access,
     /// See [`AccessExtra`].
