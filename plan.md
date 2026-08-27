@@ -25,6 +25,12 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   `g0away=`, and `visible=`, since this server has no user color or
   invisibility. A denied command names the missing privilege through
   `RequireFlags::require`, not mhxd's fixed text.
+- **A kicked client gets a drain window.** `ProcessTran_DisconnectUser`
+  calls `Disconnect()` outright, with its own comment saying it avoids
+  `StartDisconnect()` "because we want to be sure that the Client gets
+  disconnected". This server instead reads and discards for
+  `KICK_DRAIN_TIMEOUT` (3 seconds) so the client can display the
+  `myTran_DisconnectMsg` (111) notice, then closes regardless.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -71,22 +77,7 @@ one-shared-room model.
    invisible to those operations by design, not by omission — flagged in
    case that turns out to matter for a real client.
 
-4. **A polite kick (`Politequit` push, `on_user_kick`'s ban path) closes
-   the connection immediately after sending the notice, with no chance
-   for the client to drain it first.** `Session::run`'s select loop
-   (`session.rs`) does `writer.send(tx).await?` then `break`s straight
-   into dropping the socket — the same shape that caused the `FILE_GET`/
-   `BANNER_GET` "connection closed before transfer complete" bug (fixed by
-   waiting for the client's own close instead of closing first). Unlike
-   that fix, an unconditional wait for the peer to close isn't safe to
-   reuse verbatim here: a kicked client may be exactly the unresponsive
-   case an admin is disconnecting, so waiting forever would leak a hung
-   connection per stuck kick. Needs a bounded wait (drain with a short
-   timeout, then force-close regardless). The silent-kick path
-   (`RecipientMessage::Disconnect`) is unaffected: it sends nothing before
-   closing, matching the reference's own immediate `Disconnect()`.
-
-5. **Enum variant naming isn't consistently the openline constant's tail
+4. **Enum variant naming isn't consistently the openline constant's tail
    yet.** `FieldId`/`Opcode` already follow this (see AGENTS.md's Naming
    section); other enums need the same audit. First pass (every `pub enum`
    in `hotline-proto`/`hotline-server`/`hotline-client`, plus session.rs's
@@ -106,7 +97,7 @@ one-shared-room model.
    of the backlog lands, since later items are likely to add more enums
    this pass didn't have to consider.
 
-6. **`HTRK` tracker support stops at wire-format types.**
+5. **`HTRK` tracker support stops at wire-format types.**
    `hotline-tracker` has `encode_client_request_v1`/`decode_reply_header`/
    `TrackedServer::decode`/`ServerBeacon::encode`, but nothing in the
    workspace calls any of them: `hls` never sends a `ServerBeacon` to
@@ -116,7 +107,7 @@ one-shared-room model.
    `hotline-cli` that opens the tracker's TCP port, sends the client
    request, and decodes the `TrackedServer` list back.
 
-7. **Split transactions (`len` != `len2`, `HLProtocol.md`'s "Total size"
+6. **Split transactions (`len` != `len2`, `HLProtocol.md`'s "Total size"
    vs. "Data size") aren't reassembled.** `transaction.rs` already
    documents this as an assumption (`len == len2` on the wire).
    Confirmed against the reference: its transport (`UTransact.cp`)
@@ -137,7 +128,7 @@ one-shared-room model.
    ids. No corresponding encode-side change needed, since nothing
    expects to receive a deliberately split transaction from us.
 
-8. **`UserNameWithInfo::flags` is a raw `u16` even though `UserFlags`
+7. **`UserNameWithInfo::flags` is a raw `u16` even though `UserFlags`
    (`types/user_flags.rs`) exists for exactly this field** — its own doc
    comment says "Bit meanings for `UserNameWithInfo::flags`", but every
    caller does `.bits()`/raw `u16` math instead of using the typed flags.
@@ -146,7 +137,7 @@ one-shared-room model.
    standalone commit, not a quick edit. Found during the naming/structure
    review after the one-file-per-struct reorg (commit 3c7df8b).
 
-9. **`session/connection.rs` (~6800 lines) holds one `Session` struct
+8. **`session/connection.rs` (~6800 lines) holds one `Session` struct
    with a single giant `impl` spanning login, chat, private messages,
    files, news, and account-admin handlers.** AGENTS.md documents that
    `session.rs`'s handlers belong together, but a type's `impl` blocks
@@ -157,17 +148,17 @@ one-shared-room model.
    struct definition, `run`, handshake, and the two dispatch tables.
    Large, mechanical-but-risky diff; own reviewed PR.
 
-10. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
-    shapes**: its own doc comment admits `dir`/`name`/`login`/`raw` are
-    "unused for `TransferKind::Banner`". Cleaner shape: fold the
-    file-specific fields into `TransferKind::File { dir, name, raw }`,
-    leaving `TransferKind::Banner` bare, with `direction`/`size`/
-    `resume_offset`/`client_ip`/`login` shared at the top level. Touches
-    `state/transfer.rs`, `session/connection.rs`'s transfer-registration
-    call sites, and `server/htxf.rs`'s dispatch — a real data-shape
-    change, not a rename.
+9. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
+   shapes**: its own doc comment admits `dir`/`name`/`login`/`raw` are
+   "unused for `TransferKind::Banner`". Cleaner shape: fold the
+   file-specific fields into `TransferKind::File { dir, name, raw }`,
+   leaving `TransferKind::Banner` bare, with `direction`/`size`/
+   `resume_offset`/`client_ip`/`login` shared at the top level. Touches
+   `state/transfer.rs`, `session/connection.rs`'s transfer-registration
+   call sites, and `server/htxf.rs`'s dispatch — a real data-shape
+   change, not a rename.
 
-11. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
+10. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
     self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
     clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
     serializes flag names by their Rust identifier directly into
@@ -176,7 +167,7 @@ one-shared-room model.
     deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
     read-side compat shim), not a code-only rename.
 
-12. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
+11. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
     `state/shared.rs`) are missing the timestamp the reference includes.**
     The reference's `AddToMsgBoard` (`HotlineServ.cp`) header format is
     `"From %#s (%s%2.2hu %2.2hu:%2.2hu):\r\r"` — poster name followed by
@@ -189,7 +180,7 @@ one-shared-room model.
     (including its `<` marker byte, whose purpose isn't yet understood —
     ask before guessing) rather than a quick timestamp bolt-on.
 
-13. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
+12. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
     stores classic news entries joined with bare `\r` (Mac Classic line
     endings), inherited from the wire's own `\r`-separated text.** This
     matches what the client displays, but on disk it reads as one giant
@@ -201,7 +192,7 @@ one-shared-room model.
     no equivalent question since its `MessageBoard.txt` only ever ran on
     classic Mac OS itself.
 
-14. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
+13. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
     terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
     `mode`/`users`/`lines`/`access`/`encoding` are session state, while
     `input`/`should_quit` are terminal-interaction state, despite
@@ -211,7 +202,7 @@ one-shared-room model.
     make that true. Touches `main.rs`'s event loop wiring; own reviewed
     change.
 
-15. **Threaded news storage does not match the reference's on-disk
+14. **Threaded news storage does not match the reference's on-disk
     binary database format.** The reference stores each news category
     in its own file. Each file starts with an `HLNZ` header (version 2,
     `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -232,7 +223,7 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
-16. **Two open design questions from news article/category JSON
+15. **Two open design questions from news article/category JSON
     storage.** `NewsArticle::primary_flavor` picks
     `self.data.iter().next()` on a `BTreeMap`, so once an article
     legitimately holds more than one flavor, "primary" means
@@ -445,6 +436,13 @@ one-shared-room model.
     `--news-file`/`--news-tree-file`, `--ban-file`, `--banner`), so a
     missing or unreadable file says which flag to fix instead of
     reporting a bare OS error.
+
+52. A polite kick now removes the user from state at once, then gives the
+    client a bounded (`KICK_DRAIN_TIMEOUT`, 3 seconds) chance to drain
+    its `myTran_DisconnectMsg` (111) push before the connection closes.
+    Before, the connection closed right after the send. openline closes
+    at once, so the drain is a deliberate divergence. The silent-kick
+    path (`RecipientMessage::Disconnect`) is unchanged.
 
 ## Needs manual verification against the real client
 

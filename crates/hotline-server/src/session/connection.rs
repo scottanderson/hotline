@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, Stream, StreamExt};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -69,6 +69,15 @@ impl From<u16> for KickBan {
 /// Duration of a temporary kick-to-ban (`Options` (113) value 1). Not yet
 /// configurable; a fixed default until this gets a `ServerConfig` knob.
 const TEMP_BAN_DURATION: Duration = Duration::from_secs(30 * 60);
+
+/// How long a kicked client may drain its `myTran_DisconnectMsg` (111)
+/// notice. openline closes at once.
+const KICK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Reads and discards `stream` until it ends or `timeout` elapses.
+async fn drain_with_timeout<S: Stream + Unpin>(mut stream: S, timeout: Duration) {
+    let _ = tokio::time::timeout(timeout, async { while stream.next().await.is_some() {} }).await;
+}
 
 /// Which opcodes a session may currently send.
 enum SessionState {
@@ -179,7 +188,11 @@ impl Session {
                                 writer.send(tx).await?;
                             }
                             if is_kick {
-                                break; // Politequit disconnects the user
+                                // Remove the user now; it can't be reached again.
+                                Self::leave_server(&session, &state).await;
+                                // Let the client read the notice, then close.
+                                drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
+                                return Ok(());
                             }
                         }
                         Some(RecipientMessage::AccessUpdate(update)) => {
@@ -195,6 +208,12 @@ impl Session {
             }
         }
 
+        Self::leave_server(&session, &state).await;
+        Ok(())
+    }
+
+    /// Removes a session from cross-session state and notifies other users.
+    async fn leave_server(session: &Session, state: &SharedState) {
         state.remove_recipient(session.user_id).await;
         state.remove_user(session.user_id).await;
         state.reset_flood(session.user_id).await;
@@ -215,7 +234,6 @@ impl Session {
             vec![Field::u16(FieldId::UserId, session.user_id)],
         );
         state.publish(leave).await;
-        Ok(())
     }
 
     /// Checks the client's opening 12 bytes as one fixed byte string;
@@ -6972,5 +6990,18 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn drain_with_timeout_returns_once_stream_ends() {
+        let stream = futures::stream::iter([1, 2, 3]);
+        drain_with_timeout(stream, Duration::from_secs(60)).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_with_timeout_gives_up_on_a_stuck_stream() {
+        // Stands in for a client that never drains its kick notice.
+        let stuck = futures::stream::pending::<()>();
+        drain_with_timeout(stuck, KICK_DRAIN_TIMEOUT).await;
     }
 }
