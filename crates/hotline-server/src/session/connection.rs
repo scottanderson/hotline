@@ -24,8 +24,8 @@ use crate::file::FileRequester;
 use crate::flood::FloodDecision;
 use crate::server::ServerConfig;
 use crate::state::{
-    AccessUpdate, ConsoleUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection,
-    TransferKind, UserEntry, IDLE_THRESHOLD,
+    AccessUpdate, ConsoleUpdate, FileTransfer, PendingTransfer, RecipientMessage, SharedState,
+    TransferDirection, TransferKind, TransferRef, TransferTarget, UserEntry, IDLE_THRESHOLD,
 };
 
 use super::options::UserChangeOptions;
@@ -1162,20 +1162,23 @@ impl Session {
         };
         let reference = state
             .register_transfer(PendingTransfer {
-                kind: TransferKind::File,
+                kind: TransferKind::File(FileTransfer {
+                    target: TransferTarget {
+                        login: self.login.clone(),
+                        dir,
+                        name,
+                    },
+                    raw,
+                }),
                 direction: TransferDirection::Get,
-                login: self.login.clone(),
-                dir,
-                name,
                 size: data_size,
                 resume_offset,
-                raw,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
 
         vec![tx.reply(vec![
-            Field::u32(FieldId::TransferId, reference),
+            Field::u32(FieldId::TransferId, reference.0),
             Field::u32(FieldId::TransferSize, total_size as u32),
             Field::u32(FieldId::FileSize, data_size as u32),
         ])]
@@ -1194,7 +1197,7 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         vec![tx.reply(vec![
-            Field::u32(FieldId::TransferId, reference),
+            Field::u32(FieldId::TransferId, reference.0),
             Field::u32(FieldId::TransferSize, size as u32),
         ])]
     }
@@ -1230,19 +1233,22 @@ impl Session {
             .unwrap_or(0);
         let reference = state
             .register_transfer(PendingTransfer {
-                kind: TransferKind::File,
+                kind: TransferKind::File(FileTransfer {
+                    target: TransferTarget {
+                        login: self.login.clone(),
+                        dir,
+                        name,
+                    },
+                    raw: false,
+                }),
                 direction: TransferDirection::Put,
-                login: self.login.clone(),
-                dir,
-                name,
                 size: size as u64,
                 resume_offset,
-                raw: false,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
 
-        let mut fields = vec![Field::u32(FieldId::TransferId, reference)];
+        let mut fields = vec![Field::u32(FieldId::TransferId, reference.0)];
         if resume {
             fields.push(Field::bytes(
                 FieldId::ResumeFileTransfer,
@@ -3370,7 +3376,7 @@ mod tests {
             .unwrap();
         assert_eq!(size, 5);
 
-        let transfer = state.take_transfer(reference).await.unwrap();
+        let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
         assert_eq!(transfer.kind, TransferKind::Banner);
         assert_eq!(transfer.direction, TransferDirection::Get);
         assert_eq!(transfer.size, 5);
@@ -5655,7 +5661,7 @@ mod tests {
         assert_eq!(file_size, 5);
         assert_ne!(file_size, total_size);
 
-        let transfer = state.take_transfer(reference).await.unwrap();
+        let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
         assert_eq!(transfer.direction, TransferDirection::Get);
         assert_eq!(transfer.size, 5);
         assert_eq!(transfer.resume_offset, 0);
@@ -5694,7 +5700,7 @@ mod tests {
             .field(FieldId::TransferId)
             .and_then(Field::as_u32)
             .unwrap();
-        let transfer = state.take_transfer(reference).await.unwrap();
+        let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
         assert_eq!(transfer.size, 11);
         assert_eq!(transfer.resume_offset, 6);
     }
@@ -6115,7 +6121,7 @@ mod tests {
             types::decode_resume_data(&resume_field.as_bytes(text_encoding::DEFAULT)).unwrap();
         assert_eq!(already_have, 5);
 
-        let transfer = state.take_transfer(reference).await.unwrap();
+        let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
         assert_eq!(transfer.direction, TransferDirection::Put);
         assert_eq!(transfer.resume_offset, 5);
     }

@@ -27,7 +27,7 @@ use crate::news::{
 };
 use crate::state::{
     dropbox_access, dropbox_blocked, is_dropbox_path, AccessUpdate, ChatRoom, ConsoleUpdate,
-    PendingTransfer, RecipientMessage, TransferDirection, TransferKind, UserEntry,
+    PendingTransfer, RecipientMessage, TransferDirection, TransferKind, TransferRef, UserEntry,
 };
 
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
@@ -61,7 +61,7 @@ pub struct SharedState {
     banner: Arc<dyn BannerProvider>,
     /// Transfers awaiting their `HTXF` data connection, keyed by the
     /// reference number handed to the client.
-    transfers: Arc<RwLock<HashMap<u32, PendingTransfer>>>,
+    transfers: Arc<RwLock<HashMap<TransferRef, PendingTransfer>>>,
     next_transfer_ref: Arc<AtomicU32>,
     /// Console command dispatch; see [`crate::ChatCommandDispatcher`].
     commands: Arc<dyn ChatCommandDispatcher>,
@@ -655,11 +655,11 @@ impl SharedState {
     /// Register a pending transfer, returning the reference number to
     /// hand the client. Retries on the vanishingly unlikely case the
     /// counter wraps into a still-pending ref.
-    pub async fn register_transfer(&self, transfer: PendingTransfer) -> u32 {
+    pub async fn register_transfer(&self, transfer: PendingTransfer) -> TransferRef {
         let mut transfers = self.transfers.write().await;
         loop {
-            let reference = self.next_transfer_ref.fetch_add(1, Ordering::Relaxed);
-            if reference != 0 && !transfers.contains_key(&reference) {
+            let reference = TransferRef(self.next_transfer_ref.fetch_add(1, Ordering::Relaxed));
+            if reference.0 != 0 && !transfers.contains_key(&reference) {
                 transfers.insert(reference, transfer);
                 return reference;
             }
@@ -668,7 +668,7 @@ impl SharedState {
 
     /// Remove and return a pending transfer by reference number, if one
     /// is still waiting. Consumes it: a reference is only good once.
-    pub async fn take_transfer(&self, reference: u32) -> Option<PendingTransfer> {
+    pub async fn take_transfer(&self, reference: TransferRef) -> Option<PendingTransfer> {
         self.transfers.write().await.remove(&reference)
     }
 
@@ -694,7 +694,7 @@ impl SharedState {
     pub async fn start_banner_transfer(
         &self,
         client_ip: IpAddr,
-    ) -> Result<(u64, u32), &'static str> {
+    ) -> Result<(u64, TransferRef), &'static str> {
         match self.banner.kind().await {
             Some(BannerKind::Image { .. }) => {}
             _ => return Err("no banner is configured."),
@@ -708,12 +708,8 @@ impl SharedState {
             .register_transfer(PendingTransfer {
                 kind: TransferKind::Banner,
                 direction: TransferDirection::Get,
-                login: String::new(),
-                dir: HlPath::default(),
-                name: String::new(),
                 size,
                 resume_offset: 0,
-                raw: false,
                 client_ip,
             })
             .await;
@@ -1411,14 +1407,17 @@ mod tests {
     async fn register_transfer_allocates_distinct_refs_and_take_consumes_them() {
         let state = SharedState::default();
         let make = || PendingTransfer {
-            kind: TransferKind::File,
+            kind: TransferKind::File(crate::state::FileTransfer {
+                target: crate::state::TransferTarget {
+                    login: "alice".to_string(),
+                    dir: HlPath::default(),
+                    name: "x".to_string(),
+                },
+                raw: false,
+            }),
             direction: TransferDirection::Get,
-            login: "alice".to_string(),
-            dir: HlPath::default(),
-            name: "x".to_string(),
             size: 0,
             resume_offset: 0,
-            raw: false,
             client_ip: "127.0.0.1".parse().unwrap(),
         };
 

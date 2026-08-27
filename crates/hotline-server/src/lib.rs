@@ -31,4 +31,6 @@ pub use flood::{FloodConfig, FloodDecision, FloodPolicy, InMemoryFloodPolicy, No
 pub use news::{InMemoryNewsProvider, NewsArticleDetail, NewsBundle, NewsProvider};
 pub use server::{Server, ServerConfig};
 pub use session::Session;
-pub use state::{PendingTransfer, SharedState, TransferDirection, TransferKind, UserEntry};
+pub use state::{
+    FileTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind, UserEntry,
+};

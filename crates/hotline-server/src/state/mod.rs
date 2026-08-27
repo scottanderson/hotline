@@ -5,10 +5,13 @@
 mod access;
 mod console;
 mod entry;
+mod file_transfer;
 mod recipient;
 mod room;
 mod shared;
 mod transfer;
+mod transfer_ref;
+mod transfer_target;
 
 use std::borrow::Cow;
 
@@ -18,10 +21,13 @@ use hotline_proto::types::HlPath;
 pub use access::AccessUpdate;
 pub use console::ConsoleUpdate;
 pub use entry::{UserEntry, IDLE_THRESHOLD};
+pub use file_transfer::FileTransfer;
 pub use recipient::RecipientMessage;
 pub use room::ChatRoom;
 pub use shared::SharedState;
 pub use transfer::{PendingTransfer, TransferDirection, TransferKind};
+pub use transfer_ref::TransferRef;
+pub use transfer_target::TransferTarget;
 
 /// `true` if any component of `dir` names an "Upload" or "Drop Box"
 /// folder (case-insensitive), the one place an account without

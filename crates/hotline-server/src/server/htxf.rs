@@ -8,7 +8,10 @@ use hotline_proto::htxf::{self, ForkHeader, HtxfHeader};
 
 use crate::error::Result;
 use crate::file::FileRequester;
-use crate::state::{PendingTransfer, SharedState, TransferDirection, TransferKind};
+use crate::state::{
+    FileTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind, TransferRef,
+    TransferTarget,
+};
 
 /// Accept `HTXF` data connections forever, spawning one task per
 /// connection. Each connection completes exactly one pending transfer,
@@ -43,7 +46,8 @@ async fn handle_htxf_connection(
     stream.read_exact(&mut header_buf).await?;
     let header = HtxfHeader::decode(&header_buf)?;
 
-    let Some(transfer) = state.take_transfer(header.reference).await else {
+    let reference = TransferRef(header.reference);
+    let Some(transfer) = state.take_transfer(reference).await else {
         tracing::warn!(%peer, reference = header.reference, "htxf: no pending transfer for reference");
         return Ok(());
     };
@@ -52,11 +56,11 @@ async fn handle_htxf_connection(
         return Ok(());
     }
 
-    match transfer.kind {
+    match &transfer.kind {
         TransferKind::Banner => send_banner(&mut stream, state).await,
-        TransferKind::File => match transfer.direction {
-            TransferDirection::Get => send_file(&mut stream, &transfer, state).await,
-            TransferDirection::Put => receive_file(&mut stream, &transfer, state).await,
+        TransferKind::File(file) => match transfer.direction {
+            TransferDirection::Get => send_file(&mut stream, file, &transfer, state).await,
+            TransferDirection::Put => receive_file(&mut stream, file, &transfer, state).await,
         },
     }
 }
@@ -86,16 +90,15 @@ async fn drain_stream(stream: &mut TcpStream) -> Result<()> {
 /// size to match, for a client resuming an interrupted download.
 async fn send_file(
     stream: &mut TcpStream,
+    file: &FileTransfer,
     transfer: &PendingTransfer,
     state: &SharedState,
 ) -> Result<()> {
-    let requester = FileRequester {
-        login: &transfer.login,
-    };
-    let mut reader = state
-        .open_file_for_read(requester, &transfer.dir, &transfer.name)
-        .await?;
-    if !transfer.raw {
+    let FileTransfer { target, raw } = file;
+    let TransferTarget { dir, name, .. } = target;
+    let requester = target.requester();
+    let mut reader = state.open_file_for_read(requester, dir, name).await?;
+    if !raw {
         let remaining = transfer.size - transfer.resume_offset;
         stream
             .write_all(&htxf::flat_file_header(remaining as u32))
@@ -129,25 +132,18 @@ async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result
 /// under its working name for a later resume.
 async fn receive_file(
     stream: &mut TcpStream,
+    file: &FileTransfer,
     transfer: &PendingTransfer,
     state: &SharedState,
 ) -> Result<()> {
-    let requester = FileRequester {
-        login: &transfer.login,
-    };
+    let TransferTarget { dir, name, .. } = &file.target;
+    let requester = file.target.requester();
     let mut out = if transfer.resume_offset > 0 {
         state
-            .resume_file_for_write(
-                requester,
-                &transfer.dir,
-                &transfer.name,
-                transfer.resume_offset,
-            )
+            .resume_file_for_write(requester, dir, name, transfer.resume_offset)
             .await?
     } else {
-        state
-            .create_file_for_write(requester, &transfer.dir, &transfer.name)
-            .await?
+        state.create_file_for_write(requester, dir, name).await?
     };
 
     let mut prefix = [0u8; htxf::FLAT_FILE_PREFIX_LEN];
@@ -176,9 +172,7 @@ async fn receive_file(
         }
     }
     out.shutdown().await?;
-    state
-        .finish_upload(requester, &transfer.dir, &transfer.name)
-        .await?;
+    state.finish_upload(requester, dir, name).await?;
     Ok(())
 }
 
@@ -216,15 +210,19 @@ mod tests {
     async fn a_cancelled_upload_is_not_renamed_off_its_hpf_name() {
         let state = state_with_files(InMemoryFileProvider::default());
         let requester = FileRequester { login: "alice" };
+        let file = FileTransfer {
+            target: TransferTarget {
+                login: "alice".to_string(),
+                dir: HlPath::default(),
+                name: "a.txt".to_string(),
+            },
+            raw: false,
+        };
         let transfer = PendingTransfer {
-            kind: TransferKind::File,
+            kind: TransferKind::File(file.clone()),
             direction: TransferDirection::Put,
-            login: "alice".to_string(),
-            dir: HlPath::default(),
-            name: "a.txt".to_string(),
             size: 11,
             resume_offset: 0,
-            raw: false,
             client_ip: "127.0.0.1".parse().unwrap(),
         };
 
@@ -237,7 +235,7 @@ mod tests {
         client.write_all(&full[..full.len() - 1]).await.unwrap();
         drop(client);
 
-        let result = receive_file(&mut server_stream, &transfer, &state).await;
+        let result = receive_file(&mut server_stream, &file, &transfer, &state).await;
         assert!(result.is_err());
 
         assert_eq!(
@@ -262,15 +260,19 @@ mod tests {
         files.seed(&HlPath::default(), "a.txt.hpf", *b"hello world");
         let state = state_with_files(files);
         let requester = FileRequester { login: "alice" };
+        let file = FileTransfer {
+            target: TransferTarget {
+                login: "alice".to_string(),
+                dir: HlPath::default(),
+                name: "a.txt".to_string(),
+            },
+            raw: false,
+        };
         let transfer = PendingTransfer {
-            kind: TransferKind::File,
+            kind: TransferKind::File(file.clone()),
             direction: TransferDirection::Put,
-            login: "alice".to_string(),
-            dir: HlPath::default(),
-            name: "a.txt".to_string(),
             size: 11,
             resume_offset: 6,
-            raw: false,
             client_ip: "127.0.0.1".parse().unwrap(),
         };
 
@@ -283,7 +285,7 @@ mod tests {
         client.write_all(&resumed).await.unwrap();
         drop(client);
 
-        receive_file(&mut server_stream, &transfer, &state)
+        receive_file(&mut server_stream, &file, &transfer, &state)
             .await
             .unwrap();
 

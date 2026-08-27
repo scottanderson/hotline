@@ -139,17 +139,7 @@ one-shared-room model.
    struct definition, `run`, handshake, and the two dispatch tables.
    Large, mechanical-but-risky diff; own reviewed PR.
 
-8. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
-   shapes**: its own doc comment admits `dir`/`name`/`login`/`raw` are
-   "unused for `TransferKind::Banner`". Cleaner shape: fold the
-   file-specific fields into `TransferKind::File { dir, name, raw }`,
-   leaving `TransferKind::Banner` bare, with `direction`/`size`/
-   `resume_offset`/`client_ip`/`login` shared at the top level. Touches
-   `state/transfer.rs`, `session/connection.rs`'s transfer-registration
-   call sites, and `server/htxf.rs`'s dispatch — a real data-shape
-   change, not a rename.
-
-9. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
+8. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
    self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
    clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
    serializes flag names by their Rust identifier directly into
@@ -158,17 +148,17 @@ one-shared-room model.
    deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
    read-side compat shim), not a code-only rename.
 
-10. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
-    terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
-    `mode`/`users`/`lines`/`access`/`encoding` are session state, while
-    `input`/`should_quit` are terminal-interaction state, despite
-    `App`'s own doc comment describing it as pure update logic over
-    data. Splitting into a `Session` (domain) + input-handling pair (or
-    moving `input`/`should_quit` into `main.rs`'s own loop state) would
-    make that true. Touches `main.rs`'s event loop wiring; own reviewed
-    change.
+9. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
+   terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
+   `mode`/`users`/`lines`/`access`/`encoding` are session state, while
+   `input`/`should_quit` are terminal-interaction state, despite
+   `App`'s own doc comment describing it as pure update logic over
+   data. Splitting into a `Session` (domain) + input-handling pair (or
+   moving `input`/`should_quit` into `main.rs`'s own loop state) would
+   make that true. Touches `main.rs`'s event loop wiring; own reviewed
+   change.
 
-11. **Threaded news storage does not match the reference's on-disk
+10. **Threaded news storage does not match the reference's on-disk
     binary database format.** The reference stores each news category
     in its own file. Each file starts with an `HLNZ` header (version 2,
     `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -189,14 +179,14 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
-12. **Open design question from news article/category JSON storage.**
+11. **Open design question from news article/category JSON storage.**
     `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
     `BTreeMap`, so once an article legitimately holds more than one
     flavor, "primary" means alphabetically-first MIME type, not
     first-posted or preferred — harmless today (always exactly one
     entry) but worth deciding before multi-flavor posting is wired up.
 
-13. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+12. **`on_newsfile_get`'s clamp can split a multi-byte character.**
     The reply is truncated to 65535 encoded bytes. Under the Mac OS
     Roman default every character is one byte, so this is invisible;
     under `utf-8` or `shift-jis` the last character can arrive as a
@@ -450,6 +440,12 @@ one-shared-room model.
     `u16`; every call site uses `UserFlags`'s own methods, with
     `.bits()`/`from_bits_retain` kept only at the wire encode/decode
     boundary.
+
+59. `PendingTransfer`'s file-specific fields (`login`, `dir`, `name`,
+    `raw`) moved into a `FileTransfer` struct, held as
+    `TransferKind::File(FileTransfer)`, and `TransferKind::Banner` is now
+    bare. `server/htxf.rs` matches the kind once and passes the struct
+    down, so `send_file`/`receive_file` need no `unreachable!` arm.
 
 ## Needs manual verification against the real client
 
