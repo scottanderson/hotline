@@ -148,45 +148,35 @@ one-shared-room model.
    deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
    read-side compat shim), not a code-only rename.
 
-9. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
-   terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
-   `mode`/`users`/`lines`/`access`/`encoding` are session state, while
-   `input`/`should_quit` are terminal-interaction state, despite
-   `App`'s own doc comment describing it as pure update logic over
-   data. Splitting into a `Session` (domain) + input-handling pair (or
-   moving `input`/`should_quit` into `main.rs`'s own loop state) would
-   make that true. Touches `main.rs`'s event loop wiring; own reviewed
-   change.
+9. **Threaded news storage does not match the reference's on-disk
+   binary database format.** The reference stores each news category
+   in its own file. Each file starts with an `HLNZ` header (version 2,
+   `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
+   ID-to-offset hash table (`_NZ_SHashInfo`/`_NZ_SIDOffset`). Each
+   article is a chain of fixed-size blocks: one `_NZ_SNewsItemBlock`
+   index block, plus one `_NZ_SGenericBlock` block for each stored MIME
+   type. Files sit at `<bundle>/<category>` on disk. A real sample file
+   confirms this: it starts with `HLNZ`, version 2, block size 256.
+   This server stores the whole news tree in one `news.json` file
+   instead (`hotline-daemon/src/news.rs`,
+   `FileNewsProvider`/`NewsProvider`). A matching format needs three
+   new parts: a binary codec (in `hotline-proto`'s style, pure
+   encode/decode, no I/O, testable without a filesystem), a block
+   allocator that can split and merge blocks when an article grows past
+   one block, and a new `NewsProvider` backend. This work mirrors
+   `HotlineServNewsDatabase.cp`. It is a large, standalone effort, not a
+   quick change. No known client reads the file format directly; only
+   the wire protocol matters for interop. This task stays low priority
+   for now.
 
-10. **Threaded news storage does not match the reference's on-disk
-    binary database format.** The reference stores each news category
-    in its own file. Each file starts with an `HLNZ` header (version 2,
-    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
-    ID-to-offset hash table (`_NZ_SHashInfo`/`_NZ_SIDOffset`). Each
-    article is a chain of fixed-size blocks: one `_NZ_SNewsItemBlock`
-    index block, plus one `_NZ_SGenericBlock` block for each stored MIME
-    type. Files sit at `<bundle>/<category>` on disk. A real sample file
-    confirms this: it starts with `HLNZ`, version 2, block size 256.
-    This server stores the whole news tree in one `news.json` file
-    instead (`hotline-daemon/src/news.rs`,
-    `FileNewsProvider`/`NewsProvider`). A matching format needs three
-    new parts: a binary codec (in `hotline-proto`'s style, pure
-    encode/decode, no I/O, testable without a filesystem), a block
-    allocator that can split and merge blocks when an article grows past
-    one block, and a new `NewsProvider` backend. This work mirrors
-    `HotlineServNewsDatabase.cp`. It is a large, standalone effort, not a
-    quick change. No known client reads the file format directly; only
-    the wire protocol matters for interop. This task stays low priority
-    for now.
-
-11. **Open design question from news article/category JSON storage.**
+10. **Open design question from news article/category JSON storage.**
     `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
     `BTreeMap`, so once an article legitimately holds more than one
     flavor, "primary" means alphabetically-first MIME type, not
     first-posted or preferred — harmless today (always exactly one
     entry) but worth deciding before multi-flavor posting is wired up.
 
-12. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+11. **`on_newsfile_get`'s clamp can split a multi-byte character.**
     The reply is truncated to 65535 encoded bytes. Under the Mac OS
     Roman default every character is one byte, so this is invisible;
     under `utf-8` or `shift-jis` the last character can arrive as a
@@ -446,6 +436,12 @@ one-shared-room model.
     `TransferKind::File(FileTransfer)`, and `TransferKind::Banner` is now
     bare. `server/htxf.rs` matches the kind once and passes the struct
     down, so `send_file`/`receive_file` need no `unreachable!` arm.
+
+60. `hotline-cli`'s `App` split into `session::ClientSession` (session
+    state) and `main.rs`'s loop-local `input`/`should_quit` (terminal
+    state). `EventOutcome::Quit` lets a server `Politequit` push end the
+    loop, so `ClientSession` owns no quit flag. `session/` holds one type
+    per file.
 
 ## Needs manual verification against the real client
 

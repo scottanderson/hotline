@@ -1,6 +1,8 @@
-//! Application state, decoupled from both the terminal (see `ui.rs`) and
-//! the connection (see `main.rs`) so it's just data plus pure update
-//! logic.
+//! [`ClientSession`] state: what the client knows about the connection,
+//! decoupled from the terminal. Data plus pure update logic.
+
+mod event_outcome;
+mod mode;
 
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::{Opcode, TransactionType};
@@ -11,38 +13,21 @@ use hotline_proto::{Access, Field, Transaction};
 
 use crate::line::{Line, LineKind};
 
-/// Where the UI is: still showing the server's agreement, or fully
-/// logged in and chatting.
-pub enum Mode {
-    Joining,
-    Agreement(String),
-    Chat,
-}
+pub use event_outcome::EventOutcome;
+pub use mode::Mode;
 
-/// What the caller must do after applying one server event.
-#[must_use]
-pub enum EventOutcome {
-    /// State updated; nothing further needed.
-    Applied,
-    /// Nothing to show for the agreement; the caller should call
-    /// [`App::accept_agreement`] right away to complete login.
-    NeedsAgreementAccept,
-}
-
-pub struct App {
+pub struct ClientSession {
     pub nick: String,
     pub icon: u16,
     pub mode: Mode,
     pub users: Vec<UserNameWithInfo>,
     pub lines: Vec<Line>,
-    pub input: String,
-    pub should_quit: bool,
     pub access: Access,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
 }
 
-impl App {
+impl ClientSession {
     pub fn new(nick: String, icon: u16, encoding: EncodingHandle) -> Self {
         Self {
             nick,
@@ -53,8 +38,6 @@ impl App {
                 text: "connected - type a message and press Enter, Esc to quit".to_string(),
                 kind: LineKind::System,
             }],
-            input: String::new(),
-            should_quit: false,
             access: Access::empty(),
             encoding,
         }
@@ -85,7 +68,7 @@ impl App {
     }
 
     /// Apply one server-initiated transaction (chat relay, user list
-    /// change, permission denial, ...) to the app state.
+    /// change, permission denial, ...) to the session state.
     pub fn apply_server_event(&mut self, tx: &Transaction) -> EventOutcome {
         let TransactionType::Push(opcode) = tx.r#type() else {
             return EventOutcome::Applied;
@@ -94,7 +77,7 @@ impl App {
             /* 104 */ Opcode::ServerMsg => self.apply_msg(tx),
             /* 106 */ Opcode::ChatMsg => self.apply_chat(tx),
             /* 109 */ Opcode::Agreement => return self.apply_agreement(tx),
-            /* 111 */ Opcode::Politequit => self.apply_politequit(tx),
+            /* 111 */ Opcode::Politequit => return self.apply_politequit(tx),
             /* 113 */ Opcode::ChatInvite => self.apply_chat_invite(tx),
             /* 301 */ Opcode::NotifyChangeUser => self.apply_user_change(tx),
             /* 302 */ Opcode::UserPart => self.apply_user_part(tx),
@@ -154,13 +137,13 @@ impl App {
     }
 
     // 111
-    fn apply_politequit(&mut self, tx: &Transaction) {
+    fn apply_politequit(&mut self, tx: &Transaction) -> EventOutcome {
         let encoding = self.encoding.get();
         let reason = tx
             .string(FieldId::Text, encoding)
             .unwrap_or_else(|| "disconnected by the server".to_string());
         self.push(display_text(&reason), LineKind::Error);
-        self.quit();
+        EventOutcome::Quit
     }
 
     // 113
@@ -255,27 +238,6 @@ impl App {
         }
     }
 
-    /// Handle one input character.
-    pub fn on_char(&mut self, c: char) {
-        self.input.push(c);
-    }
-
-    pub fn on_backspace(&mut self) {
-        self.input.pop();
-    }
-
-    /// Take the current input line, clearing it, for the caller to send.
-    pub fn take_input(&mut self) -> Option<String> {
-        if self.input.is_empty() {
-            return None;
-        }
-        Some(std::mem::take(&mut self.input))
-    }
-
-    pub const fn quit(&mut self) {
-        self.should_quit = true;
-    }
-
     /// Send `line` as chat, reporting a failed send as a local error line
     /// (a transport error may never come back as a server push).
     pub async fn send_chat(&mut self, client: &HotlineClient, line: String) {
@@ -313,7 +275,7 @@ mod tests {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
-        let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
         let invite = Transaction::push(
             Opcode::ChatInvite,
             vec![
@@ -321,8 +283,8 @@ mod tests {
                 Field::u32(FieldId::ChatId, 7),
             ],
         );
-        let _ = app.apply_server_event(&invite);
-        assert!(app.lines.iter().any(|line| line
+        let _ = session.apply_server_event(&invite);
+        assert!(session.lines.iter().any(|line| line
             .text
             .contains("Alice invited you to a private chat (id 7)")));
     }
@@ -332,7 +294,7 @@ mod tests {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
-        let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
         let admin_change = Transaction::push(
             Opcode::NotifyChangeUser,
             vec![
@@ -344,8 +306,8 @@ mod tests {
         );
 
         // New user: flags should carry the admin bit from the start.
-        let _ = app.apply_server_event(&admin_change);
-        let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
+        let _ = session.apply_server_event(&admin_change);
+        let user = session.users.iter().find(|u| u.user_id == 2).unwrap();
         assert!(user.flags.contains(UserFlags::ADMIN));
 
         // Existing user: a later update should still reflect current flags.
@@ -358,8 +320,8 @@ mod tests {
                 Field::u16(FieldId::Color, 0),
             ],
         );
-        let _ = app.apply_server_event(&demoted);
-        let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
+        let _ = session.apply_server_event(&demoted);
+        let user = session.users.iter().find(|u| u.user_id == 2).unwrap();
         assert!(!user.flags.contains(UserFlags::ADMIN));
     }
 
@@ -368,7 +330,7 @@ mod tests {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
-        let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
         let joined = Transaction::push(
             Opcode::NotifyChangeUser,
             vec![
@@ -378,7 +340,7 @@ mod tests {
                 Field::u16(FieldId::Color, 0),
             ],
         );
-        let _ = app.apply_server_event(&joined);
+        let _ = session.apply_server_event(&joined);
 
         let renamed = Transaction::push(
             Opcode::NotifyChangeUser,
@@ -389,13 +351,13 @@ mod tests {
                 Field::u16(FieldId::Color, 0),
             ],
         );
-        let _ = app.apply_server_event(&renamed);
+        let _ = session.apply_server_event(&renamed);
 
         assert_eq!(
-            app.lines.last().unwrap().text,
+            session.lines.last().unwrap().text,
             " <<< Alice is now known as Alicia >>>"
         );
-        let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
+        let user = session.users.iter().find(|u| u.user_id == 2).unwrap();
         assert_eq!(user.name, "Alicia");
     }
 }

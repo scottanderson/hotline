@@ -1,4 +1,5 @@
-//! Rendering. Pure: takes `&App`, draws it, touches nothing else.
+//! Rendering. Pure: takes a `&ClientSession` and the current input line, draws
+//! them, touches nothing else.
 
 use hotline_proto::types::UserFlags;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -7,11 +8,11 @@ use ratatui::text::{Line as UiLine, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Mode};
 use crate::line::LineKind;
+use crate::session::{ClientSession, Mode};
 
-pub fn draw(frame: &mut Frame, app: &App) {
-    if let Mode::Agreement(text) = &app.mode {
+pub fn draw(frame: &mut Frame, session: &ClientSession, input: &str) {
+    if let Mode::Agreement(text) = &session.mode {
         draw_agreement(frame, text);
         return;
     }
@@ -26,9 +27,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(columns[0]);
 
-    draw_messages(frame, rows[0], app);
-    draw_input(frame, rows[1], app);
-    draw_users(frame, columns[1], app);
+    draw_messages(frame, rows[0], session);
+    draw_input(frame, rows[1], input);
+    draw_users(frame, columns[1], session);
 }
 
 fn draw_agreement(frame: &mut Frame, text: &str) {
@@ -47,8 +48,8 @@ fn draw_agreement(frame: &mut Frame, text: &str) {
     frame.render_widget(hint, rows[1]);
 }
 
-fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let lines: Vec<UiLine> = app
+fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, session: &ClientSession) {
+    let lines: Vec<UiLine> = session
         .lines
         .iter()
         .map(|line| {
@@ -71,17 +72,17 @@ fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let input = Paragraph::new(app.input.as_str())
-        .block(Block::default().borders(Borders::ALL).title("message"));
-    frame.render_widget(input, area);
+fn draw_input(frame: &mut Frame, area: ratatui::layout::Rect, input: &str) {
+    let paragraph =
+        Paragraph::new(input).block(Block::default().borders(Borders::ALL).title("message"));
+    frame.render_widget(paragraph, area);
 
     // Blinking-cursor-at-end-of-input, the usual terminal chat convention.
-    frame.set_cursor(area.x + 1 + app.input.chars().count() as u16, area.y + 1);
+    frame.set_cursor(area.x + 1 + input.chars().count() as u16, area.y + 1);
 }
 
-fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let items: Vec<ListItem> = app
+fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, session: &ClientSession) {
+    let items: Vec<ListItem> = session
         .users
         .iter()
         .map(|u| {
@@ -97,7 +98,7 @@ fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             } else if flags.contains(UserFlags::AWAY) {
                 style = style.fg(Color::DarkGray);
             }
-            if u.name == app.nick {
+            if u.name == session.nick {
                 style = style.add_modifier(Modifier::BOLD);
             }
             ListItem::new(Span::styled(label, style))
@@ -107,7 +108,7 @@ fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!("users ({})", app.users.len())),
+            .title(format!("users ({})", session.users.len())),
     );
     frame.render_widget(list, area);
 }

@@ -1,8 +1,8 @@
 //! `hlc`, a terminal Hotline client built on `hotline-client`.
 
-mod app;
 mod args;
 mod line;
+mod session;
 mod ui;
 
 use clap::Parser;
@@ -15,9 +15,9 @@ use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use app::{App, EventOutcome, Mode};
 use args::Args;
 use hotline_client::HotlineClient;
+use session::{ClientSession, EventOutcome, Mode};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -27,10 +27,10 @@ async fn main() -> anyhow::Result<()> {
     let (client, mut events) = HotlineClient::connect(&addr).await?;
     client.login(&args.login, &args.password).await?;
 
-    let mut app = App::new(args.nick, args.icon, client.encoding());
+    let mut session = ClientSession::new(args.nick, args.icon, client.encoding());
 
     let mut terminal = setup_terminal()?;
-    let result = run(&mut terminal, &mut app, &client, &mut events).await;
+    let result = run(&mut terminal, &mut session, &client, &mut events).await;
     restore_terminal()?;
     result
 }
@@ -50,20 +50,25 @@ fn restore_terminal() -> anyhow::Result<()> {
 
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    app: &mut App,
+    session: &mut ClientSession,
     client: &HotlineClient,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<hotline_proto::Transaction>,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
+    // The line being typed, not yet sent.
+    let mut input = String::new();
+    let mut should_quit = false;
 
-    terminal.draw(|f| ui::draw(f, app))?;
-    while !app.should_quit {
+    terminal.draw(|f| ui::draw(f, session, &input))?;
+    while !should_quit {
         tokio::select! {
             // Server-initiated traffic: chat, user list changes, ...
             tx = events.recv() => {
                 let Some(tx) = tx else { break }; // connection closed
-                if let EventOutcome::NeedsAgreementAccept = app.apply_server_event(&tx) {
-                    app.accept_agreement(client).await;
+                match session.apply_server_event(&tx) {
+                    EventOutcome::NeedsAgreementAccept => session.accept_agreement(client).await,
+                    EventOutcome::Quit => should_quit = true,
+                    EventOutcome::Applied => {}
                 }
             }
             // Terminal input.
@@ -73,34 +78,37 @@ async fn run(
                     if key.kind != KeyEventKind::Press {
                         continue;
                     }
-                    if matches!(app.mode, Mode::Agreement(_)) {
+                    if matches!(session.mode, Mode::Agreement(_)) {
                         match key.code {
-                            KeyCode::Esc => app.quit(),
-                            KeyCode::Enter => app.accept_agreement(client).await,
+                            KeyCode::Esc => should_quit = true,
+                            KeyCode::Enter => session.accept_agreement(client).await,
                             _ => {}
                         }
                         continue;
                     }
                     match key.code {
-                        KeyCode::Esc => app.quit(),
+                        KeyCode::Esc => should_quit = true,
                         KeyCode::Enter => {
-                            if let Some(line) = app.take_input() {
-                                app.send_chat(client, line).await;
+                            if !input.is_empty() {
+                                let line = std::mem::take(&mut input);
+                                session.send_chat(client, line).await;
                             }
                         }
-                        KeyCode::Backspace => app.on_backspace(),
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
                         KeyCode::Char('c')
                             if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
                         {
-                            app.quit();
+                            should_quit = true;
                         }
-                        KeyCode::Char(c) => app.on_char(c),
+                        KeyCode::Char(c) => input.push(c),
                         _ => {}
                     }
                 }
             }
         }
-        terminal.draw(|f| ui::draw(f, app))?;
+        terminal.draw(|f| ui::draw(f, session, &input))?;
     }
     Ok(())
 }
