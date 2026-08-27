@@ -20,8 +20,8 @@
 //! Streaming decode needs `len2` *before* the fields are readable, so
 //! [`TransactionHeader`] holds just the raw prefix. Reading proceeds
 //! [`TransactionHeader::decode_from_client`]/[`decode_from_server`](TransactionHeader::decode_from_server), then
-//! [`TransactionHeader::finish_decode`] once `data_len()` more bytes
-//! are in hand, producing the real `Transaction`.
+//! [`TransactionHeader::finish_decode`] once the body bytes are in hand,
+//! producing the real `Transaction`.
 //!
 //! The wire's `type` value is resolved into a [`TransactionType`] once,
 //! at decode time, and stored under `r#type` (the reference's own field

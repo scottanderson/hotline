@@ -17,6 +17,7 @@ pub struct TransactionHeader {
     pub(super) r#type: TransactionType,
     pub(super) trans: u32,
     pub(super) flag: u32,
+    len: u32,
     len2: u32,
 }
 
@@ -34,13 +35,14 @@ impl TransactionHeader {
         let wire_type = r.u32();
         let trans = r.u32();
         let flag = r.u32();
-        let _len = r.u32();
+        let len = r.u32();
         let len2 = r.u32();
         r.finish();
         Self {
             r#type: TransactionType::from_client_wire(wire_type),
             trans,
             flag,
+            len,
             len2,
         }
     }
@@ -53,13 +55,14 @@ impl TransactionHeader {
         let wire_type = r.u32();
         let trans = r.u32();
         let flag = r.u32();
-        let _len = r.u32();
+        let len = r.u32();
         let len2 = r.u32();
         r.finish();
         Self {
             r#type: TransactionType::from_server_wire(wire_type),
             trans,
             flag,
+            len,
             len2,
         }
     }
@@ -72,9 +75,28 @@ impl TransactionHeader {
         self.len2
     }
 
-    /// Finish decoding into a [`Transaction`]: `body` is exactly
-    /// [`TransactionHeader::data_len`] bytes, the field count
-    /// followed by the fields.
+    /// `len`: this transaction's total size across every part of a split
+    /// transaction. Equals [`TransactionHeader::data_len`] unless the
+    /// sender split this transaction across multiple parts.
+    pub const fn total_len(&self) -> u32 {
+        self.len
+    }
+
+    /// The transaction ID this part belongs to; parts of one split
+    /// transaction share both this and
+    /// [`TransactionHeader::is_reply`].
+    pub const fn trans(&self) -> u32 {
+        self.trans
+    }
+
+    /// `true` if this part is a reply.
+    pub const fn is_reply(&self) -> bool {
+        matches!(self.r#type, TransactionType::Reply)
+    }
+
+    /// Finish decoding into a [`Transaction`]: `body` is the field count
+    /// followed by the fields, either one part's own bytes or several
+    /// parts reassembled.
     pub fn finish_decode(self, body: &[u8]) -> Result<Transaction> {
         let fields = FieldList::decode(body)?;
         Ok(Transaction {

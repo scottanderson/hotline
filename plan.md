@@ -107,28 +107,7 @@ one-shared-room model.
    `hotline-cli` that opens the tracker's TCP port, sends the client
    request, and decodes the `TrackedServer` list back.
 
-6. **Split transactions (`len` != `len2`, `HLProtocol.md`'s "Total size"
-   vs. "Data size") aren't reassembled.** `transaction.rs` already
-   documents this as an assumption (`len == len2` on the wire).
-   Confirmed against the reference: its transport (`UTransact.cp`)
-   really does reassemble multi-part transactions on receive, keyed by
-   `(isReply, id)`, appending each part's raw bytes until `totalSize` is
-   reached before parsing `count`/fields from the assembled buffer. But
-   no real call site (client or server) ever calls
-   `SetSessionSendSize`/sends more than one part, so `len == len2` on
-   every transaction the reference actually emits. Low priority: this
-   would only harden decoding against a hypothetical non-reference
-   sender. If picked up, needs: a reassembly map in
-   `hotline_codec::TransactionCodec`'s decoder keyed by `(is_reply, id)`
-   accumulating raw bytes per id until `len` bytes are in hand, only
-   then running today's `count`/field decode against the assembled
-   buffer; a cap on claimed `len` and on the number of concurrently
-   pending partial ids, since an unbounded version lets a peer hold
-   memory open indefinitely by trickling one byte per frame across many
-   ids. No corresponding encode-side change needed, since nothing
-   expects to receive a deliberately split transaction from us.
-
-7. **`session/connection.rs` (~6800 lines) holds one `Session` struct
+6. **`session/connection.rs` (~6800 lines) holds one `Session` struct
    with a single giant `impl` spanning login, chat, private messages,
    files, news, and account-admin handlers.** AGENTS.md documents that
    `session.rs`'s handlers belong together, but a type's `impl` blocks
@@ -139,7 +118,7 @@ one-shared-room model.
    struct definition, `run`, handshake, and the two dispatch tables.
    Large, mechanical-but-risky diff; own reviewed PR.
 
-8. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
+7. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
    self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
    clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
    serializes flag names by their Rust identifier directly into
@@ -148,7 +127,7 @@ one-shared-room model.
    deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
    read-side compat shim), not a code-only rename.
 
-9. **Threaded news storage does not match the reference's on-disk
+8. **Threaded news storage does not match the reference's on-disk
    binary database format.** The reference stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -169,20 +148,31 @@ one-shared-room model.
    the wire protocol matters for interop. This task stays low priority
    for now.
 
-10. **Open design question from news article/category JSON storage.**
-    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
-    `BTreeMap`, so once an article legitimately holds more than one
-    flavor, "primary" means alphabetically-first MIME type, not
-    first-posted or preferred — harmless today (always exactly one
-    entry) but worth deciding before multi-flavor posting is wired up.
+9. **Open design question from news article/category JSON storage.**
+   `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
+   `BTreeMap`, so once an article legitimately holds more than one
+   flavor, "primary" means alphabetically-first MIME type, not
+   first-posted or preferred — harmless today (always exactly one
+   entry) but worth deciding before multi-flavor posting is wired up.
 
-11. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+10. **`on_newsfile_get`'s clamp can split a multi-byte character.**
     The reply is truncated to 65535 encoded bytes. Under the Mac OS
     Roman default every character is one byte, so this is invisible;
     under `utf-8` or `shift-jis` the last character can arrive as a
     partial sequence. Openline truncates bytes too, so this matches
     openline. Worth deciding only if a multi-byte encoding is
     ever made selectable per connection.
+
+11. **Reassembly's memory bound is per connection, not global.**
+    `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
+    nothing caps how many connections a server accepts. Total
+    reassembly memory is therefore unbounded. Needs a connection limit
+    or a shared budget, plus a decision on which.
+
+12. **`SharedState::new` and `Server::new` take eight positional
+    provider arguments** behind `#[allow(clippy::too_many_arguments)]`,
+    and each new provider also touches five test call sites. A
+    `Providers` struct or a builder would stop that growth.
 
 ## Resolved
 
@@ -442,6 +432,20 @@ one-shared-room model.
     state). `EventOutcome::Quit` lets a server `Politequit` push end the
     loop, so `ClientSession` owns no quit flag. `session/` holds one type
     per file.
+
+61. `hotline_codec::TransactionCodec` now reassembles a split
+    transaction (`len` != `len2`). The prefix guard ports all four terms
+    of openline's own check (`UTransact.cp`), zero sizes included, and a
+    whole transaction that reuses a pending `trans` appends to that
+    partial rather than decoding on its own. Each part's total replaces
+    the pending one, like openline's `UTransact.cp`, which sets
+    `totalSize` from every part's header. The size cap is per direction:
+    `SERVER_MAX_TRANSACTION_LEN` (512 KB, openline's server override) and
+    `CLIENT_MAX_TRANSACTION_LEN` (2 MB, its transport default).
+    Pending partials are bounded in bytes: `MAX_PENDING_BYTES` (64 MB)
+    over the per-id ceiling, which is just under twice the size cap. That
+    allows 64 ids on a server and 16 on a client. Both bounds are ours;
+    openline caps neither. `transaction_codec/` holds one type per file.
 
 ## Needs manual verification against the real client
 

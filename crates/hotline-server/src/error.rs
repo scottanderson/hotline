@@ -25,7 +25,7 @@ impl From<hotline_codec::CodecError> for ServerError {
     fn from(err: hotline_codec::CodecError) -> Self {
         match err {
             hotline_codec::CodecError::Io(e) => Self::Io(e),
-            hotline_codec::CodecError::Proto(e) => Self::Proto(e),
+            other => Self::Proto(other.into()),
         }
     }
 }
