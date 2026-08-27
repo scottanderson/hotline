@@ -13,35 +13,45 @@ it. Framing a `Transaction` over a socket is itself shared behavior, so
 it lives in its own crate rather than being duplicated in both.
 
 ```
-Cargo.toml                     # workspace manifest
+Cargo.toml                               # workspace manifest
 crates/
-├── hotline-proto/             # wire format only, no I/O, no async
-│   ├── wire.rs                # PacketWriter/PacketReader: builder-style fixed-buffer cursors
-│   ├── numbers.rs             # signed int encoding (EncodedInt, no heap allocation)
-│   ├── field.rs               # Field { id, data } + fixed/generic constructors
-│   ├── field_id.rs            # ClientFieldId / ServerFieldId - see below
-│   ├── opcode.rs              # ClientOpcode / ServerOpcode / TransactionType
-│   ├── transaction.rs         # Transaction: fixed fields + fields, one type
-│   ├── types.rs               # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo
-│   ├── consts.rs              # AccessPrivileges (64-bit USER_ACCESS bitmap)
-│   ├── handshake.rs           # ClientHello / ServerHello (the TRTP handshake)
-│   └── error.rs               # ProtoError
+├── hotline-proto/                       # wire format only, no I/O, no async
+│   ├── wire/                            # PacketWriter/PacketReader: builder-style fixed-buffer cursors
+│   ├── numbers.rs                       # signed int encoding (EncodedInt, no heap allocation)
+│   ├── field/                           # Field { id, data } + FieldList, FieldId (one type, both directions)
+│   ├── opcode.rs                        # Opcode (one type, both directions) + TransactionType
+│   ├── transaction/                     # Transaction + TransactionHeader
+│   ├── types/                           # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo
+│   ├── consts/                          # AccessPrivileges (64-bit myField_UserAccess bitmap)
+│   ├── handshake/                       # ClientHandshake / ServerHandshake (the TRTP handshake)
+│   ├── htxf/                            # HtxfHeader (file transfer handshake) + flat file object framing
+│   ├── text_encoding.rs                 # per-connection wire text encoding (Mac Roman by default)
+│   └── error.rs                         # ProtoError
 │
-├── hotline-codec/             # tokio_util Decoder/Encoder for Transaction
+├── hotline-codec/                       # tokio_util Decoder/Encoder for Transaction
 │
-├── hotline-client/            # async client session (Tokio)
-│   └── client.rs              # connect, handshake, login, request/reply matching,
-│                              # broadcast stream for server-initiated transactions
+├── hotline-client/                      # async client session (Tokio): connect, handshake,
+│                                        # login, request/reply matching, broadcast stream
+│                                        # for server-initiated transactions
 │
-├── hotline-server/            # async server framework (Tokio)
-│   ├── server.rs              # listener, shared state, spawns one Session per connection
-│   └── session.rs             # per-connection handshake + transaction dispatch
+├── hotline-server/                      # async server framework (Tokio)
+│   ├── server/                          # listener, spawns one Session per connection,
+│   │                                    # plus the second (HTXF) listener for file transfer
+│   ├── session/                         # per-connection handshake + transaction dispatch
+│   ├── state/                           # SharedState: cross-session user table, chat rooms,
+│   │                                    # and the channels sessions use to reach each other
+│   ├── account/                         # Account + AccountProvider trait; storage itself is
+│   │                                    # supplied by the embedding application, not owned here
+│   ├── file/                            # FileProvider trait, same plug-in shape as AccountProvider
+│   ├── news/                            # NewsProvider trait: bundles, categories, article threads
+│   └── ban/, banner/, console/, flood/  # further pluggable providers (bans, server
+│                                        # banner, console commands, flood control)
 │
-├── hotline-tracker/           # HTRK tracker protocol (client query + server beacon)
+├── hotline-tracker/                     # HTRK tracker protocol (client query + server beacon)
 │
-├── hotline-cli/               # `hlc` - terminal client binary using hotline-client
+├── hotline-cli/                         # `hlc`, terminal client binary (ratatui) using hotline-client
 │
-└── hotline-daemon/            # `hls` - server binary using hotline-server
+└── hotline-daemon/                      # `hls`, server binary using hotline-server
 ```
 
 `hotline-proto` has no `tokio` dependency: it only turns bytes into
@@ -49,26 +59,28 @@ crates/
 socket and reused by non-async consumers (a packet-capture dissector, a
 fuzzer, ...).
 
-### `ClientFieldId` / `ServerFieldId`
+### `FieldId` and `Opcode`
 
-The same numeric field tag can mean different things - or not exist at
-all - depending on which direction sent it. Field tags are two distinct,
-non-overlapping types rather than one shared enum: a tag only exists as
-a constant on the type for the direction that actually sends it. Both
-types' `Debug` impls print the original constant name. Since a bare
-`Field` doesn't know its own direction, `Transaction`'s `Debug` is where
-that gets resolved (it knows via `opcode()` whether it's a request,
-reply, or push, and picks the matching table).
+`HLProtocol.md` numbers both fields and opcodes with one flat list each
+(`myField_*`, `myTran_*`), with no client/server split. A tag-by-tag
+audit against it found no case where the same numeric value means
+something structurally different depending on direction. So `FieldId`
+and `Opcode` each cover both directions as one type, instead of the
+separate `ClientFieldId`/`ServerFieldId` and `ClientOpcode`/`ServerOpcode`
+types an earlier version of this crate used. `TransactionType::Request`/
+`Push` still carry direction, since a raw wire value alone doesn't say
+whether it came from a client or a server. Both types' `Debug` impls
+print the original constant name.
 
-### `Transaction`
+### `Transaction` / `TransactionHeader`
 
-One type carries every wire field directly (`type_`, `trans`, `flag`,
-`len`, `len2`, `fields`) rather than a separate header type wrapping a
-payload. The field count (`hc`) isn't stored either - it's always
-`fields.len()`. Streaming decode ([`Transaction::decode_prefix`] +
-[`Transaction::finish_decode`]) still splits the read in two, since
-knowing `len2` (and therefore how many more bytes to read) requires
-reading the fixed prefix first.
+`Transaction` holds `r#type`, `trans`, `flag`, and `fields`; it doesn't
+store `len`/`len2`, since `encode()` recomputes them from `fields` every
+time. The field count isn't stored either, it's always `fields.len()`.
+Streaming decode needs `len2` before fields are readable, so
+`TransactionHeader` is a separate, smaller type holding just the raw
+20-byte prefix; it turns into a full `Transaction` once the body bytes
+are in hand.
 
 ### `hotline-codec`
 
@@ -78,14 +90,28 @@ and server. A connection is a `Stream<Item = Result<Transaction, _>>` +
 `Sink<Transaction>` - `reader.next().await` / `writer.send(tx).await` -
 handling TCP fragmentation without a hand-rolled read loop.
 
+### Server session/state split
+
+`Session` holds per-connection data (the socket's assigned user ID,
+current name, granted access privileges, away status) and does the
+actual request handling. `SharedState` holds everything visible across
+connections: the connected user table, chat rooms, and the channels
+sessions use to reach each other. Account storage, file storage, news
+storage, bans, the server banner, console commands, and flood control
+are each behind their own small trait (`AccountProvider`, `FileProvider`,
+`NewsProvider`, ...); the embedding application supplies the concrete
+backend for each to `Server::new`, so `hotline-server` itself never
+owns any of that data directly.
+
 ## Status
 
-Transaction framing, field encoding, the handshake, login, chat, and
-file listing are wired up end-to-end (`hlc` can connect, log in, list
-files, and chat with `hls`), including server-side permission checks
-against `USER_ACCESS`. Not yet implemented: file transfer (`HTXF`, the
-second-port transfer handshake), private chat rooms, news threading, and
-the tracker (`HTRK`) beyond its wire-format types.
+Transaction framing, field encoding, the handshake, login (against
+pluggable named accounts, not just guest), chat (including private,
+invitation-gated chat rooms), file listing, file transfer (`HTXF`, the
+second-port transfer handshake), account CRUD, and threaded news
+(bundles, categories, and article threads) are wired up end to end,
+including server-side permission checks against `myField_UserAccess` (110). Not yet
+implemented: the tracker (`HTRK`) beyond its wire-format types.
 
 ## Getting started
 
