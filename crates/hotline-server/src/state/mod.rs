@@ -3,6 +3,7 @@
 //! reach each other.
 
 mod access;
+mod console;
 mod entry;
 mod recipient;
 mod room;
@@ -15,6 +16,7 @@ use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::types::HlPath;
 
 pub use access::AccessUpdate;
+pub use console::ConsoleUpdate;
 pub use entry::{UserEntry, IDLE_THRESHOLD};
 pub use recipient::RecipientMessage;
 pub use room::ChatRoom;

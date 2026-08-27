@@ -97,6 +97,67 @@ bitflags::bitflags! {
     }
 }
 
+/// Each flag's mhxd `/access` console config key. [`Access::BROADCAST`]
+/// is absent: mhxd's `set_access_bit` has no case for it.
+const CONSOLE_NAMES: &[(&str, Access)] = &[
+    ("delete_files", Access::DELETE_FILE),
+    ("upload_files", Access::UPLOAD_FILE),
+    ("download_files", Access::DOWNLOAD_FILE),
+    ("rename_files", Access::RENAME_FILE),
+    ("move_files", Access::MOVE_FILE),
+    ("create_folders", Access::CREATE_FOLDER),
+    ("delete_folders", Access::DELETE_FOLDER),
+    ("rename_folders", Access::RENAME_FOLDER),
+    ("move_folders", Access::MOVE_FOLDER),
+    ("read_chat", Access::READ_CHAT),
+    ("send_chat", Access::SEND_CHAT),
+    ("create_pchats", Access::CREATE_CHAT),
+    ("create_users", Access::CREATE_USER),
+    ("delete_users", Access::DELETE_USER),
+    ("read_users", Access::OPEN_USER),
+    ("modify_users", Access::MODIFY_USER),
+    ("read_news", Access::NEWS_READ_ART),
+    ("post_news", Access::POST_NEWS_ART),
+    ("disconnect_users", Access::DISCON_USER),
+    ("cant_be_disconnected", Access::CANNOT_BE_DISCON),
+    ("get_user_info", Access::GET_CLIENT_INFO),
+    ("upload_anywhere", Access::UPLOAD_ANYWHERE),
+    ("use_any_name", Access::ANY_NAME),
+    ("dont_show_agreement", Access::NO_AGREEMENT),
+    ("comment_files", Access::SET_FILE_COMMENT),
+    ("comment_folders", Access::SET_FOLDER_COMMENT),
+    ("view_drop_boxes", Access::VIEW_DROP_BOXES),
+    ("make_aliases", Access::MAKE_ALIAS),
+    ("delete_articles", Access::NEWS_DELETE_ART),
+    ("create_categories", Access::NEWS_CREATE_CAT),
+    ("delete_categories", Access::NEWS_DELETE_CAT),
+    ("create_news_bundles", Access::NEWS_CREATE_FLDR),
+    ("delete_news_bundles", Access::NEWS_DELETE_FLDR),
+    ("upload_folders", Access::UPLOAD_FOLDER),
+    ("download_folders", Access::DOWNLOAD_FOLDER),
+    ("send_msgs", Access::SEND_MESSAGE),
+];
+
+impl Access {
+    /// Looks up a flag by its console config key (`delete_files`,
+    /// `cant_be_disconnected`, ...). [`Access::BROADCAST`] has no key.
+    pub fn from_console_name(name: &str) -> Option<Self> {
+        CONSOLE_NAMES
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, flag)| *flag)
+    }
+
+    /// A single flag's console config key, the inverse of
+    /// [`Access::from_console_name`].
+    pub fn console_name(self) -> Option<&'static str> {
+        CONSOLE_NAMES
+            .iter()
+            .find(|(_, flag)| *flag == self)
+            .map(|(key, _)| *key)
+    }
+}
+
 impl Default for Access {
     /// A reasonable "guest" default: read/send public chat, browse,
     /// upload, and download files, read and post news, send and receive
@@ -164,6 +225,19 @@ impl RequireFlags for Access {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whatever `/access` displays, it must also accept back.
+    #[test]
+    fn every_flag_but_broadcast_round_trips_through_its_console_name() {
+        for (_, flag) in Access::all().iter_names() {
+            if flag == Access::BROADCAST {
+                assert_eq!(flag.console_name(), None);
+                continue;
+            }
+            let key = flag.console_name().expect("every other flag has a key");
+            assert_eq!(Access::from_console_name(key), Some(flag));
+        }
+    }
 
     #[test]
     fn access_privileges_round_trip_bytes() {

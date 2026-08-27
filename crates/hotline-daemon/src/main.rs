@@ -10,7 +10,9 @@ mod news;
 use std::sync::Arc;
 
 use clap::Parser;
-use hotline_server::{InMemoryFloodPolicy, NoBanner, Server, ServerConfig, UrlBannerProvider};
+use hotline_server::{
+    DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Server, ServerConfig, UrlBannerProvider,
+};
 
 use accounts::FileAccountProvider;
 use args::Args;
@@ -28,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
         bind_addr: format!("{}:{}", args.bind, args.port),
         agreement: args.agreement,
         server_name: args.name,
+        console_prefix: args.console_prefix,
     };
 
     let accounts = Arc::new(FileAccountProvider::open(args.accounts_dir).await?);
@@ -42,7 +45,8 @@ async fn main() -> anyhow::Result<()> {
         Some(path) => Arc::new(FileBannerProvider::open(path).await?),
         None => Arc::new(NoBanner),
     };
-    Server::new(config, accounts, files, news, bans, flood, banner)
+    let commands = Arc::new(DefaultChatCommands);
+    Server::new(config, accounts, files, news, bans, flood, banner, commands)
         .run()
         .await?;
     Ok(())

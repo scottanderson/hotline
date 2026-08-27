@@ -18,13 +18,14 @@ use hotline_proto::{ClientHandshake, Field, FieldList, ServerHandshake, Transact
 
 use crate::account::{AccessExtra, Account};
 use crate::banner::BannerKind;
+use crate::console::{ChatCommandActor, ConsoleReply};
 use crate::error::{Result, ServerError};
 use crate::file::FileRequester;
 use crate::flood::FloodDecision;
 use crate::server::ServerConfig;
 use crate::state::{
-    AccessUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection, TransferKind,
-    UserEntry, IDLE_THRESHOLD,
+    AccessUpdate, ConsoleUpdate, PendingTransfer, RecipientMessage, SharedState, TransferDirection,
+    TransferKind, UserEntry, IDLE_THRESHOLD,
 };
 
 use super::options::UserChangeOptions;
@@ -184,6 +185,9 @@ impl Session {
                         Some(RecipientMessage::AccessUpdate(update)) => {
                             session.apply_access_update(update, &state).await;
                         }
+                        Some(RecipientMessage::Console(update)) => {
+                            session.apply_console_update(update, &state).await;
+                        }
                         Some(RecipientMessage::Disconnect) => break,
                         None => break,
                     }
@@ -274,7 +278,7 @@ impl Session {
 
         match self.state {
             SessionState::Agreement => self.handle_agreement(opcode, tx, state, config).await,
-            SessionState::Joined => self.handle_joined(opcode, tx, state).await,
+            SessionState::Joined => self.handle_joined(opcode, tx, state, config).await,
         }
     }
 
@@ -303,11 +307,12 @@ impl Session {
         opcode: Opcode,
         tx: &Transaction,
         state: &SharedState,
+        config: &ServerConfig,
     ) -> Vec<Transaction> {
         match opcode {
             /* 101 */ Opcode::NewsfileGet => self.on_newsfile_get(tx, state).await,
             /* 103 */ Opcode::OldPostNews => self.on_newsfile_post(tx, state).await,
-            /* 105 */ Opcode::ChatSend => self.on_chat(tx, state).await,
+            /* 105 */ Opcode::ChatSend => self.on_chat(tx, state, config).await,
             /* 107 */ Opcode::Login => vec![tx.reply_error("already logged in")],
             /* 108 */ Opcode::SendInstantMsg => self.on_private_msg(tx, state).await,
             /* 110 */ Opcode::UserKick => self.on_user_kick(tx, state).await,
@@ -591,8 +596,32 @@ impl Session {
                 }
             }
         }
-        let icon = state.user(self.user_id).await.map(|e| e.icon).unwrap_or(0);
+        let icon = self.current_icon(state).await;
         self.announce_user_change(icon, state, false).await;
+    }
+
+    /// Applies a console-command-driven live update (see
+    /// [`crate::ChatCommandDispatcher`]) to this exact session.
+    async fn apply_console_update(&mut self, update: ConsoleUpdate, state: &SharedState) {
+        if let Some(access) = update.access {
+            self.access = access;
+        }
+        if let Some(access_extra) = update.access_extra {
+            self.access_extra = access_extra;
+        }
+        if let Some(name) = update.name {
+            self.name = name;
+        }
+        let icon = match update.icon {
+            Some(icon) => icon,
+            None => self.current_icon(state).await,
+        };
+        self.announce_user_change(icon, state, false).await;
+    }
+
+    /// This session's icon from `SharedState`, `0` if it has no entry.
+    async fn current_icon(&self, state: &SharedState) -> u16 {
+        state.user(self.user_id).await.map_or(0, |e| e.icon)
     }
 
     /// Broadcast this session's away status changing. Reads name/icon back
@@ -636,8 +665,20 @@ impl Session {
         flags
     }
 
-    /// 105: public or (if `ChatId` is present) private-room chat.
-    async fn on_chat(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+    /// `myTran_ChatSend` (105): public or (if `ChatId` is present) private-room
+    /// chat, gated on `SEND_CHAT`. A message that starts with the console
+    /// prefix runs as a console command instead.
+    async fn on_chat(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+        config: &ServerConfig,
+    ) -> Vec<Transaction> {
+        let encoding = self.encoding();
+        let Some(message) = tx.string(FieldId::Text, encoding) else {
+            return Vec::new();
+        };
+
         if let Err(reason) = self.access.require(Access::SEND_CHAT) {
             // Sent only to the denied client; CHAT_SEND has no reply mechanism.
             return vec![Transaction::push(
@@ -647,11 +688,16 @@ impl Session {
         }
 
         let chat_id = tx.field(FieldId::ChatId).and_then(Field::as_u32);
+        if let Some((prefix, command_line)) = config
+            .console_prefix
+            .and_then(|prefix| Some((prefix, message.strip_prefix(prefix)?)))
+        {
+            return self
+                .on_console_command(prefix, command_line, chat_id, state)
+                .await;
+        }
+
         let style = tx.field(FieldId::Style).and_then(Field::as_u16);
-        let encoding = self.encoding();
-        let Some(message) = tx.string(FieldId::Text, encoding) else {
-            return Vec::new();
-        };
 
         let prefix = match style == Some(1) {
             true => format!("\r *** {} ", self.name),
@@ -677,6 +723,48 @@ impl Session {
             None => state.publish(relay).await,
         }
         Vec::new()
+    }
+
+    /// Runs a console command line. Any reply goes only to this session.
+    async fn on_console_command(
+        &self,
+        prefix: char,
+        line: &str,
+        chat_id: Option<u32>,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
+        if line.is_empty() {
+            return Vec::new();
+        }
+        let (command, args) = line.split_once(' ').unwrap_or((line, ""));
+        let actor = ChatCommandActor {
+            user_id: self.user_id,
+            login: self.login.clone(),
+            access_extra: self.access_extra,
+            prefix,
+        };
+        let reply = state
+            .run_console_command(&command.to_ascii_lowercase(), args.trim_start(), &actor)
+            .await
+            .unwrap_or_else(|| ConsoleReply::Chat(format!("command not found: {command}")));
+        match reply {
+            ConsoleReply::Silent => Vec::new(),
+            ConsoleReply::Chat(text) => {
+                let mut fields = vec![Field::string(FieldId::Text, format!("\r{text}"))];
+                if let Some(chat_id) = chat_id {
+                    fields.push(Field::u32(FieldId::ChatId, chat_id));
+                }
+                vec![Transaction::push(Opcode::ChatMsg, fields)]
+            }
+            ConsoleReply::Message(text) => vec![Transaction::push(
+                Opcode::ServerMsg,
+                vec![
+                    Field::u16(FieldId::UserId, self.user_id),
+                    Field::string(FieldId::Text, text),
+                    Field::string(FieldId::Name, ConsoleReply::SENDER),
+                ],
+            )],
+        }
     }
 
     /// 300
@@ -2145,6 +2233,14 @@ mod tests {
         }
     }
 
+    /// Config with console commands switched on under `/`.
+    fn console_config() -> ServerConfig {
+        ServerConfig {
+            console_prefix: Some('/'),
+            ..ServerConfig::default()
+        }
+    }
+
     /// A minimal connected [`UserEntry`], for tests exercising
     /// private-message/chat-invite refusal against another user.
     fn test_user(user_id: u16, name: &str) -> UserEntry {
@@ -2209,6 +2305,7 @@ mod tests {
                 RecipientMessage::Push(tx) => {
                     assert_eq!(tx.r#type(), TransactionType::Push(Opcode::NotifyChangeUser));
                 }
+                RecipientMessage::Console(_) => panic!("unexpected console update"),
                 RecipientMessage::Disconnect => panic!("unexpected disconnect"),
             }
         }
@@ -2349,7 +2446,10 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session.on_chat(&request, &state).await.is_empty());
+        assert!(session
+            .on_chat(&request, &state, &ServerConfig::default())
+            .await
+            .is_empty());
 
         let text = rx
             .try_recv()
@@ -2376,7 +2476,10 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session.on_chat(&request, &state).await.is_empty());
+        assert!(session
+            .on_chat(&request, &state, &ServerConfig::default())
+            .await
+            .is_empty());
 
         let text = rx
             .try_recv()
@@ -2400,7 +2503,10 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session.on_chat(&request, &state).await.is_empty());
+        assert!(session
+            .on_chat(&request, &state, &ServerConfig::default())
+            .await
+            .is_empty());
 
         let text = rx
             .try_recv()
@@ -2424,7 +2530,10 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session.on_chat(&request, &state).await.is_empty());
+        assert!(session
+            .on_chat(&request, &state, &ServerConfig::default())
+            .await
+            .is_empty());
 
         let text = rx
             .try_recv()
@@ -2451,7 +2560,10 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session.on_chat(&request, &state).await.is_empty());
+        assert!(session
+            .on_chat(&request, &state, &ServerConfig::default())
+            .await
+            .is_empty());
 
         let text = rx
             .try_recv()
@@ -2461,6 +2573,188 @@ mod tests {
             .string(FieldId::Text, encoding)
             .unwrap();
         assert_eq!(text, "\r        Alice:  hi");
+    }
+
+    #[tokio::test]
+    async fn chat_starting_with_slash_dispatches_as_a_console_command_not_a_relay() {
+        let mut session = test_session("Alice", Access::default());
+        session.access_extra.insert(AccessExtra::MANAGE_USERS);
+        let state = SharedState::default();
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Text, "/users")],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        let reply = session.on_chat(&request, &state, &console_config()).await;
+
+        // `/users` answers with a private message from `hxd`, like mhxd.
+        assert!(rx.try_recv().is_err());
+        assert_eq!(reply.len(), 1);
+        assert_eq!(reply[0].r#type(), TransactionType::Push(Opcode::ServerMsg));
+        assert_eq!(
+            reply[0]
+                .string(FieldId::Name, text_encoding::DEFAULT)
+                .as_deref(),
+            Some("hxd")
+        );
+        assert_eq!(
+            reply[0].field(FieldId::UserId).and_then(Field::as_u16),
+            Some(session.user_id)
+        );
+    }
+
+    /// A command typed in a private room replies in that room.
+    #[tokio::test]
+    async fn console_reply_in_a_private_room_carries_its_chat_id() {
+        let session = test_session("Alice", Access::default());
+        let state = SharedState::default();
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![
+                Field::string(FieldId::Text, "/nope"),
+                Field::u32(FieldId::ChatId, 7),
+            ],
+        );
+
+        let reply = session.on_chat(&request, &state, &console_config()).await;
+
+        assert_eq!(reply[0].r#type(), TransactionType::Push(Opcode::ChatMsg));
+        assert_eq!(
+            reply[0].field(FieldId::ChatId).and_then(Field::as_u32),
+            Some(7)
+        );
+    }
+
+    /// With no console prefix configured, a would-be command is just chat.
+    #[tokio::test]
+    async fn chat_starting_with_slash_relays_as_chat_when_console_is_off() {
+        let mut session = test_session("Alice", Access::default());
+        session.access_extra.insert(AccessExtra::MANAGE_USERS);
+        let state = SharedState::default();
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Text, "/users")],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        let reply = session
+            .on_chat(&request, &state, &ServerConfig::default())
+            .await;
+
+        assert!(reply.is_empty());
+        let relayed = rx.try_recv().expect("relayed as ordinary chat");
+        let RecipientMessage::Push(push) = relayed else {
+            panic!("expected a chat push");
+        };
+        let text = push
+            .field(FieldId::Text)
+            .unwrap()
+            .as_string(text_encoding::DEFAULT);
+        assert!(text.contains("/users"), "{text}");
+    }
+
+    /// A different prefix dispatches; `/` then relays as ordinary chat.
+    #[tokio::test]
+    async fn console_prefix_is_configurable() {
+        let mut session = test_session("Alice", Access::default());
+        session.access_extra.insert(AccessExtra::MANAGE_USERS);
+        let state = SharedState::default();
+        let config = ServerConfig {
+            console_prefix: Some('!'),
+            ..ServerConfig::default()
+        };
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Text, "!users")],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        let reply = session.on_chat(&request, &state, &config).await;
+
+        assert!(rx.try_recv().is_err(), "a command must not relay as chat");
+        assert_eq!(reply.len(), 1);
+        assert_eq!(reply[0].r#type(), TransactionType::Push(Opcode::ServerMsg));
+    }
+
+    #[tokio::test]
+    async fn console_command_is_denied_without_send_chat() {
+        // SEND_CHAT is required even though /users itself needs only MANAGE_USERS.
+        let mut session = test_session("Alice", Access::empty());
+        session.access_extra.insert(AccessExtra::MANAGE_USERS);
+        let state = SharedState::default();
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Text, "/users")],
+        );
+
+        let reply = session.on_chat(&request, &state, &console_config()).await;
+        let text = reply[0]
+            .field(FieldId::Text)
+            .unwrap()
+            .as_string(text_encoding::DEFAULT);
+        assert!(text.contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn unrecognized_console_command_replies_command_not_found() {
+        let session = test_session("Alice", Access::default());
+        let state = SharedState::default();
+        let request = Transaction::request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Text, "/nope")],
+        );
+
+        let reply = session.on_chat(&request, &state, &console_config()).await;
+        let text = reply[0]
+            .field(FieldId::Text)
+            .unwrap()
+            .as_string(text_encoding::DEFAULT);
+        assert_eq!(text, "\rcommand not found: nope");
+    }
+
+    #[tokio::test]
+    async fn console_access_update_is_applied_live_and_broadcast() {
+        let mut session = test_session("Bob", Access::default());
+        session.user_id = 2;
+        let state = SharedState::default();
+        let mut rx = state.register_recipient(2).await;
+
+        session
+            .apply_console_update(
+                ConsoleUpdate {
+                    access: Some(Access::BROADCAST),
+                    access_extra: None,
+                    icon: Some(7),
+                    name: Some("Bobby".to_string()),
+                },
+                &state,
+            )
+            .await;
+
+        assert_eq!(session.access, Access::BROADCAST);
+        assert_eq!(session.name, "Bobby");
+
+        let push = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a UserChange push");
+        assert_eq!(
+            push.r#type(),
+            TransactionType::Push(Opcode::NotifyChangeUser)
+        );
+        assert_eq!(push.field(FieldId::Icon).unwrap().as_u16(), Some(7));
+        assert_eq!(
+            push.string(FieldId::Name, text_encoding::DEFAULT),
+            Some("Bobby".to_string())
+        );
     }
 
     #[tokio::test]
@@ -2883,6 +3177,7 @@ mod tests {
             std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::NoFloodPolicy),
             banner,
+            std::sync::Arc::new(crate::console::DefaultChatCommands),
         )
     }
 
@@ -3635,6 +3930,7 @@ mod tests {
             std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::new(config)),
             std::sync::Arc::new(crate::banner::NoBanner),
+            std::sync::Arc::new(crate::console::DefaultChatCommands),
         )
     }
 
@@ -4754,7 +5050,9 @@ mod tests {
                 Field::u32(FieldId::ChatId, chat_id),
             ],
         );
-        creator.on_chat(&room_chat, &state).await;
+        creator
+            .on_chat(&room_chat, &state, &ServerConfig::default())
+            .await;
 
         let delivered = creator_rx
             .try_recv()
@@ -5251,6 +5549,7 @@ mod tests {
             std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::NoFloodPolicy),
             std::sync::Arc::new(crate::banner::NoBanner),
+            std::sync::Arc::new(crate::console::DefaultChatCommands),
         )
     }
 

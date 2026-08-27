@@ -48,6 +48,10 @@ pub struct Args {
     #[arg(long, default_value = "bans.json")]
     pub ban_file: String,
 
+    /// Chat prefix for console commands, such as `/`; unset relays all chat.
+    #[arg(long)]
+    pub console_prefix: Option<char>,
+
     /// Banner shown to clients on login (unset disables the banner). An
     /// `http://`/`https://` value is shown as a URL; anything else is a
     /// local or relative path to an image file served over `HTXF`.

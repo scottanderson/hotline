@@ -16,14 +16,18 @@ use hotline_proto::Transaction;
 use crate::account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 use crate::ban::{BanProvider, BanRecord, InMemoryBanProvider};
 use crate::banner::{BannerKind, BannerProvider, NoBanner};
+use crate::console::fields::{
+    format_access, format_access_extra, parse_0wn_fields, parse_access_fields,
+};
+use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, DefaultChatCommands};
 use crate::file::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
 use crate::flood::{FloodDecision, FloodPolicy, NoFloodPolicy};
 use crate::news::{
     InMemoryNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind, NewsProvider,
 };
 use crate::state::{
-    dropbox_access, dropbox_blocked, is_dropbox_path, AccessUpdate, ChatRoom, PendingTransfer,
-    RecipientMessage, TransferDirection, TransferKind, UserEntry,
+    dropbox_access, dropbox_blocked, is_dropbox_path, AccessUpdate, ChatRoom, ConsoleUpdate,
+    PendingTransfer, RecipientMessage, TransferDirection, TransferKind, UserEntry,
 };
 
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
@@ -59,6 +63,8 @@ pub struct SharedState {
     /// reference number handed to the client.
     transfers: Arc<RwLock<HashMap<u32, PendingTransfer>>>,
     next_transfer_ref: Arc<AtomicU32>,
+    /// Console command dispatch; see [`crate::ChatCommandDispatcher`].
+    commands: Arc<dyn ChatCommandDispatcher>,
 }
 
 impl Default for SharedState {
@@ -70,13 +76,14 @@ impl Default for SharedState {
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
+            Arc::new(DefaultChatCommands),
         )
     }
 }
 
 impl SharedState {
     /// Build fresh shared state backed by `accounts`, `files`, `news`,
-    /// `bans`, `flood`, and `banner`.
+    /// `bans`, `flood`, `banner`, and `commands`.
     pub fn new(
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
@@ -84,6 +91,7 @@ impl SharedState {
         bans: Arc<dyn BanProvider>,
         flood: Arc<dyn FloodPolicy>,
         banner: Arc<dyn BannerProvider>,
+        commands: Arc<dyn ChatCommandDispatcher>,
     ) -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
@@ -101,6 +109,7 @@ impl SharedState {
             banner,
             transfers: Arc::new(RwLock::new(HashMap::new())),
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
+            commands,
         }
     }
 }
@@ -246,6 +255,116 @@ impl SharedState {
         for sender in self.recipients.read().await.values() {
             let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
         }
+    }
+
+    /// Send a console-command-driven update to exactly one connected
+    /// session. A no-op if that user isn't connected.
+    pub async fn send_console_update(&self, target_user_id: u16, update: ConsoleUpdate) {
+        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
+            let _ = sender.try_send(RecipientMessage::Console(update));
+        }
+    }
+
+    /// `target_id`'s [`UserEntry`], if connected.
+    async fn console_target(&self, target_id: u32) -> Result<UserEntry, Cow<'static, str>> {
+        let user = match u16::try_from(target_id) {
+            Ok(user_id) => self.user(user_id).await,
+            Err(_) => None,
+        };
+        let user = user.ok_or_else(|| format!("no such user (uid:{target_id})"))?;
+        Ok(user)
+    }
+
+    /// `target_id`'s [`UserEntry`], if connected and holding
+    /// [`AccessExtra::ACCESS_VOLATILE`].
+    async fn access_volatile_target(&self, target_id: u32) -> Result<UserEntry, Cow<'static, str>> {
+        let target = self.console_target(target_id).await?;
+        if !target.access_extra.contains(AccessExtra::ACCESS_VOLATILE) {
+            Err("user cannot be modified")?;
+        }
+        Ok(target)
+    }
+
+    /// `/access <uid>` with no fields: `target_id`'s current privileges
+    /// as text. The target must hold [`AccessExtra::ACCESS_VOLATILE`].
+    pub async fn describe_access(&self, target_id: u32) -> Result<String, Cow<'static, str>> {
+        let target = self.access_volatile_target(target_id).await?;
+        Ok(format!(
+            "{} (uid {target_id})\rAccess: {}\rAccessExtra: {}",
+            target.name,
+            format_access(target.access),
+            format_access_extra(target.access_extra),
+        ))
+    }
+
+    /// `/access <uid> field=0|1 ...`: applies each field to `target_id`'s
+    /// live privileges, all or nothing, parsed like mhxd's `cmd_access`. A
+    /// field is an [`Access`] or [`AccessExtra`] console key. The target
+    /// must hold [`AccessExtra::ACCESS_VOLATILE`].
+    pub async fn apply_access_fields(
+        &self,
+        target_id: u32,
+        fields: &str,
+    ) -> Result<String, Cow<'static, str>> {
+        let target = self.access_volatile_target(target_id).await?;
+
+        let mut access = target.access;
+        let mut access_extra = target.access_extra;
+        parse_access_fields(fields, &mut access, &mut access_extra)?;
+
+        self.send_console_update(
+            target.user_id,
+            ConsoleUpdate {
+                access: Some(access),
+                access_extra: Some(access_extra),
+                icon: None,
+                name: None,
+            },
+        )
+        .await;
+        Ok(target.name)
+    }
+
+    /// `/0wn <uid> icon=<n> name=<text>`: overwrites `target_id`'s live icon
+    /// and display name, parsed like mhxd's `cmd_0wn`. A key matches by
+    /// prefix, and `name=` takes the rest of the line. The target must hold
+    /// [`AccessExtra::IS_0WN3D`]. `None` if nothing changed.
+    pub async fn apply_0wn_fields(
+        &self,
+        target_id: u32,
+        fields: &str,
+    ) -> Result<Option<String>, Cow<'static, str>> {
+        let target = self.console_target(target_id).await?;
+        if !target.access_extra.contains(AccessExtra::IS_0WN3D) {
+            Err("User cannot be 0wned")?;
+        }
+
+        let (icon, name) = parse_0wn_fields(fields);
+        if icon.is_none() && name.is_none() {
+            return Ok(None);
+        }
+        self.send_console_update(
+            target.user_id,
+            ConsoleUpdate {
+                access: None,
+                access_extra: None,
+                icon,
+                name,
+            },
+        )
+        .await;
+        Ok(Some(target.name))
+    }
+
+    /// Runs `command` (lowercased, without the prefix) via the
+    /// configured [`ChatCommandDispatcher`]. `None` if unrecognized.
+    pub async fn run_console_command(
+        &self,
+        command: &str,
+        args: &str,
+        actor: &ChatCommandActor,
+    ) -> Option<ConsoleReply> {
+        self.commands.run(command, args, actor, self).await
     }
 
     /// List a directory as seen by `requester`. `dir` is empty for the
@@ -1057,6 +1176,7 @@ mod tests {
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
+            Arc::new(crate::console::DefaultChatCommands),
         );
 
         state.post_news("alice", "hello").await;
@@ -1084,6 +1204,7 @@ mod tests {
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
+            Arc::new(crate::console::DefaultChatCommands),
         );
 
         assert!(other.news().await.contains("hello"));
@@ -1188,6 +1309,7 @@ mod tests {
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
+            Arc::new(crate::console::DefaultChatCommands),
         );
 
         let requester = FileRequester { login: "alice" };
@@ -1214,6 +1336,7 @@ mod tests {
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
+            Arc::new(crate::console::DefaultChatCommands),
         );
         let requester = FileRequester { login: "alice" };
 
@@ -1275,5 +1398,191 @@ mod tests {
         assert!(state.take_transfer(ref_a).await.is_some());
         assert!(state.take_transfer(ref_a).await.is_none());
         assert!(state.take_transfer(ref_b).await.is_some());
+    }
+
+    fn test_user_entry(user_id: u16, access_extra: AccessExtra) -> UserEntry {
+        UserEntry {
+            user_id,
+            login: "bob".to_string(),
+            account_name: "Bob".to_string(),
+            name: "Bob".to_string(),
+            icon: 0,
+            client_version: None,
+            access: Access::default(),
+            access_extra,
+            remote_addr: "127.0.0.1:0".parse().unwrap(),
+            connected_at: Instant::now(),
+            last_active: Instant::now(),
+            refuses_pm: false,
+            refuses_chat: false,
+            automatic_response: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_access_fields_grants_a_flag_live() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+        let mut rx = state.register_recipient(2).await;
+
+        let name = state
+            .apply_access_fields(2, "delete_files=1")
+            .await
+            .unwrap();
+
+        assert_eq!(name, "Bob");
+        let update = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_console_update)
+            .expect("expected a console update");
+        assert_eq!(update.access, Some(Access::default() | Access::DELETE_FILE));
+    }
+
+    #[tokio::test]
+    async fn apply_access_fields_rejects_broadcast_which_has_no_console_key() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+
+        let result = state.apply_access_fields(2, "broadcast=1").await;
+
+        assert_eq!(result, Err("unknown argument \"broadcast\"".into()));
+    }
+
+    /// mhxd matches console keys with `strcmp`.
+    #[tokio::test]
+    async fn apply_access_fields_console_key_is_case_sensitive() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+
+        let result = state.apply_access_fields(2, "DELETE_FILES=1").await;
+
+        assert_eq!(result, Err("unknown argument \"DELETE_FILES\"".into()));
+    }
+
+    /// mhxd stops at a word with no `=` and still applies what came before.
+    #[tokio::test]
+    async fn apply_access_fields_stops_at_a_word_without_equals() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+        let mut rx = state.register_recipient(2).await;
+
+        let result = state.apply_access_fields(2, "delete_files=1 junk").await;
+
+        assert_eq!(result, Ok("Bob".to_string()));
+        let update = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_console_update)
+            .expect("expected a console update");
+        assert_eq!(update.access, Some(Access::default() | Access::DELETE_FILE));
+    }
+
+    #[tokio::test]
+    async fn apply_access_fields_refuses_a_target_without_access_volatile() {
+        let state = SharedState::default();
+        let non_volatile = AccessExtra::default() - AccessExtra::ACCESS_VOLATILE;
+        state.insert_user(test_user_entry(2, non_volatile)).await;
+
+        let result = state.apply_access_fields(2, "broadcast=1").await;
+
+        assert_eq!(result, Err("user cannot be modified".into()));
+    }
+
+    #[tokio::test]
+    async fn apply_0wn_fields_sets_icon_and_name() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+        let mut rx = state.register_recipient(2).await;
+
+        let name = state
+            .apply_0wn_fields(2, "icon=42 name=New Name")
+            .await
+            .unwrap();
+
+        assert_eq!(name.as_deref(), Some("Bob"));
+        let update = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_console_update)
+            .expect("expected a console update");
+        assert_eq!(update.icon, Some(42));
+        assert_eq!(update.name.as_deref(), Some("New Name"));
+    }
+
+    #[tokio::test]
+    async fn apply_0wn_fields_refuses_a_target_without_is_0wn3d() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::empty()))
+            .await;
+
+        let result = state.apply_0wn_fields(2, "icon=5").await;
+
+        assert_eq!(result, Err("User cannot be 0wned".into()));
+    }
+
+    /// mhxd's `user_0wn` ignores a key it doesn't know.
+    #[tokio::test]
+    async fn apply_0wn_fields_ignores_an_unknown_key() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+
+        let result = state.apply_0wn_fields(2, "color=1").await;
+
+        assert_eq!(result, Ok(None));
+    }
+
+    /// mhxd reads the icon with `strtoul`, so a non-number is `0`.
+    #[tokio::test]
+    async fn apply_0wn_fields_reads_the_icon_like_strtoul() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+        let mut rx = state.register_recipient(2).await;
+
+        state.apply_0wn_fields(2, "iconic=0x10").await.unwrap();
+
+        let update = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_console_update)
+            .expect("expected a console update");
+        assert_eq!(update.icon, Some(16));
+    }
+
+    #[tokio::test]
+    async fn apply_0wn_fields_caps_a_name_at_31_bytes() {
+        let state = SharedState::default();
+        state
+            .insert_user(test_user_entry(2, AccessExtra::default()))
+            .await;
+        let mut rx = state.register_recipient(2).await;
+
+        let long = "x".repeat(40);
+        state
+            .apply_0wn_fields(2, &format!("name={long}"))
+            .await
+            .unwrap();
+
+        let update = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_console_update)
+            .expect("expected a console update");
+        assert_eq!(update.name.as_deref(), Some(&long[..31]));
     }
 }

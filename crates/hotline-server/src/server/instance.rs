@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 use crate::account::AccountProvider;
 use crate::ban::BanProvider;
 use crate::banner::BannerProvider;
+use crate::console::ChatCommandDispatcher;
 use crate::error::Result;
 use crate::file::FileProvider;
 use crate::flood::FloodPolicy;
@@ -25,8 +26,10 @@ impl Server {
     /// Create a server with the given configuration, backed by `accounts`
     /// (see [`AccountProvider`]), `files` (see [`FileProvider`]), `news`
     /// (see [`NewsProvider`]), `bans` (see [`BanProvider`]), `flood` (see
-    /// [`FloodPolicy`]), and `banner` (see [`BannerProvider`]) - the
-    /// embedding application supplies all six concrete backends.
+    /// [`FloodPolicy`]), `banner` (see [`BannerProvider`]), and `commands`
+    /// (see [`ChatCommandDispatcher`]). The embedding application supplies
+    /// all seven concrete backends.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: ServerConfig,
         accounts: Arc<dyn AccountProvider>,
@@ -35,8 +38,9 @@ impl Server {
         bans: Arc<dyn BanProvider>,
         flood: Arc<dyn FloodPolicy>,
         banner: Arc<dyn BannerProvider>,
+        commands: Arc<dyn ChatCommandDispatcher>,
     ) -> Self {
-        let state = SharedState::new(accounts, files, news, bans, flood, banner);
+        let state = SharedState::new(accounts, files, news, bans, flood, banner, commands);
         Self { config, state }
     }
 

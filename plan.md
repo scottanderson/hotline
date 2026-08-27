@@ -18,6 +18,13 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   these at a small fixed buffer and truncates silently past it; this
   server accepts up to the wire format's real 255-byte `pstring` limit
   and errors past that instead. More permissive by design; not changed.
+- **Console commands differ from mhxd in small ways.** `/access <uid>`
+  with no fields shows the target's privileges; mhxd has no such view.
+  `/access` applies its fields all or nothing, but mhxd keeps the fields
+  before an unknown key and notifies no one. `/0wn` ignores `color=`,
+  `g0away=`, and `visible=`, since this server has no user color or
+  invisibility. A denied command names the missing privilege through
+  `RequireFlags::require`, not mhxd's fixed text.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -39,21 +46,7 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **No pluggable admin/console-command layer.** Several `AccessExtra`
-   fields exist purely to gate the secondary reference's in-chat admin
-   commands (`/access`, `/0wn`, `/color`, `/users`, `/mon`, a debug
-   command) — `USER_COLOR`, `USER_ACCESS`, `USER_0WN`, `IS_0WN3D`,
-   `MANAGE_USERS`, `DEBUG`, and `ACCESS_VOLATILE` (whether a command-
-   driven access change persists to the account) — and none of them do
-   anything today because `on_chat` has no command parser at all, just
-   a plain broadcast. If this server ever adds one, the command set
-   itself is a natural fit for a provider (a `ChatCommandProvider` or
-   similar, mapping a leading-slash token to a handler), the same shape
-   as `AccountProvider`/`FileProvider`: `hotline-server` would define
-   the trait and dispatch, the embedding application would supply which
-   commands actually exist.
-
-2. **Folder transfer (`myTran_DownloadFldr`/`UploadFldr`) isn't
+1. **Folder transfer (`myTran_DownloadFldr`/`UploadFldr`) isn't
    implemented at all.** Needs new opcodes, a `TransferKind::Folder` (or
    equivalent), and the `dlFldrAction_SendFile`/`_ResumeFile`/`_NextFile`
    (1/2/3, `HotlineClientServerCommon.h`) action field the client sends on
@@ -63,7 +56,7 @@ one-shared-room model.
    `Access::DOWNLOAD_FOLDER`/`UPLOAD_FOLDER`, which have known reference
    denial strings in `Access::actions` but no `require()` call site yet.
 
-3. **HTXF transfer queue not implemented**
+2. **HTXF transfer queue not implemented**
    (`HTLS_DATA_QUEUE_POSITION`/`HTLS_HDR_QUEUE_UPDATE` equivalents:
    `WaitingCount` (116), the `DownloadInfo` push). Needs a concurrent-
    download cap in `ServerConfig` and a waiting list in `SharedState`. A
@@ -72,13 +65,13 @@ one-shared-room model.
    exists those five sections always read `"None."`, with no in-progress
    transfers ever reported.
 
-4. **A still-uploading (`.hpf`) file can't be touched by its plain name
+3. **A still-uploading (`.hpf`) file can't be touched by its plain name
    until it finishes.** `delete`/`rename`/`r#move`/`symlink` all resolve
    only the exact name passed in, so a resumable in-progress upload is
    invisible to those operations by design, not by omission — flagged in
    case that turns out to matter for a real client.
 
-5. **A polite kick (`Politequit` push, `on_user_kick`'s ban path) closes
+4. **A polite kick (`Politequit` push, `on_user_kick`'s ban path) closes
    the connection immediately after sending the notice, with no chance
    for the client to drain it first.** `Session::run`'s select loop
    (`session.rs`) does `writer.send(tx).await?` then `break`s straight
@@ -93,7 +86,7 @@ one-shared-room model.
    (`RecipientMessage::Disconnect`) is unaffected: it sends nothing before
    closing, matching the reference's own immediate `Disconnect()`.
 
-6. **Startup file errors don't say which file.** `hotline-daemon`'s
+5. **Startup file errors don't say which file.** `hotline-daemon`'s
    provider `open()` calls (`FileAccountProvider`, `FileFileProvider`,
    `FileNewsProvider`, `FileBanProvider`, `FileBannerProvider`) all
    propagate a raw `io::Error` straight through `main`'s `?` to `anyhow`,
@@ -103,7 +96,7 @@ one-shared-room model.
    `io::Error` with the path it was trying (`anyhow::Context::with_context`,
    or a matching `io::Error::new` with the path folded into the message).
 
-7. **Enum variant naming isn't consistently the openline constant's tail
+6. **Enum variant naming isn't consistently the openline constant's tail
    yet.** `FieldId`/`Opcode` already follow this (see AGENTS.md's Naming
    section); other enums need the same audit. First pass (every `pub enum`
    in `hotline-proto`/`hotline-server`/`hotline-client`, plus session.rs's
@@ -184,18 +177,7 @@ one-shared-room model.
     call sites, and `server/htxf.rs`'s dispatch — a real data-shape
     change, not a rename.
 
-12. **`ChatCommandProvider` is misnamed relative to its siblings.**
-    Unlike `AccountProvider`/`FileProvider`/`NewsProvider`/`BanProvider`/
-    `BannerProvider` (real storage backends), it dispatches `/`-prefixed
-    chat commands and provides no persistence — the same reasoning that
-    already pulled `FloodPolicy` out of the `*Provider` family (commit
-    48ae74d). Candidate rename: `ChatCommandDispatcher`/
-    `ConsoleCommandHandler`, likely paired with renaming the `commands/`
-    module itself (ambiguous against "commands" meaning wire
-    transactions) to something like `console/`. Touches ~8 files; a
-    naming/design call, not mechanical.
-
-13. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
+12. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
     self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
     clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
     serializes flag names by their Rust identifier directly into
@@ -204,7 +186,7 @@ one-shared-room model.
     deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
     read-side compat shim), not a code-only rename.
 
-15. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
+13. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
     `state/shared.rs`) are missing the timestamp the reference includes.**
     The reference's `AddToMsgBoard` (`HotlineServ.cp`) header format is
     `"From %#s (%s%2.2hu %2.2hu:%2.2hu):\r\r"` — poster name followed by
@@ -217,7 +199,7 @@ one-shared-room model.
     (including its `<` marker byte, whose purpose isn't yet understood —
     ask before guessing) rather than a quick timestamp bolt-on.
 
-16. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
+14. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
     stores classic news entries joined with bare `\r` (Mac Classic line
     endings), inherited from the wire's own `\r`-separated text.** This
     matches what the client displays, but on disk it reads as one giant
@@ -229,7 +211,7 @@ one-shared-room model.
     no equivalent question since its `MessageBoard.txt` only ever ran on
     classic Mac OS itself.
 
-17. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
+15. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
     terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
     `mode`/`users`/`lines`/`access`/`encoding` are session state, while
     `input`/`should_quit` are terminal-interaction state, despite
@@ -239,7 +221,7 @@ one-shared-room model.
     make that true. Touches `main.rs`'s event loop wiring; own reviewed
     change.
 
-18. **Threaded news storage does not match the reference's on-disk
+16. **Threaded news storage does not match the reference's on-disk
     binary database format.** The reference stores each news category
     in its own file. Each file starts with an `HLNZ` header (version 2,
     `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -260,7 +242,7 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
-19. **Two open design questions from news article/category JSON
+17. **Two open design questions from news article/category JSON
     storage.** `NewsArticle::primary_flavor` picks
     `self.data.iter().next()` on a `BTreeMap`, so once an article
     legitimately holds more than one flavor, "primary" means
@@ -429,6 +411,43 @@ one-shared-room model.
     compatibility allowance.
 48. `NewsProvider`'s tree/flat caches switched from `RwLock` to
     `arc_swap::ArcSwap` (lock-free reads, read-heavy access pattern).
+
+49. A pluggable console-command layer added (`ChatCommandDispatcher`,
+    `console/`). The crate defines the trait and a `DefaultChatCommands`
+    implementation, and the embedding application can supply its own.
+    Console commands are opt-in: `ServerConfig::console_prefix`
+    (`Option<char>`, `None` by default) plays the role of mhxd's
+    `hxd_cfg.operation.commands` switch. Unset, every message relays as
+    chat. `Some(c)` dispatches a message that starts with `c`, and `hls`
+    exposes it as `--console-prefix`. Replies go to the sender only, like
+    mhxd. An error is a `myTran_ChatMsg` (106) line `<command>: <text>`,
+    like `cmd_err`, in the command's room if it has one. An unknown
+    command replies `command not found`, like `cmd_notfound`. `/users`
+    sends mhxd's table as a `myTran_ServerMsg` (104) from `hxd`, like
+    `cmd_users`. A successful `/access` or `/0wn` sends nothing. Command
+    names match case-insensitively, unlike mhxd's `strncmp`; this is
+    deliberate.
+    `/users`, `/access`, and `/0wn` are implemented. A target is a user ID
+    or a nickname, found like mhxd's `nick_to_uid`. `/access` matches keys
+    exactly and stops at a word with no `=`. `/0wn` matches keys by
+    prefix, reads `icon=` like `strtoul`, and caps `name=` at 31 bytes.
+    `/color` has no equivalent field to port, and `/mon` is an
+    undocumented mhxd debug command. `/access` takes and shows mhxd's own
+    console keys (`delete_files`, `cant_be_disconnected`) from
+    `Access::CONSOLE_NAMES`. `Access::BROADCAST` has no key, since mhxd's
+    `set_access_bit` has no case for it. mhxd has no `/access <uid>` view,
+    so that display is our own. Field parsing and mutation live in
+    `SharedState::apply_access_fields`/`apply_0wn_fields`, and each change
+    logs one "console change" event, like mhxd.
+    `access_extra.rs`'s `actions()` lists neither `ACCESS_VOLATILE` nor
+    `IS_0WN3D`: both are target-eligibility checks that never reach
+    `RequireFlags::require`. AGENTS.md records this exception.
+
+50. `on_chat` now checks `Access::SEND_CHAT` before testing for the
+    console prefix, matching mhxd's own dispatch-table gate (`send_chat`
+    gates the whole chat opcode, including any
+    console command inside it), so a chat-muted user can no longer
+    reach a console command.
 
 ## Needs manual verification against the real client
 

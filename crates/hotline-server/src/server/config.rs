@@ -8,6 +8,8 @@ pub struct ServerConfig {
     pub agreement: String,
     /// Name reported in the `Login` reply (protocol version >= 151).
     pub server_name: String,
+    /// Chat prefix for console commands; `None` relays all chat.
+    pub console_prefix: Option<char>,
 }
 
 impl Default for ServerConfig {
@@ -16,6 +18,7 @@ impl Default for ServerConfig {
             bind_addr: "0.0.0.0:5500".to_string(),
             agreement: "Hotline".to_string(),
             server_name: "Hotline".to_string(),
+            console_prefix: None,
         }
     }
 }

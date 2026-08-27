@@ -44,7 +44,8 @@ bitflags::bitflags! {
         /// View another user's access bits via a console command.
         /// Config key: `user_access`.
         const USER_ACCESS        = 1 << 12;
-        /// Console-side access changes don't persist to the account.
+        /// Required for `/access` to modify this account. The change is
+        /// live only and is never saved to the account.
         /// Config key: `access_volatile`.
         const ACCESS_VOLATILE    = 1 << 13;
         /// Use the console `/0wn` command on other users.
@@ -80,6 +81,14 @@ bitflags::bitflags! {
     }
 }
 
+impl AccessExtra {
+    /// Looks up a flag by its config key (`chat_private`, `msg`, ...).
+    /// Each key is the flag's own Rust constant name, lowercased.
+    pub fn from_console_name(name: &str) -> Option<Self> {
+        Self::from_name(&name.to_ascii_uppercase())
+    }
+}
+
 impl RequireFlags for AccessExtra {
     fn actions(&self) -> String {
         self.iter_names()
@@ -97,9 +106,7 @@ impl RequireFlags for AccessExtra {
                 AccessExtra::SET_SUBJECT => "set the chat subject",
                 AccessExtra::DEBUG => "use debug commands",
                 AccessExtra::USER_ACCESS => "view another user's access",
-                AccessExtra::ACCESS_VOLATILE => "make console access changes permanent",
-                AccessExtra::USER_0WN => "use the /0wn command",
-                AccessExtra::IS_0WN3D => "be targeted by /0wn",
+                AccessExtra::USER_0WN => "overwrite another user's icon or name",
                 AccessExtra::MANAGE_USERS => "manage other users",
                 AccessExtra::INFO_GET_ADDRESS => "view another user's address",
                 AccessExtra::INFO_GET_LOGIN => "view another user's login",
@@ -134,6 +141,21 @@ impl Default for AccessExtra {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/access` takes these keys, so a constant rename is a wire-visible
+    /// change, not just a refactor.
+    #[test]
+    fn console_keys_are_the_constant_names_lowercased() {
+        for (name, flag) in AccessExtra::all().iter_names() {
+            let key = name.to_ascii_lowercase();
+            assert_eq!(AccessExtra::from_console_name(&key), Some(flag));
+        }
+        assert_eq!(
+            AccessExtra::from_console_name("chat_private"),
+            Some(AccessExtra::CHAT_PRIVATE)
+        );
+        assert_eq!(AccessExtra::from_console_name("nope"), None);
+    }
 
     #[test]
     fn access_extra_default_matches_the_reference() {

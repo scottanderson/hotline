@@ -205,6 +205,7 @@ mod tests {
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
+            Arc::new(crate::console::DefaultChatCommands),
         )
     }
 

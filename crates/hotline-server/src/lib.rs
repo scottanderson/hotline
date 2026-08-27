@@ -9,6 +9,7 @@ mod account;
 mod ban;
 mod banner;
 mod bitflags_serde;
+mod console;
 mod error;
 mod file;
 mod flood;
@@ -20,6 +21,7 @@ mod state;
 pub use account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 pub use ban::{BanProvider, BanRecord, InMemoryBanProvider};
 pub use banner::{BannerKind, BannerProvider, NoBanner, UrlBannerProvider};
+pub use console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, DefaultChatCommands};
 pub use error::{Result, ServerError};
 pub use file::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,

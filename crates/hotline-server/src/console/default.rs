@@ -1,0 +1,375 @@
+use async_trait::async_trait;
+
+use hotline_proto::consts::RequireFlags;
+use hotline_proto::types::UserFlags;
+
+use crate::account::AccessExtra;
+use crate::console::{strtoul, ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
+use crate::state::{SharedState, UserEntry};
+
+/// `/users`, `/access`, and `/0wn`. See the module docs for what's
+/// deliberately not ported.
+#[derive(Debug, Default)]
+pub struct DefaultChatCommands;
+
+#[async_trait]
+impl ChatCommandDispatcher for DefaultChatCommands {
+    async fn run(
+        &self,
+        command: &str,
+        args: &str,
+        actor: &ChatCommandActor,
+        state: &SharedState,
+    ) -> Option<ConsoleReply> {
+        let reply = match command {
+            "users" => cmd_users(actor, state).await,
+            "access" => cmd_access(args, actor, state).await,
+            "0wn" => cmd_0wn(args, actor, state).await,
+            _ => return None,
+        };
+        Some(reply)
+    }
+}
+
+/// mhxd's `cmd_err`: `command: text` as a chat line.
+fn cmd_err(command: &str, text: &str) -> ConsoleReply {
+    ConsoleReply::Chat(format!("{command}: {text}"))
+}
+
+/// mhxd's `nick_to_uid`: the user whose name starts with `nick`'s first
+/// word. An exact match wins over the first prefix match.
+fn nick_to_uid(users: &[UserEntry], nick: &str) -> Option<u16> {
+    let word = nick.split(' ').next().unwrap_or_default();
+    let mut matches = users.iter().filter(|user| user.name.starts_with(word));
+    let first = matches.next()?;
+    let exact = matches.rfind(|user| user.name.len() == word.len());
+    Some(exact.unwrap_or(first).user_id)
+}
+
+/// Splits the target off `args`: a user id, or a nickname when the id
+/// parses as `0` and `args` doesn't start with `"0 "`.
+async fn target<'a>(args: &'a str, state: &SharedState) -> Result<(u32, &'a str), String> {
+    let (word, rest) = args.split_once(' ').unwrap_or((args, ""));
+    let mut uid = strtoul(args) as u32;
+    if uid == 0 && !args.starts_with("0 ") {
+        uid = nick_to_uid(&state.users().await, args)
+            .ok_or_else(|| format!("no such user \"{word}\""))?
+            .into();
+    }
+    Ok((uid, rest.trim_start_matches(' ')))
+}
+
+/// Logs a privilege or appearance change made by a console command.
+fn log_console_change(
+    command: &str,
+    actor: &ChatCommandActor,
+    target: &str,
+    uid: u32,
+    fields: &str,
+) {
+    tracing::info!(
+        command,
+        actor = %actor.login,
+        actor_uid = actor.user_id,
+        target,
+        target_uid = uid,
+        fields,
+        "console change"
+    );
+}
+
+/// One `/users` section: a table of `users`, or `none.`.
+fn user_table(users: &[UserEntry]) -> String {
+    if users.is_empty() {
+        return "none.\r".to_string();
+    }
+    let rows: String = users
+        .iter()
+        .map(|user| {
+            let role = match UserFlags::from_bits_retain(user.flags()).contains(UserFlags::ADMIN) {
+                true => "OWNER",
+                false => "LUSER",
+            };
+            format!("{:<3} | {:<25.25} | {role:>4}\r", user.user_id, user.name)
+        })
+        .collect();
+    format!(
+        "uid | nickname                  |  priv  \r{}\r{rows}",
+        "_".repeat(41)
+    )
+}
+
+/// `/users`: a private message listing connected users, laid out like
+/// mhxd's `cmd_users`.
+async fn cmd_users(actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+    if let Err(reason) = actor.access_extra.require(AccessExtra::MANAGE_USERS) {
+        return cmd_err("users", &reason);
+    }
+    let users = state.users().await;
+    ConsoleReply::Message(format!(
+        "(chat 0x0): {} users:\r*** Visible Users ***\r\r{}\r*** Invisible Users ***\r\r{}",
+        users.len(),
+        user_table(&users),
+        // No user is ever invisible here.
+        user_table(&[]),
+    ))
+}
+
+/// `/access <uid|nick>` shows a user's privileges, and `/access <uid|nick>
+/// FIELD=0|1 ...` changes them live. Needs [`AccessExtra::USER_ACCESS`].
+/// The target must hold [`AccessExtra::ACCESS_VOLATILE`].
+async fn cmd_access(args: &str, actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+    if args.is_empty() {
+        return ConsoleReply::Silent;
+    }
+    if let Err(reason) = actor.access_extra.require(AccessExtra::USER_ACCESS) {
+        return cmd_err("access", &reason);
+    }
+    let (uid, rest) = match target(args, state).await {
+        Ok(target) => target,
+        Err(reason) => return cmd_err("access", &reason),
+    };
+
+    if rest.is_empty() {
+        return match state.describe_access(uid).await {
+            Ok(description) => ConsoleReply::Chat(description),
+            Err(reason) => cmd_err("access", &reason),
+        };
+    }
+
+    match state.apply_access_fields(uid, rest).await {
+        Ok(name) => {
+            log_console_change("access", actor, &name, uid, rest);
+            ConsoleReply::Silent
+        }
+        Err(reason) => cmd_err("access", &reason),
+    }
+}
+
+/// `/0wn <uid|nick> icon=<n> name=<text>` sets a user's icon or name
+/// live. Needs [`AccessExtra::USER_0WN`]. The target must hold
+/// [`AccessExtra::IS_0WN3D`]. `name=` takes the rest of the line.
+async fn cmd_0wn(args: &str, actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+    if args.is_empty() {
+        return ConsoleReply::Silent;
+    }
+    if let Err(reason) = actor.access_extra.require(AccessExtra::USER_0WN) {
+        return cmd_err("0wn", &reason);
+    }
+    let (uid, rest) = match target(args, state).await {
+        Ok(target) => target,
+        Err(reason) => return cmd_err("0wn", &reason),
+    };
+    match state.apply_0wn_fields(uid, rest).await {
+        Ok(Some(name)) => {
+            log_console_change("0wn", actor, &name, uid, rest);
+            ConsoleReply::Silent
+        }
+        Ok(None) => ConsoleReply::Silent,
+        Err(reason) => cmd_err("0wn", &reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::time::Instant;
+
+    use hotline_proto::consts::Access;
+
+    use super::*;
+
+    fn actor(access_extra: AccessExtra) -> ChatCommandActor {
+        ChatCommandActor {
+            user_id: 1,
+            login: "admin".to_string(),
+            access_extra,
+            prefix: '/',
+        }
+    }
+
+    fn user_entry(user_id: u16, login: &str, name: &str, access_extra: AccessExtra) -> UserEntry {
+        UserEntry {
+            user_id,
+            login: login.to_string(),
+            account_name: name.to_string(),
+            name: name.to_string(),
+            icon: 0,
+            client_version: None,
+            access: Access::default(),
+            access_extra,
+            remote_addr: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            connected_at: Instant::now(),
+            last_active: Instant::now(),
+            refuses_pm: false,
+            refuses_chat: false,
+            automatic_response: None,
+        }
+    }
+
+    async fn connect(state: &SharedState, user_id: u16, login: &str, name: &str) {
+        state
+            .insert_user(user_entry(user_id, login, name, AccessExtra::default()))
+            .await;
+        state.register_recipient(user_id).await;
+    }
+
+    fn chat(reply: ConsoleReply) -> String {
+        match reply {
+            ConsoleReply::Chat(text) => text,
+            other => panic!("expected a chat line, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn users_denied_without_manage_users() {
+        let state = SharedState::default();
+        let reply = chat(cmd_users(&actor(AccessExtra::empty()), &state).await);
+        assert!(reply.starts_with("users: "), "{reply}");
+        assert!(reply.contains("not allowed"), "{reply}");
+    }
+
+    /// mhxd's `cmd_users` layout, sent as a private message.
+    #[tokio::test]
+    async fn users_lists_connected_users_like_mhxd() {
+        let state = SharedState::default();
+        connect(&state, 2, "bob", "Bob").await;
+
+        let reply = cmd_users(&actor(AccessExtra::MANAGE_USERS), &state).await;
+
+        let rule = "_".repeat(41);
+        let expected = format!(
+            "(chat 0x0): 1 users:\r*** Visible Users ***\r\r\
+             uid | nickname                  |  priv  \r{rule}\r\
+             2   | Bob                       | LUSER\r\
+             \r*** Invisible Users ***\r\rnone.\r"
+        );
+        assert_eq!(reply, ConsoleReply::Message(expected));
+    }
+
+    #[tokio::test]
+    async fn empty_arguments_reply_nothing() {
+        let state = SharedState::default();
+        let actor = actor(AccessExtra::all());
+        assert_eq!(cmd_access("", &actor, &state).await, ConsoleReply::Silent);
+        assert_eq!(cmd_0wn("", &actor, &state).await, ConsoleReply::Silent);
+    }
+
+    #[tokio::test]
+    async fn access_denied_without_user_access() {
+        let state = SharedState::default();
+        let reply = chat(cmd_access("2", &actor(AccessExtra::empty()), &state).await);
+        assert!(reply.starts_with("access: "), "{reply}");
+        assert!(reply.contains("not allowed"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn access_view_reports_current_flags() {
+        let state = SharedState::default();
+        connect(&state, 2, "bob", "Bob").await;
+        let reply = chat(cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state).await);
+        assert!(reply.contains("Bob"));
+        assert!(reply.contains("Access:"));
+        assert!(reply.contains("AccessExtra:"));
+    }
+
+    /// The view has to name flags the way the modify path takes them.
+    #[tokio::test]
+    async fn access_view_shows_keys_the_modify_path_accepts() {
+        let state = SharedState::default();
+        connect(&state, 2, "bob", "Bob").await;
+
+        let reply = chat(cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state).await);
+
+        assert!(reply.contains("download_files"), "{reply}");
+        assert!(reply.contains("chat_private"), "{reply}");
+        assert!(!reply.contains("DOWNLOAD_FILE"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn access_unknown_user_is_reported() {
+        let state = SharedState::default();
+        let reply = cmd_access("99", &actor(AccessExtra::USER_ACCESS), &state).await;
+        assert_eq!(reply, cmd_err("access", "no such user (uid:99)"));
+    }
+
+    #[tokio::test]
+    async fn access_unknown_nickname_is_reported() {
+        let state = SharedState::default();
+        connect(&state, 2, "bob", "Bob").await;
+        let reply = cmd_access("Zed x=1", &actor(AccessExtra::USER_ACCESS), &state).await;
+        assert_eq!(reply, cmd_err("access", "no such user \"Zed\""));
+    }
+
+    #[tokio::test]
+    async fn access_unknown_field_is_rejected() {
+        let state = SharedState::default();
+        connect(&state, 2, "bob", "Bob").await;
+        let reply = cmd_access("2 not_a_field=1", &actor(AccessExtra::USER_ACCESS), &state).await;
+        assert_eq!(reply, cmd_err("access", "unknown argument \"not_a_field\""));
+    }
+
+    /// A change replies nothing, like mhxd.
+    #[tokio::test]
+    async fn access_change_by_nickname_replies_nothing() {
+        let state = SharedState::default();
+        connect(&state, 2, "bob", "Bob").await;
+        let reply = cmd_access(
+            "Bob delete_files=1",
+            &actor(AccessExtra::USER_ACCESS),
+            &state,
+        )
+        .await;
+        assert_eq!(reply, ConsoleReply::Silent);
+    }
+
+    #[tokio::test]
+    async fn access_modify_never_persists_to_the_account() {
+        let state = SharedState::default();
+        state
+            .put_account(
+                "bob".to_string(),
+                crate::account::Account {
+                    password: String::new(),
+                    name: "Bob".to_string(),
+                    access: Access::default(),
+                    access_extra: AccessExtra::default(),
+                },
+            )
+            .await
+            .unwrap();
+        connect(&state, 2, "bob", "Bob").await;
+
+        cmd_access("2 delete_files=1", &actor(AccessExtra::USER_ACCESS), &state).await;
+
+        let account = state.account("bob").await.expect("account exists");
+        assert!(!account.access.contains(Access::DELETE_FILE));
+    }
+
+    #[tokio::test]
+    async fn zeroown_denied_without_user_0wn() {
+        let state = SharedState::default();
+        let reply = chat(cmd_0wn("2 icon=5", &actor(AccessExtra::empty()), &state).await);
+        assert!(reply.starts_with("0wn: "), "{reply}");
+        assert!(reply.contains("not allowed"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn zeroown_change_replies_nothing() {
+        let state = SharedState::default();
+        connect(&state, 2, "bob", "Bob").await;
+        let reply = cmd_0wn("2 icon=5", &actor(AccessExtra::USER_0WN), &state).await;
+        assert_eq!(reply, ConsoleReply::Silent);
+    }
+
+    #[test]
+    fn nick_to_uid_prefers_an_exact_match() {
+        let users = [
+            user_entry(2, "a", "Bobby", AccessExtra::default()),
+            user_entry(3, "b", "Bob", AccessExtra::default()),
+        ];
+        assert_eq!(nick_to_uid(&users, "Bob rest"), Some(3));
+        assert_eq!(nick_to_uid(&users, "Bo"), Some(2));
+        assert_eq!(nick_to_uid(&users, "Al"), None);
+    }
+}
