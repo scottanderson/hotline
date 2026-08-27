@@ -22,6 +22,7 @@ humantime = { workspace = true }
 num_enum = { workspace = true }
 uuid = { workspace = true }
 arc-swap = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

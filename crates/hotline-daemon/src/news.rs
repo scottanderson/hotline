@@ -8,6 +8,9 @@ use async_trait::async_trait;
 use hotline_server::{NewsBundle, NewsProvider};
 
 /// Flat news as a plain text file, the threaded tree as a separate JSON file.
+///
+/// Flat news entries keep the wire's bare `\r` separators, like openline's
+/// `MessageBoard.txt`. The text is UTF-8, not the wire encoding.
 pub struct FileNewsProvider {
     flat_path: PathBuf,
     tree_path: PathBuf,
@@ -95,6 +98,28 @@ mod tests {
             "hello world"
         );
         assert_eq!(provider.load_flat().await.as_ref().as_ref(), "hello world");
+    }
+
+    /// A `\n` in a post body survives a restart.
+    #[tokio::test]
+    async fn flat_news_round_trips_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let flat_path = dir.path().join("news.txt");
+        let tree_path = dir.path().join("news.json");
+        let provider = FileNewsProvider::open(&flat_path, &tree_path)
+            .await
+            .unwrap();
+
+        let entry = "From Alice\r\rline one\nline two\r\r";
+        provider.save_flat(Arc::new(entry.into())).await;
+
+        let on_disk = tokio::fs::read(&flat_path).await.unwrap();
+        assert_eq!(on_disk, entry.as_bytes());
+
+        let reopened = FileNewsProvider::open(&flat_path, &tree_path)
+            .await
+            .unwrap();
+        assert_eq!(reopened.load_flat().await.as_ref().as_ref(), entry);
     }
 
     #[tokio::test]

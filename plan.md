@@ -167,32 +167,7 @@ one-shared-room model.
     deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
     read-side compat shim), not a code-only rename.
 
-11. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
-    `state/shared.rs`) are missing the timestamp the reference includes.**
-    The reference's `AddToMsgBoard` (`HotlineServ.cp`) header format is
-    `"From %#s (%s%2.2hu %2.2hu:%2.2hu):\r\r"` — poster name followed by
-    `(Mon day hour:minute):`, e.g. `From Alice (Jan 5 14:32):`. Our
-    `post_news` writes `From {poster}\r\r` with no date/time at all.
-    Separately, the reference's divider is a *footer* appended after each
-    message (`"\x3c\r______...\r"`, prefixed by a `<` byte), not a header
-    prepended before the next one like our `DIVIDER` constant. Needs a
-    fix that reproduces the reference's exact header/footer shape
-    (including its `<` marker byte, whose purpose isn't yet understood —
-    ask before guessing) rather than a quick timestamp bolt-on.
-
-12. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
-    stores classic news entries joined with bare `\r` (Mac Classic line
-    endings), inherited from the wire's own `\r`-separated text.** This
-    matches what the client displays, but on disk it reads as one giant
-    line in most modern editors/tools that only recognize `\n`/`\r\n` —
-    a `.txt` file people may reasonably expect to be openable normally.
-    Worth deciding deliberately (translate to native line endings on
-    disk and back on load, or at least document it prominently) rather
-    than leaving it as an accidental Mac-only artifact; the reference has
-    no equivalent question since its `MessageBoard.txt` only ever ran on
-    classic Mac OS itself.
-
-13. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
+11. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
     terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
     `mode`/`users`/`lines`/`access`/`encoding` are session state, while
     `input`/`should_quit` are terminal-interaction state, despite
@@ -202,7 +177,7 @@ one-shared-room model.
     make that true. Touches `main.rs`'s event loop wiring; own reviewed
     change.
 
-14. **Threaded news storage does not match the reference's on-disk
+12. **Threaded news storage does not match the reference's on-disk
     binary database format.** The reference stores each news category
     in its own file. Each file starts with an `HLNZ` header (version 2,
     `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -223,12 +198,20 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
-15. **Open design question from news article/category JSON storage.**
+13. **Open design question from news article/category JSON storage.**
     `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
     `BTreeMap`, so once an article legitimately holds more than one
     flavor, "primary" means alphabetically-first MIME type, not
     first-posted or preferred — harmless today (always exactly one
     entry) but worth deciding before multi-flavor posting is wired up.
+
+14. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+    The reply is truncated to 65535 encoded bytes. Under the Mac OS
+    Roman default every character is one byte, so this is invisible;
+    under `utf-8` or `shift-jis` the last character can arrive as a
+    partial sequence. Openline truncates bytes too, so this matches
+    openline. Worth deciding only if a multi-byte encoding is
+    ever made selectable per connection.
 
 ## Resolved
 
@@ -449,6 +432,28 @@ one-shared-room model.
     text parser caps nesting, so a hand-edited `news.json` nested too
     deep fails to parse cleanly instead of overflowing the stack. A test
     pins that down.
+
+55. `news.txt` keeps the wire's bare `\r` separators verbatim, like
+    openline's `MessageBoard.txt` and mhxd's `news.c`. A `\r` to `\n`
+    translation for text editors was rejected: it is not injective, so a
+    `\n` inside a post body would come back as a separator after a
+    restart. A test pins the byte-for-byte round trip.
+
+56. `post_news` now matches openline's `AddToMsgBoard` byte for byte: a
+    header with poster and timestamp, then the body, then a footer
+    divider. The `<` byte previously flagged in the backlog is a C
+    string length-prefix artifact in openline's source; it is never
+    written to the board.
+    Wall-clock time comes from the new `chrono` dependency.
+
+57. `on_newsfile_get` clamps its reply to 65535 bytes, matching
+    openline's `if (s > max_Uint16) s = max_Uint16;`
+    (`HotlineServTrans.cp`) and mhxd's `MAX_NEWS_SIZE`. A field's length
+    is a `u16`, so a larger board previously failed to encode and the
+    client got nothing. Posts are prepended, so the clamp keeps the
+    newest. mhxd goes further and truncates the stored file on every
+    post (`news_save_post` reads back at most `MAX_NEWS_SIZE`); this
+    server follows openline and keeps the whole file on disk.
 
 ## Needs manual verification against the real client
 

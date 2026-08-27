@@ -11,7 +11,7 @@ use hotline_codec::TransactionCodec;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::htxf;
 use hotline_proto::opcode::{Opcode, TransactionType};
-use hotline_proto::text_encoding::{Encoding, EncodingHandle};
+use hotline_proto::text_encoding::{self, Encoding, EncodingHandle};
 use hotline_proto::types::{self, HlDate, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{ClientHandshake, Field, FieldList, ServerHandshake, Transaction};
@@ -65,6 +65,10 @@ impl From<u16> for KickBan {
         }
     }
 }
+
+/// Cap on the classic news text in one `myTran_GetMsgs` (101) reply,
+/// the most a `u16` field length allows.
+const MAX_FLAT_NEWS_LEN: usize = u16::MAX as usize;
 
 /// Duration of a temporary kick-to-ban (`Options` (113) value 1). Not yet
 /// configurable; a fixed default until this gets a `ServerConfig` knob.
@@ -1406,8 +1410,9 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let news = state.news().await;
-        vec![tx.reply(vec![Field::string(FieldId::Text, news)])]
+        let mut news = text_encoding::encode(self.encoding(), &state.news().await);
+        news.truncate(MAX_FLAT_NEWS_LEN);
+        vec![tx.reply(vec![Field::bytes(FieldId::Text, news)])]
     }
 
     /// 103: post to the classic (non-threaded) news.
@@ -3779,6 +3784,40 @@ mod tests {
         let news = reply.string(FieldId::Text, encoding).unwrap();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
+    }
+
+    /// A board past a field's `u16` length sends its newest 65535 bytes.
+    #[tokio::test]
+    async fn newsfile_get_clamps_a_board_past_the_field_limit() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+
+        for i in 0..20 {
+            let body = format!("{i}{}", "x".repeat(8000));
+            let post = Transaction::request(
+                Opcode::OldPostNews,
+                1,
+                vec![Field::string(FieldId::Text, body)],
+            );
+            session.on_newsfile_post(&post, &state).await;
+        }
+        assert!(state.news().await.len() > MAX_FLAT_NEWS_LEN);
+
+        let get = Transaction::request(Opcode::NewsfileGet, 2, vec![]);
+        let [reply] = session
+            .on_newsfile_get(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        let data = reply.field(FieldId::Text).unwrap().as_bytes(encoding);
+        assert_eq!(data.len(), MAX_FLAT_NEWS_LEN);
+        // Posts are prepended, so the clamp keeps the newest.
+        assert!(data.starts_with(b"From Alice"));
+        assert!(data.windows(6).any(|w| w == b"19xxxx"));
+        assert!(!data.windows(5).any(|w| w == b"0xxxx"));
+        reply.encode(encoding).expect("clamped reply encodes");
     }
 
     #[tokio::test]

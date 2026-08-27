@@ -731,9 +731,25 @@ impl SharedState {
     }
 
     /// Prepend a new post to the classic news. Returns the formatted entry.
+    ///
+    /// Matches openline's `AddToMsgBoard` (`HotlineServ.cp`) byte for byte,
+    /// including its missing space between month and day.
     pub async fn post_news(&self, poster: &str, text: &str) -> String {
-        const DIVIDER: &str = "_________________________________________________________";
-        let entry = format!("{DIVIDER}\rFrom {poster}\r\r{text}\r\r");
+        use chrono::{Datelike, Timelike};
+
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        const FOOTER_DIVIDER: &str = "__________________________________________________________";
+
+        let now = chrono::Local::now();
+        let month = MONTHS[now.month0() as usize];
+        let entry = format!(
+            "From {poster} ({month}{day:02} {hour:02}:{minute:02}):\r\r{text}\r{FOOTER_DIVIDER}\r",
+            day = now.day(),
+            hour = now.hour(),
+            minute = now.minute(),
+        );
         let _guard = self.news_flat_lock.lock().await;
         let flat = self.news_provider.load_flat().await;
         let mut new_flat = String::with_capacity(entry.len() + flat.len());
@@ -1214,6 +1230,21 @@ mod tests {
             .unwrap();
         assert_eq!(articles.articles.len(), 1);
         assert_eq!(articles.articles[0].title, "Hi");
+    }
+
+    /// Matches openline's `AddToMsgBoard` header, body, and footer shape,
+    /// with no `<` byte.
+    #[tokio::test]
+    async fn post_news_matches_openlines_header_and_footer_shape() {
+        let state = SharedState::default();
+
+        let entry = state.post_news("alice", "hello").await;
+
+        let footer = "_".repeat(58);
+        assert!(entry.starts_with("From alice ("), "{entry:?}");
+        assert!(entry.contains("):\r\rhello\r"), "{entry:?}");
+        assert!(entry.ends_with(&format!("\r{footer}\r")), "{entry:?}");
+        assert!(!entry.contains('<'), "{entry:?}");
     }
 
     /// `HashMap`'s iteration order has no relation to insertion order, so
