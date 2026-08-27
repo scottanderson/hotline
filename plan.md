@@ -86,17 +86,7 @@ one-shared-room model.
    (`RecipientMessage::Disconnect`) is unaffected: it sends nothing before
    closing, matching the reference's own immediate `Disconnect()`.
 
-5. **Startup file errors don't say which file.** `hotline-daemon`'s
-   provider `open()` calls (`FileAccountProvider`, `FileFileProvider`,
-   `FileNewsProvider`, `FileBanProvider`, `FileBannerProvider`) all
-   propagate a raw `io::Error` straight through `main`'s `?` to `anyhow`,
-   so a missing/unreadable `--banner`, `--accounts-dir`, `--files-dir`,
-   etc. prints just `Error: No such file or directory (os error 2)` with
-   no path and no hint which flag caused it. Each `open()` should wrap its
-   `io::Error` with the path it was trying (`anyhow::Context::with_context`,
-   or a matching `io::Error::new` with the path folded into the message).
-
-6. **Enum variant naming isn't consistently the openline constant's tail
+5. **Enum variant naming isn't consistently the openline constant's tail
    yet.** `FieldId`/`Opcode` already follow this (see AGENTS.md's Naming
    section); other enums need the same audit. First pass (every `pub enum`
    in `hotline-proto`/`hotline-server`/`hotline-client`, plus session.rs's
@@ -116,7 +106,7 @@ one-shared-room model.
    of the backlog lands, since later items are likely to add more enums
    this pass didn't have to consider.
 
-7. **`HTRK` tracker support stops at wire-format types.**
+6. **`HTRK` tracker support stops at wire-format types.**
    `hotline-tracker` has `encode_client_request_v1`/`decode_reply_header`/
    `TrackedServer::decode`/`ServerBeacon::encode`, but nothing in the
    workspace calls any of them: `hls` never sends a `ServerBeacon` to
@@ -126,7 +116,7 @@ one-shared-room model.
    `hotline-cli` that opens the tracker's TCP port, sends the client
    request, and decodes the `TrackedServer` list back.
 
-8. **Split transactions (`len` != `len2`, `HLProtocol.md`'s "Total size"
+7. **Split transactions (`len` != `len2`, `HLProtocol.md`'s "Total size"
    vs. "Data size") aren't reassembled.** `transaction.rs` already
    documents this as an assumption (`len == len2` on the wire).
    Confirmed against the reference: its transport (`UTransact.cp`)
@@ -147,7 +137,7 @@ one-shared-room model.
    ids. No corresponding encode-side change needed, since nothing
    expects to receive a deliberately split transaction from us.
 
-9. **`UserNameWithInfo::flags` is a raw `u16` even though `UserFlags`
+8. **`UserNameWithInfo::flags` is a raw `u16` even though `UserFlags`
    (`types/user_flags.rs`) exists for exactly this field** — its own doc
    comment says "Bit meanings for `UserNameWithInfo::flags`", but every
    caller does `.bits()`/raw `u16` math instead of using the typed flags.
@@ -156,18 +146,18 @@ one-shared-room model.
    standalone commit, not a quick edit. Found during the naming/structure
    review after the one-file-per-struct reorg (commit 3c7df8b).
 
-10. **`session/connection.rs` (~6800 lines) holds one `Session` struct
-    with a single giant `impl` spanning login, chat, private messages,
-    files, news, and account-admin handlers.** AGENTS.md documents that
-    `session.rs`'s handlers belong together, but a type's `impl` blocks
-    can span multiple files in the same module: splitting into
-    `session/chat.rs`, `session/files.rs`, `session/news.rs`,
-    `session/accounts.rs`, `session/admin.rs` (each a separate
-    `impl Session { ... }`) would leave `connection.rs` with just the
-    struct definition, `run`, handshake, and the two dispatch tables.
-    Large, mechanical-but-risky diff; own reviewed PR.
+9. **`session/connection.rs` (~6800 lines) holds one `Session` struct
+   with a single giant `impl` spanning login, chat, private messages,
+   files, news, and account-admin handlers.** AGENTS.md documents that
+   `session.rs`'s handlers belong together, but a type's `impl` blocks
+   can span multiple files in the same module: splitting into
+   `session/chat.rs`, `session/files.rs`, `session/news.rs`,
+   `session/accounts.rs`, `session/admin.rs` (each a separate
+   `impl Session { ... }`) would leave `connection.rs` with just the
+   struct definition, `run`, handshake, and the two dispatch tables.
+   Large, mechanical-but-risky diff; own reviewed PR.
 
-11. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
+10. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
     shapes**: its own doc comment admits `dir`/`name`/`login`/`raw` are
     "unused for `TransferKind::Banner`". Cleaner shape: fold the
     file-specific fields into `TransferKind::File { dir, name, raw }`,
@@ -177,7 +167,7 @@ one-shared-room model.
     call sites, and `server/htxf.rs`'s dispatch — a real data-shape
     change, not a rename.
 
-12. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
+11. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
     self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
     clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
     serializes flag names by their Rust identifier directly into
@@ -186,7 +176,7 @@ one-shared-room model.
     deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
     read-side compat shim), not a code-only rename.
 
-13. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
+12. **Classic news posts (`myTran_OldPostNews`, `SharedState::post_news`,
     `state/shared.rs`) are missing the timestamp the reference includes.**
     The reference's `AddToMsgBoard` (`HotlineServ.cp`) header format is
     `"From %#s (%s%2.2hu %2.2hu:%2.2hu):\r\r"` — poster name followed by
@@ -199,7 +189,7 @@ one-shared-room model.
     (including its `<` marker byte, whose purpose isn't yet understood —
     ask before guessing) rather than a quick timestamp bolt-on.
 
-14. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
+13. **`news.txt` (`hotline-daemon`'s `FileNewsProvider::flat_path`)
     stores classic news entries joined with bare `\r` (Mac Classic line
     endings), inherited from the wire's own `\r`-separated text.** This
     matches what the client displays, but on disk it reads as one giant
@@ -211,7 +201,7 @@ one-shared-room model.
     no equivalent question since its `MessageBoard.txt` only ever ran on
     classic Mac OS itself.
 
-15. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
+14. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
     terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
     `mode`/`users`/`lines`/`access`/`encoding` are session state, while
     `input`/`should_quit` are terminal-interaction state, despite
@@ -221,7 +211,7 @@ one-shared-room model.
     make that true. Touches `main.rs`'s event loop wiring; own reviewed
     change.
 
-16. **Threaded news storage does not match the reference's on-disk
+15. **Threaded news storage does not match the reference's on-disk
     binary database format.** The reference stores each news category
     in its own file. Each file starts with an `HLNZ` header (version 2,
     `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -242,7 +232,7 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
-17. **Two open design questions from news article/category JSON
+16. **Two open design questions from news article/category JSON
     storage.** `NewsArticle::primary_flavor` picks
     `self.data.iter().next()` on a `BTreeMap`, so once an article
     legitimately holds more than one flavor, "primary" means
@@ -448,6 +438,13 @@ one-shared-room model.
     gates the whole chat opcode, including any
     console command inside it), so a chat-muted user can no longer
     reach a console command.
+
+51. `hotline-daemon`'s provider `open()` calls now wrap each `io::Error`
+    with `anyhow::Context::with_context`, naming both the flag and its
+    value (`--accounts-dir`, `--files-dir`/`--comments-file`,
+    `--news-file`/`--news-tree-file`, `--ban-file`, `--banner`), so a
+    missing or unreadable file says which flag to fix instead of
+    reporting a bare OS error.
 
 ## Needs manual verification against the real client
 
