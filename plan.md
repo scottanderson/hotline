@@ -223,19 +223,12 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
-15. **Two open design questions from news article/category JSON
-    storage.** `NewsArticle::primary_flavor` picks
-    `self.data.iter().next()` on a `BTreeMap`, so once an article
-    legitimately holds more than one flavor, "primary" means
-    alphabetically-first MIME type, not first-posted or preferred —
-    harmless today (always exactly one entry) but worth deciding before
-    multi-flavor posting is wired up. Separately, nesting a category's
-    articles under their JSON parent made both `ArticleNodeRef::serialize`
-    and `category.rs`'s `flatten` recurse per thread-depth, where the old
-    flat-map-plus-id-links shape needed no recursion to save/load a
-    category; a pathologically deep, self-nested reply chain could now
-    stack-overflow the server on save or load. Worth a depth cap or an
-    iterative rewrite if deep threads ever become realistic.
+15. **Open design question from news article/category JSON storage.**
+    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
+    `BTreeMap`, so once an article legitimately holds more than one
+    flavor, "primary" means alphabetically-first MIME type, not
+    first-posted or preferred — harmless today (always exactly one
+    entry) but worth deciding before multi-flavor posting is wired up.
 
 ## Resolved
 
@@ -443,6 +436,19 @@ one-shared-room model.
     Before, the connection closed right after the send. openline closes
     at once, so the drain is a deliberate divergence. The silent-kick
     path (`RecipientMessage::Disconnect`) is unchanged.
+
+53. `post_article` now rejects a reply chain longer than 32 articles,
+    and `mkdir` rejects a bundle nested deeper than 16. The deepest
+    legal tree stays within serde_json's nesting limit of 128, so
+    `news.json` always loads back.
+
+54. News category `flatten` now rejects a duplicate article id. A
+    duplicate would overwrite an earlier article's slot, leaving
+    `NewsCategory::depth_of` stuck in a `parent_id` cycle; it now fails
+    `FileThreadedNewsProvider::open` outright instead. `serde_json`'s
+    text parser caps nesting, so a hand-edited `news.json` nested too
+    deep fails to parse cleanly instead of overflowing the stack. A test
+    pins that down.
 
 ## Needs manual verification against the real client
 

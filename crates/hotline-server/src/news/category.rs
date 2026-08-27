@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::SystemTime;
 
 use hotline_proto::types::HlDate;
+use serde::de::Error as _;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
@@ -9,6 +10,10 @@ use uuid::Uuid;
 use crate::news::flavor_map::{self, FlavorMapRef};
 use crate::news::iso_date::{self, civil_from_days, days_from_civil};
 use crate::news::NewsArticle;
+
+/// Longest reply chain, our own limit. Keeps a saved thread within
+/// serde_json's nesting limit.
+pub(crate) const MAX_REPLY_CHAIN_LEN: usize = 32;
 
 /// A leaf category: a thread of articles plus the bookkeeping mirrored
 /// into `myField_NewsCatListData15` (323).
@@ -50,6 +55,20 @@ impl NewsCategory {
             }
             _ => &self.roots,
         }
+    }
+
+    /// Number of ancestors `id` has (0 for a root article). `id` must
+    /// already exist in `self.articles`.
+    pub(crate) fn depth_of(&self, mut id: u32) -> usize {
+        let mut depth = 0;
+        while let Some(article) = self.articles.get(&id) {
+            if article.parent_id == 0 {
+                break;
+            }
+            depth += 1;
+            id = article.parent_id;
+        }
+        depth
     }
 
     fn siblings_of_mut(&mut self, parent_id: u32) -> &mut Vec<u32> {
@@ -234,13 +253,23 @@ struct ArticleNode {
 
 /// Stores `node` and its descendants in `out`, setting each `parent_id`
 /// from the nesting. Returns `node`'s own id.
-fn flatten(node: ArticleNode, parent_id: u32, out: &mut HashMap<u32, NewsArticle>) -> u32 {
+///
+/// Rejects an id reused elsewhere in the tree.
+fn flatten(
+    node: ArticleNode,
+    parent_id: u32,
+    seen: &mut HashSet<u32>,
+    out: &mut HashMap<u32, NewsArticle>,
+) -> Result<u32, &'static str> {
     let id = node.id;
+    if !seen.insert(id) {
+        return Err("duplicate article id in news data");
+    }
     let children = node
         .children
         .into_iter()
-        .map(|child| flatten(child, id, out))
-        .collect();
+        .map(|child| flatten(child, id, seen, out))
+        .collect::<Result<Vec<u32>, _>>()?;
     out.insert(
         id,
         NewsArticle {
@@ -253,7 +282,7 @@ fn flatten(node: ArticleNode, parent_id: u32, out: &mut HashMap<u32, NewsArticle
             children,
         },
     );
-    id
+    Ok(id)
 }
 
 impl<'de> Deserialize<'de> for NewsCategory {
@@ -267,11 +296,13 @@ impl<'de> Deserialize<'de> for NewsCategory {
 
         let raw = Raw::deserialize(deserializer)?;
         let mut articles = HashMap::new();
+        let mut seen = HashSet::new();
         let roots = raw
             .articles
             .into_iter()
-            .map(|node| flatten(node, 0, &mut articles))
-            .collect();
+            .map(|node| flatten(node, 0, &mut seen, &mut articles))
+            .collect::<Result<Vec<u32>, _>>()
+            .map_err(D::Error::custom)?;
         Ok(NewsCategory {
             guid: raw.guid,
             // add_sn always equals next_article_id; see add_article.
@@ -466,5 +497,71 @@ mod tests {
         let round_tripped: NewsCategory = serde_json::from_value(json).unwrap();
         assert_eq!(round_tripped.articles[&root].flags, 7);
         assert_eq!(round_tripped.articles[&root].children, vec![root + 1]);
+    }
+
+    #[test]
+    fn a_duplicate_article_id_is_rejected_on_load() {
+        let json = serde_json::json!({
+            "guid": Uuid::new_v4(),
+            "next_article_id": 3,
+            "articles": [
+                {
+                    "id": 1,
+                    "date": "2024-01-01T00:00:00.000Z",
+                    "title": "Root",
+                    "poster": "alice",
+                    "data": {"text/plain": ""},
+                    "children": [
+                        {
+                            "id": 1,
+                            "date": "2024-01-01T00:00:00.000Z",
+                            "title": "Reply",
+                            "poster": "bob",
+                            "data": {"text/plain": ""},
+                        },
+                    ],
+                },
+            ],
+        });
+
+        let result: Result<NewsCategory, _> = serde_json::from_value(json);
+
+        let err = result
+            .expect_err("duplicate id must be rejected")
+            .to_string();
+        assert!(err.contains("duplicate article id"), "{err}");
+    }
+
+    /// Raw JSON text, not `serde_json::Value`: only the text parser has
+    /// the recursion cap the real load path relies on.
+    #[test]
+    fn deeply_nested_json_text_fails_to_parse_instead_of_overflowing_the_stack() {
+        let depth = 1000;
+        let mut json = String::new();
+        for id in 0..depth {
+            json.push_str(&format!(
+                "{{\"id\":{id},\"date\":\"2024-01-01T00:00:00.000Z\",\
+                 \"title\":\"x\",\"poster\":\"alice\",\
+                 \"data\":{{\"text/plain\":\"\"}},\"children\":["
+            ));
+        }
+        json.push_str(&format!(
+            "{{\"id\":{depth},\"date\":\"2024-01-01T00:00:00.000Z\",\
+             \"title\":\"x\",\"poster\":\"alice\",\"data\":{{\"text/plain\":\"\"}}}}"
+        ));
+        json.push_str(&"]}".repeat(depth as usize));
+        let json = format!(
+            "{{\"guid\":\"{}\",\"next_article_id\":{},\"articles\":[{json}]}}",
+            Uuid::new_v4(),
+            depth + 1,
+        );
+
+        let result: Result<NewsCategory, _> = serde_json::from_str(&json);
+
+        let err = result.expect_err("nesting must exceed the parser's cap");
+        assert!(
+            err.to_string().contains("recursion limit exceeded"),
+            "{err}"
+        );
     }
 }

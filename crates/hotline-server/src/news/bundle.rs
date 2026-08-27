@@ -2,9 +2,14 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::news::category::MAX_REPLY_CHAIN_LEN;
 use crate::news::{
     NewsArticle, NewsArticleView, NewsCategory, NewsItemKind, NewsListKind, NewsNode,
 };
+
+/// Deepest bundle nesting, our own limit. Keeps a saved tree within
+/// serde_json's nesting limit.
+const MAX_BUNDLE_DEPTH: usize = 16;
 
 /// A folder containing other bundles/categories, keyed by name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -91,7 +96,11 @@ impl NewsBundle {
     /// `Err` if `components` isn't a bundle, `name` already exists, or
     /// `name` is too long for the `myField_NewsCatListData15` (323)
     /// listing entry it will need to encode into (a 1-byte length prefix).
+    /// Also `Err` past `MAX_BUNDLE_DEPTH`.
     pub fn mkdir(&mut self, components: &[String], name: &str) -> Result<(), &'static str> {
+        if components.len() >= MAX_BUNDLE_DEPTH {
+            return Err("news bundles are nested too deep");
+        }
         let parent = self.check_new_name(components, name)?;
         parent
             .entries
@@ -174,6 +183,9 @@ impl NewsBundle {
             .ok_or("no such news category")?;
         if parent_id != 0 && !category.articles.contains_key(&parent_id) {
             return Err("no such parent article");
+        }
+        if parent_id != 0 && category.depth_of(parent_id) + 1 >= MAX_REPLY_CHAIN_LEN {
+            return Err("reply chain is too deep");
         }
         Ok(category.add_article(parent_id, title, poster, flags, mime_type, data))
     }
@@ -319,6 +331,106 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err, "no such parent article");
+    }
+
+    /// Posts a reply to `parent_id` `count` times, each reply the parent
+    /// of the next, returning the last posted article's id.
+    fn post_reply_chain(
+        root: &mut NewsBundle,
+        path: &[String],
+        mut parent_id: u32,
+        count: u32,
+    ) -> u32 {
+        for _ in 0..count {
+            parent_id = root
+                .post_article(
+                    path,
+                    parent_id,
+                    "Re".to_string(),
+                    "alice".to_string(),
+                    0,
+                    "text/plain".to_string(),
+                    b"x".to_vec(),
+                )
+                .unwrap();
+        }
+        parent_id
+    }
+
+    #[test]
+    fn post_article_allows_a_reply_chain_up_to_the_length_cap() {
+        let mut root = NewsBundle::default();
+        root.mkcategory(&[], "General").unwrap();
+        let path = ["General".to_string()];
+
+        let last = post_reply_chain(&mut root, &path, 0, MAX_REPLY_CHAIN_LEN as u32);
+
+        let listing = root.list_articles(&path).unwrap();
+        assert_eq!(listing.len(), MAX_REPLY_CHAIN_LEN);
+        assert_eq!(
+            root.category(&path).unwrap().depth_of(last),
+            MAX_REPLY_CHAIN_LEN - 1
+        );
+    }
+
+    #[test]
+    fn post_article_rejects_a_reply_chain_past_the_length_cap() {
+        let mut root = NewsBundle::default();
+        root.mkcategory(&[], "General").unwrap();
+        let path = ["General".to_string()];
+
+        let last = post_reply_chain(&mut root, &path, 0, MAX_REPLY_CHAIN_LEN as u32);
+
+        let err = root
+            .post_article(
+                &path,
+                last,
+                "One reply too many".to_string(),
+                "alice".to_string(),
+                0,
+                "text/plain".to_string(),
+                b"x".to_vec(),
+            )
+            .unwrap_err();
+        assert_eq!(err, "reply chain is too deep");
+        // The rejected post left the chain exactly at the cap.
+        assert_eq!(
+            root.list_articles(&path).unwrap().len(),
+            MAX_REPLY_CHAIN_LEN
+        );
+    }
+
+    #[test]
+    fn mkdir_rejects_a_bundle_past_the_depth_cap() {
+        let mut root = NewsBundle::default();
+        let path: Vec<String> = (0..MAX_BUNDLE_DEPTH).map(|i| format!("b{i}")).collect();
+        for depth in 0..MAX_BUNDLE_DEPTH {
+            root.mkdir(&path[..depth], &path[depth]).unwrap();
+        }
+
+        let err = root.mkdir(&path, "one too many").unwrap_err();
+
+        assert_eq!(err, "news bundles are nested too deep");
+    }
+
+    #[test]
+    fn the_deepest_allowed_tree_loads_back_from_json_text() {
+        let mut root = NewsBundle::default();
+        let mut path: Vec<String> = (0..MAX_BUNDLE_DEPTH).map(|i| format!("b{i}")).collect();
+        for depth in 0..MAX_BUNDLE_DEPTH {
+            root.mkdir(&path[..depth], &path[depth]).unwrap();
+        }
+        root.mkcategory(&path, "General").unwrap();
+        path.push("General".to_string());
+        post_reply_chain(&mut root, &path, 0, MAX_REPLY_CHAIN_LEN as u32);
+
+        let json = serde_json::to_vec_pretty(&root).unwrap();
+        let loaded: NewsBundle = serde_json::from_slice(&json).unwrap();
+
+        assert_eq!(
+            loaded.list_articles(&path).unwrap().len(),
+            MAX_REPLY_CHAIN_LEN
+        );
     }
 
     #[test]
