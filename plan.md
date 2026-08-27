@@ -128,16 +128,7 @@ one-shared-room model.
    ids. No corresponding encode-side change needed, since nothing
    expects to receive a deliberately split transaction from us.
 
-7. **`UserNameWithInfo::flags` is a raw `u16` even though `UserFlags`
-   (`types/user_flags.rs`) exists for exactly this field** — its own doc
-   comment says "Bit meanings for `UserNameWithInfo::flags`", but every
-   caller does `.bits()`/raw `u16` math instead of using the typed flags.
-   Changing the field to `UserFlags` restores type safety but touches
-   ~23 call sites across `hotline-server`/`hotline-client`; worth a
-   standalone commit, not a quick edit. Found during the naming/structure
-   review after the one-file-per-struct reorg (commit 3c7df8b).
-
-8. **`session/connection.rs` (~6800 lines) holds one `Session` struct
+7. **`session/connection.rs` (~6800 lines) holds one `Session` struct
    with a single giant `impl` spanning login, chat, private messages,
    files, news, and account-admin handlers.** AGENTS.md documents that
    `session.rs`'s handlers belong together, but a type's `impl` blocks
@@ -148,7 +139,7 @@ one-shared-room model.
    struct definition, `run`, handshake, and the two dispatch tables.
    Large, mechanical-but-risky diff; own reviewed PR.
 
-9. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
+8. **`PendingTransfer` (`state/transfer.rs`) mixes two payload
    shapes**: its own doc comment admits `dir`/`name`/`login`/`raw` are
    "unused for `TransferKind::Banner`". Cleaner shape: fold the
    file-specific fields into `TransferKind::File { dir, name, raw }`,
@@ -158,16 +149,16 @@ one-shared-room model.
    call sites, and `server/htxf.rs`'s dispatch — a real data-shape
    change, not a rename.
 
-10. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
-    self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
-    clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
-    serializes flag names by their Rust identifier directly into
-    on-disk account JSON (`"ALL"` or `["MSG", ...]`), so renaming the
-    constant breaks any already-persisted account store. Needs a
-    deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
-    read-side compat shim), not a code-only rename.
+9. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
+   self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
+   clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
+   serializes flag names by their Rust identifier directly into
+   on-disk account JSON (`"ALL"` or `["MSG", ...]`), so renaming the
+   constant breaks any already-persisted account store. Needs a
+   deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
+   read-side compat shim), not a code-only rename.
 
-11. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
+10. **`hotline-cli`'s `App` mixes UI-agnostic session state with raw
     terminal-input state in one struct** (`app.rs`): `nick`/`icon`/
     `mode`/`users`/`lines`/`access`/`encoding` are session state, while
     `input`/`should_quit` are terminal-interaction state, despite
@@ -177,7 +168,7 @@ one-shared-room model.
     make that true. Touches `main.rs`'s event loop wiring; own reviewed
     change.
 
-12. **Threaded news storage does not match the reference's on-disk
+11. **Threaded news storage does not match the reference's on-disk
     binary database format.** The reference stores each news category
     in its own file. Each file starts with an `HLNZ` header (version 2,
     `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -198,14 +189,14 @@ one-shared-room model.
     the wire protocol matters for interop. This task stays low priority
     for now.
 
-13. **Open design question from news article/category JSON storage.**
+12. **Open design question from news article/category JSON storage.**
     `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
     `BTreeMap`, so once an article legitimately holds more than one
     flavor, "primary" means alphabetically-first MIME type, not
     first-posted or preferred — harmless today (always exactly one
     entry) but worth deciding before multi-flavor posting is wired up.
 
-14. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+13. **`on_newsfile_get`'s clamp can split a multi-byte character.**
     The reply is truncated to 65535 encoded bytes. Under the Mac OS
     Roman default every character is one byte, so this is invisible;
     under `utf-8` or `shift-jis` the last character can arrive as a
@@ -454,6 +445,11 @@ one-shared-room model.
     newest. mhxd goes further and truncates the stored file on every
     post (`news_save_post` reads back at most `MAX_NEWS_SIZE`); this
     server follows openline and keeps the whole file on disk.
+
+58. `UserNameWithInfo::flags` is now typed `UserFlags` instead of a raw
+    `u16`; every call site uses `UserFlags`'s own methods, with
+    `.bits()`/`from_bits_retain` kept only at the wire encode/decode
+    boundary.
 
 ## Needs manual verification against the real client
 

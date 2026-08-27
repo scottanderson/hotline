@@ -5,7 +5,7 @@
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
-use hotline_proto::types::UserNameWithInfo;
+use hotline_proto::types::{UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
 
@@ -193,7 +193,8 @@ impl App {
         let flags = tx
             .field(FieldId::Color)
             .and_then(Field::as_u16)
-            .unwrap_or_default();
+            .map(UserFlags::from_bits_retain)
+            .unwrap_or_else(UserFlags::empty);
 
         match self.users.iter().position(|u| u.user_id == user_id) {
             Some(pos) => {
@@ -329,7 +330,6 @@ mod tests {
     #[test]
     fn apply_user_change_carries_admin_color_for_new_and_existing_users() {
         use hotline_proto::opcode::Opcode;
-        use hotline_proto::types::UserFlags;
         use hotline_proto::FieldId;
 
         let mut app = App::new("me".to_string(), 0, EncodingHandle::default());
@@ -346,7 +346,7 @@ mod tests {
         // New user: flags should carry the admin bit from the start.
         let _ = app.apply_server_event(&admin_change);
         let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
-        assert!(UserFlags::from_bits_truncate(user.flags).contains(UserFlags::ADMIN));
+        assert!(user.flags.contains(UserFlags::ADMIN));
 
         // Existing user: a later update should still reflect current flags.
         let demoted = Transaction::push(
@@ -360,7 +360,7 @@ mod tests {
         );
         let _ = app.apply_server_event(&demoted);
         let user = app.users.iter().find(|u| u.user_id == 2).unwrap();
-        assert!(!UserFlags::from_bits_truncate(user.flags).contains(UserFlags::ADMIN));
+        assert!(!user.flags.contains(UserFlags::ADMIN));
     }
 
     #[test]

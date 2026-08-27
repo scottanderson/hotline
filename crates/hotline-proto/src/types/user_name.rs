@@ -2,6 +2,7 @@
 
 use crate::error::{ProtoError, Result};
 use crate::text_encoding::{self, Encoding};
+use crate::types::UserFlags;
 use crate::wire::{PacketReader, VecWriter};
 
 /// The packed `USER_NAME_WITH_INFO` (300) record from userlist replies.
@@ -11,8 +12,8 @@ pub struct UserNameWithInfo {
     pub user_id: u16,
     /// Icon ID.
     pub icon: u16,
-    /// See `USER_FLAGS` bit meanings (away, admin, refuses PM/chat).
-    pub flags: u16,
+    /// See [`UserFlags`] bit meanings.
+    pub flags: UserFlags,
     /// Display name.
     pub name: String,
 }
@@ -28,7 +29,7 @@ impl UserNameWithInfo {
         VecWriter::with_capacity(Self::LEN + name_bytes.len())
             .u16(self.user_id)
             .u16(self.icon)
-            .u16(self.flags)
+            .u16(self.flags.bits())
             .u16(name_bytes.len() as u16)
             .bytes(&name_bytes)
             .finish()
@@ -61,7 +62,7 @@ impl UserNameWithInfo {
         Ok(Self {
             user_id,
             icon,
-            flags,
+            flags: UserFlags::from_bits_retain(flags),
             name,
         })
     }
@@ -78,7 +79,7 @@ mod tests {
         let user = UserNameWithInfo {
             user_id: 7,
             icon: 128,
-            flags: UserFlags::AWAY.bits(),
+            flags: UserFlags::AWAY,
             name: "Virtual1".to_string(),
         };
         let bytes = user.encode(encoding);
@@ -92,7 +93,7 @@ mod tests {
         let user = UserNameWithInfo {
             user_id: 1,
             icon: 0,
-            flags: 0,
+            flags: UserFlags::empty(),
             name: "Ren\u{e9}".to_string(),
         };
         let bytes = user.encode(encoding);
@@ -109,7 +110,7 @@ mod tests {
         let user = UserNameWithInfo {
             user_id: 1,
             icon: 0,
-            flags: 0,
+            flags: UserFlags::empty(),
             name: "日本語".to_string(),
         };
         let bytes = user.encode(encoding);

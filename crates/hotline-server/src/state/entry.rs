@@ -59,29 +59,19 @@ impl UserEntry {
         self.last_active.elapsed() > IDLE_THRESHOLD
     }
 
-    /// Current `UserFlags` bits: admin (from `DISCONNECT_USERS`), idle, and
+    /// Current `UserFlags`: admin (from `DISCONNECT_USERS`), idle, and
     /// whether this user holds every/no currently-defined privilege.
-    pub fn flags(&self) -> u16 {
-        let mut bits = if self.access.contains(Access::DISCON_USER) {
-            UserFlags::ADMIN.bits()
-        } else {
-            0
-        };
-        if self.is_idle() {
-            bits |= UserFlags::AWAY.bits();
-        }
-        if self.access == Access::all() - Access::NO_AGREEMENT {
-            bits |= UserFlags::ALL_PRIVS.bits();
-        }
-        if self.access.is_empty() {
-            bits |= UserFlags::NO_PRIVS.bits();
-        }
-        if self.refuses_pm {
-            bits |= UserFlags::REFUSES_PM.bits();
-        }
-        if self.refuses_chat {
-            bits |= UserFlags::REFUSES_CHAT.bits();
-        }
-        bits
+    pub fn flags(&self) -> UserFlags {
+        let mut flags = UserFlags::empty();
+        flags.set(UserFlags::ADMIN, self.access.contains(Access::DISCON_USER));
+        flags.set(UserFlags::AWAY, self.is_idle());
+        flags.set(
+            UserFlags::ALL_PRIVS,
+            self.access == Access::all() - Access::NO_AGREEMENT,
+        );
+        flags.set(UserFlags::NO_PRIVS, self.access.is_empty());
+        flags.set(UserFlags::REFUSES_PM, self.refuses_pm);
+        flags.set(UserFlags::REFUSES_CHAT, self.refuses_chat);
+        flags
     }
 }

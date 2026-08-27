@@ -526,7 +526,7 @@ impl Session {
         let self_entry = UserNameWithInfo {
             user_id: self.user_id,
             icon,
-            flags: self.user_flags().bits(),
+            flags: self.user_flags(),
             name: self.name.clone(),
         };
 

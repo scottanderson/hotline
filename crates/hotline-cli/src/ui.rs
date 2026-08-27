@@ -90,7 +90,7 @@ fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             } else {
                 u.name.clone()
             };
-            let flags = UserFlags::from_bits_truncate(u.flags);
+            let flags = u.flags;
             let mut style = Style::default();
             if flags.contains(UserFlags::ADMIN) {
                 style = style.fg(Color::Red);

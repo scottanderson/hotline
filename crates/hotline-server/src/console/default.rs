@@ -86,7 +86,7 @@ fn user_table(users: &[UserEntry]) -> String {
     let rows: String = users
         .iter()
         .map(|user| {
-            let role = match UserFlags::from_bits_retain(user.flags()).contains(UserFlags::ADMIN) {
+            let role = match user.flags().contains(UserFlags::ADMIN) {
                 true => "OWNER",
                 false => "LUSER",
             };
