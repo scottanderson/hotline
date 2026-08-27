@@ -20,7 +20,7 @@
 //! Streaming decode needs `len2` *before* the fields are readable, so
 //! [`TransactionHeader`] holds just the raw prefix. Reading proceeds
 //! [`TransactionHeader::decode_from_client`]/[`decode_from_server`](TransactionHeader::decode_from_server), then
-//! [`TransactionHeader::finish_decode`] once `remaining_len()` more bytes
+//! [`TransactionHeader::finish_decode`] once `data_len()` more bytes
 //! are in hand, producing the real `Transaction`.
 //!
 //! The wire's `type` value is resolved into a [`TransactionType`] once,
@@ -312,7 +312,7 @@ impl Transaction {
                 available: buf.len(),
             })?;
         let header = decode_prefix(prefix);
-        let body_end = TransactionHeader::LEN + header.remaining_len() as usize;
+        let body_end = TransactionHeader::LEN + header.data_len() as usize;
         let body = buf
             .get(TransactionHeader::LEN..body_end)
             .ok_or(ProtoError::UnexpectedEof {
@@ -396,8 +396,8 @@ mod tests {
         let header = TransactionHeader::decode_from_client(&prefix);
         assert_eq!(
             bytes.len(),
-            TransactionHeader::LEN + header.remaining_len() as usize,
-            "remaining_len() (== len2) must equal count(2) + all field bytes"
+            TransactionHeader::LEN + header.data_len() as usize,
+            "data_len() (== len2) must equal count(2) + all field bytes"
         );
 
         let decoded = Transaction::decode_from_client(&bytes).unwrap();
@@ -426,8 +426,8 @@ mod tests {
         let prefix: [u8; TransactionHeader::LEN] =
             bytes[..TransactionHeader::LEN].try_into().unwrap();
         let header = TransactionHeader::decode_from_client(&prefix);
-        let body = &bytes
-            [TransactionHeader::LEN..TransactionHeader::LEN + header.remaining_len() as usize];
+        let body =
+            &bytes[TransactionHeader::LEN..TransactionHeader::LEN + header.data_len() as usize];
         let streamed = header.finish_decode(body).unwrap();
 
         assert_eq!(streamed, Transaction::decode_from_client(&bytes).unwrap());
@@ -488,7 +488,7 @@ mod tests {
             bytes[..TransactionHeader::LEN].try_into().unwrap();
         let header = TransactionHeader::decode_from_client(&prefix);
         let field_bytes = 4 + 2; // one field header + "hi"
-        assert_eq!(header.remaining_len(), field_bytes + 2);
+        assert_eq!(header.data_len(), field_bytes + 2);
     }
 
     #[test]

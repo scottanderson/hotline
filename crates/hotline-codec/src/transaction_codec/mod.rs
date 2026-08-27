@@ -1,31 +1,13 @@
+mod decode_state;
+mod error;
+
 use bytes::{Buf, BytesMut};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
-use hotline_proto::{ProtoError, Transaction, TransactionHeader};
+use hotline_proto::{Transaction, TransactionHeader};
 use tokio_util::codec::{Decoder, Encoder};
 
-/// Framing errors: either the transport failed (`io::Error`, required by
-/// `Decoder`/`Encoder`'s `Error: From<io::Error>` bound) or the bytes
-/// that arrived weren't a valid `Transaction`.
-#[derive(Debug, thiserror::Error)]
-pub enum CodecError {
-    /// The underlying transport failed.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    /// The bytes read were not a valid transaction.
-    #[error("protocol error: {0}")]
-    Proto(#[from] ProtoError),
-}
-
-/// What [`TransactionCodec`] is waiting for next.
-#[derive(Debug, Default)]
-enum DecodeState {
-    /// Waiting for the 20-byte fixed prefix.
-    #[default]
-    Prefix,
-    /// Prefix decoded; waiting for `header.remaining_len()` more bytes to
-    /// finish it.
-    Body(TransactionHeader),
-}
+use decode_state::DecodeState;
+pub use error::CodecError;
 
 /// A [`tokio_util::codec::Decoder`]/[`tokio_util::codec::Encoder`] for [`Transaction`].
 /// `decode_prefix` is set once at construction; see
@@ -89,7 +71,7 @@ impl Decoder for TransactionCodec {
                     // loop: the body may already be in this segment too
                 }
                 DecodeState::Body(partial) => {
-                    let need = partial.remaining_len() as usize;
+                    let need = partial.data_len() as usize;
                     if src.len() < need {
                         return Ok(None);
                     }

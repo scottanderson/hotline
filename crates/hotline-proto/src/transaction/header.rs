@@ -26,7 +26,7 @@ impl TransactionHeader {
     pub const LEN: usize = 20;
 
     /// Decode the fixed-size prefix only (through `len2`), assuming these
-    /// bytes were sent **by a client**. [`TransactionHeader::remaining_len`]
+    /// bytes were sent **by a client**. [`TransactionHeader::data_len`]
     /// says how many more bytes to read, then
     /// [`TransactionHeader::finish_decode`] parses them.
     pub fn decode_from_client(buf: &[u8; Self::LEN]) -> Self {
@@ -68,12 +68,12 @@ impl TransactionHeader {
     /// [`TransactionHeader::decode_from_server`], before
     /// [`TransactionHeader::finish_decode`] can run: `len2`, i.e. the
     /// 2-byte field count plus every field's bytes.
-    pub const fn remaining_len(&self) -> u32 {
+    pub const fn data_len(&self) -> u32 {
         self.len2
     }
 
     /// Finish decoding into a [`Transaction`]: `body` is exactly
-    /// [`TransactionHeader::remaining_len`] bytes, the field count
+    /// [`TransactionHeader::data_len`] bytes, the field count
     /// followed by the fields.
     pub fn finish_decode(self, body: &[u8]) -> Result<Transaction> {
         let fields = FieldList::decode(body)?;
