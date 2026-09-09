@@ -1,17 +1,16 @@
 # Near-term goals
 
-Closing feature gaps versus the reference implementation used for behavior
-parity (see AGENTS.md: never name it in code/commits/docs, only describe
-*what*/*why*). Backlog below, in priority order.
+Closing feature gaps versus openline, used for behavior parity. Backlog
+below, in priority order.
 
-## Known deliberate divergences from the reference server
+## Known deliberate divergences from openline
 
-- **`GETLIST` visibility timing.** The reference makes a raw TCP connection
+- **`GETLIST` visibility timing.** Openline makes a raw TCP connection
   visible to `GETLIST` immediately at accept, before `Login` even arrives
   (blank name/icon until set). This server only becomes visible at `Login`
   time. Low priority.
-- **`reply_error()` text doesn't match the reference's error strings.** The
-  reference uses short, sometimes cryptic strings (`"who?!?"`, `"Uh, no."`);
+- **`reply_error()` text doesn't match openline's error strings.** Openline
+  uses short, sometimes cryptic strings (`"who?!?"`, `"Uh, no."`);
   this server uses friendlier text. Not changed yet — decide with the user
   whether exact-string parity matters for any known client first.
 - **Posted news article title/poster/flavor length cap.** Openline caps
@@ -36,18 +35,17 @@ parity (see AGENTS.md: never name it in code/commits/docs, only describe
   defaults to `"text/plain"`. A real client always sends this field, so
   this only affects a hand-crafted request; not changed.
 
-## Primary vs. secondary reference divergences (resolved)
+## Openline vs. mhxd divergences (resolved)
 
-Where the two reference implementations disagree, this server matched the
-*secondary* reference in every case found so far: chat room password/invite
-gating, chat subject checks, chat invite reply behavior, dropbox path
-substring matching, login case folding, agreement push branching, the
-`USER_GETLIST` access check, `AccessExtra::CHAT_PRIVATE` gating chat-room
-membership opcodes, and `AccessExtra::MSG` as an alternative to
-`Access::SEND_MESSAGE`. One exception: `on_chat_create`'s invite-target
-handling matched neither reference and was fixed toward the *primary*
-reference's shape (loop over every `Uid`, one shared room, skip
-undeliverable targets), since that fits this server's existing
+Where openline and mhxd disagree, this server matched mhxd in every case
+found so far: chat room password/invite gating, chat subject checks, chat
+invite reply behavior, dropbox path substring matching, login case
+folding, agreement push branching, the `USER_GETLIST` access check,
+`AccessExtra::CHAT_PRIVATE` gating chat-room membership opcodes, and
+`AccessExtra::MSG` as an alternative to `Access::SEND_MESSAGE`. One
+exception: `on_chat_create`'s invite-target handling matched neither and
+was fixed toward openline's shape (loop over every `Uid`, one shared room,
+skip undeliverable targets), since that fits this server's existing
 one-shared-room model.
 
 ## Backlog, in priority order
@@ -59,7 +57,7 @@ one-shared-room model.
    the HTXF connection to step through a folder's files one at a time.
    Independently visible feature, large enough for its own commit(s) once
    picked up, not a small addition to fold into other work. Also covers
-   `Access::DOWNLOAD_FOLDER`/`UPLOAD_FOLDER`, which have known reference
+   `Access::DOWNLOAD_FOLDER`/`UPLOAD_FOLDER`, which have known openline
    denial strings in `Access::actions` but no `require()` call site yet.
 
 2. **HTXF transfer queue not implemented**
@@ -127,8 +125,8 @@ one-shared-room model.
    deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
    read-side compat shim), not a code-only rename.
 
-8. **Threaded news storage does not match the reference's on-disk
-   binary database format.** The reference stores each news category
+8. **Threaded news storage does not match openline's on-disk
+   binary database format.** Openline stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
    ID-to-offset hash table (`_NZ_SHashInfo`/`_NZ_SIDOffset`). Each
@@ -177,7 +175,7 @@ one-shared-room model.
 ## Resolved
 
 1. `UserSelfinfo`'s `Access` field now sends the session's real privileges
-   (`self.access.bits()`), matching the reference.
+   (`self.access.bits()`), matching openline.
 2. `on_file_getinfo` intentionally omits `FileType`/`FileCreator`/
    `FileDateCreate`/`FileComment` — no real HFS metadata to source them
    from, matching a widely used non-HFS server's own trimmed field set.
@@ -195,9 +193,9 @@ one-shared-room model.
 6. HTXF resume support: `FILE_GET` honors `FileResumeData` on download;
    `FILE_PUT`'s `opts == 1` resumes an upload via a `.hpf` working-name
    convention (`FileProvider::finish_upload`/`partial_upload_name`),
-   following the non-HFS reference codepath. Resource-fork (`"MACR"`)
-   upload data needed no code change — already discarded by tag like the
-   reference's own data-fork-only storage.
+   following mhxd's non-HFS codepath. Resource-fork (`"MACR"`)
+   upload data needed no code change — already discarded by tag like
+   mhxd's own data-fork-only storage.
 7. Private-message/chat refusal and automatic response implemented:
    `on_user_change` persists refuse-message/refuse-chat/auto-response
    preferences; `Session::refusal_bounce` bounces or auto-replies on
@@ -205,13 +203,13 @@ one-shared-room model.
 8. `FieldId::Options` (113) added (needed by item 7's bounce push);
    module docs updated to note it now carries different meanings per
    direction.
-9. `USER_FLAGS` (112) now also sets `ALL_PRIVS`/`NO_PRIVS`, matching the
-   reference's own computed bits.
+9. `USER_FLAGS` (112) now also sets `ALL_PRIVS`/`NO_PRIVS`, matching
+   openline's own computed bits.
 10. `HlPath::decode` now rejects a declared component count over 256
     before allocating (decoder-side safety bound, no reference to match).
 11. `InMemoryFileProvider::delete`/`rename`/`r#move` no longer
     auto-vivify missing intermediate directories (`Dir::get_dir_mut_existing`);
-    they return `NotFound` like the reference instead.
+    they return `NotFound` like openline instead.
 12. `Ping` (500)'s "undocumented in `HLProtocol.md`" status folded into
     item 15/naming's resolution below; no separate fix needed.
 13. Investigated restoring `const fn` on `Opcode`'s `From`/`Into`: not
@@ -223,10 +221,10 @@ one-shared-room model.
     `server.rs`'s existing `tracing::warn!` on session error. No change
     needed.
 15. Doc comments and `opcode_names!`/field-id tables now cite
-    `HLProtocol.md`'s own `myTran_*`/`myField_*` names instead of the
-    reference header's `HTLC_HDR_*`/`HTLS_DATA_*` names; the two opcodes
+    `HLProtocol.md`'s own `myTran_*`/`myField_*` names instead of
+    openline's header `HTLC_HDR_*`/`HTLS_DATA_*` names; the two opcodes
     absent from `HLProtocol.md` (`GetUserList`/`SetUserList`, `Ping`) keep
-    citing a reference header name, now called out explicitly in
+    citing an openline header name, now called out explicitly in
     AGENTS.md's naming rule.
 16. `ClientFieldId`/`ServerFieldId` and `ClientOpcode`/`ServerOpcode`
     collapsed into single `FieldId`/`Opcode` types, matching
@@ -236,18 +234,18 @@ one-shared-room model.
 17. Investigated `Cow<'_, str>` on `UserEntry`'s string fields: no real
     call site avoided a clone (`Session` and `UserEntry` are independently
     owned with no common borrow scope), reverted.
-18. Chat room password/invite gating kept matching the secondary
-    reference; `on_chat_create`'s invite-target handling fixed to match
-    the primary reference's one-shared-room, skip-undeliverable-targets
-    shape (see "Primary vs. secondary" section above).
-19. `on_chat_subject` kept matching the secondary reference (access
-    check, membership requirement, room password).
-20. `on_chat_invite` kept matching the secondary reference (always
-    replies, requires prior membership, rejects a repeat invite).
-21. `on_chat_part` now sends no reply on success, matching the
-    reference's own never-reply behavior.
+18. Chat room password/invite gating kept matching mhxd;
+    `on_chat_create`'s invite-target handling fixed to match openline's
+    one-shared-room, skip-undeliverable-targets shape (see "openline vs.
+    mhxd" section above).
+19. `on_chat_subject` kept matching mhxd (access check, membership
+    requirement, room password).
+20. `on_chat_invite` kept matching mhxd (always replies, requires prior
+    membership, rejects a repeat invite).
+21. `on_chat_part` now sends no reply on success, matching openline's
+    own never-reply behavior.
 22. `on_chat_decline` now sends no reply on success and broadcasts a
-    decline notice to the room, matching the primary reference.
+    decline notice to the room, matching openline.
 23. `on_chat` now supports the emote/action style (`Style` == 1 renders
     as `"*** {name} ..."` instead of the normal prefix).
 24. `on_msg_broadcast` now excludes the sender from the fan-out
@@ -258,18 +256,18 @@ one-shared-room model.
     drop-box visibility check; only their type-specific privilege remains
     (mkdir/rename are unaffected, still gated).
 27. `on_file_put`'s drop-box/upload-folder ancestor-substring match kept
-    matching the secondary reference.
+    matching mhxd.
 28. `on_file_get`'s reply now also sends raw `FileSize` alongside
     `TransferId`/`TransferSize`.
-29. `on_newsfile_post` now rejects posts over 8192 bytes with the
-    reference's own error text before appending.
+29. `on_newsfile_post` now rejects posts over 8192 bytes with openline's
+    own error text before appending.
 30. Logins are now case-folded to lowercase consistently at every entry
-    point (create/read/modify/delete/lookup), avoiding the reference's own
+    point (create/read/modify/delete/lookup), avoiding openline's own
     filesystem-case-insensitivity-dependent inconsistency.
 31. `on_login`'s immediate-join gate now also requires a non-zero icon,
-    matching the reference's `psUserName[0] && nIconID` check.
+    matching openline's `psUserName[0] && nIconID` check.
 32. `on_login`'s agreement-push logic kept its two-way branch, matching
-    the secondary reference over the primary's three-way branch.
+    mhxd over openline's three-way branch.
 33. `on_login` now sends `Bannerid` (161) via the pre-existing
     `FieldId::Bannerid` variant.
 34. `on_login` now always sends `ServerName`, empty when unconfigured.
@@ -278,9 +276,9 @@ one-shared-room model.
     instead of a `Politequit` push; a missing `Uid` defaults to 0 and
     still replies success; temp/perm ban options implemented (see
     resolved item "ban/mute list" below).
-37. `on_user_get_info`'s reply reshaped to the primary reference's own
-    labels/section order and field set, plus an `Online` duration and
-    `Icon`/`Version` lines not in either reference. File-transfer sections
+37. `on_user_get_info`'s reply reshaped to openline's own labels/section
+    order and field set, plus an `Online` duration and `Icon`/`Version`
+    lines not in either. File-transfer sections
     still always read `"None."` — needs the transfer-progress tracker
     from the open "HTXF transfer queue" backlog item.
 38. Banner support implemented: `Opcode::BannerGet`/`Banner` added,
@@ -290,7 +288,7 @@ one-shared-room model.
     own opt-in gate, on by default.
 39. `RequireFlags::require` now renders each missing flag through a
     per-flag `actions()` denial-text table (`Access`/`AccessExtra`),
-    matching the reference's own fixed strings verbatim where one exists.
+    matching openline's own fixed strings verbatim where one exists.
 40. `on_file_get` now checks `Access::DOWNLOAD_FILE` (was
     `AccessExtra::FILE_GETINFO`, a copy/paste from the metadata-only
     handler). File/folder comments implemented end to end
@@ -322,11 +320,11 @@ one-shared-room model.
     `NoBanner`/`UrlBannerProvider`/`hotline-daemon`'s `FileBannerProvider`),
     resolved together with item 38 above.
 46. `on_chat_invite`/`_join`/`_part`/`_decline`/`_subject` now all require
-    `AccessExtra::CHAT_PRIVATE` up front, matching the secondary
-    reference's dispatch-level gate.
+    `AccessExtra::CHAT_PRIVATE` up front, matching mhxd's dispatch-level
+    gate.
 47. `on_private_msg` now allows `AccessExtra::MSG` as an alternative to
-    `Access::SEND_MESSAGE`, matching the secondary reference's client
-    compatibility allowance.
+    `Access::SEND_MESSAGE`, matching mhxd's client compatibility
+    allowance.
 48. `NewsProvider`'s tree/flat caches switched from `RwLock` to
     `arc_swap::ArcSwap` (lock-free reads, read-heavy access pattern).
 

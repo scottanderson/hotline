@@ -810,9 +810,10 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// 303: renders as a single scrollable text block in the client's "Get
-    /// Info" window, so its shape follows the reference's own labels and
-    /// section order rather than this server's own report design.
+    /// `myTran_GetClientInfoText` (303): renders as a single scrollable text
+    /// block in the client's "Get Info" window, so its shape follows openline's
+    /// own labels and section order rather than this server's own report
+    /// design.
     async fn on_user_get_info(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
@@ -979,7 +980,7 @@ impl Session {
     /// private messages/chat invites or has an automatic response
     /// configured, or `None` when delivery should proceed normally. Gated
     /// on this session's own PM-refusal setting for both message and
-    /// chat-invite bounces, matching the reference's own reuse of that
+    /// chat-invite bounces, matching openline's own reuse of that
     /// one flag.
     fn refusal_bounce(
         &self,
@@ -1939,7 +1940,7 @@ impl Session {
     }
 
     /// Disconnect every session currently logged in under `login`, with
-    /// the reference's own message text for an account deleted out from
+    /// openline's own message text for an account deleted out from
     /// under it.
     async fn disconnect_account_sessions(login: &str, state: &SharedState) {
         for target in state.user_ids_for_login(login).await {
@@ -2089,7 +2090,7 @@ impl Session {
     /// [`Session::apply_user_list_record`] for the per-record rules.
     /// Processes every record even after a soft (storage) failure, but
     /// stops and reports immediately on a hard (permission) failure,
-    /// matching the reference.
+    /// matching openline.
     async fn on_set_user_list(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let encoding = self.encoding();
         let mut save_error = false;
@@ -2198,9 +2199,7 @@ impl Session {
             };
         }
 
-        // No old login: a brand new record, unless its login collides
-        // with an existing account, which is a non-fatal notice, not an
-        // error (matches the reference).
+        // A new record whose login is taken gets a notice and is skipped.
         if state.account(&login).await.is_some() {
             state
                 .send_to(
@@ -4490,7 +4489,7 @@ mod tests {
             .unwrap();
 
         // No PASSWORD field at all, not the "unchanged" sentinel: this
-        // clears the password, matching the reference's own behavior.
+        // clears the password, matching openline's own behavior.
         let modify = Transaction::request(
             Opcode::AccountModify,
             1,

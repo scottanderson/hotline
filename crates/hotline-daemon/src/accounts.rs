@@ -53,8 +53,7 @@ impl FileAccountProvider {
         Ok(provider)
     }
 
-    /// `None` for a login that can't be a safe filename (matches the
-    /// reference's own rejection of a `/` in a login).
+    /// `None` for a login that can't be a safe filename. mhxd also rejects a `/`.
     fn path_for(&self, login: &str) -> Option<PathBuf> {
         if login.is_empty() || login.contains(['/', '\\']) || login == "." || login == ".." {
             return None;

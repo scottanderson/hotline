@@ -123,7 +123,7 @@ impl RequireFlags for AccessExtra {
 }
 
 impl Default for AccessExtra {
-    /// Matches the reference's own defaults for a fresh account.
+    /// Matches mhxd's own defaults for a fresh account.
     fn default() -> Self {
         Self::CHAT_PRIVATE
             | Self::USER_GETLIST

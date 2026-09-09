@@ -53,9 +53,8 @@ pub fn partial_upload_name(name: &str) -> String {
 }
 
 /// `file_type`/`creator` inferred from a file's extension, the same
-/// fallback the reference server's non-HFS (Windows) build uses in place
-/// of real Mac type/creator metadata (`_FSWinExtToMacTypeCode` in
-/// `UFileSys(W).cp`).
+/// fallback openline's non-HFS (Windows) build uses in place of real Mac
+/// type/creator metadata (`_FSWinExtToMacTypeCode` in `UFileSys(W).cp`).
 pub fn type_and_creator_for_name(name: &str) -> ([u8; 4], [u8; 4]) {
     let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext);
     match ext.to_ascii_uppercase().as_str() {

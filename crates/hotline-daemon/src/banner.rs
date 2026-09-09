@@ -19,8 +19,8 @@ pub struct FileBannerProvider {
 impl FileBannerProvider {
     /// Opens `path`, inferring the wire format tag from its extension
     /// (`.jpg`/`.jpeg` -> `JPEG`, `.gif` -> `GIFf`, `.pct`/`.pict` ->
-    /// `PICT`, `.bmp`/`.dib` -> `BMP `), the same mapping the reference
-    /// server applies. Fails if `path` doesn't exist or its extension
+    /// `PICT`, `.bmp`/`.dib` -> `BMP `), the same mapping openline
+    /// applies (`HotlineServ.cp`). Fails if `path` doesn't exist or its extension
     /// isn't one of those.
     pub async fn open(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();

@@ -22,8 +22,8 @@ pub struct NewsCategory {
     pub guid: Uuid,
     /// Incremented by one each time an article is added. Never reset.
     pub add_sn: u32,
-    /// Always `1`: the reference this mirrors never actually updates it
-    /// past its initial value once a category is created.
+    /// Always `1`: openline's own `delSN` never actually updates past its
+    /// initial value once a category is created.
     pub del_sn: u32,
     next_article_id: u32,
     pub articles: HashMap<u32, NewsArticle>,

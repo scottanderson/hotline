@@ -61,9 +61,7 @@ impl Server {
 
         loop {
             let (stream, peer) = listener.accept().await?;
-            // Reject a banned address before it can consume a handshake or
-            // any other protocol resource, matching how the reference
-            // server checks its ban list immediately on accept.
+            // Reject a banned address before the handshake.
             if self.state.is_banned(peer.ip()).await.is_some() {
                 tracing::debug!(%peer, "rejected connection from banned address");
                 continue;

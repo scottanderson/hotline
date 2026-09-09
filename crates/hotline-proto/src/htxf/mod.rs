@@ -52,7 +52,7 @@ pub fn flat_file_header(data_size: u32) -> [u8; FLAT_FILE_HEADER_LEN] {
         .u64(0) // create date
         .u64(0) // modify date
         .u16(0) // name script
-        .u16(0) // name size (name omitted, matching the reference's
+        .u16(0) // name size (name omitted, matching openline's
         // placeholder-only INFO fork for a plain file transfer)
         .u16(0) // comment size (comment omitted)
         // DATA fork header.

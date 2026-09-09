@@ -6,7 +6,7 @@ bitflags::bitflags! {
     pub struct UserFlags: u16 {
         /// User is away/idle.
         const AWAY               = 1 << 0;
-        /// User is an admin (or, per the reference's own uncertainty, disconnected).
+        /// User is an admin (`HLProtocol.md` says "disconnected?").
         const ADMIN               = 1 << 1;
         /// User refuses private messages.
         const REFUSES_PM          = 1 << 2;

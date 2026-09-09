@@ -1,9 +1,9 @@
 //! Big-endian unsigned integer helpers for field payloads.
 //!
-//! Every wire integer field wider than 16 bits is unsigned in the
-//! reference implementation (`u_int32_t`; there's no genuinely signed
-//! field anywhere in it), so [`encode`]/[`decode`] are unsigned and are
-//! what [`crate::field::Field::u32`] uses.
+//! Every wire integer field wider than 16 bits is unsigned in mhxd
+//! (`u_int32_t`; there's no genuinely signed field anywhere in it), so
+//! [`encode`]/[`decode`] are unsigned and are what
+//! [`crate::field::Field::u32`] uses.
 //!
 //! [`encode`] picks whichever of the 2-byte or 4-byte width is
 //! smaller. [`decode`] stays tolerant of either width regardless of

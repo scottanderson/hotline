@@ -26,7 +26,7 @@
 //! different Rust name.
 //!
 //! [`Opcode::Ping`] (500) doesn't appear in `HLProtocol.md`; its name
-//! cites the wire constant used for it in the reference header.
+//! cites openline's `HotlineClientServerCommon.h` constant instead.
 
 use num_enum::{FromPrimitive, IntoPrimitive};
 
