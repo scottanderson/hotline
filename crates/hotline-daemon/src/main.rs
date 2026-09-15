@@ -20,7 +20,7 @@ use args::Args;
 use banner::FileBannerProvider;
 use bans::FileBanProvider;
 use file::DiskFileProvider;
-use news::FileNewsProvider;
+use news::{FileFlatNewsProvider, FileThreadedNewsProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,13 +54,23 @@ async fn main() -> anyhow::Result<()> {
                 )
             })?,
     );
-    let news = Arc::new(
-        FileNewsProvider::open(args.news_file.clone(), args.news_tree_file.clone())
+    let flat_news = Arc::new(
+        FileFlatNewsProvider::open(args.news_file.clone())
             .await
             .with_context(|| {
                 format!(
-                    "failed to open the news store (--news-file {}, --news-tree-file {})",
-                    args.news_file, args.news_tree_file
+                    "failed to open the flat news file {} (--news-file)",
+                    args.news_file
+                )
+            })?,
+    );
+    let threaded_news = Arc::new(
+        FileThreadedNewsProvider::open(args.news_tree_file.clone())
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to open the news tree file {} (--news-tree-file)",
+                    args.news_tree_file
                 )
             })?,
     );
@@ -82,8 +92,18 @@ async fn main() -> anyhow::Result<()> {
         None => Arc::new(NoBanner),
     };
     let commands = Arc::new(DefaultChatCommands);
-    Server::new(config, accounts, files, news, bans, flood, banner, commands)
-        .run()
-        .await?;
+    Server::new(
+        config,
+        accounts,
+        files,
+        flat_news,
+        threaded_news,
+        bans,
+        flood,
+        banner,
+        commands,
+    )
+    .run()
+    .await?;
     Ok(())
 }

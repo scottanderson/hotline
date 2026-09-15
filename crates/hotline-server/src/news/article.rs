@@ -6,10 +6,15 @@ use hotline_proto::types::HlDate;
 /// JSON shape.
 #[derive(Debug, Clone)]
 pub struct NewsArticle {
+    /// The article it replies to, or `0` if it's a top-level post.
     pub parent_id: u32,
+    /// `myField_NewsArtFlags` (334).
     pub flags: u32,
+    /// When it was posted.
     pub date: HlDate,
+    /// The article's subject line.
     pub title: String,
+    /// The name of the user who posted it.
     pub poster: String,
     /// Stored bodies, keyed by MIME type. Always has at least one entry.
     pub data: BTreeMap<String, Vec<u8>>,

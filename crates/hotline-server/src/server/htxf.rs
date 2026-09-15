@@ -196,6 +196,7 @@ mod tests {
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(files),
             Arc::new(InMemoryNewsProvider::default()),
+            Arc::new(InMemoryNewsProvider::default()),
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),

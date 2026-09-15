@@ -28,7 +28,10 @@ pub use file::{
     FileRequester, InMemoryFileProvider, PARTIAL_CREATOR, PARTIAL_SUFFIX, PARTIAL_TYPE,
 };
 pub use flood::{FloodConfig, FloodDecision, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
-pub use news::{InMemoryNewsProvider, NewsArticleDetail, NewsBundle, NewsProvider};
+pub use news::{
+    FlatNewsProvider, InMemoryNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle,
+    NewsItemKind, NewsListKind, ThreadedNewsProvider,
+};
 pub use server::{Server, ServerConfig};
 pub use session::Session;
 pub use state::{

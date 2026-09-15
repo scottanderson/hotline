@@ -136,15 +136,15 @@ one-shared-room model.
    confirms this: it starts with `HLNZ`, version 2, block size 256.
    This server stores the whole news tree in one `news.json` file
    instead (`hotline-daemon/src/news.rs`,
-   `FileNewsProvider`/`NewsProvider`). A matching format needs three
-   new parts: a binary codec (in `hotline-proto`'s style, pure
-   encode/decode, no I/O, testable without a filesystem), a block
+   `FileThreadedNewsProvider`/`ThreadedNewsProvider`). A matching format
+   needs three new parts: a binary codec (in `hotline-proto`'s style,
+   pure encode/decode, no I/O, testable without a filesystem), a block
    allocator that can split and merge blocks when an article grows past
-   one block, and a new `NewsProvider` backend. This work mirrors
-   `HotlineServNewsDatabase.cp`. It is a large, standalone effort, not a
-   quick change. No known client reads the file format directly; only
-   the wire protocol matters for interop. This task stays low priority
-   for now.
+   one block, and a new `ThreadedNewsProvider` backend. This work
+   mirrors `HotlineServNewsDatabase.cp`. It is a large, standalone
+   effort, not a quick change. No known client reads the file format
+   directly; only the wire protocol matters for interop. This task
+   stays low priority for now.
 
 9. **Open design question from news article/category JSON storage.**
    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
@@ -444,6 +444,13 @@ one-shared-room model.
     over the per-id ceiling, which is just under twice the size cap. That
     allows 64 ids on a server and 16 on a client. Both bounds are ours;
     openline caps neither. `transaction_codec/` holds one type per file.
+
+62. Split `NewsProvider` into `FlatNewsProvider` and
+    `ThreadedNewsProvider`. Each method is now one storage operation, not
+    a whole-blob load/save pair. Each provider owns its own lock, so
+    `SharedState`'s `news_flat_lock`/`news_tree_lock` are gone. A step
+    toward the binary news format backlog item. `FlatNewsProvider::post`
+    prepends, like openline's `UMemory::Insert(mMsgData, 0, ...)`.
 
 ## Needs manual verification against the real client
 

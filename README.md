@@ -43,7 +43,7 @@ crates/
 │   ├── account/                         # Account + AccountProvider trait; storage itself is
 │   │                                    # supplied by the embedding application, not owned here
 │   ├── file/                            # FileProvider trait, same plug-in shape as AccountProvider
-│   ├── news/                            # NewsProvider trait: bundles, categories, article threads
+│   ├── news/                            # FlatNewsProvider/ThreadedNewsProvider: bundles, categories, threads
 │   └── ban/, banner/, console/, flood/  # further pluggable providers (bans, server
 │                                        # banner, console commands, flood control)
 │
@@ -99,7 +99,7 @@ connections: the connected user table, chat rooms, and the channels
 sessions use to reach each other. Account storage, file storage, news
 storage, bans, the server banner, console commands, and flood control
 are each behind their own small trait (`AccountProvider`, `FileProvider`,
-`NewsProvider`, ...); the embedding application supplies the concrete
+`FlatNewsProvider`, ...); the embedding application supplies the concrete
 backend for each to `Server::new`, so `hotline-server` itself never
 owns any of that data directly.
 

@@ -30,6 +30,6 @@ pub use item::NewsItemKind;
 pub use listing::NewsListKind;
 pub use memory::InMemoryNewsProvider;
 pub use node::NewsNode;
-pub use provider::NewsProvider;
+pub use provider::{FlatNewsProvider, ThreadedNewsProvider};
 pub use summary::NewsCategorySummary;
 pub use view::NewsArticleView;

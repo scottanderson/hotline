@@ -4,7 +4,12 @@ use super::{NewsCategorySummary, NewsNode};
 /// fields that differ between the two.
 #[derive(Debug, Clone)]
 pub enum NewsListKind {
-    Bundle { count: u16 },
+    /// A folder, and how many entries it holds.
+    Bundle {
+        /// The bundle's own entry count.
+        count: u16,
+    },
+    /// An article thread.
     Category(NewsCategorySummary),
 }
 

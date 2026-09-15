@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use hotline_proto::types::HlDate;
 
+use crate::news::NewsArticleView;
+
 /// One threaded news article's full data, for a `myTran_GetNewsArtData`
 /// (400) reply.
 #[derive(Debug, Clone)]
@@ -22,4 +24,19 @@ pub struct NewsArticleDetail {
     pub first_child_id: u32,
     /// This article's stored bodies, keyed by MIME type.
     pub data: BTreeMap<String, Vec<u8>>,
+}
+
+impl From<NewsArticleView<'_>> for NewsArticleDetail {
+    fn from(view: NewsArticleView<'_>) -> Self {
+        Self {
+            title: view.article.title.clone(),
+            poster: view.article.poster.clone(),
+            date: view.article.date,
+            prev_id: view.prev_id,
+            next_id: view.next_id,
+            parent_id: view.article.parent_id,
+            first_child_id: view.article.children.first().copied().unwrap_or(0),
+            data: view.article.data.clone(),
+        }
+    }
 }

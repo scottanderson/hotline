@@ -3202,6 +3202,7 @@ mod tests {
             std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
             std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
             std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::NoFloodPolicy),
             banner,
@@ -3988,6 +3989,7 @@ mod tests {
         SharedState::new(
             std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
             std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
+            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::new(config)),
@@ -5607,6 +5609,7 @@ mod tests {
         SharedState::new(
             std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
             std::sync::Arc::new(files),
+            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
             std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
             std::sync::Arc::new(crate::flood::NoFloodPolicy),

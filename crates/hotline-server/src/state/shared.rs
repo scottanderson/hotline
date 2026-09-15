@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
@@ -23,7 +23,8 @@ use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, Defa
 use crate::file::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
 use crate::flood::{FloodDecision, FloodPolicy, NoFloodPolicy};
 use crate::news::{
-    InMemoryNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind, NewsProvider,
+    FlatNewsProvider, InMemoryNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
+    ThreadedNewsProvider,
 };
 use crate::state::{
     dropbox_access, dropbox_blocked, is_dropbox_path, AccessUpdate, ChatRoom, ConsoleUpdate,
@@ -40,13 +41,10 @@ pub struct SharedState {
     /// File storage backing the file listing and `FILE_GET`/`FILE_PUT`;
     /// see [`crate::FileProvider`].
     files: Arc<dyn FileProvider>,
-    /// News storage, see [`crate::NewsProvider`]. No local cache: read and
-    /// written directly on every call.
-    news_provider: Arc<dyn NewsProvider>,
-    /// Serializes a flat-news load-then-save round trip through `news_provider`.
-    news_flat_lock: Arc<Mutex<()>>,
-    /// Same purpose as `news_flat_lock`, for the threaded tree.
-    news_tree_lock: Arc<Mutex<()>>,
+    /// Classic news storage, see [`crate::FlatNewsProvider`].
+    flat_news: Arc<dyn FlatNewsProvider>,
+    /// Threaded news storage, see [`crate::ThreadedNewsProvider`].
+    threaded_news: Arc<dyn ThreadedNewsProvider>,
     /// Chat ID `0` is always present: the main room every connected
     /// user is implicitly in. Other entries are private rooms.
     chat_rooms: Arc<RwLock<HashMap<u32, ChatRoom>>>,
@@ -69,10 +67,12 @@ pub struct SharedState {
 
 impl Default for SharedState {
     fn default() -> Self {
+        let news = Arc::new(InMemoryNewsProvider::default());
         Self::new(
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(InMemoryFileProvider::default()),
-            Arc::new(InMemoryNewsProvider::default()),
+            news.clone(),
+            news,
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
@@ -82,12 +82,15 @@ impl Default for SharedState {
 }
 
 impl SharedState {
-    /// Build fresh shared state backed by `accounts`, `files`, `news`,
-    /// `bans`, `flood`, `banner`, and `commands`.
+    /// Build fresh shared state backed by `accounts`, `files`,
+    /// `flat_news`, `threaded_news`, `bans`, `flood`, `banner`, and
+    /// `commands`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         accounts: Arc<dyn AccountProvider>,
         files: Arc<dyn FileProvider>,
-        news: Arc<dyn NewsProvider>,
+        flat_news: Arc<dyn FlatNewsProvider>,
+        threaded_news: Arc<dyn ThreadedNewsProvider>,
         bans: Arc<dyn BanProvider>,
         flood: Arc<dyn FloodPolicy>,
         banner: Arc<dyn BannerProvider>,
@@ -98,9 +101,8 @@ impl SharedState {
             next_user_id: Arc::new(AtomicU16::new(1)),
             recipients: Arc::new(RwLock::new(HashMap::new())),
             files,
-            news_provider: news,
-            news_flat_lock: Arc::new(Mutex::new(())),
-            news_tree_lock: Arc::new(Mutex::new(())),
+            flat_news,
+            threaded_news,
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
             accounts,
@@ -723,7 +725,7 @@ impl SharedState {
 
     /// The full classic news text.
     pub async fn news(&self) -> String {
-        self.news_provider.load_flat().await.to_string()
+        self.flat_news.load().await.to_string()
     }
 
     /// Prepend a new post to the classic news. Returns the formatted entry.
@@ -746,14 +748,7 @@ impl SharedState {
             hour = now.hour(),
             minute = now.minute(),
         );
-        let _guard = self.news_flat_lock.lock().await;
-        let flat = self.news_provider.load_flat().await;
-        let mut new_flat = String::with_capacity(entry.len() + flat.len());
-        new_flat.push_str(&entry);
-        new_flat.push_str(&flat);
-        self.news_provider
-            .save_flat(Arc::new(new_flat.into_boxed_str()))
-            .await;
+        self.flat_news.post(&entry).await;
         entry
     }
 
@@ -763,9 +758,10 @@ impl SharedState {
         &self,
         path: &HlPath,
     ) -> Result<Vec<NewsCategoryListEntry>, &'static str> {
-        let tree = self.news_provider.load_tree().await;
-        let entries = tree
+        let entries = self
+            .threaded_news
             .list_dir(&path.components)
+            .await
             .ok_or("news bundle not found")?;
         Ok(entries
             .into_iter()
@@ -788,9 +784,10 @@ impl SharedState {
         &self,
         path: &HlPath,
     ) -> Result<NewsArticleListData, &'static str> {
-        let tree = self.news_provider.load_tree().await;
-        let articles = tree
+        let articles = self
+            .threaded_news
             .list_articles(&path.components)
+            .await
             .ok_or("news category not found")?;
         Ok(NewsArticleListData {
             articles: articles
@@ -819,38 +816,20 @@ impl SharedState {
         path: &HlPath,
         id: u32,
     ) -> Result<NewsArticleDetail, &'static str> {
-        let tree = self.news_provider.load_tree().await;
-        let view = tree
+        self.threaded_news
             .article(&path.components, id)
-            .ok_or("news article not found")?;
-        Ok(NewsArticleDetail {
-            title: view.article.title.clone(),
-            poster: view.article.poster.clone(),
-            date: view.article.date,
-            prev_id: view.prev_id,
-            next_id: view.next_id,
-            parent_id: view.article.parent_id,
-            first_child_id: view.article.children.first().copied().unwrap_or(0),
-            data: view.article.data.clone(),
-        })
+            .await
+            .ok_or("news article not found")
     }
 
     /// Create a news bundle (folder) named `name` under `path`.
     pub async fn news_mkdir(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        let _guard = self.news_tree_lock.lock().await;
-        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
-        tree.mkdir(&path.components, name)?;
-        self.news_provider.save_tree(Arc::new(tree)).await;
-        Ok(())
+        self.threaded_news.mkdir(&path.components, name).await
     }
 
     /// Create a news category named `name` under `path`.
     pub async fn news_mkcategory(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        let _guard = self.news_tree_lock.lock().await;
-        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
-        tree.mkcategory(&path.components, name)?;
-        self.news_provider.save_tree(Arc::new(tree)).await;
-        Ok(())
+        self.threaded_news.mkcategory(&path.components, name).await
     }
 
     /// Delete the news bundle or category named by `path` (its last
@@ -865,18 +844,17 @@ impl SharedState {
         if path.components.is_empty() {
             Err("news item not found")?;
         }
-        let _guard = self.news_tree_lock.lock().await;
-        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
-        let kind = tree
+        let kind = self
+            .threaded_news
             .item_kind(&path.components)
+            .await
             .ok_or("news item not found")?;
         let required = match kind {
             NewsItemKind::Bundle => Access::NEWS_DELETE_FLDR,
             NewsItemKind::Category => Access::NEWS_DELETE_CAT,
         };
         access.require(required)?;
-        tree.delete(&path.components).map_err(|e| e.to_string())?;
-        self.news_provider.save_tree(Arc::new(tree)).await;
+        self.threaded_news.delete(&path.components).await?;
         Ok(())
     }
 
@@ -892,19 +870,17 @@ impl SharedState {
         mime_type: String,
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
-        let _guard = self.news_tree_lock.lock().await;
-        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
-        let id = tree.post_article(
-            &path.components,
-            parent_id,
-            title,
-            poster,
-            flags,
-            mime_type,
-            data,
-        )?;
-        self.news_provider.save_tree(Arc::new(tree)).await;
-        Ok(id)
+        self.threaded_news
+            .post_article(
+                &path.components,
+                parent_id,
+                title,
+                poster,
+                flags,
+                mime_type,
+                data,
+            )
+            .await
     }
 
     /// Delete an article from the news category at `path`. If
@@ -916,11 +892,9 @@ impl SharedState {
         id: u32,
         recursive: bool,
     ) -> Result<(), &'static str> {
-        let _guard = self.news_tree_lock.lock().await;
-        let mut tree = Arc::unwrap_or_clone(self.news_provider.load_tree().await);
-        tree.delete_article(&path.components, id, recursive)?;
-        self.news_provider.save_tree(Arc::new(tree)).await;
-        Ok(())
+        self.threaded_news
+            .delete_article(&path.components, id, recursive)
+            .await
     }
 
     /// Create a new private chat room with `creator` as its only member,
@@ -1177,13 +1151,14 @@ mod tests {
 
     use super::*;
 
-    /// Two `SharedState`s sharing a [`NewsProvider`] see each other's writes.
+    /// Two `SharedState`s sharing a news provider see each other's writes.
     #[tokio::test]
     async fn news_is_visible_across_shared_states_backed_by_the_same_provider() {
-        let provider: Arc<dyn NewsProvider> = Arc::new(InMemoryNewsProvider::default());
+        let provider = Arc::new(InMemoryNewsProvider::default());
         let state = SharedState::new(
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(InMemoryFileProvider::default()),
+            provider.clone(),
             provider.clone(),
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
@@ -1212,6 +1187,7 @@ mod tests {
         let other = SharedState::new(
             Arc::new(InMemoryAccountProvider::default()),
             Arc::new(InMemoryFileProvider::default()),
+            provider.clone(),
             provider,
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
@@ -1333,6 +1309,7 @@ mod tests {
             Arc::new(InMemoryAccountProvider::default()),
             files,
             Arc::new(crate::news::InMemoryNewsProvider::default()),
+            Arc::new(crate::news::InMemoryNewsProvider::default()),
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
             Arc::new(NoBanner),
@@ -1359,6 +1336,7 @@ mod tests {
         let state = SharedState::new(
             Arc::new(InMemoryAccountProvider::default()),
             files,
+            Arc::new(crate::news::InMemoryNewsProvider::default()),
             Arc::new(crate::news::InMemoryNewsProvider::default()),
             Arc::new(InMemoryBanProvider::default()),
             Arc::new(NoFloodPolicy),
