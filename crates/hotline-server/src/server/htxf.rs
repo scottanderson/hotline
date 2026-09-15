@@ -187,21 +187,22 @@ mod tests {
     use crate::file::{FileRequester, InMemoryFileProvider};
     use crate::flood::NoFloodPolicy;
     use crate::news::InMemoryNewsProvider;
+    use crate::providers::Providers;
     use hotline_proto::consts::Access;
     use hotline_proto::types::HlPath;
     use tokio::io::AsyncWriteExt;
 
     fn state_with_files(files: InMemoryFileProvider) -> SharedState {
-        SharedState::new(
-            Arc::new(InMemoryAccountProvider::default()),
-            Arc::new(files),
-            Arc::new(InMemoryNewsProvider::default()),
-            Arc::new(InMemoryNewsProvider::default()),
-            Arc::new(InMemoryBanProvider::default()),
-            Arc::new(NoFloodPolicy),
-            Arc::new(NoBanner),
-            Arc::new(crate::console::DefaultChatCommands),
-        )
+        SharedState::new(Providers {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
+            files: Arc::new(files),
+            flat_news: Arc::new(InMemoryNewsProvider::default()),
+            threaded_news: Arc::new(InMemoryNewsProvider::default()),
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(crate::console::DefaultChatCommands),
+        })
     }
 
     /// `tokio::io::copy` returns early on a closed connection the same

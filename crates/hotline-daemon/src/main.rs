@@ -12,7 +12,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use hotline_server::{
-    DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Server, ServerConfig, UrlBannerProvider,
+    DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Providers, Server, ServerConfig,
+    UrlBannerProvider,
 };
 
 use accounts::FileAccountProvider;
@@ -94,14 +95,16 @@ async fn main() -> anyhow::Result<()> {
     let commands = Arc::new(DefaultChatCommands);
     Server::new(
         config,
-        accounts,
-        files,
-        flat_news,
-        threaded_news,
-        bans,
-        flood,
-        banner,
-        commands,
+        Providers {
+            accounts,
+            files,
+            flat_news,
+            threaded_news,
+            bans,
+            flood,
+            banner,
+            commands,
+        },
     )
     .run()
     .await?;

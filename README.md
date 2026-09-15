@@ -99,9 +99,9 @@ connections: the connected user table, chat rooms, and the channels
 sessions use to reach each other. Account storage, file storage, news
 storage, bans, the server banner, console commands, and flood control
 are each behind their own small trait (`AccountProvider`, `FileProvider`,
-`FlatNewsProvider`, ...); the embedding application supplies the concrete
-backend for each to `Server::new`, so `hotline-server` itself never
-owns any of that data directly.
+`FlatNewsProvider`, ...); the embedding application bundles its concrete
+backends into a `Providers` struct and passes that to `Server::new`, so
+`hotline-server` itself never owns any of that data directly.
 
 ## Status
 

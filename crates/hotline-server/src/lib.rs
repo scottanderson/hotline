@@ -14,6 +14,7 @@ mod error;
 mod file;
 mod flood;
 mod news;
+mod providers;
 mod server;
 mod session;
 mod state;
@@ -32,6 +33,7 @@ pub use news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle,
     NewsItemKind, NewsListKind, ThreadedNewsProvider,
 };
+pub use providers::Providers;
 pub use server::{Server, ServerConfig};
 pub use session::Session;
 pub use state::{

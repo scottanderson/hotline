@@ -1,16 +1,9 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
-use crate::account::AccountProvider;
-use crate::ban::BanProvider;
-use crate::banner::BannerProvider;
-use crate::console::ChatCommandDispatcher;
 use crate::error::Result;
-use crate::file::FileProvider;
-use crate::flood::FloodPolicy;
-use crate::news::{FlatNewsProvider, ThreadedNewsProvider};
+use crate::providers::Providers;
 use crate::server::htxf::run_htxf_listener;
 use crate::server::ServerConfig;
 use crate::session::Session;
@@ -23,35 +16,9 @@ pub struct Server {
 }
 
 impl Server {
-    /// Create a server with the given configuration, backed by `accounts`
-    /// (see [`AccountProvider`]), `files` (see [`FileProvider`]), `flat_news`
-    /// (see [`FlatNewsProvider`]), `threaded_news` (see
-    /// [`ThreadedNewsProvider`]), `bans` (see [`BanProvider`]), `flood` (see
-    /// [`FloodPolicy`]), `banner` (see [`BannerProvider`]), and `commands`
-    /// (see [`ChatCommandDispatcher`]). The embedding application supplies
-    /// all eight concrete backends.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        config: ServerConfig,
-        accounts: Arc<dyn AccountProvider>,
-        files: Arc<dyn FileProvider>,
-        flat_news: Arc<dyn FlatNewsProvider>,
-        threaded_news: Arc<dyn ThreadedNewsProvider>,
-        bans: Arc<dyn BanProvider>,
-        flood: Arc<dyn FloodPolicy>,
-        banner: Arc<dyn BannerProvider>,
-        commands: Arc<dyn ChatCommandDispatcher>,
-    ) -> Self {
-        let state = SharedState::new(
-            accounts,
-            files,
-            flat_news,
-            threaded_news,
-            bans,
-            flood,
-            banner,
-            commands,
-        );
+    /// Create a server with `config`, backed by `providers`.
+    pub fn new(config: ServerConfig, providers: Providers) -> Self {
+        let state = SharedState::new(providers);
         Self { config, state }
     }
 

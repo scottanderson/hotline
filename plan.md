@@ -167,11 +167,6 @@ one-shared-room model.
     reassembly memory is therefore unbounded. Needs a connection limit
     or a shared budget, plus a decision on which.
 
-12. **`SharedState::new` and `Server::new` take eight positional
-    provider arguments** behind `#[allow(clippy::too_many_arguments)]`,
-    and each new provider also touches five test call sites. A
-    `Providers` struct or a builder would stop that growth.
-
 ## Resolved
 
 1. `UserSelfinfo`'s `Access` field now sends the session's real privileges
@@ -451,6 +446,11 @@ one-shared-room model.
     `SharedState`'s `news_flat_lock`/`news_tree_lock` are gone. A step
     toward the binary news format backlog item. `FlatNewsProvider::post`
     prepends, like openline's `UMemory::Insert(mMsgData, 0, ...)`.
+
+63. `SharedState::new`/`Server::new` now take a single `Providers`
+    struct instead of eight positional arguments, dropping
+    `#[allow(clippy::too_many_arguments)]`. A new provider now touches
+    one field, not every call site's argument list.
 
 ## Needs manual verification against the real client
 

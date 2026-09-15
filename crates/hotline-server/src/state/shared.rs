@@ -26,6 +26,7 @@ use crate::news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
     ThreadedNewsProvider,
 };
+use crate::providers::Providers;
 use crate::state::{
     dropbox_access, dropbox_blocked, is_dropbox_path, AccessUpdate, ChatRoom, ConsoleUpdate,
     PendingTransfer, RecipientMessage, TransferDirection, TransferKind, TransferRef, UserEntry,
@@ -68,50 +69,38 @@ pub struct SharedState {
 impl Default for SharedState {
     fn default() -> Self {
         let news = Arc::new(InMemoryNewsProvider::default());
-        Self::new(
-            Arc::new(InMemoryAccountProvider::default()),
-            Arc::new(InMemoryFileProvider::default()),
-            news.clone(),
-            news,
-            Arc::new(InMemoryBanProvider::default()),
-            Arc::new(NoFloodPolicy),
-            Arc::new(NoBanner),
-            Arc::new(DefaultChatCommands),
-        )
+        Self::new(Providers {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
+            files: Arc::new(InMemoryFileProvider::default()),
+            flat_news: news.clone(),
+            threaded_news: news,
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(DefaultChatCommands),
+        })
     }
 }
 
 impl SharedState {
-    /// Build fresh shared state backed by `accounts`, `files`,
-    /// `flat_news`, `threaded_news`, `bans`, `flood`, `banner`, and
-    /// `commands`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        accounts: Arc<dyn AccountProvider>,
-        files: Arc<dyn FileProvider>,
-        flat_news: Arc<dyn FlatNewsProvider>,
-        threaded_news: Arc<dyn ThreadedNewsProvider>,
-        bans: Arc<dyn BanProvider>,
-        flood: Arc<dyn FloodPolicy>,
-        banner: Arc<dyn BannerProvider>,
-        commands: Arc<dyn ChatCommandDispatcher>,
-    ) -> Self {
+    /// Build fresh shared state backed by `providers`.
+    pub fn new(providers: Providers) -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
             next_user_id: Arc::new(AtomicU16::new(1)),
             recipients: Arc::new(RwLock::new(HashMap::new())),
-            files,
-            flat_news,
-            threaded_news,
+            files: providers.files,
+            flat_news: providers.flat_news,
+            threaded_news: providers.threaded_news,
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
-            accounts,
-            bans,
-            flood,
-            banner,
+            accounts: providers.accounts,
+            bans: providers.bans,
+            flood: providers.flood,
+            banner: providers.banner,
             transfers: Arc::new(RwLock::new(HashMap::new())),
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
-            commands,
+            commands: providers.commands,
         }
     }
 }
@@ -1155,16 +1144,16 @@ mod tests {
     #[tokio::test]
     async fn news_is_visible_across_shared_states_backed_by_the_same_provider() {
         let provider = Arc::new(InMemoryNewsProvider::default());
-        let state = SharedState::new(
-            Arc::new(InMemoryAccountProvider::default()),
-            Arc::new(InMemoryFileProvider::default()),
-            provider.clone(),
-            provider.clone(),
-            Arc::new(InMemoryBanProvider::default()),
-            Arc::new(NoFloodPolicy),
-            Arc::new(NoBanner),
-            Arc::new(crate::console::DefaultChatCommands),
-        );
+        let state = SharedState::new(Providers {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
+            files: Arc::new(InMemoryFileProvider::default()),
+            flat_news: provider.clone(),
+            threaded_news: provider.clone(),
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(crate::console::DefaultChatCommands),
+        });
 
         state.post_news("alice", "hello").await;
         state
@@ -1184,16 +1173,16 @@ mod tests {
             .await
             .unwrap();
 
-        let other = SharedState::new(
-            Arc::new(InMemoryAccountProvider::default()),
-            Arc::new(InMemoryFileProvider::default()),
-            provider.clone(),
-            provider,
-            Arc::new(InMemoryBanProvider::default()),
-            Arc::new(NoFloodPolicy),
-            Arc::new(NoBanner),
-            Arc::new(crate::console::DefaultChatCommands),
-        );
+        let other = SharedState::new(Providers {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
+            files: Arc::new(InMemoryFileProvider::default()),
+            flat_news: provider.clone(),
+            threaded_news: provider,
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(crate::console::DefaultChatCommands),
+        });
 
         assert!(other.news().await.contains("hello"));
         let articles = other
@@ -1305,16 +1294,16 @@ mod tests {
         let files = Arc::new(InMemoryFileProvider::default());
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         files.seed(&HlPath::new(["sub"]), "inner.txt", *b"x");
-        let state = SharedState::new(
-            Arc::new(InMemoryAccountProvider::default()),
+        let state = SharedState::new(Providers {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
             files,
-            Arc::new(crate::news::InMemoryNewsProvider::default()),
-            Arc::new(crate::news::InMemoryNewsProvider::default()),
-            Arc::new(InMemoryBanProvider::default()),
-            Arc::new(NoFloodPolicy),
-            Arc::new(NoBanner),
-            Arc::new(crate::console::DefaultChatCommands),
-        );
+            flat_news: Arc::new(crate::news::InMemoryNewsProvider::default()),
+            threaded_news: Arc::new(crate::news::InMemoryNewsProvider::default()),
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(crate::console::DefaultChatCommands),
+        });
 
         let requester = FileRequester { login: "alice" };
         let mut entries = state
@@ -1333,16 +1322,16 @@ mod tests {
     #[tokio::test]
     async fn an_in_progress_upload_is_listed_under_its_real_hpf_name() {
         let files = Arc::new(InMemoryFileProvider::default());
-        let state = SharedState::new(
-            Arc::new(InMemoryAccountProvider::default()),
+        let state = SharedState::new(Providers {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
             files,
-            Arc::new(crate::news::InMemoryNewsProvider::default()),
-            Arc::new(crate::news::InMemoryNewsProvider::default()),
-            Arc::new(InMemoryBanProvider::default()),
-            Arc::new(NoFloodPolicy),
-            Arc::new(NoBanner),
-            Arc::new(crate::console::DefaultChatCommands),
-        );
+            flat_news: Arc::new(crate::news::InMemoryNewsProvider::default()),
+            threaded_news: Arc::new(crate::news::InMemoryNewsProvider::default()),
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(crate::console::DefaultChatCommands),
+        });
         let requester = FileRequester { login: "alice" };
 
         {

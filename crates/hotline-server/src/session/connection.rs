@@ -2238,6 +2238,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::Providers;
     use hotline_proto::text_encoding;
     use tokio::sync::mpsc;
 
@@ -3198,16 +3199,16 @@ mod tests {
     }
 
     fn state_with_banner(banner: std::sync::Arc<dyn crate::banner::BannerProvider>) -> SharedState {
-        SharedState::new(
-            std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
-            std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
-            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-            std::sync::Arc::new(crate::flood::NoFloodPolicy),
+        SharedState::new(Providers {
+            accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
+            files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
+            flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
+            flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
             banner,
-            std::sync::Arc::new(crate::console::DefaultChatCommands),
-        )
+            commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+        })
     }
 
     #[tokio::test]
@@ -3986,16 +3987,16 @@ mod tests {
     }
 
     fn state_with_flood(config: crate::flood::FloodConfig) -> SharedState {
-        SharedState::new(
-            std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
-            std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
-            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-            std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::new(config)),
-            std::sync::Arc::new(crate::banner::NoBanner),
-            std::sync::Arc::new(crate::console::DefaultChatCommands),
-        )
+        SharedState::new(Providers {
+            accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
+            files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
+            flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
+            flood: std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::new(config)),
+            banner: std::sync::Arc::new(crate::banner::NoBanner),
+            commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+        })
     }
 
     #[tokio::test]
@@ -5606,16 +5607,16 @@ mod tests {
     }
 
     fn state_with_files(files: crate::file::InMemoryFileProvider) -> SharedState {
-        SharedState::new(
-            std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
-            std::sync::Arc::new(files),
-            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-            std::sync::Arc::new(crate::flood::NoFloodPolicy),
-            std::sync::Arc::new(crate::banner::NoBanner),
-            std::sync::Arc::new(crate::console::DefaultChatCommands),
-        )
+        SharedState::new(Providers {
+            accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
+            files: std::sync::Arc::new(files),
+            flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+            bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
+            flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
+            banner: std::sync::Arc::new(crate::banner::NoBanner),
+            commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+        })
     }
 
     #[tokio::test]
