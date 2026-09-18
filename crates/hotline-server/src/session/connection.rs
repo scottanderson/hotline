@@ -1,10 +1,12 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
+use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, Stream, StreamExt};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
@@ -91,6 +93,20 @@ enum SessionState {
     Joined,
 }
 
+/// The write half of a session's framed connection.
+type SessionWriter = SplitSink<Framed<TcpStream, TransactionCodec>, Transaction>;
+
+/// The read half of a session's framed connection.
+type SessionReader = SplitStream<Framed<TcpStream, TransactionCodec>>;
+
+/// How a session's dispatch loop ended.
+enum SessionEnd {
+    /// Close the connection at once.
+    Closed,
+    /// Drain the reader for [`KICK_DRAIN_TIMEOUT`] before closing.
+    Kicked,
+}
+
 /// A single client connection: handshake state plus the transaction
 /// dispatch loop. Not `Clone`, one per socket.
 pub struct Session {
@@ -161,6 +177,35 @@ impl Session {
 
         let (mut writer, mut reader) = Framed::new(stream, codec).split();
         let mut rx = state.register_recipient(user_id).await;
+
+        let outcome = Self::dispatch(
+            &mut session,
+            &state,
+            &config,
+            &mut writer,
+            &mut reader,
+            &mut rx,
+        )
+        .await;
+        // Runs on every exit from `dispatch`, including an early `?`.
+        Self::leave_server(&session, &state).await;
+        if let Ok(SessionEnd::Kicked) = outcome {
+            // Give the client a bounded chance to read the notice.
+            drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
+        }
+        outcome.map(|_| ())
+    }
+
+    /// Dispatches this connection's traffic until it ends. The caller owns
+    /// the cleanup.
+    async fn dispatch(
+        session: &mut Session,
+        state: &SharedState,
+        config: &ServerConfig,
+        writer: &mut SessionWriter,
+        reader: &mut SessionReader,
+        rx: &mut mpsc::Receiver<RecipientMessage>,
+    ) -> Result<SessionEnd> {
         let idle_sleep = tokio::time::sleep(IDLE_THRESHOLD);
         tokio::pin!(idle_sleep);
 
@@ -168,19 +213,19 @@ impl Session {
             tokio::select! {
                 // Traffic from this client.
                 frame = reader.next() => {
-                    let Some(tx) = frame.transpose()? else { break }; // clean EOF
+                    let Some(tx) = frame.transpose()? else { break Ok(SessionEnd::Closed) }; // clean EOF
                     state.touch_user(session.user_id).await;
                     idle_sleep.as_mut().reset(tokio::time::Instant::now() + IDLE_THRESHOLD);
                     if session.is_away {
-                        session.set_away(false, &state).await;
+                        session.set_away(false, state).await;
                     }
-                    for reply in session.handle(&tx, &state, &config).await {
+                    for reply in session.handle(&tx, state, config).await {
                         writer.send(reply).await?;
                     }
                 }
                 // Fires after IDLE_THRESHOLD with no request from this client.
                 () = &mut idle_sleep, if !session.is_away && matches!(session.state, SessionState::Joined) => {
-                    session.set_away(true, &state).await;
+                    session.set_away(true, state).await;
                 }
                 // Everything server-initiated for this session.
                 msg = rx.recv() => {
@@ -192,28 +237,21 @@ impl Session {
                                 writer.send(tx).await?;
                             }
                             if is_kick {
-                                // Remove the user now; it can't be reached again.
-                                Self::leave_server(&session, &state).await;
-                                // Let the client read the notice, then close.
-                                drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
-                                return Ok(());
+                                break Ok(SessionEnd::Kicked);
                             }
                         }
                         Some(RecipientMessage::AccessUpdate(update)) => {
-                            session.apply_access_update(update, &state).await;
+                            session.apply_access_update(update, state).await;
                         }
                         Some(RecipientMessage::Console(update)) => {
-                            session.apply_console_update(update, &state).await;
+                            session.apply_console_update(update, state).await;
                         }
-                        Some(RecipientMessage::Disconnect) => break,
-                        None => break,
+                        Some(RecipientMessage::Disconnect) => break Ok(SessionEnd::Closed),
+                        None => break Ok(SessionEnd::Closed),
                     }
                 }
             }
         }
-
-        Self::leave_server(&session, &state).await;
-        Ok(())
     }
 
     /// Removes a session from cross-session state and notifies other users.
@@ -7051,5 +7089,37 @@ mod tests {
         // Stands in for a client that never drains its kick notice.
         let stuck = futures::stream::pending::<()>();
         drain_with_timeout(stuck, KICK_DRAIN_TIMEOUT).await;
+    }
+
+    /// A malformed transaction leaves `run` through `?` and must still
+    /// unregister the session.
+    #[tokio::test]
+    async fn a_malformed_transaction_still_unregisters_the_session() {
+        use tokio::net::TcpListener;
+
+        let state = SharedState::default();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_state = state.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            Session::run(stream, server_state, ServerConfig::default()).await
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client
+            .write_all(&ClientHandshake::default().encode())
+            .await
+            .unwrap();
+        let mut reply = [0u8; ServerHandshake::LEN];
+        client.read_exact(&mut reply).await.unwrap();
+
+        // A 20-byte header declaring len == len2 == 0.
+        client.write_all(&[0u8; 20]).await.unwrap();
+
+        assert!(server.await.unwrap().is_err());
+        assert_eq!(state.recipient_count().await, 0);
+        assert!(state.users().await.is_empty());
     }
 }

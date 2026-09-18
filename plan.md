@@ -454,6 +454,17 @@ one-shared-room model.
     silently dropping the bit. This code is unpublished, so no stored
     account anywhere holds the old name and no migration shim is needed.
 
+65. `Session::run` now cleans up on every exit. Its select loop moved
+    into `Session::dispatch`, returning a `SessionEnd`; `run` calls
+    `leave_server` unconditionally after it, then drains only on
+    `SessionEnd::Kicked`. Before, an early `?` (a malformed transaction
+    through `frame.transpose()?`, or a failed `writer.send`) returned
+    past the cleanup, leaving the `UserEntry`, the `recipients` sender,
+    and the flood state behind and never broadcasting
+    `NotifyDeleteUser`. Every other client then saw a user nobody could
+    reach, and `/access` against that id reported success. A logged-in
+    client reached this with one zero-length transaction.
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against

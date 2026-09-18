@@ -199,6 +199,12 @@ impl SharedState {
         self.recipients.write().await.remove(&user_id);
     }
 
+    /// How many recipients are registered.
+    #[cfg(test)]
+    pub(crate) async fn recipient_count(&self) -> usize {
+        self.recipients.read().await.len()
+    }
+
     /// Publish a transaction to every session (e.g. a chat message or a
     /// user list change notification). Sessions that are slow/gone just
     /// miss it; delivery is best-effort like the real protocol's chat.
