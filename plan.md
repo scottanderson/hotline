@@ -42,8 +42,8 @@ found so far: chat room password/invite gating, chat subject checks, chat
 invite reply behavior, dropbox path substring matching, login case
 folding, agreement push branching, the `USER_GETLIST` access check,
 `AccessExtra::CHAT_PRIVATE` gating chat-room membership opcodes, and
-`AccessExtra::MSG` as an alternative to `Access::SEND_MESSAGE`. One
-exception: `on_chat_create`'s invite-target handling matched neither and
+`AccessExtra::MSG_OVERRIDE` as an alternative to `Access::SEND_MESSAGE`.
+One exception: `on_chat_create`'s invite-target handling matched neither and
 was fixed toward openline's shape (loop over every `Uid`, one shared room,
 skip undeliverable targets), since that fits this server's existing
 one-shared-room model.
@@ -116,16 +116,7 @@ one-shared-room model.
    struct definition, `run`, handshake, and the two dispatch tables.
    Large, mechanical-but-risky diff; own reviewed PR.
 
-7. **`AccessExtra::MSG` is a cryptic bitflag name** among otherwise
-   self-explanatory siblings (`CHAT_PRIVATE`, `USER_GETLIST`, ...). A
-   clearer name (`MSG_OVERRIDE`?) is tempting, but `bitflags_serde`
-   serializes flag names by their Rust identifier directly into
-   on-disk account JSON (`"ALL"` or `["MSG", ...]`), so renaming the
-   constant breaks any already-persisted account store. Needs a
-   deliberate migration decision (e.g. a `#[serde(alias = "MSG")]`-style
-   read-side compat shim), not a code-only rename.
-
-8. **Threaded news storage does not match openline's on-disk
+7. **Threaded news storage does not match openline's on-disk
    binary database format.** Openline stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -146,22 +137,22 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-9. **Open design question from news article/category JSON storage.**
+8. **Open design question from news article/category JSON storage.**
    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
    `BTreeMap`, so once an article legitimately holds more than one
    flavor, "primary" means alphabetically-first MIME type, not
    first-posted or preferred — harmless today (always exactly one
    entry) but worth deciding before multi-flavor posting is wired up.
 
-10. **`on_newsfile_get`'s clamp can split a multi-byte character.**
-    The reply is truncated to 65535 encoded bytes. Under the Mac OS
-    Roman default every character is one byte, so this is invisible;
-    under `utf-8` or `shift-jis` the last character can arrive as a
-    partial sequence. Openline truncates bytes too, so this matches
-    openline. Worth deciding only if a multi-byte encoding is
-    ever made selectable per connection.
+9. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+   The reply is truncated to 65535 encoded bytes. Under the Mac OS
+   Roman default every character is one byte, so this is invisible;
+   under `utf-8` or `shift-jis` the last character can arrive as a
+   partial sequence. Openline truncates bytes too, so this matches
+   openline. Worth deciding only if a multi-byte encoding is
+   ever made selectable per connection.
 
-11. **Reassembly's memory bound is per connection, not global.**
+10. **Reassembly's memory bound is per connection, not global.**
     `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
     nothing caps how many connections a server accepts. Total
     reassembly memory is therefore unbounded. Needs a connection limit
@@ -317,7 +308,7 @@ one-shared-room model.
 46. `on_chat_invite`/`_join`/`_part`/`_decline`/`_subject` now all require
     `AccessExtra::CHAT_PRIVATE` up front, matching mhxd's dispatch-level
     gate.
-47. `on_private_msg` now allows `AccessExtra::MSG` as an alternative to
+47. `on_private_msg` now allows `AccessExtra::MSG_OVERRIDE` as an alternative to
     `Access::SEND_MESSAGE`, matching mhxd's client compatibility
     allowance.
 48. `NewsProvider`'s tree/flat caches switched from `RwLock` to
@@ -451,6 +442,17 @@ one-shared-room model.
     struct instead of eight positional arguments, dropping
     `#[allow(clippy::too_many_arguments)]`. A new provider now touches
     one field, not every call site's argument list.
+
+64. `AccessExtra::MSG` renamed to `MSG_OVERRIDE`. Its config key stays
+    mhxd's own `msg`, because `AccessExtra` now carries a real
+    `CONSOLE_NAMES` table like `Access` does, instead of deriving the key
+    from the constant name. That drops the coupling that made this a
+    migration question at all: the Rust name and the config key move
+    independently now. The on-disk account JSON does use the new name
+    (`bitflags_serde` writes Rust identifiers); an account file holding
+    the old `"MSG"` fails to load with `unknown flag "MSG"` rather than
+    silently dropping the bit. This code is unpublished, so no stored
+    account anywhere holds the old name and no migration shim is needed.
 
 ## Needs manual verification against the real client
 

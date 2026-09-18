@@ -8,9 +8,9 @@ bitflags::bitflags! {
         /// Open or create a private chat.
         /// Config key: `chat_private`.
         const CHAT_PRIVATE       = 1 << 0;
-        /// Send a private message even without `SEND_MSGS`.
+        /// Send a private message even without `Access::SEND_MESSAGE`.
         /// Config key: `msg`.
-        const MSG                = 1 << 1;
+        const MSG_OVERRIDE       = 1 << 1;
         /// List users and see join/part/change traffic.
         /// Config key: `user_getlist`.
         const USER_GETLIST       = 1 << 2;
@@ -81,11 +81,50 @@ bitflags::bitflags! {
     }
 }
 
+/// Each flag's config key.
+const CONSOLE_NAMES: &[(&str, AccessExtra)] = &[
+    ("chat_private", AccessExtra::CHAT_PRIVATE),
+    ("msg", AccessExtra::MSG_OVERRIDE),
+    ("user_getlist", AccessExtra::USER_GETLIST),
+    ("file_list", AccessExtra::FILE_LIST),
+    ("file_getinfo", AccessExtra::FILE_GETINFO),
+    ("file_hash", AccessExtra::FILE_HASH),
+    ("user_visibility", AccessExtra::USER_VISIBILITY),
+    ("user_color", AccessExtra::USER_COLOR),
+    ("can_spam", AccessExtra::CAN_SPAM),
+    ("set_subject", AccessExtra::SET_SUBJECT),
+    ("debug", AccessExtra::DEBUG),
+    ("user_access", AccessExtra::USER_ACCESS),
+    ("access_volatile", AccessExtra::ACCESS_VOLATILE),
+    ("user_0wn", AccessExtra::USER_0WN),
+    ("is_0wn3d", AccessExtra::IS_0WN3D),
+    ("info_get_address", AccessExtra::INFO_GET_ADDRESS),
+    ("info_get_login", AccessExtra::INFO_GET_LOGIN),
+    ("manage_users", AccessExtra::MANAGE_USERS),
+    ("name_lock", AccessExtra::NAME_LOCK),
+    ("ignore_queue", AccessExtra::IGNORE_QUEUE),
+    ("can_login", AccessExtra::CAN_LOGIN),
+    ("can_agree", AccessExtra::CAN_AGREE),
+    ("can_ping", AccessExtra::CAN_PING),
+    ("banner_get", AccessExtra::BANNER_GET),
+];
+
 impl AccessExtra {
     /// Looks up a flag by its config key (`chat_private`, `msg`, ...).
-    /// Each key is the flag's own Rust constant name, lowercased.
     pub fn from_console_name(name: &str) -> Option<Self> {
-        Self::from_name(&name.to_ascii_uppercase())
+        CONSOLE_NAMES
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, flag)| *flag)
+    }
+
+    /// A single flag's config key, the inverse of
+    /// [`AccessExtra::from_console_name`].
+    pub fn console_name(self) -> Option<&'static str> {
+        CONSOLE_NAMES
+            .iter()
+            .find(|(_, flag)| *flag == self)
+            .map(|(key, _)| *key)
     }
 }
 
@@ -94,7 +133,7 @@ impl RequireFlags for AccessExtra {
         self.iter_names()
             .map(|(name, this)| match this {
                 AccessExtra::CHAT_PRIVATE => "open or create a private chat",
-                AccessExtra::MSG => "send a private message",
+                AccessExtra::MSG_OVERRIDE => "send a private message",
                 AccessExtra::USER_GETLIST => "view the user list",
                 AccessExtra::FILE_LIST => "list files",
                 AccessExtra::FILE_GETINFO => "view a file's information",
@@ -142,19 +181,25 @@ impl Default for AccessExtra {
 mod tests {
     use super::*;
 
-    /// `/access` takes these keys, so a constant rename is a wire-visible
-    /// change, not just a refactor.
+    /// Whatever `/access` displays, it must also accept back.
     #[test]
-    fn console_keys_are_the_constant_names_lowercased() {
-        for (name, flag) in AccessExtra::all().iter_names() {
-            let key = name.to_ascii_lowercase();
-            assert_eq!(AccessExtra::from_console_name(&key), Some(flag));
+    fn every_flag_round_trips_through_its_console_name() {
+        for (_, flag) in AccessExtra::all().iter_names() {
+            let key = flag.console_name().expect("every flag has a key");
+            assert_eq!(AccessExtra::from_console_name(key), Some(flag));
         }
-        assert_eq!(
-            AccessExtra::from_console_name("chat_private"),
-            Some(AccessExtra::CHAT_PRIVATE)
-        );
         assert_eq!(AccessExtra::from_console_name("nope"), None);
+    }
+
+    /// The key stays mhxd's own `msg`.
+    #[test]
+    fn msg_override_keeps_the_msg_key() {
+        assert_eq!(
+            AccessExtra::from_console_name("msg"),
+            Some(AccessExtra::MSG_OVERRIDE)
+        );
+        assert_eq!(AccessExtra::MSG_OVERRIDE.console_name(), Some("msg"));
+        assert_eq!(AccessExtra::from_console_name("msg_override"), None);
     }
 
     #[test]

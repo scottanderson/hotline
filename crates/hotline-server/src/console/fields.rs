@@ -6,8 +6,8 @@ use crate::account::AccessExtra;
 use crate::console::strtoul;
 
 /// `names` comma separated, `"none"` if empty.
-fn join_flag_names(names: impl Iterator<Item = String>) -> String {
-    let names: Vec<String> = names.collect();
+fn join_flag_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<&str> = names.collect();
     if names.is_empty() {
         "none".to_string()
     } else {
@@ -29,16 +29,16 @@ pub(crate) fn format_access(value: Access) -> String {
     join_flag_names(
         value
             .iter_names()
-            .map(|(name, flag)| flag.console_name().unwrap_or(name).to_string()),
+            .map(|(name, flag)| flag.console_name().unwrap_or(name)),
     )
 }
 
-/// Same, for [`AccessExtra`], whose keys are its own names lowercased.
+/// Same, for [`AccessExtra`].
 pub(crate) fn format_access_extra(value: AccessExtra) -> String {
     join_flag_names(
         value
             .iter_names()
-            .map(|(name, _)| name.to_ascii_lowercase()),
+            .map(|(name, flag)| flag.console_name().unwrap_or(name)),
     )
 }
 

@@ -928,7 +928,7 @@ impl Session {
     /// 108: a private instant message to one other user.
     async fn on_private_msg(&self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::SEND_MESSAGE) {
-            if !self.access_extra.contains(AccessExtra::MSG) {
+            if !self.access_extra.contains(AccessExtra::MSG_OVERRIDE) {
                 return vec![tx.reply_error(reason)];
             }
         }
@@ -4243,7 +4243,7 @@ mod tests {
     #[tokio::test]
     async fn msg_allowed_via_access_extra_msg_without_send_message() {
         let mut session = test_session("Alice", Access::empty());
-        session.access_extra.insert(AccessExtra::MSG);
+        session.access_extra.insert(AccessExtra::MSG_OVERRIDE);
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
 
@@ -4263,7 +4263,7 @@ mod tests {
     #[tokio::test]
     async fn msg_denied_without_send_message_or_access_extra_msg() {
         let mut session = test_session("Alice", Access::empty());
-        session.access_extra.remove(AccessExtra::MSG);
+        session.access_extra.remove(AccessExtra::MSG_OVERRIDE);
         let state = SharedState::default();
 
         let request = Transaction::request(
