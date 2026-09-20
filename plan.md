@@ -95,17 +95,7 @@ one-shared-room model.
    of the backlog lands, since later items are likely to add more enums
    this pass didn't have to consider.
 
-5. **`HTRK` tracker support stops at wire-format types.**
-   `hotline-tracker` has `encode_client_request_v1`/`decode_reply_header`/
-   `TrackedServer::decode`/`ServerBeacon::encode`, but nothing in the
-   workspace calls any of them: `hls` never sends a `ServerBeacon` to
-   register with a tracker, and `hlc` has no tracker-query mode to list
-   servers before connecting. Needs a periodic beacon task wired into
-   `hotline-daemon` (with a `--tracker` config flag) and a query command in
-   `hotline-cli` that opens the tracker's TCP port, sends the client
-   request, and decodes the `TrackedServer` list back.
-
-6. **`session/connection.rs` (~6800 lines) holds one `Session` struct
+5. **`session/connection.rs` (~6800 lines) holds one `Session` struct
    with a single giant `impl` spanning login, chat, private messages,
    files, news, and account-admin handlers.** AGENTS.md documents that
    `session.rs`'s handlers belong together, but a type's `impl` blocks
@@ -116,7 +106,7 @@ one-shared-room model.
    struct definition, `run`, handshake, and the two dispatch tables.
    Large, mechanical-but-risky diff; own reviewed PR.
 
-7. **Threaded news storage does not match openline's on-disk
+6. **Threaded news storage does not match openline's on-disk
    binary database format.** Openline stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -137,14 +127,14 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-8. **Open design question from news article/category JSON storage.**
+7. **Open design question from news article/category JSON storage.**
    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
    `BTreeMap`, so once an article legitimately holds more than one
    flavor, "primary" means alphabetically-first MIME type, not
    first-posted or preferred — harmless today (always exactly one
    entry) but worth deciding before multi-flavor posting is wired up.
 
-9. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+8. **`on_newsfile_get`'s clamp can split a multi-byte character.**
    The reply is truncated to 65535 encoded bytes. Under the Mac OS
    Roman default every character is one byte, so this is invisible;
    under `utf-8` or `shift-jis` the last character can arrive as a
@@ -152,13 +142,13 @@ one-shared-room model.
    openline. Worth deciding only if a multi-byte encoding is
    ever made selectable per connection.
 
-10. **Reassembly's memory bound is per connection, not global.**
-    `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
-    nothing caps how many connections a server accepts. Total
-    reassembly memory is therefore unbounded. Needs a connection limit
-    or a shared budget, plus a decision on which.
+9. **Reassembly's memory bound is per connection, not global.**
+   `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
+   nothing caps how many connections a server accepts. Total
+   reassembly memory is therefore unbounded. Needs a connection limit
+   or a shared budget, plus a decision on which.
 
-11. **The tracker beacon counts logged-in users.** openline sends
+10. **The tracker beacon counts logged-in users.** openline sends
     `mStats.connCount`, which counts a connection when it is accepted,
     before login (`HotlineServ.cp`).
 
@@ -477,6 +467,33 @@ one-shared-room model.
     `Cow<'static, str>` instead of `String`, so `delete_account`'s
     `"no such account"` literal no longer allocates.
     `Session::apply_user_list_record` follows.
+
+68. `HTRK` tracker support is wired end to end. `hls --tracker
+    [password@]host[:port]` beacons over UDP every 300 seconds (openline's
+    `mTrackerTimer`), and `hlc --tracker host[:port]` lists a
+    tracker's servers and exits. Two wire bugs came out of it:
+    `ServerBeacon` encoded a `login` pstring that no tracker reads
+    (openline's `ProcessRegister` and mhxd's `tracker_register_timer`
+    both expect name, description, password only), and its fourth
+    `u16` is openline's `flags`, not padding. openline's server always
+    sends 0 there, and nothing in openline or mhxd reads it.
+    `decode_server_list` is new: nothing could read past the 6-byte
+    reply header before, and a reply is one or more chunks, so stopping
+    at the first would drop servers. Each chunk is framed by its own
+    `data_size`, since mhxd's split path can emit a chunk whose size
+    and entry count disagree; a `data_size` under 4 is rejected,
+    because `hlc --tracker` reads these bytes from an unauthenticated
+    peer and a smaller value would make the entry slice run backwards.
+    A tracker can also claim more servers than it sends, so `hlc`
+    returns the ones that arrived rather than discarding them at the
+    deadline. `hls` checks its beacon at startup: an empty `--name`,
+    which openline's `RegisterServer` drops, and an over-long field
+    both fail the process instead of registering nothing.
+    `pass_id` keeps a server's listed name when its address changes.
+    Like openline, `hls` saves a random nonzero ID on first run
+    (`--tracker-id-file`), and `--tracker-id` overrides it.
+    `--tracker` takes any number of trackers. openline registers with
+    at most 5, the number of tracker fields in its settings window.
 
 ## Needs manual verification against the real client
 

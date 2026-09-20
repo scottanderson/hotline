@@ -27,4 +27,9 @@ pub struct Args {
     /// Icon ID.
     #[arg(long, default_value_t = 0)]
     pub icon: u16,
+
+    /// List the servers a tracker knows about, then exit without
+    /// connecting. Takes `host[:port]`; the port defaults to 5498.
+    #[arg(long, value_name = "HOST[:PORT]")]
+    pub tracker: Option<String>,
 }

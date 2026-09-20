@@ -3,6 +3,7 @@
 mod args;
 mod line;
 mod session;
+mod tracker;
 mod ui;
 
 use clap::Parser;
@@ -22,6 +23,12 @@ use session::{ClientSession, EventOutcome, Mode};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if let Some(address) = &args.tracker {
+        let list = tracker::query(address, hotline_proto::text_encoding::DEFAULT).await?;
+        print!("{}", tracker::format_list(&list));
+        return Ok(());
+    }
 
     let addr = format!("{}:{}", args.host, args.port);
     let (client, mut events) = HotlineClient::connect(&addr).await?;

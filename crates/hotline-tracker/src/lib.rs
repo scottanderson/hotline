@@ -5,15 +5,20 @@
 
 mod error;
 mod server_beacon;
+mod server_list;
 mod tracked_server;
 
 use hotline_proto::wire::{PacketReader, PacketWriter};
 
 pub use error::{Result, TrackerError};
 pub use server_beacon::ServerBeacon;
+pub use server_list::{decode_server_list, ServerList, CHUNK_HEADER_LEN};
 pub use tracked_server::TrackedServer;
 
 const MAGIC: &[u8; 4] = b"HTRK";
+
+/// Port a tracker answers client queries on.
+pub const TCP_PORT: u16 = 5498;
 
 /// Port a tracker listens for server beacons on.
 pub const UDP_PORT: u16 = 5499;

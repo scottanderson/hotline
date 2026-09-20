@@ -1,3 +1,4 @@
+use hotline_proto::text_encoding::{self, Encoding};
 use hotline_proto::wire::PacketReader;
 
 use crate::{Result, TrackerError};
@@ -19,7 +20,7 @@ pub struct TrackedServer {
 
 /// Read a Pascal-style (1-byte length prefix) string starting at `offset`,
 /// returning it along with the offset just past it.
-fn read_pstring(buf: &[u8], offset: usize) -> Result<(String, usize)> {
+fn read_pstring(buf: &[u8], offset: usize, encoding: &'static Encoding) -> Result<(String, usize)> {
     let len = *buf.get(offset).ok_or(TrackerError::UnexpectedEof {
         needed: offset + 1,
         available: buf.len(),
@@ -32,13 +33,13 @@ fn read_pstring(buf: &[u8], offset: usize) -> Result<(String, usize)> {
             available: buf.len(),
         });
     }
-    Ok((String::from_utf8_lossy(&buf[start..end]).into_owned(), end))
+    Ok((text_encoding::decode(encoding, &buf[start..end]), end))
 }
 
 impl TrackedServer {
     /// Decode one entry from a tracker server-list reply, returning the
     /// entry and bytes consumed.
-    pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
+    pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<(Self, usize)> {
         // ip(4) port(2) users(2) reserved(2) name_len(1) name desc_len(1) desc
         const PREFIX_LEN: usize = 10;
         let prefix: [u8; PREFIX_LEN] = buf
@@ -55,8 +56,8 @@ impl TrackedServer {
         let user_count = r.u16();
         let _reserved = r.u16();
         r.finish();
-        let (name, offset) = read_pstring(buf, PREFIX_LEN)?;
-        let (description, offset) = read_pstring(buf, offset)?;
+        let (name, offset) = read_pstring(buf, PREFIX_LEN, encoding)?;
+        let (description, offset) = read_pstring(buf, offset, encoding)?;
 
         Ok((
             Self {
@@ -74,7 +75,6 @@ impl TrackedServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hotline_proto::text_encoding;
     use hotline_proto::wire::VecWriter;
 
     #[test]
@@ -92,7 +92,7 @@ mod tests {
             .unwrap()
             .finish();
 
-        let (server, consumed) = TrackedServer::decode(&buf).unwrap();
+        let (server, consumed) = TrackedServer::decode(&buf, encoding).unwrap();
         assert_eq!(consumed, buf.len());
         assert_eq!(server.ip, [127, 0, 0, 1]);
         assert_eq!(server.port, 5500);

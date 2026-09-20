@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 hotline-client = { workspace = true }
 hotline-proto = { workspace = true }
+hotline-tracker = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 clap = { workspace = true }
