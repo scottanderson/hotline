@@ -158,6 +158,10 @@ one-shared-room model.
     reassembly memory is therefore unbounded. Needs a connection limit
     or a shared budget, plus a decision on which.
 
+11. **The tracker beacon counts logged-in users.** openline sends
+    `mStats.connCount`, which counts a connection when it is accepted,
+    before login (`HotlineServ.cp`).
+
 ## Resolved
 
 1. `UserSelfinfo`'s `Access` field now sends the session's real privileges

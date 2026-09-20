@@ -22,6 +22,12 @@ impl Server {
         Self { config, state }
     }
 
+    /// This server's cross-session state, for a caller that runs its own
+    /// task alongside [`Server::run`].
+    pub const fn state(&self) -> &SharedState {
+        &self.state
+    }
+
     /// Bind and accept connections forever, spawning one task per client.
     /// Never returns unless the listener errors.
     pub async fn run(self) -> Result<()> {

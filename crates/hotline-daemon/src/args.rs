@@ -52,6 +52,24 @@ pub struct Args {
     #[arg(long)]
     pub console_prefix: Option<char>,
 
+    /// Tracker to register with, as `[password@]host[:port]`, repeatable.
+    /// The port defaults to 5499. Unset disables registration.
+    #[arg(long = "tracker", value_name = "[PASSWORD@]HOST[:PORT]")]
+    pub trackers: Vec<String>,
+
+    /// Tracker ID that keeps this server's listed name when its address
+    /// changes. Unset uses the ID saved in `--tracker-id-file`.
+    #[arg(long)]
+    pub tracker_id: Option<u32>,
+
+    /// File holding the saved tracker ID, created with a random one if missing.
+    #[arg(long, default_value = "tracker-id")]
+    pub tracker_id_file: String,
+
+    /// Description sent to trackers alongside `--name`.
+    #[arg(long, default_value = "")]
+    pub tracker_description: String,
+
     /// Banner shown to clients on login (unset disables the banner). An
     /// `http://`/`https://` value is shown as a URL; anything else is a
     /// local or relative path to an image file served over `HTXF`.

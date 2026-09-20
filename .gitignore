@@ -5,6 +5,7 @@ comments.json
 bans.json
 news.json
 news.txt
+tracker-id
 **/*.rs.bk
 Cargo.lock
 .DS_Store

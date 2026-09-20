@@ -6,7 +6,9 @@ mod banner;
 mod bans;
 mod file;
 mod news;
+mod tracker;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -22,6 +24,7 @@ use banner::FileBannerProvider;
 use bans::FileBanProvider;
 use file::DiskFileProvider;
 use news::{FileFlatNewsProvider, FileThreadedNewsProvider};
+use tracker::{run_beacon, TrackerTarget};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -31,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let config = ServerConfig {
         bind_addr: format!("{}:{}", args.bind, args.port),
         agreement: args.agreement,
-        server_name: args.name,
+        server_name: args.name.clone(),
         console_prefix: args.console_prefix,
     };
 
@@ -93,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         None => Arc::new(NoBanner),
     };
     let commands = Arc::new(DefaultChatCommands);
-    Server::new(
+    let server = Server::new(
         config,
         Providers {
             accounts,
@@ -105,8 +108,38 @@ async fn main() -> anyhow::Result<()> {
             banner,
             commands,
         },
-    )
-    .run()
-    .await?;
+    );
+
+    if !args.trackers.is_empty() {
+        let targets: Vec<TrackerTarget> = args
+            .trackers
+            .iter()
+            .map(String::as_str)
+            .map(TrackerTarget::parse)
+            .collect();
+        tracker::check(&targets, &args.name, &args.tracker_description)?;
+        let pass_id = match args.tracker_id {
+            Some(pass_id) => pass_id,
+            None => tracker::load_pass_id(Path::new(&args.tracker_id_file)).await?,
+        };
+        tracing::info!(count = targets.len(), "registering with trackers");
+        let state = server.state().clone();
+        tokio::spawn(async move {
+            if let Err(error) = run_beacon(
+                state,
+                targets,
+                args.port,
+                args.name,
+                args.tracker_description,
+                pass_id,
+            )
+            .await
+            {
+                tracing::error!(%error, "tracker registration stopped");
+            }
+        });
+    }
+
+    server.run().await?;
     Ok(())
 }

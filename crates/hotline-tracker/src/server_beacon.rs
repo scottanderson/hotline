@@ -3,8 +3,11 @@ use hotline_proto::wire::VecWriter;
 
 use crate::Result;
 
-/// A server's periodic UDP beacon to a tracker (new-protocol form, with
-/// login/password).
+/// Message type for a beacon that registers or refreshes a server.
+/// openline's `ProcessRegister` ignores type 2 (remove).
+const TYPE_ADD: u16 = 1;
+
+/// A server's periodic UDP beacon to a tracker.
 #[derive(Debug, Clone)]
 pub struct ServerBeacon {
     /// Server's Hotline (TCP) listening port.
@@ -17,26 +20,24 @@ pub struct ServerBeacon {
     pub name: String,
     /// Server description.
     pub description: String,
-    /// Tracker account login.
-    pub login: String,
-    /// Tracker account password.
+    /// Tracker password, empty if the tracker takes unauthenticated
+    /// registrations.
     pub password: String,
 }
 
 impl ServerBeacon {
     /// Encode the UDP payload sent to the tracker. Fails if any of
-    /// `name`/`description`/`login`/`password` is longer than 255 bytes.
+    /// `name`/`description`/`password` is longer than 255 bytes.
     pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         Ok(VecWriter::new()
-            .u16(1)
+            .u16(TYPE_ADD)
             .u16(self.port)
             .u16(self.user_count)
-            .u16(0)
+            .u16(0) // flags
             .u32(self.pass_id)
             .with_encoding(encoding)
             .pstring(&self.name)?
             .pstring(&self.description)?
-            .pstring(&self.login)?
             .pstring(&self.password)?
             .finish())
     }
@@ -48,21 +49,33 @@ mod tests {
     use crate::TrackerError;
     use hotline_proto::text_encoding;
 
+    /// openline's `ProcessRegister` reads
+    /// `type | port | userCount | flags | passID` then three pstrings,
+    /// in that order and with nothing between them.
     #[test]
-    fn server_beacon_round_trips_through_encode() {
-        let encoding = text_encoding::DEFAULT;
+    fn server_beacon_encodes_fields_in_order() {
         let beacon = ServerBeacon {
             port: 5500,
             user_count: 2,
             pass_id: 0xdead_beef,
-            name: "Test Server".to_string(),
-            description: "A description".to_string(),
-            login: "".to_string(),
-            password: "".to_string(),
+            name: "Test".to_string(),
+            description: "Desc".to_string(),
+            password: "pw".to_string(),
         };
-        let bytes = beacon.encode(encoding).unwrap();
-        assert_eq!(u16::from_be_bytes([bytes[0], bytes[1]]), 1); // beacon version
-        assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), 5500);
+
+        let bytes = beacon.encode(text_encoding::DEFAULT).unwrap();
+
+        let mut expected = vec![
+            0x00, 0x01, // type: add
+            0x15, 0x7c, // port 5500
+            0x00, 0x02, // user count
+            0x00, 0x00, // flags
+            0xde, 0xad, 0xbe, 0xef, // pass ID
+        ];
+        expected.extend([4, b'T', b'e', b's', b't']);
+        expected.extend([4, b'D', b'e', b's', b'c']);
+        expected.extend([2, b'p', b'w']);
+        assert_eq!(bytes, expected);
     }
 
     #[test]
@@ -74,7 +87,6 @@ mod tests {
             pass_id: 0,
             name: "x".repeat(256),
             description: String::new(),
-            login: String::new(),
             password: String::new(),
         };
         assert!(matches!(

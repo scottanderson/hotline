@@ -18,7 +18,7 @@ pub enum TrackerError {
     /// The `HTRK` magic number did not match.
     #[error("bad magic, expected HTRK")]
     BadMagic,
-    /// A name/description/login/password was too long to encode.
+    /// A name/description/password was too long to encode.
     #[error(transparent)]
     StringTooLong(#[from] PStringTooLong),
 }

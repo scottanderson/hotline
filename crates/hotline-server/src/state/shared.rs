@@ -133,6 +133,11 @@ impl SharedState {
         users
     }
 
+    /// How many users are currently connected.
+    pub async fn user_count(&self) -> usize {
+        self.users.read().await.len()
+    }
+
     /// Look up one connected user by ID.
     pub async fn user(&self, user_id: u16) -> Option<UserEntry> {
         self.users.read().await.get(&user_id).cloned()

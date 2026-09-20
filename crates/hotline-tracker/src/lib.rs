@@ -15,6 +15,21 @@ pub use tracked_server::TrackedServer;
 
 const MAGIC: &[u8; 4] = b"HTRK";
 
+/// Port a tracker listens for server beacons on.
+pub const UDP_PORT: u16 = 5499;
+
+/// `magic(4) | version(2)`, the fixed prefix on a tracker reply.
+pub const REPLY_HEADER_LEN: usize = 6;
+
+/// Add `default_port` to a bare `host`.
+pub fn with_default_port(address: &str, default_port: u16) -> String {
+    if address.contains(':') {
+        address.to_string()
+    } else {
+        format!("{address}:{default_port}")
+    }
+}
+
 /// The client's initial request to a tracker (version 1, "old protocol":
 /// just the magic + version, no login).
 pub fn encode_client_request_v1() -> [u8; 6] {
@@ -24,13 +39,12 @@ pub fn encode_client_request_v1() -> [u8; 6] {
 /// Decode the fixed 6-byte header a tracker reply starts with, checking
 /// the magic and returning the version.
 pub fn decode_reply_header(buf: &[u8]) -> Result<u16> {
-    const HEADER_LEN: usize = 6;
-    let prefix: [u8; HEADER_LEN] = buf
-        .get(..HEADER_LEN)
+    let prefix: [u8; REPLY_HEADER_LEN] = buf
+        .get(..REPLY_HEADER_LEN)
         .map(TryInto::try_into)
         .and_then(std::result::Result::ok)
         .ok_or(TrackerError::UnexpectedEof {
-            needed: HEADER_LEN,
+            needed: REPLY_HEADER_LEN,
             available: buf.len(),
         })?;
 
@@ -58,6 +72,15 @@ mod tests {
     fn reply_header_round_trips() {
         let bytes = encode_client_request_v1();
         assert_eq!(decode_reply_header(&bytes).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_bare_host_takes_the_default_port() {
+        assert_eq!(
+            with_default_port("tracker.example", 5498),
+            "tracker.example:5498"
+        );
+        assert_eq!(with_default_port("10.0.0.1:1", 5498), "10.0.0.1:1");
     }
 
     #[test]
