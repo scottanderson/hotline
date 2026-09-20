@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -61,12 +62,12 @@ impl AccountProvider for InMemoryAccountProvider {
         self.accounts.read().unwrap().get(login).cloned()
     }
 
-    async fn put(&self, login: String, account: Account) -> Result<(), String> {
+    async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
         self.accounts.write().unwrap().insert(login, account);
         Ok(())
     }
 
-    async fn delete(&self, login: &str) -> Result<bool, String> {
+    async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>> {
         Ok(self.accounts.write().unwrap().remove(login).is_some())
     }
 

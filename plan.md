@@ -468,6 +468,12 @@ one-shared-room model.
 66. `state/recipient.rs`'s `is_disconnect` is now a `const fn`, so
     `cargo clippy --workspace --all-targets` is warning-free again.
 
+67. `AccountProvider::put`/`delete`, `BanProvider::ban`/`unban`, and
+    `SharedState::put_account`/`delete_account`/`ban` now return
+    `Cow<'static, str>` instead of `String`, so `delete_account`'s
+    `"no such account"` literal no longer allocates.
+    `Session::apply_user_list_record` follows.
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against

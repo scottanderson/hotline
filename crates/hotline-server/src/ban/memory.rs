@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::RwLock;
@@ -24,7 +25,7 @@ impl BanProvider for InMemoryBanProvider {
         }
     }
 
-    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), String> {
+    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), Cow<'static, str>> {
         self.bans
             .write()
             .unwrap()
@@ -32,7 +33,7 @@ impl BanProvider for InMemoryBanProvider {
         Ok(())
     }
 
-    async fn unban(&self, ip: IpAddr) -> Result<(), String> {
+    async fn unban(&self, ip: IpAddr) -> Result<(), Cow<'static, str>> {
         self.bans.write().unwrap().remove(&ip);
         Ok(())
     }

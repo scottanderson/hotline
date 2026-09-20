@@ -1093,7 +1093,11 @@ impl SharedState {
     }
 
     /// Create or overwrite an account.
-    pub async fn put_account(&self, login: String, account: Account) -> Result<(), String> {
+    pub async fn put_account(
+        &self,
+        login: String,
+        account: Account,
+    ) -> Result<(), Cow<'static, str>> {
         self.accounts.put(login, account).await
     }
 
@@ -1107,7 +1111,7 @@ impl SharedState {
         &self,
         ip: IpAddr,
         until: Option<std::time::SystemTime>,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cow<'static, str>> {
         self.bans.ban(ip, until).await
     }
 
@@ -1123,12 +1127,11 @@ impl SharedState {
     }
 
     /// Delete an account. `Err("no such account")` if it didn't exist.
-    pub async fn delete_account(&self, login: &str) -> Result<(), String> {
-        match self.accounts.delete(login).await {
-            Ok(true) => Ok(()),
-            Ok(false) => Err("no such account".to_string()),
-            Err(reason) => Err(reason),
+    pub async fn delete_account(&self, login: &str) -> Result<(), Cow<'static, str>> {
+        if !self.accounts.delete(login).await? {
+            Err("no such account")?;
         }
+        Ok(())
     }
 
     /// Every account, login and details together, sorted by login for a

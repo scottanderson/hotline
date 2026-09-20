@@ -3,6 +3,7 @@
 //! backend `hls` plugs in, persisting every ban to a single sidecar file
 //! so they survive a restart.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -56,7 +57,7 @@ impl BanProvider for FileBanProvider {
         }
     }
 
-    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), String> {
+    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), Cow<'static, str>> {
         let mut cache = self.cache.write().await;
         let mut updated = cache.clone();
         updated.insert(ip, BanRecord { ip, until });
@@ -67,7 +68,7 @@ impl BanProvider for FileBanProvider {
         Ok(())
     }
 
-    async fn unban(&self, ip: IpAddr) -> Result<(), String> {
+    async fn unban(&self, ip: IpAddr) -> Result<(), Cow<'static, str>> {
         let mut cache = self.cache.write().await;
         let mut updated = cache.clone();
         updated.remove(&ip);

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::IpAddr;
 use std::time::SystemTime;
 
@@ -13,7 +14,7 @@ pub trait BanProvider: Send + Sync {
     /// already expired.
     async fn is_banned(&self, ip: IpAddr) -> Option<BanRecord>;
     /// Ban `ip` until `until`, or permanently if `None`.
-    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), String>;
+    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), Cow<'static, str>>;
     /// Lift a ban.
-    async fn unban(&self, ip: IpAddr) -> Result<(), String>;
+    async fn unban(&self, ip: IpAddr) -> Result<(), Cow<'static, str>>;
 }

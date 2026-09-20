@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -932,13 +933,13 @@ impl Session {
                     .ban(ip, Some(SystemTime::now() + TEMP_BAN_DURATION))
                     .await
                 {
-                    tracing::warn!(%ip, error, "failed to persist ban");
+                    tracing::warn!(%ip, %error, "failed to persist ban");
                 }
                 Some("You are temporarily banned on this server.")
             }
             (KickBan::Permanent, Some(ip)) => {
                 if let Err(error) = state.ban(ip, None).await {
-                    tracing::warn!(%ip, error, "failed to persist ban");
+                    tracing::warn!(%ip, %error, "failed to persist ban");
                 }
                 Some("You are permanently banned on this server.")
             }
@@ -2163,7 +2164,7 @@ impl Session {
         &self,
         record: &FieldList,
         state: &SharedState,
-    ) -> std::result::Result<bool, String> {
+    ) -> std::result::Result<bool, Cow<'static, str>> {
         let encoding = self.encoding();
         let as_deobfuscated_string = |f: &Field| f.as_deobfuscated_string(encoding);
         let old_login = record
@@ -2258,7 +2259,7 @@ impl Session {
 
         self.access.require(Access::CREATE_USER)?;
         if !self.access.contains(access - Access::NO_AGREEMENT) {
-            return Err("Cannot create account with more access than yourself.".to_string());
+            Err("Cannot create account with more access than yourself.")?;
         }
         let account = Account {
             password,

@@ -2,6 +2,7 @@
 //! directory. `hotline-server` deliberately doesn't own persistence (see
 //! its module docs); this is the concrete backend `hls` plugs in.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -77,7 +78,7 @@ impl AccountProvider for FileAccountProvider {
         self.cache.read().await.get(login).cloned()
     }
 
-    async fn put(&self, login: String, account: Account) -> Result<(), String> {
+    async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
         self.write_account(&login, &account)
             .await
             .map_err(|e| e.to_string())?;
@@ -85,18 +86,16 @@ impl AccountProvider for FileAccountProvider {
         Ok(())
     }
 
-    async fn delete(&self, login: &str) -> Result<bool, String> {
+    async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>> {
         let Some(path) = self.path_for(login) else {
             return Ok(false);
         };
         match tokio::fs::remove_file(path).await {
-            Ok(()) => {
-                self.cache.write().await.remove(login);
-                Ok(true)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(e) => Err(e.to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            other => other.map_err(|e| e.to_string())?,
         }
+        self.cache.write().await.remove(login);
+        Ok(true)
     }
 
     async fn list(&self) -> Vec<(String, Account)> {
