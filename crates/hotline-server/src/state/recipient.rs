@@ -41,7 +41,7 @@ impl RecipientMessage {
     }
 
     #[cfg(test)]
-    pub(crate) fn is_disconnect(&self) -> bool {
+    pub(crate) const fn is_disconnect(&self) -> bool {
         matches!(self, Self::Disconnect)
     }
 }

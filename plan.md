@@ -465,6 +465,9 @@ one-shared-room model.
     reach, and `/access` against that id reported success. A logged-in
     client reached this with one zero-length transaction.
 
+66. `state/recipient.rs`'s `is_disconnect` is now a `const fn`, so
+    `cargo clippy --workspace --all-targets` is warning-free again.
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
