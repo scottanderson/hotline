@@ -95,18 +95,7 @@ one-shared-room model.
    of the backlog lands, since later items are likely to add more enums
    this pass didn't have to consider.
 
-5. **`session/connection.rs` (~6800 lines) holds one `Session` struct
-   with a single giant `impl` spanning login, chat, private messages,
-   files, news, and account-admin handlers.** AGENTS.md documents that
-   `session.rs`'s handlers belong together, but a type's `impl` blocks
-   can span multiple files in the same module: splitting into
-   `session/chat.rs`, `session/files.rs`, `session/news.rs`,
-   `session/accounts.rs`, `session/admin.rs` (each a separate
-   `impl Session { ... }`) would leave `connection.rs` with just the
-   struct definition, `run`, handshake, and the two dispatch tables.
-   Large, mechanical-but-risky diff; own reviewed PR.
-
-6. **Threaded news storage does not match openline's on-disk
+5. **Threaded news storage does not match openline's on-disk
    binary database format.** Openline stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -127,14 +116,14 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-7. **Open design question from news article/category JSON storage.**
+6. **Open design question from news article/category JSON storage.**
    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
    `BTreeMap`, so once an article legitimately holds more than one
    flavor, "primary" means alphabetically-first MIME type, not
    first-posted or preferred — harmless today (always exactly one
    entry) but worth deciding before multi-flavor posting is wired up.
 
-8. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+7. **`on_newsfile_get`'s clamp can split a multi-byte character.**
    The reply is truncated to 65535 encoded bytes. Under the Mac OS
    Roman default every character is one byte, so this is invisible;
    under `utf-8` or `shift-jis` the last character can arrive as a
@@ -142,15 +131,15 @@ one-shared-room model.
    openline. Worth deciding only if a multi-byte encoding is
    ever made selectable per connection.
 
-9. **Reassembly's memory bound is per connection, not global.**
+8. **Reassembly's memory bound is per connection, not global.**
    `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
    nothing caps how many connections a server accepts. Total
    reassembly memory is therefore unbounded. Needs a connection limit
    or a shared budget, plus a decision on which.
 
-10. **The tracker beacon counts logged-in users.** openline sends
-    `mStats.connCount`, which counts a connection when it is accepted,
-    before login (`HotlineServ.cp`).
+9. **The tracker beacon counts logged-in users.** openline sends
+   `mStats.connCount`, which counts a connection when it is accepted,
+   before login (`HotlineServ.cp`).
 
 ## Resolved
 
@@ -494,6 +483,13 @@ one-shared-room model.
     (`--tracker-id-file`), and `--tracker-id` overrides it.
     `--tracker` takes any number of trackers. openline registers with
     at most 5, the number of tracker fields in its settings window.
+
+69. `session/connection.rs` split into per-area sibling files, each a
+    separate `impl Session` block: `chat.rs`, `users.rs`, `files.rs`,
+    `news.rs`, `accounts.rs`, plus `test_support.rs` for the shared
+    test fixtures. `connection.rs` keeps the struct, `run`, the
+    handshake, and the dispatch tables. No code changed; every
+    function and test moved verbatim.
 
 ## Needs manual verification against the real client
 
