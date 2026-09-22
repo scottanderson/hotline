@@ -53,13 +53,21 @@ async fn handle_htxf_connection(
     };
     if transfer.client_ip != peer.ip() {
         tracing::warn!(%peer, expected = %transfer.client_ip, "htxf: connection from wrong address for reference");
+        state.release_download_slot(reference).await;
         return Ok(());
     }
 
     match &transfer.kind {
         TransferKind::Banner => send_banner(&mut stream, state).await,
         TransferKind::File(file) => match transfer.direction {
-            TransferDirection::Get => send_file(&mut stream, file, &transfer, state).await,
+            TransferDirection::Get => {
+                if !state.wait_for_download_slot(reference).await {
+                    return Ok(());
+                }
+                let result = send_file(&mut stream, file, &transfer, state).await;
+                state.release_download_slot(reference).await;
+                result
+            }
             TransferDirection::Put => receive_file(&mut stream, file, &transfer, state).await,
         },
     }
@@ -306,5 +314,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(buf, b"hello there");
+    }
+
+    /// A wrong-address connection still frees the download's slot.
+    #[tokio::test]
+    async fn htxf_connection_from_the_wrong_address_releases_the_download_slot() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        state.set_download_limits(1, 10);
+
+        let held = state
+            .register_transfer(PendingTransfer {
+                kind: TransferKind::File(FileTransfer {
+                    target: TransferTarget {
+                        login: "alice".to_string(),
+                        dir: HlPath::default(),
+                        name: "a.txt".to_string(),
+                    },
+                    raw: true,
+                }),
+                direction: TransferDirection::Get,
+                size: 5,
+                resume_offset: 0,
+                client_ip: "10.0.0.1".parse().unwrap(),
+            })
+            .await;
+        assert_eq!(state.admit_download(held, 1).await, 0);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (server_stream, peer) = listener.accept().await.unwrap();
+
+        let header = hotline_proto::htxf::HtxfHeader {
+            reference: held.0,
+            len: 0,
+            transfer_type: hotline_proto::htxf::HtxfType::File,
+        };
+        client.write_all(&header.encode()).await.unwrap();
+
+        handle_htxf_connection(server_stream, peer, &state)
+            .await
+            .unwrap();
+
+        // `held`'s slot is free, so a second download starts active.
+        let second = state
+            .register_transfer(PendingTransfer {
+                kind: TransferKind::File(FileTransfer {
+                    target: TransferTarget {
+                        login: "bob".to_string(),
+                        dir: HlPath::default(),
+                        name: "a.txt".to_string(),
+                    },
+                    raw: true,
+                }),
+                direction: TransferDirection::Get,
+                size: 5,
+                resume_offset: 0,
+                client_ip: "127.0.0.1".parse().unwrap(),
+            })
+            .await;
+        assert_eq!(state.admit_download(second, 2).await, 0);
     }
 }

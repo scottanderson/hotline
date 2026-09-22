@@ -4,6 +4,7 @@
 
 mod access;
 mod console;
+mod download_queue;
 mod entry;
 mod file_transfer;
 mod recipient;

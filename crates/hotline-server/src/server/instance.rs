@@ -19,6 +19,7 @@ impl Server {
     /// Create a server with `config`, backed by `providers`.
     pub fn new(config: ServerConfig, providers: Providers) -> Self {
         let state = SharedState::new(providers);
+        state.set_download_limits(config.max_downloads, config.max_downloads_per_client);
         Self { config, state }
     }
 

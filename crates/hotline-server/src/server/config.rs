@@ -1,3 +1,9 @@
+/// `max_downloads`'s default, openline's `mOptions.nMaxDownloads`.
+pub const DEFAULT_MAX_DOWNLOADS: usize = 100;
+
+/// `max_downloads_per_client`'s default, openline's `mOptions.nMaxDownloadsClient`.
+pub const DEFAULT_MAX_DOWNLOADS_PER_CLIENT: usize = 10;
+
 /// Server configuration.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -10,6 +16,10 @@ pub struct ServerConfig {
     pub server_name: String,
     /// Chat prefix for console commands; `None` relays all chat.
     pub console_prefix: Option<char>,
+    /// Concurrent downloads before further ones queue. Uploads are not capped.
+    pub max_downloads: usize,
+    /// Concurrent downloads for one user before further ones queue.
+    pub max_downloads_per_client: usize,
 }
 
 impl Default for ServerConfig {
@@ -19,6 +29,8 @@ impl Default for ServerConfig {
             agreement: "Hotline".to_string(),
             server_name: "Hotline".to_string(),
             console_prefix: None,
+            max_downloads: DEFAULT_MAX_DOWNLOADS,
+            max_downloads_per_client: DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
         }
     }
 }

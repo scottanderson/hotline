@@ -60,14 +60,12 @@ one-shared-room model.
    `Access::DOWNLOAD_FOLDER`/`UPLOAD_FOLDER`, which have known openline
    denial strings in `Access::actions` but no `require()` call site yet.
 
-2. **HTXF transfer queue not implemented**
-   (`HTLS_DATA_QUEUE_POSITION`/`HTLS_HDR_QUEUE_UPDATE` equivalents:
-   `WaitingCount` (116), the `DownloadInfo` push). Needs a concurrent-
-   download cap in `ServerConfig` and a waiting list in `SharedState`. A
-   live per-transfer-progress tracker from this piece is also what
-   `on_user_get_info`'s file-transfer sections are waiting on; until it
-   exists those five sections always read `"None."`, with no in-progress
-   transfers ever reported.
+2. **No live per-transfer-progress tracker.** `on_user_get_info`'s
+   file-transfer sections always read `"None."`, with no in-progress
+   transfer ever reported. The concurrent-download queue itself
+   (Resolved) tracks which references hold an active slot, but not
+   their byte-level progress; this needs its own tracker fed from
+   `server/htxf.rs`'s actual read/write loop.
 
 3. **A still-uploading (`.hpf`) file can't be touched by its plain name
    until it finishes.** `delete`/`rename`/`r#move`/`symlink` all resolve
@@ -140,6 +138,11 @@ one-shared-room model.
 9. **The tracker beacon counts logged-in users.** openline sends
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
+
+10. **The download queue does not watch the `HTXF` socket.** A queued
+    download that closes its connection keeps its place until it is
+    promoted. A disconnect frees an active slot, but the transfer keeps
+    running, so the active count can pass `max_downloads` for a while.
 
 ## Resolved
 
@@ -490,6 +493,24 @@ one-shared-room model.
     test fixtures. `connection.rs` keeps the struct, `run`, the
     handshake, and the dispatch tables. No code changed; every
     function and test moved verbatim.
+
+70. Concurrent-download queue implemented (`state/download_queue.rs`):
+    `ServerConfig::max_downloads`/`max_downloads_per_client` (openline's
+    own defaults, 100/10, `HotlineServ.cp`'s `mOptions.nMaxDownloads`/
+    `nMaxDownloadsClient`), a waiting list in `SharedState` past either
+    cap, `WaitingCount` (116) on `on_file_get`'s own reply when queued,
+    and `myTran_DownloadInfo` (211) pushes as a queued download's
+    position changes or it is promoted to an active slot. This follows
+    openline's soft-queue shape (no hard reject). mhxd rejects uploads
+    past a limit and openline never caps them; this server leaves uploads
+    uncapped, like openline. Promotion is event-driven (on a slot's
+    release or a user's disconnect), not polled on a timer like
+    openline's `ProcessDownloadsWaiting`/mhxd's `queue_refresher`. An
+    admitted download gets a 500-second grace period to open its `HTXF`
+    connection, like openline's idle check and its `startSecs` reset at
+    promotion. A download whose connection never arrives, arrives from
+    the wrong address, or whose user disconnects leaves the queue,
+    active or queued, and a queued waiter wakes and ends.
 
 ## Needs manual verification against the real client
 

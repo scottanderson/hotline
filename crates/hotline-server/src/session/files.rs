@@ -153,12 +153,17 @@ impl Session {
                 client_ip: self.remote_addr.ip(),
             })
             .await;
+        let waiting_count = state.admit_download(reference, self.user_id).await;
 
-        vec![tx.reply(vec![
+        let mut fields = vec![
             Field::u32(FieldId::TransferId, reference.0),
             Field::u32(FieldId::TransferSize, total_size as u32),
             Field::u32(FieldId::FileSize, data_size as u32),
-        ])]
+        ];
+        if waiting_count > 0 {
+            fields.push(Field::u32(FieldId::QueuePosition, waiting_count));
+        }
+        vec![tx.reply(fields)]
     }
 
     /// 212: request the server banner image over `HTXF`, the same
@@ -559,6 +564,103 @@ mod tests {
         assert_eq!(transfer.direction, TransferDirection::Get);
         assert_eq!(transfer.size, 5);
         assert_eq!(transfer.resume_offset, 0);
+    }
+
+    #[tokio::test]
+    async fn file_get_reply_carries_no_waiting_count_under_the_download_cap() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = Transaction::request(
+            Opcode::FileGet,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        assert!(reply.field(FieldId::QueuePosition).is_none());
+    }
+
+    #[tokio::test]
+    async fn file_get_past_the_download_cap_queues_and_reports_waiting_count() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        files.seed(&HlPath::default(), "b.txt", *b"world");
+        let state = state_with_files(files);
+        state.set_download_limits(1, 10);
+        let mut first_session = test_session("Alice", Access::all());
+        first_session.user_id = 1;
+        let mut second_session = test_session("Bob", Access::all());
+        second_session.user_id = 2;
+
+        let first_get = Transaction::request(
+            Opcode::FileGet,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [first_reply] = first_session
+            .on_file_get(&first_get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(first_reply.field(FieldId::QueuePosition).is_none());
+
+        let second_get = Transaction::request(
+            Opcode::FileGet,
+            2,
+            vec![Field::string(FieldId::FileName, "b.txt")],
+        );
+        let [second_reply] = second_session
+            .on_file_get(&second_get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let waiting_count = second_reply
+            .field(FieldId::QueuePosition)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert_eq!(waiting_count, 1);
+
+        let mut second_recipient = state.register_recipient(2).await;
+
+        let first_reference = first_reply
+            .field(FieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+        state
+            .release_download_slot(TransferRef(first_reference))
+            .await;
+
+        let second_reference = second_reply
+            .field(FieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+
+        let push = match second_recipient.recv().await.unwrap() {
+            crate::state::RecipientMessage::Push(tx) => tx,
+            other => panic!("expected a DownloadInfo push, got {other:?}"),
+        };
+        assert_eq!(
+            push.r#type(),
+            hotline_proto::opcode::TransactionType::Push(Opcode::DownloadInfo)
+        );
+        assert_eq!(
+            push.field(FieldId::TransferId).and_then(Field::as_u32),
+            Some(second_reference)
+        );
+        assert_eq!(
+            push.field(FieldId::QueuePosition).and_then(Field::as_u32),
+            Some(0)
+        );
+
+        let promoted = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            state.wait_for_download_slot(TransferRef(second_reference)),
+        )
+        .await
+        .expect("second download should have been promoted once the first slot freed");
+        assert!(promoted);
     }
 
     #[tokio::test]

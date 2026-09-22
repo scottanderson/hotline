@@ -36,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
         agreement: args.agreement,
         server_name: args.name.clone(),
         console_prefix: args.console_prefix,
+        ..ServerConfig::default()
     };
 
     let accounts = Arc::new(

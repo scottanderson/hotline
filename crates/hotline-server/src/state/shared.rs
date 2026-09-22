@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, RwLock};
 
@@ -11,7 +12,7 @@ use hotline_proto::opcode::Opcode;
 use hotline_proto::types::{
     FileNameWithInfo, HlPath, NewsArticleListData, NewsArticleSummary, NewsCategoryListEntry,
 };
-use hotline_proto::Transaction;
+use hotline_proto::{Field, FieldId, Transaction};
 
 use crate::account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 use crate::ban::{BanProvider, BanRecord, InMemoryBanProvider};
@@ -27,10 +28,15 @@ use crate::news::{
     ThreadedNewsProvider,
 };
 use crate::providers::Providers;
+use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
+use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::{
     dropbox_access, dropbox_blocked, is_dropbox_path, AccessUpdate, ChatRoom, ConsoleUpdate,
     PendingTransfer, RecipientMessage, TransferDirection, TransferKind, TransferRef, UserEntry,
 };
+
+/// How long an active download may wait for its `HTXF` connection, openline's 500 s.
+const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
 #[derive(Clone)]
@@ -62,6 +68,9 @@ pub struct SharedState {
     /// reference number handed to the client.
     transfers: Arc<RwLock<HashMap<TransferRef, PendingTransfer>>>,
     next_transfer_ref: Arc<AtomicU32>,
+    /// Concurrent-download admission; see
+    /// [`download_queue::DownloadQueue`](crate::state::download_queue::DownloadQueue).
+    download_queue: Arc<DownloadQueue>,
     /// Console command dispatch; see [`crate::ChatCommandDispatcher`].
     commands: Arc<dyn ChatCommandDispatcher>,
 }
@@ -100,8 +109,18 @@ impl SharedState {
             banner: providers.banner,
             transfers: Arc::new(RwLock::new(HashMap::new())),
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
+            download_queue: Arc::new(DownloadQueue::default()),
             commands: providers.commands,
         }
+    }
+
+    /// Set the download limits. A `0` falls back to its default.
+    pub fn set_download_limits(&self, max_downloads: usize, max_downloads_per_client: usize) {
+        let or_default = |value, default| if value == 0 { default } else { value };
+        self.download_queue.set_limits(Limits {
+            total: or_default(max_downloads, DEFAULT_MAX_DOWNLOADS),
+            per_client: or_default(max_downloads_per_client, DEFAULT_MAX_DOWNLOADS_PER_CLIENT),
+        });
     }
 }
 
@@ -122,6 +141,7 @@ impl SharedState {
     pub async fn remove_user(&self, user_id: u16) {
         self.users.write().await.remove(&user_id);
         self.leave_chat_room(0, user_id).await;
+        self.release_downloads_for_user(user_id).await;
     }
 
     /// Snapshot of all currently connected users, in connection order
@@ -672,6 +692,71 @@ impl SharedState {
     /// is still waiting. Consumes it: a reference is only good once.
     pub async fn take_transfer(&self, reference: TransferRef) -> Option<PendingTransfer> {
         self.transfers.write().await.remove(&reference)
+    }
+
+    /// Admit a registered download. Returns its `myField_WaitingCount` (116),
+    /// `0` if it is active now.
+    pub async fn admit_download(&self, reference: TransferRef, user_id: u16) -> u32 {
+        let waiting_count = self.download_queue.admit(reference, user_id);
+        if waiting_count == 0 {
+            self.spawn_download_idle_timeout(reference);
+        }
+        waiting_count
+    }
+
+    /// Free `reference`'s slot if no `HTXF` connection arrives within
+    /// [`DOWNLOAD_IDLE_TIMEOUT`]. Restarts on promotion.
+    fn spawn_download_idle_timeout(&self, reference: TransferRef) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(DOWNLOAD_IDLE_TIMEOUT).await;
+            if state.take_transfer(reference).await.is_some() {
+                state.release_download_slot(reference).await;
+            }
+        });
+    }
+
+    /// Wait until `reference` holds an active download slot. `false` if
+    /// it left the queue without one, such as on a disconnect.
+    pub async fn wait_for_download_slot(&self, reference: TransferRef) -> bool {
+        self.download_queue.wait_for_slot(reference).await
+    }
+
+    /// Drop `reference`'s download, active or queued, and push
+    /// `myTran_DownloadInfo` (211) to each download it promotes or moves.
+    pub async fn release_download_slot(&self, reference: TransferRef) {
+        let updates = self.download_queue.release(reference);
+        self.push_download_updates(updates).await;
+    }
+
+    /// Drop a disconnected user's active and waiting downloads, promoting
+    /// and notifying any others that now fit.
+    async fn release_downloads_for_user(&self, user_id: u16) {
+        let updates = self.download_queue.remove_user(user_id);
+        self.push_download_updates(updates).await;
+    }
+
+    /// Push one `myTran_DownloadInfo` (211) per update, starting a freshly
+    /// promoted entry's idle timeout.
+    async fn push_download_updates(&self, updates: Vec<QueueUpdate>) {
+        for QueueUpdate {
+            user_id,
+            reference,
+            waiting_count,
+        } in updates
+        {
+            if waiting_count == 0 {
+                self.spawn_download_idle_timeout(reference);
+            }
+            let tx = Transaction::push(
+                Opcode::DownloadInfo,
+                vec![
+                    Field::u32(FieldId::TransferId, reference.0),
+                    Field::u32(FieldId::QueuePosition, waiting_count),
+                ],
+            );
+            self.send_to(user_id, tx).await;
+        }
     }
 
     /// Finish `dir`/`name`'s upload, once every byte has arrived.
@@ -1409,6 +1494,46 @@ mod tests {
         assert!(state.take_transfer(ref_a).await.is_some());
         assert!(state.take_transfer(ref_a).await.is_none());
         assert!(state.take_transfer(ref_b).await.is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_admitted_download_whose_htxf_connection_never_arrives_frees_its_slot() {
+        let state = SharedState::default();
+        state.set_download_limits(1, 10);
+        let make = || PendingTransfer {
+            kind: TransferKind::File(crate::state::FileTransfer {
+                target: crate::state::TransferTarget {
+                    login: "alice".to_string(),
+                    dir: HlPath::default(),
+                    name: "x".to_string(),
+                },
+                raw: false,
+            }),
+            direction: TransferDirection::Get,
+            size: 0,
+            resume_offset: 0,
+            client_ip: "127.0.0.1".parse().unwrap(),
+        };
+
+        let abandoned = state.register_transfer(make()).await;
+        assert_eq!(state.admit_download(abandoned, 1).await, 0);
+
+        // The second download queues behind the never-connected first.
+        let second = state.register_transfer(make()).await;
+        assert_eq!(state.admit_download(second, 2).await, 1);
+
+        // Let both timeout tasks reach `sleep` before the clock advances.
+        tokio::task::yield_now().await;
+        tokio::time::advance(DOWNLOAD_IDLE_TIMEOUT + Duration::from_secs(1)).await;
+        // Let the abandoned slot's timeout task run and promote `second`.
+        tokio::task::yield_now().await;
+
+        assert!(state.take_transfer(abandoned).await.is_none());
+        let promoted =
+            tokio::time::timeout(Duration::from_secs(1), state.wait_for_download_slot(second))
+                .await
+                .expect("second download should have been promoted once the idle slot freed");
+        assert!(promoted);
     }
 
     fn test_user_entry(user_id: u16, access_extra: AccessExtra) -> UserEntry {
