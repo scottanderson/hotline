@@ -3,9 +3,11 @@
 //! reports its `port + 1` transfer port, plus the flattened file object
 //! format both sides frame file bytes in on that connection.
 
+mod folder;
 mod fork_header;
 mod header;
 
+pub use folder::{FolderAction, FolderItemHeader};
 pub use fork_header::ForkHeader;
 pub use header::{HtxfHeader, HtxfType};
 

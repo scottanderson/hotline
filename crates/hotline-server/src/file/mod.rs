@@ -11,6 +11,7 @@
 //! [`AccountProvider`]: crate::AccountProvider
 
 mod dir;
+mod folder_item;
 mod memory;
 mod node;
 mod provider;
@@ -19,6 +20,7 @@ mod writer;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
+pub use folder_item::FolderItem;
 pub use memory::InMemoryFileProvider;
 pub use provider::FileProvider;
 pub use requester::FileRequester;

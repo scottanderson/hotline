@@ -26,7 +26,7 @@ pub use console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, Default
 pub use error::{Result, ServerError};
 pub use file::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
-    FileRequester, InMemoryFileProvider, PARTIAL_CREATOR, PARTIAL_SUFFIX, PARTIAL_TYPE,
+    FileRequester, FolderItem, InMemoryFileProvider, PARTIAL_CREATOR, PARTIAL_SUFFIX, PARTIAL_TYPE,
 };
 pub use flood::{FloodConfig, FloodDecision, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
 pub use news::{
@@ -37,5 +37,6 @@ pub use providers::Providers;
 pub use server::{Server, ServerConfig};
 pub use session::Session;
 pub use state::{
-    FileTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind, UserEntry,
+    FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
+    UserEntry,
 };

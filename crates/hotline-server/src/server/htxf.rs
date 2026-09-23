@@ -1,16 +1,17 @@
 use std::io;
 use std::net::SocketAddr;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use hotline_proto::htxf::{self, ForkHeader, HtxfHeader};
+use hotline_proto::htxf::{self, FolderAction, FolderItemHeader, ForkHeader, HtxfHeader};
+use hotline_proto::types::{self, HlPath};
 
 use crate::error::Result;
 use crate::file::FileRequester;
 use crate::state::{
-    FileTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind, TransferRef,
-    TransferTarget,
+    FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
+    TransferRef, TransferTarget,
 };
 
 /// Accept `HTXF` data connections forever, spawning one task per
@@ -34,9 +35,8 @@ pub(crate) async fn run_htxf_listener(listener: TcpListener, state: SharedState)
     }
 }
 
-/// Complete one `HTXF` data connection: read its 16-byte handshake
-/// header, match it to a pending transfer registered by `FILE_GET`/
-/// `FILE_PUT`, then stream the file in the appropriate direction.
+/// Complete one `HTXF` data connection: match its handshake to a pending
+/// banner, file, or folder transfer, then run it.
 async fn handle_htxf_connection(
     mut stream: TcpStream,
     peer: SocketAddr,
@@ -69,6 +69,17 @@ async fn handle_htxf_connection(
                 result
             }
             TransferDirection::Put => receive_file(&mut stream, file, &transfer, state).await,
+        },
+        TransferKind::Folder(folder) => match transfer.direction {
+            TransferDirection::Get => {
+                if !state.wait_for_download_slot(reference).await {
+                    return Ok(());
+                }
+                let result = send_folder(&mut stream, folder, state).await;
+                state.release_download_slot(reference).await;
+                result
+            }
+            TransferDirection::Put => receive_folder(&mut stream, folder, state).await,
         },
     }
 }
@@ -106,17 +117,31 @@ async fn send_file(
     let TransferTarget { dir, name, .. } = target;
     let requester = target.requester();
     let mut reader = state.open_file_for_read(requester, dir, name).await?;
-    if !raw {
-        let remaining = transfer.size - transfer.resume_offset;
-        stream
-            .write_all(&htxf::flat_file_header(remaining as u32))
-            .await?;
-        if transfer.resume_offset > 0 {
-            skip_bytes(&mut reader, transfer.resume_offset).await?;
-        }
+    if *raw {
+        tokio::io::copy(&mut reader, stream).await?;
+    } else {
+        send_flat_file(stream, reader, transfer.size, transfer.resume_offset).await?;
     }
-    tokio::io::copy(&mut reader, stream).await?;
     drain_stream(stream).await
+}
+
+/// Write a flattened file object for `reader`'s `size` bytes, skipping
+/// the first `resume_offset` of them.
+async fn send_flat_file(
+    stream: &mut TcpStream,
+    mut reader: impl AsyncRead + Unpin,
+    size: u64,
+    resume_offset: u64,
+) -> Result<()> {
+    let remaining = size - resume_offset;
+    stream
+        .write_all(&htxf::flat_file_header(remaining as u32))
+        .await?;
+    if resume_offset > 0 {
+        skip_bytes(&mut reader, resume_offset).await?;
+    }
+    tokio::io::copy(&mut reader.take(remaining), stream).await?;
+    Ok(())
 }
 
 /// Discard the first `n` bytes read from `reader`, for starting a resumed
@@ -153,7 +178,18 @@ async fn receive_file(
     } else {
         state.create_file_for_write(requester, dir, name).await?
     };
+    receive_flat_file(stream, &mut out).await?;
+    out.shutdown().await?;
+    state.finish_upload(requester, dir, name).await?;
+    Ok(())
+}
 
+/// Read one flattened file object, writing its `DATA` fork to `out` and
+/// discarding any other fork.
+async fn receive_flat_file(
+    stream: &mut TcpStream,
+    out: &mut (impl AsyncWrite + Unpin),
+) -> Result<()> {
     let mut prefix = [0u8; htxf::FLAT_FILE_PREFIX_LEN];
     stream.read_exact(&mut prefix).await?;
     let fork_count = htxf::decode_flat_file_prefix(&prefix)?;
@@ -166,7 +202,7 @@ async fn receive_file(
         let mut remaining = fork_header.data_size as u64;
         if &fork_header.fork_type == b"DATA" {
             let mut limited = stream.take(remaining);
-            let copied = tokio::io::copy(&mut limited, &mut out).await?;
+            let copied = tokio::io::copy(&mut limited, out).await?;
             if copied != remaining {
                 return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
             }
@@ -179,9 +215,193 @@ async fn receive_file(
             }
         }
     }
+    Ok(())
+}
+
+/// Send a `myTran_DownloadFldr` (210) download: the next item's
+/// [`FolderItemHeader`] on each `NextFile`, then a file's size and
+/// flattened object on `SendFile`/`ResumeFile`. Ends once the items run
+/// out or the client closes.
+async fn send_folder(
+    stream: &mut TcpStream,
+    folder: &FolderTransfer,
+    state: &SharedState,
+) -> Result<()> {
+    let FolderTransfer {
+        target,
+        items,
+        encoding,
+        ..
+    } = folder;
+    let TransferTarget { dir, name, .. } = target;
+    let requester = target.requester();
+    let root = folder_root(dir, name);
+    let mut items = items.iter();
+    // The file whose header was just sent, until its data is asked for.
+    let mut pending_file = None;
+    while let Some(action) = read_folder_action(stream).await? {
+        match action {
+            FolderAction::NextFile => {
+                let Some(item) = items.next() else {
+                    break;
+                };
+                let header = FolderItemHeader {
+                    is_folder: item.is_folder,
+                    path: item.path.clone(),
+                };
+                stream.write_all(&header.encode(encoding)?).await?;
+                pending_file = (!item.is_folder).then_some(item);
+            }
+            FolderAction::SendFile | FolderAction::ResumeFile => {
+                let Some(item) = pending_file.take() else {
+                    continue;
+                };
+                let resume_offset = if action == FolderAction::ResumeFile {
+                    u64::from(read_resume_data(stream).await?).min(item.size)
+                } else {
+                    0
+                };
+                let (dir, name) = split_item_path(&root, &item.path)
+                    .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+                let reader = state.open_file_for_read(requester, &dir, name).await?;
+                let flat_size = htxf::FLAT_FILE_HEADER_LEN as u64 + item.size - resume_offset;
+                stream.write_all(&(flat_size as u32).to_be_bytes()).await?;
+                send_flat_file(stream, reader, item.size, resume_offset).await?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Receive a `myTran_UploadFldr` (213) upload: ask for each item's header with
+/// `NextFile`, then receive it with [`receive_folder_item`]. Ends after
+/// the declared item count. Every item gets a `NextFile` after it except
+/// a last item whose data was received.
+async fn receive_folder(
+    stream: &mut TcpStream,
+    folder: &FolderTransfer,
+    state: &SharedState,
+) -> Result<()> {
+    let FolderTransfer {
+        target,
+        item_count,
+        encoding,
+        ..
+    } = folder;
+    let TransferTarget { dir, name, .. } = target;
+    let requester = target.requester();
+    let root = folder_root(dir, name);
+    write_folder_action(stream, FolderAction::NextFile).await?;
+    for remaining in (0..*item_count).rev() {
+        let body = read_u16_prefixed(stream).await?;
+        let received = match FolderItemHeader::decode_body(&body, encoding) {
+            Ok(header) => match split_item_path(&root, &header.path) {
+                Some((dir, name)) => {
+                    receive_folder_item(stream, requester, &dir, name, header.is_folder, state)
+                        .await?
+                }
+                None => false,
+            },
+            Err(_) => false,
+        };
+        if !received || remaining > 0 {
+            write_folder_action(stream, FolderAction::NextFile).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Receive one folder upload item. Asks for a file's data with
+/// `SendFile`, or `ResumeFile` for an unfinished upload, unless
+/// [`SharedState::prepare_folder_upload_item`] skips the item. `true`
+/// once a file's data is received.
+async fn receive_folder_item(
+    stream: &mut TcpStream,
+    requester: FileRequester<'_>,
+    dir: &HlPath,
+    name: &str,
+    is_folder: bool,
+    state: &SharedState,
+) -> Result<bool> {
+    let Some(resume_offset) = state
+        .prepare_folder_upload_item(requester, dir, name, is_folder)
+        .await
+    else {
+        return Ok(false);
+    };
+    let opened = if resume_offset > 0 {
+        state
+            .resume_file_for_write(requester, dir, name, resume_offset)
+            .await
+    } else {
+        state.create_file_for_write(requester, dir, name).await
+    };
+    let Ok(mut out) = opened else {
+        return Ok(false);
+    };
+    if resume_offset > 0 {
+        let resume_data = types::encode_resume_data(resume_offset as u32);
+        write_folder_action(stream, FolderAction::ResumeFile).await?;
+        stream
+            .write_all(&(resume_data.len() as u16).to_be_bytes())
+            .await?;
+        stream.write_all(&resume_data).await?;
+    } else {
+        write_folder_action(stream, FolderAction::SendFile).await?;
+    }
+    let mut flat_size = [0u8; 4];
+    stream.read_exact(&mut flat_size).await?;
+    receive_flat_file(stream, &mut out).await?;
     out.shutdown().await?;
     state.finish_upload(requester, dir, name).await?;
+    Ok(true)
+}
+
+/// A folder transfer's root folder path: `dir` plus `name`.
+fn folder_root(dir: &HlPath, name: &str) -> Vec<String> {
+    let mut root = dir.components.clone();
+    root.push(name.to_string());
+    root
+}
+
+/// Split an item's `path` under `root` into its directory and name.
+/// `None` for an empty path.
+fn split_item_path<'a>(root: &[String], path: &'a HlPath) -> Option<(HlPath, &'a str)> {
+    let (name, parents) = path.components.split_last()?;
+    Some((HlPath::new(root.iter().chain(parents)), name))
+}
+
+/// The next [`FolderAction`], or `None` once the client closes.
+async fn read_folder_action(stream: &mut TcpStream) -> Result<Option<FolderAction>> {
+    let mut buf = [0u8; 2];
+    match stream.read_exact(&mut buf).await {
+        Ok(_) => Ok(Some(FolderAction::from(u16::from_be_bytes(buf)))),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Send one [`FolderAction`].
+async fn write_folder_action(stream: &mut TcpStream, action: FolderAction) -> Result<()> {
+    stream.write_all(&u16::from(action).to_be_bytes()).await?;
     Ok(())
+}
+
+/// A `ResumeFile` action's `size(2) | resume data`, as the byte count the
+/// client already has.
+async fn read_resume_data(stream: &mut TcpStream) -> Result<u32> {
+    let buf = read_u16_prefixed(stream).await?;
+    Ok(types::decode_resume_data(&buf)?)
+}
+
+/// Read a `len(2)` prefix, then that many bytes.
+async fn read_u16_prefixed(stream: &mut TcpStream) -> Result<Vec<u8>> {
+    let mut len = [0u8; 2];
+    stream.read_exact(&mut len).await?;
+    let mut buf = vec![0u8; u16::from_be_bytes(len) as usize];
+    stream.read_exact(&mut buf).await?;
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -197,8 +417,11 @@ mod tests {
     use crate::news::InMemoryNewsProvider;
     use crate::providers::Providers;
     use hotline_proto::consts::Access;
+    use hotline_proto::htxf::HtxfType;
+    use hotline_proto::text_encoding;
     use hotline_proto::types::HlPath;
     use tokio::io::AsyncWriteExt;
+    use tokio::task::JoinHandle;
 
     fn state_with_files(files: InMemoryFileProvider) -> SharedState {
         SharedState::new(Providers {
@@ -376,5 +599,265 @@ mod tests {
             })
             .await;
         assert_eq!(state.admit_download(second, 2).await, 0);
+    }
+
+    /// Register `folder`, connect to it over loopback, and send the
+    /// `HTXF` header, with the server side running in a spawned task.
+    async fn start_folder_transfer(
+        state: &SharedState,
+        folder: FolderTransfer,
+        direction: TransferDirection,
+    ) -> (TcpStream, JoinHandle<()>) {
+        let reference = state
+            .register_transfer(PendingTransfer {
+                kind: TransferKind::Folder(folder),
+                direction,
+                size: 0,
+                resume_offset: 0,
+                client_ip: "127.0.0.1".parse().unwrap(),
+            })
+            .await;
+        if direction == TransferDirection::Get {
+            state.admit_download(reference, 1).await;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server_stream, peer) = listener.accept().await.unwrap();
+        let state = state.clone();
+        let server = tokio::spawn(async move {
+            handle_htxf_connection(server_stream, peer, &state)
+                .await
+                .unwrap();
+        });
+        let header = HtxfHeader {
+            reference: reference.0,
+            len: 0,
+            transfer_type: HtxfType::Folder,
+        };
+        client.write_all(&header.encode()).await.unwrap();
+        (client, server)
+    }
+
+    fn folder_transfer(
+        name: &str,
+        items: Vec<crate::file::FolderItem>,
+        item_count: u32,
+    ) -> FolderTransfer {
+        FolderTransfer {
+            target: TransferTarget {
+                login: "alice".to_string(),
+                dir: HlPath::default(),
+                name: name.to_string(),
+            },
+            items,
+            item_count,
+            encoding: text_encoding::DEFAULT,
+        }
+    }
+
+    async fn send_action(client: &mut TcpStream, action: FolderAction) {
+        client
+            .write_all(&u16::from(action).to_be_bytes())
+            .await
+            .unwrap();
+    }
+
+    async fn read_action(client: &mut TcpStream) -> FolderAction {
+        let mut buf = [0u8; 2];
+        client.read_exact(&mut buf).await.unwrap();
+        FolderAction::from(u16::from_be_bytes(buf))
+    }
+
+    async fn read_item_header(client: &mut TcpStream) -> FolderItemHeader {
+        let body = read_u16_prefixed(client).await.unwrap();
+        FolderItemHeader::decode_body(&body, text_encoding::DEFAULT).unwrap()
+    }
+
+    /// A file's `size(4)` then its flattened object, returning the object's
+    /// `DATA` fork bytes.
+    async fn read_sized_flat_file(client: &mut TcpStream) -> Vec<u8> {
+        let mut size = [0u8; 4];
+        client.read_exact(&mut size).await.unwrap();
+        let mut flat = vec![0u8; u32::from_be_bytes(size) as usize];
+        client.read_exact(&mut flat).await.unwrap();
+        flat.split_off(htxf::FLAT_FILE_HEADER_LEN)
+    }
+
+    async fn send_item_header(client: &mut TcpStream, is_folder: bool, path: &[&str]) {
+        let header = FolderItemHeader {
+            is_folder,
+            path: HlPath::new(path.iter().copied()),
+        };
+        client
+            .write_all(&header.encode(text_encoding::DEFAULT).unwrap())
+            .await
+            .unwrap();
+    }
+
+    async fn send_sized_flat_file(client: &mut TcpStream, data: &[u8]) {
+        let flat = htxf::encode_flat_file(data);
+        client
+            .write_all(&(flat.len() as u32).to_be_bytes())
+            .await
+            .unwrap();
+        client.write_all(&flat).await.unwrap();
+    }
+
+    async fn read_file(state: &SharedState, dir: &[&str], name: &str) -> Vec<u8> {
+        let requester = FileRequester { login: "alice" };
+        let mut reader = state
+            .open_file_for_read(requester, &HlPath::new(dir.iter().copied()), name)
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.unwrap();
+        buf
+    }
+
+    #[tokio::test]
+    async fn folder_download_steps_through_each_item_then_closes() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top", "Sub"]), "a.txt", *b"hello");
+        files.seed(&HlPath::new(["Top"]), "b.txt", *b"hi");
+        let state = state_with_files(files);
+        let requester = FileRequester { login: "alice" };
+        let items = state
+            .walk_folder(requester, &HlPath::default(), "Top", Access::all())
+            .await
+            .unwrap();
+        let folder = folder_transfer("Top", items, 3);
+        let (mut client, server) =
+            start_folder_transfer(&state, folder, TransferDirection::Get).await;
+
+        send_action(&mut client, FolderAction::NextFile).await;
+        let header = read_item_header(&mut client).await;
+        assert!(header.is_folder);
+        assert_eq!(header.path, HlPath::new(["Sub"]));
+
+        send_action(&mut client, FolderAction::NextFile).await;
+        let header = read_item_header(&mut client).await;
+        assert!(!header.is_folder);
+        assert_eq!(header.path, HlPath::new(["Sub", "a.txt"]));
+        send_action(&mut client, FolderAction::SendFile).await;
+        assert_eq!(read_sized_flat_file(&mut client).await, b"hello");
+
+        send_action(&mut client, FolderAction::NextFile).await;
+        let header = read_item_header(&mut client).await;
+        assert_eq!(header.path, HlPath::new(["b.txt"]));
+        // Skip b.txt's data; the items then run out.
+        send_action(&mut client, FolderAction::NextFile).await;
+
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn folder_download_resumes_a_file_from_its_resume_data() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let requester = FileRequester { login: "alice" };
+        let items = state
+            .walk_folder(requester, &HlPath::default(), "Top", Access::all())
+            .await
+            .unwrap();
+        let folder = folder_transfer("Top", items, 1);
+        let (mut client, server) =
+            start_folder_transfer(&state, folder, TransferDirection::Get).await;
+
+        send_action(&mut client, FolderAction::NextFile).await;
+        read_item_header(&mut client).await;
+        let resume_data = types::encode_resume_data(2);
+        send_action(&mut client, FolderAction::ResumeFile).await;
+        client
+            .write_all(&(resume_data.len() as u16).to_be_bytes())
+            .await
+            .unwrap();
+        client.write_all(&resume_data).await.unwrap();
+        assert_eq!(read_sized_flat_file(&mut client).await, b"llo");
+
+        drop(client);
+        server.await.unwrap();
+    }
+
+    /// Every item counts toward the declared total, a skipped one too.
+    /// A skipped last item still gets a `NextFile` after it.
+    #[tokio::test]
+    async fn folder_upload_creates_items_skips_existing_files_and_ends_at_the_item_count() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "exists.txt", *b"old");
+        let state = state_with_files(files);
+        let folder = folder_transfer("Top", Vec::new(), 3);
+        let (mut client, server) =
+            start_folder_transfer(&state, folder, TransferDirection::Put).await;
+
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+        send_item_header(&mut client, true, &["Sub"]).await;
+
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+        send_item_header(&mut client, false, &["Sub", "a.txt"]).await;
+        assert_eq!(read_action(&mut client).await, FolderAction::SendFile);
+        send_sized_flat_file(&mut client, b"hello").await;
+
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+        send_item_header(&mut client, false, &["exists.txt"]).await;
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty());
+        server.await.unwrap();
+
+        assert_eq!(read_file(&state, &["Top", "Sub"], "a.txt").await, b"hello");
+        assert_eq!(read_file(&state, &["Top"], "exists.txt").await, b"old");
+    }
+
+    #[tokio::test]
+    async fn folder_upload_resumes_an_unfinished_file() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt.hpf", *b"hello ");
+        let state = state_with_files(files);
+        let folder = folder_transfer("Top", Vec::new(), 1);
+        let (mut client, server) =
+            start_folder_transfer(&state, folder, TransferDirection::Put).await;
+
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+        send_item_header(&mut client, false, &["a.txt"]).await;
+        assert_eq!(read_action(&mut client).await, FolderAction::ResumeFile);
+        assert_eq!(read_resume_data(&mut client).await.unwrap(), 6);
+        send_sized_flat_file(&mut client, b"world").await;
+
+        server.await.unwrap();
+        assert_eq!(read_file(&state, &["Top"], "a.txt").await, b"hello world");
+    }
+
+    /// A path through an existing file skips the item rather than
+    /// creating anything under it. A received last file gets no
+    /// `NextFile` after it.
+    #[tokio::test]
+    async fn folder_upload_skips_an_item_whose_parent_is_a_file() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "f", *b"x");
+        let state = state_with_files(files);
+        let folder = folder_transfer("Top", Vec::new(), 2);
+        let (mut client, server) =
+            start_folder_transfer(&state, folder, TransferDirection::Put).await;
+
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+        send_item_header(&mut client, false, &["f", "a.txt"]).await;
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+        send_item_header(&mut client, false, &["b.txt"]).await;
+        assert_eq!(read_action(&mut client).await, FolderAction::SendFile);
+        send_sized_flat_file(&mut client, b"b").await;
+
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty());
+        server.await.unwrap();
+        assert_eq!(read_file(&state, &["Top"], "b.txt").await, b"b");
     }
 }

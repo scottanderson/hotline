@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use crate::state::FileTransfer;
+use crate::state::{FileTransfer, FolderTransfer};
 
 /// Which way a pending `HTXF` transfer moves file bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +16,8 @@ pub enum TransferDirection {
 pub enum TransferKind {
     /// A file, see [`FileTransfer`].
     File(FileTransfer),
+    /// A folder and everything under it, see [`FolderTransfer`].
+    Folder(FolderTransfer),
     /// The server banner image from [`crate::BannerProvider`], sent as a plain
     /// unframed byte stream.
     Banner,

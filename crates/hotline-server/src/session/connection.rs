@@ -390,7 +390,9 @@ impl Session {
             /* 207 */ Opcode::FileSetinfo => self.on_file_setinfo(tx, state).await,
             /* 208 */ Opcode::FileMove => self.on_file_move(tx, state).await,
             /* 209 */ Opcode::FileSymlink => self.on_file_symlink(tx, state).await,
+            /* 210 */ Opcode::DownloadFldr => self.on_download_fldr(tx, state).await,
             /* 212 */ Opcode::BannerGet => self.on_banner_get(tx, state).await,
+            /* 213 */ Opcode::UploadFldr => self.on_upload_fldr(tx, state).await,
             /* 300 */ Opcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 370 */ Opcode::NewsListdir => self.on_news_listdir(tx, state).await,
             /* 371 */

@@ -6,14 +6,16 @@ use crate::error::{ProtoError, Result};
 use crate::htxf::MAGIC;
 use crate::wire::{PacketReader, PacketWriter};
 
-/// Transfer type carried in [`HtxfHeader::transfer_type`]. Folder
-/// transfers use another wire value not implemented here.
+/// Transfer type carried in [`HtxfHeader::transfer_type`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum HtxfType {
     /// A single file.
     File = 0,
+
+    /// A folder, `myTran_DownloadFldr` (210) or `myTran_UploadFldr` (213).
+    Folder = 1,
 
     /// The server banner image (`myTran_DownloadBanner`, 212).
     Banner = 2,

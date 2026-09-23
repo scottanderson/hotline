@@ -9,8 +9,8 @@ use hotline_proto::{Field, Transaction};
 use crate::account::AccessExtra;
 use crate::file::FileRequester;
 use crate::state::{
-    FileTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind, TransferRef,
-    TransferTarget,
+    FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
+    TransferRef, TransferTarget,
 };
 
 use super::connection::Session;
@@ -137,33 +137,49 @@ impl Session {
             let remaining = data_size - resume_offset;
             (resume_offset, remaining + htxf::FLAT_FILE_HEADER_LEN as u64)
         };
+        let kind = TransferKind::File(FileTransfer {
+            target: TransferTarget {
+                login: self.login.clone(),
+                dir,
+                name,
+            },
+            raw,
+        });
+        let mut fields = vec![
+            Field::u32(FieldId::TransferSize, total_size as u32),
+            Field::u32(FieldId::FileSize, data_size as u32),
+        ];
+        fields.extend(
+            self.register_download(kind, data_size, resume_offset, state)
+                .await,
+        );
+        vec![tx.reply(fields)]
+    }
+
+    /// Register and admit a download. Returns its `myField_RefNum` (107)
+    /// field, then `myField_WaitingCount` (116) if it is queued.
+    async fn register_download(
+        &self,
+        kind: TransferKind,
+        size: u64,
+        resume_offset: u64,
+        state: &SharedState,
+    ) -> Vec<Field> {
         let reference = state
             .register_transfer(PendingTransfer {
-                kind: TransferKind::File(FileTransfer {
-                    target: TransferTarget {
-                        login: self.login.clone(),
-                        dir,
-                        name,
-                    },
-                    raw,
-                }),
+                kind,
                 direction: TransferDirection::Get,
-                size: data_size,
+                size,
                 resume_offset,
                 client_ip: self.remote_addr.ip(),
             })
             .await;
         let waiting_count = state.admit_download(reference, self.user_id).await;
-
-        let mut fields = vec![
-            Field::u32(FieldId::TransferId, reference.0),
-            Field::u32(FieldId::TransferSize, total_size as u32),
-            Field::u32(FieldId::FileSize, data_size as u32),
-        ];
+        let mut fields = vec![Field::u32(FieldId::TransferId, reference.0)];
         if waiting_count > 0 {
             fields.push(Field::u32(FieldId::QueuePosition, waiting_count));
         }
-        vec![tx.reply(fields)]
+        fields
     }
 
     /// 212: request the server banner image over `HTXF`, the same
@@ -246,6 +262,110 @@ impl Session {
             ));
         }
         vec![tx.reply(fields)]
+    }
+
+    /// `myTran_DownloadFldr` (210): start a folder download. Replies with the
+    /// total byte count of the folder's files and its item count. An empty
+    /// folder gets no transfer reference.
+    pub(super) async fn on_download_fldr(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
+        if let Err(reason) = self.access.require(Access::DOWNLOAD_FOLDER) {
+            return vec![tx.reply_error(reason)];
+        }
+
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let requester = FileRequester { login: &self.login };
+        let items = match state.walk_folder(requester, &dir, &name, self.access).await {
+            Ok(items) => items,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let total_size: u64 = items.iter().map(|item| item.size).sum();
+        let item_count = items.len() as u32;
+        let mut fields = vec![
+            Field::u32(FieldId::TransferSize, total_size as u32),
+            Field::u32(FieldId::FolderItemCount, item_count),
+        ];
+        if items.is_empty() {
+            return vec![tx.reply(fields)];
+        }
+
+        let kind = TransferKind::Folder(FolderTransfer {
+            target: TransferTarget {
+                login: self.login.clone(),
+                dir,
+                name,
+            },
+            items,
+            item_count,
+            encoding: self.encoding(),
+        });
+        fields.extend(self.register_download(kind, total_size, 0, state).await);
+        vec![tx.reply(fields)]
+    }
+
+    /// `myTran_UploadFldr` (213): start a folder upload, creating the folder
+    /// right away. The destination rule matches `myTran_UploadFile` (203).
+    /// `myField_FileXferOptions` (204) == 1 resumes into an existing folder
+    /// instead. A zero `myField_FldrItemCount` (220) gets no transfer
+    /// reference.
+    pub(super) async fn on_upload_fldr(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
+        if let Err(reason) = self.access.require(Access::UPLOAD_FOLDER) {
+            return vec![tx.reply_error(reason)];
+        }
+
+        let (name, dir) = match self.file_name_and_dir(tx) {
+            Ok(result) => result,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let requester = FileRequester { login: &self.login };
+        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
+        if let Err(reason) = state
+            .start_folder_upload(requester, &dir, &name, self.access, resume)
+            .await
+        {
+            return vec![tx.reply_error(reason)];
+        }
+
+        let item_count = tx
+            .field(FieldId::FolderItemCount)
+            .and_then(Field::as_u32)
+            .unwrap_or(0);
+        if item_count == 0 {
+            return vec![tx.reply(vec![])];
+        }
+        let size = tx
+            .field(FieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap_or(0);
+        let reference = state
+            .register_transfer(PendingTransfer {
+                kind: TransferKind::Folder(FolderTransfer {
+                    target: TransferTarget {
+                        login: self.login.clone(),
+                        dir,
+                        name,
+                    },
+                    items: Vec::new(),
+                    item_count,
+                    encoding: self.encoding(),
+                }),
+                direction: TransferDirection::Put,
+                size: size as u64,
+                resume_offset: 0,
+                client_ip: self.remote_addr.ip(),
+            })
+            .await;
+        vec![tx.reply(vec![Field::u32(FieldId::TransferId, reference.0)])]
     }
 
     /// 204: delete a file, or a folder and everything under it.
@@ -1026,6 +1146,232 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
+    }
+
+    fn folder_request(opcode: Opcode, dir: &[&str], name: &str, extra: Vec<Field>) -> Transaction {
+        let encoding = text_encoding::DEFAULT;
+        let mut fields = vec![
+            Field::string(FieldId::FileName, name),
+            Field::bytes(
+                FieldId::FilePath,
+                HlPath::new(dir.iter().copied()).encode(encoding).unwrap(),
+            ),
+        ];
+        fields.extend(extra);
+        Transaction::request(opcode, 1, fields)
+    }
+
+    #[tokio::test]
+    async fn download_fldr_denied_without_download_folders() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::DOWNLOAD_FOLDER);
+        let session = test_session("Alice", access);
+
+        let get = folder_request(Opcode::DownloadFldr, &[], "Top", vec![]);
+        let [reply] = session
+            .on_download_fldr(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn download_fldr_replies_with_size_count_and_ref_and_registers_the_items() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
+        files.seed(&HlPath::new(["Top", "Sub"]), "b.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = folder_request(Opcode::DownloadFldr, &[], "Top", vec![]);
+        let [reply] = session
+            .on_download_fldr(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let u32_field = |id| reply.field(id).and_then(Field::as_u32).unwrap();
+        assert_eq!(u32_field(FieldId::TransferSize), 7);
+        assert_eq!(u32_field(FieldId::FolderItemCount), 3);
+        assert!(reply.field(FieldId::QueuePosition).is_none());
+
+        let transfer = state
+            .take_transfer(TransferRef(u32_field(FieldId::TransferId)))
+            .await
+            .unwrap();
+        assert_eq!(transfer.direction, TransferDirection::Get);
+        assert_eq!(transfer.size, 7);
+        let TransferKind::Folder(folder) = transfer.kind else {
+            panic!("expected a folder transfer");
+        };
+        assert_eq!(folder.target.name, "Top");
+        assert_eq!(folder.item_count, 3);
+        assert_eq!(folder.items.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn download_fldr_of_an_empty_folder_replies_without_a_ref() {
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+        let requester = FileRequester { login: "Alice" };
+        state
+            .mkdir(requester, &HlPath::default(), "Empty", Access::all())
+            .await
+            .unwrap();
+
+        let get = folder_request(Opcode::DownloadFldr, &[], "Empty", vec![]);
+        let [reply] = session
+            .on_download_fldr(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert_eq!(
+            reply
+                .field(FieldId::FolderItemCount)
+                .and_then(Field::as_u32),
+            Some(0)
+        );
+        assert!(reply.field(FieldId::TransferId).is_none());
+    }
+
+    #[tokio::test]
+    async fn download_fldr_of_a_missing_folder_is_an_error() {
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+
+        let get = folder_request(Opcode::DownloadFldr, &[], "Missing", vec![]);
+        let [reply] = session
+            .on_download_fldr(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn upload_fldr_denied_without_upload_folders() {
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let mut access = Access::all();
+        access.remove(Access::UPLOAD_FOLDER);
+        let session = test_session("Alice", access);
+
+        let put = folder_request(Opcode::UploadFldr, &[], "New", vec![]);
+        let [reply] = session
+            .on_upload_fldr(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn upload_fldr_outside_a_dropbox_is_denied_without_upload_anywhere() {
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let mut access = Access::all();
+        access.remove(Access::UPLOAD_ANYWHERE);
+        let session = test_session("Alice", access);
+
+        let put = folder_request(Opcode::UploadFldr, &[], "New", vec![]);
+        let [reply] = session
+            .on_upload_fldr(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn upload_fldr_creates_the_folder_and_replies_with_a_ref() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Uploads"]), "other.txt", *b"x");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::UPLOAD_ANYWHERE);
+        let session = test_session("Alice", access);
+        let requester = FileRequester { login: "Alice" };
+
+        let put = folder_request(
+            Opcode::UploadFldr,
+            &["Uploads"],
+            "New",
+            vec![
+                Field::u32(FieldId::FolderItemCount, 2),
+                Field::u32(FieldId::TransferSize, 10),
+            ],
+        );
+        let [reply] = session
+            .on_upload_fldr(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let info = state
+            .file_info(requester, &HlPath::new(["Uploads"]), "New", Access::all())
+            .await
+            .unwrap();
+        assert_eq!(info.file_type, *b"fldr");
+
+        let reference = reply
+            .field(FieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+        let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
+        assert_eq!(transfer.direction, TransferDirection::Put);
+        assert_eq!(transfer.size, 10);
+        let TransferKind::Folder(folder) = transfer.kind else {
+            panic!("expected a folder transfer");
+        };
+        assert_eq!(folder.item_count, 2);
+    }
+
+    #[tokio::test]
+    async fn upload_fldr_with_no_items_creates_the_folder_without_a_ref() {
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+        let requester = FileRequester { login: "Alice" };
+
+        let put = folder_request(Opcode::UploadFldr, &[], "New", vec![]);
+        let [reply] = session
+            .on_upload_fldr(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(reply.field(FieldId::TransferId).is_none());
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "New")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_fldr_rejects_an_existing_name_unless_resuming_into_a_folder() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"x");
+        files.seed(&HlPath::default(), "file.txt", *b"x");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+        let resume = || vec![Field::u16(FieldId::FileXferOptions, 1)];
+        let put = |name, extra| folder_request(Opcode::UploadFldr, &[], name, extra);
+        let is_error = |tx: Transaction| {
+            let session = &session;
+            let state = &state;
+            async move {
+                let [reply] = session.on_upload_fldr(&tx, state).await.try_into().unwrap();
+                reply.is_error()
+            }
+        };
+
+        assert!(is_error(put("Top", vec![])).await);
+        assert!(!is_error(put("Top", resume())).await);
+        assert!(is_error(put("file.txt", resume())).await);
+        assert!(is_error(put("Missing", resume())).await);
     }
 
     #[tokio::test]

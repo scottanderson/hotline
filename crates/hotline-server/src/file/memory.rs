@@ -363,7 +363,7 @@ impl FileProvider for InMemoryFileProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::{PARTIAL_CREATOR, PARTIAL_TYPE};
+    use crate::file::{FolderItem, PARTIAL_CREATOR, PARTIAL_TYPE};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn requester() -> FileRequester<'static> {
@@ -402,6 +402,44 @@ mod tests {
         let mut buf = Vec::new();
         reader.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf, b"hello");
+    }
+
+    #[tokio::test]
+    async fn walk_lists_a_folder_before_its_contents() {
+        let provider = InMemoryFileProvider::default();
+        let top = HlPath::new(["Top"]);
+        provider.seed(&top, "b.txt", *b"bb");
+        provider.seed(&HlPath::new(["Top", "A"]), "inner.txt", *b"x");
+        provider.seed(&HlPath::default(), "outside.txt", *b"no");
+
+        let items = provider
+            .walk(requester(), &HlPath::default(), "Top")
+            .await
+            .unwrap();
+        let item = |path: &[&str], is_folder, size| FolderItem {
+            path: HlPath::new(path.iter().copied()),
+            is_folder,
+            size,
+        };
+        assert_eq!(
+            items,
+            [
+                item(&["A"], true, 0),
+                item(&["A", "inner.txt"], false, 1),
+                item(&["b.txt"], false, 2),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_of_a_file_is_empty_and_of_a_missing_name_is_none() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::default(), "a.txt", *b"hello");
+
+        let root = HlPath::default();
+        let walk = |name| provider.walk(requester(), &root, name);
+        assert_eq!(walk("a.txt").await, Some(Vec::new()));
+        assert_eq!(walk("missing").await, None);
     }
 
     #[tokio::test]

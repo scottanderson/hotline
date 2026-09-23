@@ -408,6 +408,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn walk_lists_a_nested_folder_before_its_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().join("Top");
+        tokio::fs::create_dir_all(top.join("A")).await.unwrap();
+        tokio::fs::write(top.join("A").join("inner.txt"), b"x")
+            .await
+            .unwrap();
+        tokio::fs::write(top.join("b.txt"), b"bb").await.unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let items = provider
+            .walk(requester(), &HlPath::default(), "Top")
+            .await
+            .unwrap();
+        let summary: Vec<_> = items
+            .iter()
+            .map(|i| (i.path.components.join("/"), i.is_folder, i.size))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("A".to_string(), true, 0),
+                ("A/inner.txt".to_string(), false, 1),
+                ("b.txt".to_string(), false, 2),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_skips_a_symlinked_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().join("Top");
+        tokio::fs::create_dir(&top).await.unwrap();
+        tokio::fs::symlink(&top, top.join("loop")).await.unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let items = provider
+            .walk(requester(), &HlPath::default(), "Top")
+            .await
+            .unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_reports_a_symlinked_files_target_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().join("Top");
+        tokio::fs::create_dir(&top).await.unwrap();
+        let target = dir.path().join("a-file-with-a-long-name.txt");
+        tokio::fs::write(&target, b"hi").await.unwrap();
+        tokio::fs::symlink(&target, top.join("link")).await.unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let items = provider
+            .walk(requester(), &HlPath::default(), "Top")
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].size, 2);
+    }
+
+    #[tokio::test]
     async fn rejects_traversal_out_of_the_root() {
         let dir = tempfile::tempdir().unwrap();
         let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))

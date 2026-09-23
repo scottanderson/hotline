@@ -7,6 +7,7 @@ mod console;
 mod download_queue;
 mod entry;
 mod file_transfer;
+mod folder_transfer;
 mod recipient;
 mod room;
 mod shared;
@@ -23,6 +24,7 @@ pub use access::AccessUpdate;
 pub use console::ConsoleUpdate;
 pub use entry::{UserEntry, IDLE_THRESHOLD};
 pub use file_transfer::FileTransfer;
+pub use folder_transfer::FolderTransfer;
 pub use recipient::RecipientMessage;
 pub use room::ChatRoom;
 pub use shared::SharedState;
@@ -30,11 +32,11 @@ pub use transfer::{PendingTransfer, TransferDirection, TransferKind};
 pub use transfer_ref::TransferRef;
 pub use transfer_target::TransferTarget;
 
-/// `true` if any component of `dir` names an "Upload" or "Drop Box"
-/// folder (case-insensitive), the one place an account without
+/// `true` if `dir`'s own name contains "upload" or "drop box"
+/// (case-insensitive), the one place an account without
 /// `UPLOAD_ANYWHERE` may still upload to.
-fn is_dropbox_path(dir: &HlPath) -> bool {
-    dir.components.iter().any(|c| {
+fn is_upload_folder(dir: &HlPath) -> bool {
+    dir.components.last().is_some_and(|c| {
         let c = c.to_ascii_lowercase();
         c.contains("upload") || c.contains("drop box")
     })
@@ -66,4 +68,17 @@ fn dropbox_access(
         access.require(Access::VIEW_DROP_BOXES)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_destination_folders_own_name_counts_as_an_upload_folder() {
+        assert!(is_upload_folder(&HlPath::new(["Uploads"])));
+        assert!(is_upload_folder(&HlPath::new(["Files", "Drop Box"])));
+        assert!(!is_upload_folder(&HlPath::new(["Uploads", "Music"])));
+        assert!(!is_upload_folder(&HlPath::default()));
+    }
 }

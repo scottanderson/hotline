@@ -21,7 +21,9 @@ use crate::console::fields::{
     format_access, format_access_extra, parse_0wn_fields, parse_access_fields,
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, DefaultChatCommands};
-use crate::file::{BoxedReader, BoxedWriter, FileProvider, FileRequester, InMemoryFileProvider};
+use crate::file::{
+    BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem, InMemoryFileProvider,
+};
 use crate::flood::{FloodDecision, FloodPolicy, NoFloodPolicy};
 use crate::news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
@@ -31,12 +33,13 @@ use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::{
-    dropbox_access, dropbox_blocked, is_dropbox_path, AccessUpdate, ChatRoom, ConsoleUpdate,
+    dropbox_access, dropbox_blocked, is_upload_folder, AccessUpdate, ChatRoom, ConsoleUpdate,
     PendingTransfer, RecipientMessage, TransferDirection, TransferKind, TransferRef, UserEntry,
 };
 
-/// How long an active download may wait for its `HTXF` connection, openline's 500 s.
-const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
+/// How long an active download or an upload may wait for its `HTXF`
+/// connection, openline's 500 s.
+const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
 #[derive(Clone)]
@@ -422,6 +425,28 @@ impl SharedState {
         Ok(size)
     }
 
+    /// Every item under `dir`/`name`, for a `myTran_DownloadFldr` (210)
+    /// download. Skips any drop box `access` can't view, with everything
+    /// under it. `Err` if missing or itself drop-box-blocked.
+    pub async fn walk_folder(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        access: Access,
+    ) -> Result<Vec<FolderItem>, Cow<'static, str>> {
+        dropbox_access(dir, Some(name), access)?;
+        let items = self
+            .files
+            .walk(requester, dir, name)
+            .await
+            .ok_or("file or folder not found.")?;
+        Ok(items
+            .into_iter()
+            .filter(|item| !dropbox_blocked(&item.path, None, access))
+            .collect())
+    }
+
     /// Whether a file or folder already exists at this path.
     pub async fn file_exists(
         &self,
@@ -447,7 +472,7 @@ impl SharedState {
         access: Access,
         resume: bool,
     ) -> Result<u64, Cow<'static, str>> {
-        if !is_dropbox_path(dir) {
+        if !is_upload_folder(dir) {
             access.require(Access::UPLOAD_ANYWHERE)?;
         }
         if self.files.exists(requester, dir, name).await {
@@ -462,6 +487,69 @@ impl SharedState {
         } else {
             Ok(0)
         }
+    }
+
+    /// Start (or resume) a `myTran_UploadFldr` (213) upload of folder
+    /// `name` under `dir`, creating the folder if it's missing. `dir` must
+    /// exist, with the same destination rule as [`Self::authorize_upload`].
+    /// Resuming needs a folder already at `name`; otherwise nothing may be
+    /// there yet.
+    pub async fn start_folder_upload(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        access: Access,
+        resume: bool,
+    ) -> Result<(), Cow<'static, str>> {
+        self.files
+            .list(requester, dir)
+            .await
+            .ok_or("file or folder not found.")?;
+        if !is_upload_folder(dir) {
+            access.require(Access::UPLOAD_ANYWHERE)?;
+        }
+        let existing = self.files.info(requester, dir, name).await;
+        if resume {
+            let info = existing.ok_or("file or folder not found.")?;
+            if info.file_type != *b"fldr" {
+                Err("file already exists.")?;
+            }
+            return Ok(());
+        }
+        if existing.is_some() {
+            Err("file already exists.")?;
+        }
+        self.files
+            .mkdir(requester, dir, name)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Prepare one item of a `myTran_UploadFldr` (213) upload at
+    /// `dir`/`name`: create a missing folder, or pick where a file's data
+    /// starts. `Some` byte offset to resume a file's upload from (`0` for a
+    /// new file); `None` to skip the item, including a finished file
+    /// already there and any `dir` that isn't a folder.
+    pub async fn prepare_folder_upload_item(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        is_folder: bool,
+    ) -> Option<u64> {
+        self.files.list(requester, dir).await?;
+        if is_folder {
+            if !self.files.exists(requester, dir, name).await {
+                let _ = self.files.mkdir(requester, dir, name).await;
+            }
+            return None;
+        }
+        if let Some(offset) = self.files.partial_upload_size(requester, dir, name).await {
+            return Some(offset);
+        }
+        (!self.files.exists(requester, dir, name).await).then_some(0)
     }
 
     /// Open a file for reading, for a `FILE_GET` download.
@@ -676,16 +764,34 @@ impl SharedState {
 
     /// Register a pending transfer, returning the reference number to
     /// hand the client. Retries on the vanishingly unlikely case the
-    /// counter wraps into a still-pending ref.
+    /// counter wraps into a still-pending ref. An upload expires after
+    /// `TRANSFER_IDLE_TIMEOUT`.
     pub async fn register_transfer(&self, transfer: PendingTransfer) -> TransferRef {
-        let mut transfers = self.transfers.write().await;
-        loop {
-            let reference = TransferRef(self.next_transfer_ref.fetch_add(1, Ordering::Relaxed));
-            if reference.0 != 0 && !transfers.contains_key(&reference) {
-                transfers.insert(reference, transfer);
-                return reference;
+        let is_upload = transfer.direction == TransferDirection::Put;
+        let reference = {
+            let mut transfers = self.transfers.write().await;
+            loop {
+                let reference = TransferRef(self.next_transfer_ref.fetch_add(1, Ordering::Relaxed));
+                if reference.0 != 0 && !transfers.contains_key(&reference) {
+                    transfers.insert(reference, transfer);
+                    break reference;
+                }
             }
+        };
+        if is_upload {
+            self.spawn_upload_idle_timeout(reference);
         }
+        reference
+    }
+
+    /// Drop upload `reference` if no `HTXF` connection arrives within
+    /// [`TRANSFER_IDLE_TIMEOUT`].
+    fn spawn_upload_idle_timeout(&self, reference: TransferRef) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(TRANSFER_IDLE_TIMEOUT).await;
+            state.take_transfer(reference).await;
+        });
     }
 
     /// Remove and return a pending transfer by reference number, if one
@@ -705,11 +811,11 @@ impl SharedState {
     }
 
     /// Free `reference`'s slot if no `HTXF` connection arrives within
-    /// [`DOWNLOAD_IDLE_TIMEOUT`]. Restarts on promotion.
+    /// [`TRANSFER_IDLE_TIMEOUT`]. Restarts on promotion.
     fn spawn_download_idle_timeout(&self, reference: TransferRef) {
         let state = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(DOWNLOAD_IDLE_TIMEOUT).await;
+            tokio::time::sleep(TRANSFER_IDLE_TIMEOUT).await;
             if state.take_transfer(reference).await.is_some() {
                 state.release_download_slot(reference).await;
             }
@@ -1418,6 +1524,51 @@ mod tests {
         assert_eq!(&entries[1].file_type, b"fldr");
     }
 
+    fn state_with_files(files: InMemoryFileProvider) -> SharedState {
+        SharedState::new(Providers {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
+            files: Arc::new(files),
+            flat_news: Arc::new(crate::news::InMemoryNewsProvider::default()),
+            threaded_news: Arc::new(crate::news::InMemoryNewsProvider::default()),
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(crate::console::DefaultChatCommands),
+        })
+    }
+
+    #[tokio::test]
+    async fn walk_folder_skips_a_drop_box_and_its_contents_without_view_drop_boxes() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"a");
+        files.seed(&HlPath::new(["Top", "My Drop Box"]), "secret.txt", *b"s");
+        let state = state_with_files(files);
+        let requester = FileRequester { login: "alice" };
+        let root = HlPath::default();
+        let walk = |access| state.walk_folder(requester, &root, "Top", access);
+
+        let paths = |items: Vec<FolderItem>| -> Vec<Vec<String>> {
+            items.into_iter().map(|i| i.path.components).collect()
+        };
+        assert_eq!(
+            paths(walk(Access::empty()).await.unwrap()),
+            [vec!["a.txt".to_string()]]
+        );
+        assert_eq!(walk(Access::VIEW_DROP_BOXES).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn walk_folder_refuses_a_drop_box_root_without_view_drop_boxes() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "a.txt", *b"a");
+        let state = state_with_files(files);
+        let requester = FileRequester { login: "alice" };
+        assert!(state
+            .walk_folder(requester, &HlPath::default(), "Drop Box", Access::empty())
+            .await
+            .is_err());
+    }
+
     #[tokio::test]
     async fn an_in_progress_upload_is_listed_under_its_real_hpf_name() {
         let files = Arc::new(InMemoryFileProvider::default());
@@ -1497,6 +1648,33 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn an_upload_whose_htxf_connection_never_arrives_expires() {
+        let state = SharedState::default();
+        let reference = state
+            .register_transfer(PendingTransfer {
+                kind: TransferKind::File(crate::state::FileTransfer {
+                    target: crate::state::TransferTarget {
+                        login: "alice".to_string(),
+                        dir: HlPath::default(),
+                        name: "x".to_string(),
+                    },
+                    raw: false,
+                }),
+                direction: TransferDirection::Put,
+                size: 0,
+                resume_offset: 0,
+                client_ip: "127.0.0.1".parse().unwrap(),
+            })
+            .await;
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(TRANSFER_IDLE_TIMEOUT + Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+
+        assert!(state.take_transfer(reference).await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn an_admitted_download_whose_htxf_connection_never_arrives_frees_its_slot() {
         let state = SharedState::default();
         state.set_download_limits(1, 10);
@@ -1524,7 +1702,7 @@ mod tests {
 
         // Let both timeout tasks reach `sleep` before the clock advances.
         tokio::task::yield_now().await;
-        tokio::time::advance(DOWNLOAD_IDLE_TIMEOUT + Duration::from_secs(1)).await;
+        tokio::time::advance(TRANSFER_IDLE_TIMEOUT + Duration::from_secs(1)).await;
         // Let the abandoned slot's timeout task run and promote `second`.
         tokio::task::yield_now().await;
 

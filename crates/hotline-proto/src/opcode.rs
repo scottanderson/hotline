@@ -134,6 +134,9 @@ pub enum Opcode {
     /// Create a file alias (209).
     /// Original: `myTran_MakeFileAlias`.
     FileSymlink = 209,
+    /// Begin downloading a folder and its contents (210).
+    /// Original: `myTran_DownloadFldr`.
+    DownloadFldr = 210,
     /// Server push: a queued download's position changed (211). Sent
     /// while `myField_WaitingCount` (116) is nonzero.
     /// Original: `myTran_DownloadInfo`.
@@ -141,6 +144,9 @@ pub enum Opcode {
     /// Fetch the server banner image over `HTXF` (212).
     /// Original: `myTran_DownloadBanner`.
     BannerGet = 212,
+    /// Begin uploading a folder and its contents (213).
+    /// Original: `myTran_UploadFldr`.
+    UploadFldr = 213,
     /// Fetch the connected-user list (300).
     /// Original: `myTran_GetUserNameList`.
     UserGetlist = 300,
@@ -262,8 +268,10 @@ opcode_names!(
     (myTran_SetFileInfo, FileSetinfo),
     (myTran_MoveFile, FileMove),
     (myTran_MakeFileAlias, FileSymlink),
+    (myTran_DownloadFldr, DownloadFldr),
     (myTran_DownloadInfo, DownloadInfo),
     (myTran_DownloadBanner, BannerGet),
+    (myTran_UploadFldr, UploadFldr),
     (myTran_GetUserNameList, UserGetlist),
     (myTran_NotifyChangeUser, NotifyChangeUser),
     (myTran_NotifyDeleteUser, UserPart),

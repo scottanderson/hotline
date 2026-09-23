@@ -30,6 +30,16 @@ below, in priority order.
   disconnected". This server instead reads and discards for
   `KICK_DRAIN_TIMEOUT` (3 seconds) so the client can display the
   `myTran_DisconnectMsg` (111) notice, then closes regardless.
+- **Folder transfer drops some of openline's safeguards.** No
+  disk-space check before a `myTran_UploadFldr` (213), no 2-minute idle
+  kill once a folder upload's connection is open, and no skip for an
+  item whose path is too long for openline's fixed 1024-byte buffer.
+  A folder download also skips a symlinked folder in `hls`; openline
+  resolves aliases and skips only one that loops back to an ancestor.
+- **A running upload outlives its client.** openline's `ProcessUploads`
+  and `ProcessFldrUploads` abort an upload, file or folder, once its
+  client disconnects. Here only downloads have a cancel token, so an
+  open upload connection keeps writing until it closes.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -50,30 +60,20 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **Folder transfer (`myTran_DownloadFldr`/`UploadFldr`) isn't
-   implemented at all.** Needs new opcodes, a `TransferKind::Folder` (or
-   equivalent), and the `dlFldrAction_SendFile`/`_ResumeFile`/`_NextFile`
-   (1/2/3, `HotlineClientServerCommon.h`) action field the client sends on
-   the HTXF connection to step through a folder's files one at a time.
-   Independently visible feature, large enough for its own commit(s) once
-   picked up, not a small addition to fold into other work. Also covers
-   `Access::DOWNLOAD_FOLDER`/`UPLOAD_FOLDER`, which have known openline
-   denial strings in `Access::actions` but no `require()` call site yet.
-
-2. **No live per-transfer-progress tracker.** `on_user_get_info`'s
+1. **No live per-transfer-progress tracker.** `on_user_get_info`'s
    file-transfer sections always read `"None."`, with no in-progress
    transfer ever reported. The concurrent-download queue itself
    (Resolved) tracks which references hold an active slot, but not
    their byte-level progress; this needs its own tracker fed from
    `server/htxf.rs`'s actual read/write loop.
 
-3. **A still-uploading (`.hpf`) file can't be touched by its plain name
+2. **A still-uploading (`.hpf`) file can't be touched by its plain name
    until it finishes.** `delete`/`rename`/`r#move`/`symlink` all resolve
    only the exact name passed in, so a resumable in-progress upload is
    invisible to those operations by design, not by omission — flagged in
    case that turns out to matter for a real client.
 
-4. **Enum variant naming isn't consistently the openline constant's tail
+3. **Enum variant naming isn't consistently the openline constant's tail
    yet.** `FieldId`/`Opcode` already follow this (see AGENTS.md's Naming
    section); other enums need the same audit. First pass (every `pub enum`
    in `hotline-proto`/`hotline-server`/`hotline-client`, plus session.rs's
@@ -93,7 +93,7 @@ one-shared-room model.
    of the backlog lands, since later items are likely to add more enums
    this pass didn't have to consider.
 
-5. **Threaded news storage does not match openline's on-disk
+4. **Threaded news storage does not match openline's on-disk
    binary database format.** Openline stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -114,14 +114,14 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-6. **Open design question from news article/category JSON storage.**
+5. **Open design question from news article/category JSON storage.**
    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
    `BTreeMap`, so once an article legitimately holds more than one
    flavor, "primary" means alphabetically-first MIME type, not
    first-posted or preferred — harmless today (always exactly one
    entry) but worth deciding before multi-flavor posting is wired up.
 
-7. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+6. **`on_newsfile_get`'s clamp can split a multi-byte character.**
    The reply is truncated to 65535 encoded bytes. Under the Mac OS
    Roman default every character is one byte, so this is invisible;
    under `utf-8` or `shift-jis` the last character can arrive as a
@@ -129,20 +129,20 @@ one-shared-room model.
    openline. Worth deciding only if a multi-byte encoding is
    ever made selectable per connection.
 
-8. **Reassembly's memory bound is per connection, not global.**
+7. **Reassembly's memory bound is per connection, not global.**
    `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
    nothing caps how many connections a server accepts. Total
    reassembly memory is therefore unbounded. Needs a connection limit
    or a shared budget, plus a decision on which.
 
-9. **The tracker beacon counts logged-in users.** openline sends
+8. **The tracker beacon counts logged-in users.** openline sends
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
 
-10. **The download queue does not watch the `HTXF` socket.** A queued
-    download that closes its connection keeps its place until it is
-    promoted. A disconnect frees an active slot, but the transfer keeps
-    running, so the active count can pass `max_downloads` for a while.
+9. **The download queue does not watch the `HTXF` socket.** A queued
+   download that closes its connection keeps its place until it is
+   promoted. A disconnect frees an active slot, but the transfer keeps
+   running, so the active count can pass `max_downloads` for a while.
 
 ## Resolved
 
@@ -511,6 +511,28 @@ one-shared-room model.
     promotion. A download whose connection never arrives, arrives from
     the wrong address, or whose user disconnects leaves the queue,
     active or queued, and a queued waiter wakes and ends.
+
+71. Folder transfer (`myTran_DownloadFldr`/`myTran_UploadFldr`, 210/213)
+    implemented from openline alone, since mhxd never implemented it:
+    `ProcessTran_DownloadFldr`/`ProcessTran_UploadFldr`
+    (`HotlineServTrans.cp`), `ProcessFldrDownloads`/`ProcessFldrUploads`
+    (`HotlineServ.cp`), and `CMyDLFldr` (`HotlineFolderDownload.cp`).
+    `FileProvider::walk` lists a folder in pre-order; a download skips
+    every drop box `VIEW_DROP_BOXES` doesn't cover at any depth, like
+    `CMyDLFldr`'s constructor. 210 replies with the plain sum of file
+    sizes and the item count, root not counted, and shares the
+    concurrent-download queue (72). 213 creates the folder in the
+    handler. On the `HTXF` connection, `server/htxf.rs` steps through
+    items with `dlFldrAction_*`: a download sends each item's header on
+    `NextFile` and a file's size and flattened object on
+    `SendFile`/`ResumeFile`; an upload asks for each header with
+    `NextFile`, resumes a file with a `.hpf` working copy, skips a
+    finished one, and stops after the declared item count, sending no
+    trailing `NextFile` only after a received last file. `Access::DOWNLOAD_FOLDER`/`UPLOAD_FOLDER` now
+    have their first `require()` call sites.
+    An upload reference, file or folder, expires after 500 s if its
+    `HTXF` connection never arrives, like `ProcessUploads`/
+    `ProcessFldrUploads`.
 
 ## Needs manual verification against the real client
 

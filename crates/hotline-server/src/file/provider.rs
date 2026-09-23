@@ -3,7 +3,7 @@ use std::io;
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 
-use super::{partial_upload_name, BoxedReader, BoxedWriter, FileRequester};
+use super::{partial_upload_name, BoxedReader, BoxedWriter, FileRequester, FolderItem};
 
 /// Storage backing `FILE_LIST`/`FILE_GET`/`FILE_PUT`. `hotline-server`
 /// doesn't own file storage any more than it owns account storage (see
@@ -22,6 +22,57 @@ pub trait FileProvider: Send + Sync {
     /// A file's size in bytes, or `None` if it doesn't exist, is a
     /// folder, or isn't visible to `requester`.
     async fn size(&self, requester: FileRequester<'_>, dir: &HlPath, name: &str) -> Option<u64>;
+
+    /// Every file and folder under `dir`/`name`, in pre-order, each folder
+    /// just before its contents. Each file's size comes from
+    /// [`Self::size`], skipping any entry it rejects. Empty if `name` is a
+    /// file; `None` if it doesn't exist.
+    async fn walk(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<Vec<FolderItem>> {
+        let info = self.info(requester, dir, name).await?;
+        let mut items = Vec::new();
+        if info.file_type != *b"fldr" {
+            return Some(items);
+        }
+        let mut root = dir.components.clone();
+        root.push(name.to_string());
+        let mut stack: Vec<(Vec<String>, FileNameWithInfo)> = Vec::new();
+        let mut next_dir = Some(Vec::new());
+        loop {
+            if let Some(parent) = next_dir.take() {
+                let full = HlPath::new(root.iter().chain(&parent));
+                let entries = self.list(requester, &full).await.unwrap_or_default();
+                stack.extend(entries.into_iter().rev().map(|e| (parent.clone(), e)));
+            }
+            let Some((mut path, entry)) = stack.pop() else {
+                break;
+            };
+            let is_folder = entry.file_type == *b"fldr";
+            let size = if is_folder {
+                0
+            } else {
+                let dir = HlPath::new(root.iter().chain(&path));
+                match self.size(requester, &dir, &entry.name).await {
+                    Some(size) => size,
+                    None => continue,
+                }
+            };
+            path.push(entry.name);
+            if is_folder {
+                next_dir = Some(path.clone());
+            }
+            items.push(FolderItem {
+                path: HlPath::new(path),
+                is_folder,
+                size,
+            });
+        }
+        Some(items)
+    }
 
     /// Whether a file or folder already exists at this path.
     async fn exists(&self, requester: FileRequester<'_>, dir: &HlPath, name: &str) -> bool;
