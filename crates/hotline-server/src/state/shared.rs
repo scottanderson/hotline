@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, RwLock};
+use tokio_util::sync::CancellationToken;
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
@@ -833,6 +834,26 @@ impl SharedState {
     pub async fn release_download_slot(&self, reference: TransferRef) {
         let updates = self.download_queue.release(reference);
         self.push_download_updates(updates).await;
+    }
+
+    /// Cancel `user_id`'s download `reference`, queued or running, like
+    /// openline's `KillDownloadByRefNum`. Another user's download is left
+    /// alone.
+    pub async fn kill_download(&self, reference: TransferRef, user_id: u16) {
+        let Some(updates) = self.download_queue.kill(reference, user_id) else {
+            return;
+        };
+        self.take_transfer(reference).await;
+        self.push_download_updates(updates).await;
+    }
+
+    /// `reference`'s cancel token, `None` once the download has left the
+    /// queue.
+    pub(crate) fn download_cancel_token(
+        &self,
+        reference: TransferRef,
+    ) -> Option<CancellationToken> {
+        self.download_queue.cancel_token(reference)
     }
 
     /// Drop a disconnected user's active and waiting downloads, promoting
@@ -1711,6 +1732,42 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(1), state.wait_for_download_slot(second))
                 .await
                 .expect("second download should have been promoted once the idle slot freed");
+        assert!(promoted);
+    }
+
+    #[tokio::test]
+    async fn a_killed_download_refuses_its_htxf_connection_and_promotes_the_next() {
+        let state = SharedState::default();
+        state.set_download_limits(1, 10);
+        let make = || PendingTransfer {
+            kind: TransferKind::File(crate::state::FileTransfer {
+                target: crate::state::TransferTarget {
+                    login: "alice".to_string(),
+                    dir: HlPath::default(),
+                    name: "x".to_string(),
+                },
+                raw: false,
+            }),
+            direction: TransferDirection::Get,
+            size: 0,
+            resume_offset: 0,
+            client_ip: "127.0.0.1".parse().unwrap(),
+        };
+        let first = state.register_transfer(make()).await;
+        assert_eq!(state.admit_download(first, 1).await, 0);
+        let second = state.register_transfer(make()).await;
+        assert_eq!(state.admit_download(second, 2).await, 1);
+
+        state.kill_download(first, 2).await;
+        assert!(state.download_cancel_token(first).is_some());
+
+        state.kill_download(first, 1).await;
+        assert!(state.take_transfer(first).await.is_none());
+        assert!(state.download_cancel_token(first).is_none());
+        let promoted =
+            tokio::time::timeout(Duration::from_secs(1), state.wait_for_download_slot(second))
+                .await
+                .expect("second download should have been promoted");
         assert!(promoted);
     }
 

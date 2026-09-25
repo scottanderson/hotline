@@ -144,19 +144,14 @@ one-shared-room model.
    promoted. A disconnect frees an active slot, but the transfer keeps
    running, so the active count can pass `max_downloads` for a while.
 
-10. **`myTran_KillDownload` (214) has no handler.** openline's
-    `ProcessTran_KillDownload` (`HotlineServTrans.cp`) reads
-    `myField_RefNum` (107), cancels that download, and replies with no
-    error. It would also let a client drop a queued download (item 8).
-
-11. **No per-address connection limit.** openline refuses a connection
+10. **No per-address connection limit.** openline refuses a connection
     past `nMaxConnectionsIP` (default 5) from one address
     (`HotlineServ.cp`). This also bounds item 5.
 
-12. **No login timeout.** openline disconnects a client that has not
+11. **No login timeout.** openline disconnects a client that has not
     logged in after 60 seconds (`HotlineServ.cp`).
 
-13. **Flood control does not ban.** openline adds a 30-minute temporary
+12. **Flood control does not ban.** openline adds a 30-minute temporary
     ban for each of these: more than 10 consecutive connections from one
     address within 30 seconds, more than 120 transactions in a minute,
     five identical private messages, more than 20 messages in a minute,
@@ -165,14 +160,14 @@ one-shared-room model.
     only disconnects, from one points policy with fixed thresholds
     (`FloodConfig::default()`).
 
-14. **`hls` cannot set the download limits.** `ServerConfig` has
+13. **`hls` cannot set the download limits.** `ServerConfig` has
     `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
     for them.
 
-15. **No activity log.** openline logs downloads, uploads, connections,
+14. **No activity log.** openline logs downloads, uploads, connections,
     and account changes, each behind its own option (`myOpt_Log*`).
 
-16. **No HTTP tunnel listeners.** openline also listens on the base port
+15. **No HTTP tunnel listeners.** openline also listens on the base port
     plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
     The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
     `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -180,14 +175,14 @@ one-shared-room model.
     padding. `HLProtocol.md` does not document it and mhxd does not
     implement it, so no client is at hand to test against.
 
-17. **Small cleanups found in review.** The `*b"fldr"` check repeats
+16. **Small cleanups found in review.** The `*b"fldr"` check repeats
     across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
     helper would fit. `start_folder_upload` repeats
     `authorize_upload`'s destination rule. `prepare_folder_upload_item`
     ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
     `login`, `dir`, and `name`.
 
-18. **`hlc` covers only chat and lists.** It logs in, shows the
+17. **`hlc` covers only chat and lists.** It logs in, shows the
     agreement, chats in public, and lists users, files, and tracker
     servers. It cannot transfer files or folders, read or post classic or
     threaded news, send private messages, use private chat rooms, get
@@ -583,6 +578,14 @@ one-shared-room model.
     An upload reference, file or folder, expires after 500 s if its
     `HTXF` connection never arrives, like `ProcessUploads`/
     `ProcessFldrUploads`.
+
+72. `myTran_KillDownload` (214) implemented, matching openline's
+    `ProcessTran_KillDownload` (`HotlineServTrans.cp`) and
+    `KillDownloadByRefNum` (`HotlineServ.cp`). It reads `myField_RefNum`
+    (107) and always replies with no error. Only the owner's own download
+    is dropped, queued or running. A running `HTXF` send stops, a pending
+    reference refuses its later connection, and the queue promotes the
+    next download.
 
 ## Needs manual verification against the real client
 

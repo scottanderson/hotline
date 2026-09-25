@@ -368,6 +368,23 @@ impl Session {
         vec![tx.reply(vec![Field::u32(FieldId::TransferId, reference.0)])]
     }
 
+    /// `myTran_KillDownload` (214): cancel one of this session's downloads,
+    /// queued or running.
+    pub(super) async fn on_kill_download(
+        &self,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
+        if let Some(reference) = tx
+            .field(FieldId::TransferId)
+            .and_then(Field::as_u32)
+            .map(TransferRef)
+        {
+            state.kill_download(reference, self.user_id).await;
+        }
+        vec![tx.reply(vec![])]
+    }
+
     /// 204: delete a file, or a folder and everything under it.
     pub(super) async fn on_file_delete(
         &self,
@@ -700,6 +717,39 @@ mod tests {
         );
         let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
         assert!(reply.field(FieldId::QueuePosition).is_none());
+    }
+
+    /// openline's `ProcessTran_KillDownload` always replies with no error.
+    #[tokio::test]
+    async fn kill_download_cancels_this_sessions_download() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+        let get = Transaction::request(
+            Opcode::FileGet,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let reference = reply
+            .field(FieldId::TransferId)
+            .and_then(Field::as_u32)
+            .unwrap();
+
+        let kill = Transaction::request(
+            Opcode::KillDownload,
+            2,
+            vec![Field::u32(FieldId::TransferId, reference)],
+        );
+        let [reply] = session
+            .on_kill_download(&kill, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        assert!(!reply.is_error());
+        assert!(state.take_transfer(TransferRef(reference)).await.is_none());
     }
 
     #[tokio::test]

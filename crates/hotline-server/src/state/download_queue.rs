@@ -5,6 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::TransferRef;
@@ -39,6 +40,7 @@ struct Inner {
     active: HashMap<TransferRef, u16>,
     waiting: VecDeque<Waiting>,
     notify: HashMap<TransferRef, Arc<Notify>>,
+    cancel: HashMap<TransferRef, CancellationToken>,
 }
 
 impl Inner {
@@ -91,6 +93,7 @@ impl DownloadQueue {
     /// an active slot.
     pub(crate) fn admit(&self, reference: TransferRef, user_id: u16) -> u32 {
         let mut inner = self.inner.lock().unwrap();
+        inner.cancel.insert(reference, CancellationToken::new());
         let waiting_count = inner.ahead_of(user_id);
         if waiting_count == 0 {
             inner.active.insert(reference, user_id);
@@ -130,12 +133,40 @@ impl DownloadQueue {
         let mut inner = self.inner.lock().unwrap();
         inner.active.remove(&reference);
         inner.waiting.retain(|w| w.reference != reference);
+        inner.cancel.remove(&reference);
         inner.wake(reference);
         recompute(&mut inner)
     }
 
-    /// Drop every active and waiting entry for a disconnected user, then
-    /// promote waiting downloads that now fit.
+    /// `reference`'s cancel token, `None` once it has left the queue.
+    pub(crate) fn cancel_token(&self, reference: TransferRef) -> Option<CancellationToken> {
+        self.inner.lock().unwrap().cancel.get(&reference).cloned()
+    }
+
+    /// Cancel `user_id`'s download `reference`, then release it like
+    /// [`Self::release`]. `None` if it isn't `user_id`'s download.
+    pub(crate) fn kill(&self, reference: TransferRef, user_id: u16) -> Option<Vec<QueueUpdate>> {
+        {
+            let inner = self.inner.lock().unwrap();
+            let owner = inner.active.get(&reference).copied().or_else(|| {
+                inner
+                    .waiting
+                    .iter()
+                    .find(|w| w.reference == reference)
+                    .map(|w| w.user_id)
+            });
+            if owner != Some(user_id) {
+                return None;
+            }
+            if let Some(cancel) = inner.cancel.get(&reference) {
+                cancel.cancel();
+            }
+        }
+        Some(self.release(reference))
+    }
+
+    /// Cancel and drop every active and waiting entry for a disconnected
+    /// user, then promote waiting downloads that now fit.
     pub(crate) fn remove_user(&self, user_id: u16) -> Vec<QueueUpdate> {
         let mut inner = self.inner.lock().unwrap();
         let removed_refs: Vec<TransferRef> = inner
@@ -154,6 +185,9 @@ impl DownloadQueue {
         inner.active.retain(|_, &mut u| u != user_id);
         inner.waiting.retain(|w| w.user_id != user_id);
         for reference in removed_refs {
+            if let Some(cancel) = inner.cancel.remove(&reference) {
+                cancel.cancel();
+            }
             inner.wake(reference);
         }
         recompute(&mut inner)
@@ -332,5 +366,53 @@ mod tests {
 
         let updates = q.remove_user(100);
         assert_eq!(updates, vec![update(101, 2, 0)]);
+    }
+
+    #[test]
+    fn disconnecting_a_user_cancels_their_running_download() {
+        let q = with_limits(1, 10);
+        q.admit(TransferRef(1), 100);
+        let cancel = q.cancel_token(TransferRef(1)).unwrap();
+
+        q.remove_user(100);
+
+        assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn killing_a_running_download_cancels_it_and_frees_its_slot() {
+        let queue = with_limits(1, 10);
+        queue.admit(TransferRef(1), 5);
+        queue.admit(TransferRef(2), 6);
+        let cancel = queue.cancel_token(TransferRef(1)).unwrap();
+
+        let updates = queue
+            .kill(TransferRef(1), 5)
+            .expect("user 5 owns download 1");
+
+        assert!(cancel.is_cancelled());
+        assert!(queue.cancel_token(TransferRef(1)).is_none());
+        assert_eq!(updates, vec![update(6, 2, 0)]);
+    }
+
+    #[test]
+    fn killing_a_queued_download_drops_it() {
+        let queue = with_limits(1, 10);
+        queue.admit(TransferRef(1), 5);
+        queue.admit(TransferRef(2), 6);
+
+        assert!(queue.kill(TransferRef(2), 6).is_some());
+        assert!(queue.cancel_token(TransferRef(2)).is_none());
+    }
+
+    /// openline's `KillDownloadByRefNum` leaves another client's download alone.
+    #[test]
+    fn another_users_download_is_not_killed() {
+        let queue = with_limits(1, 10);
+        queue.admit(TransferRef(1), 5);
+        let cancel = queue.cancel_token(TransferRef(1)).unwrap();
+
+        assert!(queue.kill(TransferRef(1), 6).is_none());
+        assert!(!cancel.is_cancelled());
     }
 }

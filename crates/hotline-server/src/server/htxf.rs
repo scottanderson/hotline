@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 
@@ -61,27 +62,40 @@ async fn handle_htxf_connection(
         TransferKind::Banner => send_banner(&mut stream, state).await,
         TransferKind::File(file) => match transfer.direction {
             TransferDirection::Get => {
-                if !state.wait_for_download_slot(reference).await {
-                    return Ok(());
-                }
-                let result = send_file(&mut stream, file, &transfer, state).await;
-                state.release_download_slot(reference).await;
-                result
+                let send = send_file(&mut stream, file, &transfer, state);
+                run_download(state, reference, send).await
             }
             TransferDirection::Put => receive_file(&mut stream, file, &transfer, state).await,
         },
         TransferKind::Folder(folder) => match transfer.direction {
             TransferDirection::Get => {
-                if !state.wait_for_download_slot(reference).await {
-                    return Ok(());
-                }
-                let result = send_folder(&mut stream, folder, state).await;
-                state.release_download_slot(reference).await;
-                result
+                let send = send_folder(&mut stream, folder, state);
+                run_download(state, reference, send).await
             }
             TransferDirection::Put => receive_folder(&mut stream, folder, state).await,
         },
     }
+}
+
+/// Run `send` once download `reference` holds a slot, then free the slot.
+/// A `myTran_KillDownload` (214) stops it early.
+async fn run_download(
+    state: &SharedState,
+    reference: TransferRef,
+    send: impl Future<Output = Result<()>>,
+) -> Result<()> {
+    let Some(cancel) = state.download_cancel_token(reference) else {
+        return Ok(());
+    };
+    if !state.wait_for_download_slot(reference).await {
+        return Ok(());
+    }
+    let result = tokio::select! {
+        result = send => result,
+        () = cancel.cancelled() => Ok(()),
+    };
+    state.release_download_slot(reference).await;
+    result
 }
 
 /// Send a `BANNER_GET` download: the banner image's raw bytes, with none

@@ -147,6 +147,9 @@ pub enum Opcode {
     /// Begin uploading a folder and its contents (213).
     /// Original: `myTran_UploadFldr`.
     UploadFldr = 213,
+    /// Cancel a download by its reference number (214).
+    /// Original: `myTran_KillDownload`.
+    KillDownload = 214,
     /// Fetch the connected-user list (300).
     /// Original: `myTran_GetUserNameList`.
     UserGetlist = 300,
@@ -272,6 +275,7 @@ opcode_names!(
     (myTran_DownloadInfo, DownloadInfo),
     (myTran_DownloadBanner, BannerGet),
     (myTran_UploadFldr, UploadFldr),
+    (myTran_KillDownload, KillDownload),
     (myTran_GetUserNameList, UserGetlist),
     (myTran_NotifyChangeUser, NotifyChangeUser),
     (myTran_NotifyDeleteUser, UserPart),

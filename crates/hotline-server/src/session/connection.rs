@@ -393,6 +393,7 @@ impl Session {
             /* 210 */ Opcode::DownloadFldr => self.on_download_fldr(tx, state).await,
             /* 212 */ Opcode::BannerGet => self.on_banner_get(tx, state).await,
             /* 213 */ Opcode::UploadFldr => self.on_upload_fldr(tx, state).await,
+            /* 214 */ Opcode::KillDownload => self.on_kill_download(tx, state).await,
             /* 300 */ Opcode::UserGetlist => self.on_user_get_list(tx, state).await,
             /* 370 */ Opcode::NewsListdir => self.on_news_listdir(tx, state).await,
             /* 371 */
