@@ -4,8 +4,10 @@ use hotline_proto::types::HlDate;
 
 use crate::news::NewsArticleView;
 
-/// One threaded news article's full data, for a `myTran_GetNewsArtData`
-/// (400) reply.
+/// One threaded news article's full data, for a
+/// [`myTran_GetNewsArtData`] (400) reply.
+///
+/// [`myTran_GetNewsArtData`]: hotline_proto::Opcode::GetNewsArtData
 #[derive(Debug, Clone)]
 pub struct NewsArticleDetail {
     /// The article's subject line.

@@ -13,8 +13,10 @@ use crate::state::SharedState;
 use super::connection::Session;
 
 impl Session {
-    /// `myTran_NewUser` (350)
-    pub(super) async fn on_account_create(
+    /// [`myTran_NewUser`] (350)
+    ///
+    /// [`myTran_NewUser`]: hotline_proto::Opcode::NewUser
+    pub(super) async fn on_new_user(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -22,11 +24,13 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
-        self.on_account_create_or_modify(tx, state).await
+        self.on_new_or_set_user(tx, state).await
     }
 
-    /// `myTran_DeleteUser` (351)
-    pub(super) async fn on_account_delete(
+    /// [`myTran_DeleteUser`] (351)
+    ///
+    /// [`myTran_DeleteUser`]: hotline_proto::Opcode::DeleteUser
+    pub(super) async fn on_delete_user(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -55,9 +59,9 @@ impl Session {
                 .send_to(
                     target,
                     Transaction::push(
-                        Opcode::Politequit,
+                        Opcode::DisconnectMsg,
                         vec![Field::string(
-                            FieldId::Text,
+                            FieldId::Data,
                             "You are logged in with an account which was deleted.",
                         )],
                     ),
@@ -66,8 +70,10 @@ impl Session {
         }
     }
 
-    /// `myTran_GetUser` (352)
-    pub(super) async fn on_account_read(
+    /// [`myTran_GetUser`] (352)
+    ///
+    /// [`myTran_GetUser`]: hotline_proto::Opcode::GetUser
+    pub(super) async fn on_get_user(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -76,7 +82,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
-        let Some(login) = tx.string(FieldId::Login, encoding) else {
+        let Some(login) = tx.string(FieldId::UserLogin, encoding) else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
@@ -84,15 +90,17 @@ impl Session {
             return vec![tx.reply_error("no such account")];
         };
         vec![tx.reply(vec![
-            Field::string(FieldId::Name, account.name),
-            Field::obfuscated_string(FieldId::Login, login),
+            Field::string(FieldId::UserName, account.name),
+            Field::obfuscated_string(FieldId::UserLogin, login),
             Self::redacted_password_field(&account.password),
-            Field::u64(FieldId::Access, account.access.bits()),
+            Field::u64(FieldId::UserAccess, account.access.bits()),
         ])]
     }
 
-    /// `myTran_SetUser` (353)
-    pub(super) async fn on_account_modify(
+    /// [`myTran_SetUser`] (353)
+    ///
+    /// [`myTran_SetUser`]: hotline_proto::Opcode::SetUser
+    pub(super) async fn on_set_user(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -100,13 +108,16 @@ impl Session {
         if let Err(reason) = self.access.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
-        self.on_account_create_or_modify(tx, state).await
+        self.on_new_or_set_user(tx, state).await
     }
 
     /// Implementation for
-    /// `myTran_NewUser` (350) and
-    /// `myTran_SetUser` (353).
-    pub(super) async fn on_account_create_or_modify(
+    /// [`myTran_NewUser`] (350) and
+    /// [`myTran_SetUser`] (353).
+    ///
+    /// [`myTran_NewUser`]: hotline_proto::Opcode::NewUser
+    /// [`myTran_SetUser`]: hotline_proto::Opcode::SetUser
+    pub(super) async fn on_new_or_set_user(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -118,7 +129,7 @@ impl Session {
         let login = login.to_lowercase();
         let existing = state.account(&login).await;
         // Absent PASSWORD clears it; raw byte 0x00 means unchanged.
-        let password = match tx.field(FieldId::Password) {
+        let password = match tx.field(FieldId::UserPassword) {
             Some(field) if field.as_bytes(encoding).as_ref() == [0u8] => existing
                 .as_ref()
                 .map(|a| a.password.clone())
@@ -159,20 +170,32 @@ impl Session {
         vec![reply]
     }
 
-    /// The password field as sent back for `myTran_GetUser` (352)
-    /// and each record of `myTran_GetUserList` (348): empty if unset,
+    /// The password field as sent back for [`myTran_GetUser`] (352)
+    /// and each record of [`myTran_GetUserList`] (348): empty if unset,
     /// a single `x` otherwise, so the real password is never echoed.
+    ///
+    /// [`myTran_GetUser`]: hotline_proto::Opcode::GetUser
+    /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
     pub(super) fn redacted_password_field(password: &str) -> Field {
         Field::string(
-            FieldId::Password,
+            FieldId::UserPassword,
             if password.is_empty() { "" } else { "x" },
         )
     }
 
-    /// `myTran_GetUserList` (348): every account at once, for the
-    /// bulk account editor. Each account is one `Text` (101) field
-    /// wrapping its own nested `Name`/`Login`/`Password`/`Access` field
-    /// list, the same `count`-prefixed shape a transaction body uses.
+    /// [`myTran_GetUserList`] (348): every account at once, for the
+    /// bulk account editor. Each account is one [`myField_Data`] (101) field
+    /// wrapping its own nested field list of [`myField_UserName`] (102),
+    /// [`myField_UserLogin`] (105), [`myField_UserPassword`] (106), and
+    /// [`myField_UserAccess`] (110), the same `count`-prefixed shape a
+    /// transaction body uses.
+    ///
+    /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
+    /// [`myField_UserName`]: hotline_proto::FieldId::UserName
+    /// [`myField_UserLogin`]: hotline_proto::FieldId::UserLogin
+    /// [`myField_UserPassword`]: hotline_proto::FieldId::UserPassword
+    /// [`myField_UserAccess`]: hotline_proto::FieldId::UserAccess
     pub(super) async fn on_get_user_list(
         &self,
         tx: &Transaction,
@@ -189,27 +212,31 @@ impl Session {
             .filter_map(|(login, account)| {
                 FieldList::encode(
                     &[
-                        Field::string(FieldId::Name, account.name),
-                        Field::obfuscated_string(FieldId::Login, login),
+                        Field::string(FieldId::UserName, account.name),
+                        Field::obfuscated_string(FieldId::UserLogin, login),
                         Self::redacted_password_field(&account.password),
-                        Field::u64(FieldId::Access, account.access.bits()),
+                        Field::u64(FieldId::UserAccess, account.access.bits()),
                     ],
                     encoding,
                 )
                 .ok()
             })
-            .map(|record| Field::bytes(FieldId::Text, record))
+            .map(|record| Field::bytes(FieldId::Data, record))
             .collect();
         vec![tx.reply(fields)]
     }
 
-    /// `myTran_SetUserList` (349): save a bulk-edited account list.
-    /// Each `Text` (101) field is one nested account record in the same
-    /// shape `myTran_GetUserList` sent; see
+    /// [`myTran_SetUserList`] (349): save a bulk-edited account list.
+    /// Each [`myField_Data`] (101) field is one nested account record in the same
+    /// shape [`myTran_GetUserList`] (348) sent; see
     /// [`Session::apply_user_list_record`] for the per-record rules.
     /// Processes every record even after a soft (storage) failure, but
     /// stops and reports immediately on a hard (permission) failure,
     /// matching openline.
+    ///
+    /// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
+    /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
     pub(super) async fn on_set_user_list(
         &self,
         tx: &Transaction,
@@ -217,7 +244,7 @@ impl Session {
     ) -> Vec<Transaction> {
         let encoding = self.encoding();
         let mut save_error = false;
-        for field in tx.fields(FieldId::Text) {
+        for field in tx.fields(FieldId::Data) {
             let Ok(record) = FieldList::decode(&field.as_bytes(encoding)) else {
                 save_error = true;
                 continue;
@@ -234,9 +261,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// Apply one `myTran_SetUserList` record: `Text` (101), if
+    /// Apply one [`myTran_SetUserList`] (349) record: [`myField_Data`] (101), if
     /// present, is the account's login before this edit (deobfuscated,
-    /// scrambled the same way as `Login`), absent for a brand new record.
+    /// scrambled the same way as [`myField_UserLogin`] (105)), absent for a
+    /// brand new record.
     /// An empty name and login means delete; otherwise this is a rename
     /// (login changed), a plain modify, or a create, depending on whether
     /// the old login was given and whether the new login already exists.
@@ -244,6 +272,10 @@ impl Session {
     /// `Ok(true)` if applied, `Ok(false)` for a soft (storage) failure
     /// that shouldn't stop the rest of the list from applying, `Err` for
     /// a hard (permission) failure that aborts the whole request.
+    ///
+    /// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
+    /// [`myField_UserLogin`]: hotline_proto::FieldId::UserLogin
     pub(super) async fn apply_user_list_record(
         &self,
         record: &FieldList,
@@ -252,13 +284,15 @@ impl Session {
         let encoding = self.encoding();
         let as_deobfuscated_string = |f: &Field| f.as_deobfuscated_string(encoding);
         let old_login = record
-            .field(FieldId::Text)
+            .field(FieldId::Data)
             .map(as_deobfuscated_string)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_lowercase());
-        let name = record.string(FieldId::Name, encoding).unwrap_or_default();
+        let name = record
+            .string(FieldId::UserName, encoding)
+            .unwrap_or_default();
         let login = record
-            .field(FieldId::Login)
+            .field(FieldId::UserLogin)
             .map(as_deobfuscated_string)
             .unwrap_or_default()
             .to_lowercase();
@@ -277,7 +311,7 @@ impl Session {
             };
         }
 
-        let password = match record.field(FieldId::Password) {
+        let password = match record.field(FieldId::UserPassword) {
             Some(f) if f.as_bytes(encoding).as_ref() == [0u8] => {
                 let Some(old_login) = &old_login else {
                     return Ok(false);
@@ -291,7 +325,7 @@ impl Session {
             None => String::new(),
         };
         let access = record
-            .field(FieldId::Access)
+            .field(FieldId::UserAccess)
             .and_then(Field::as_u64)
             .map(Access::from_bits_truncate)
             .unwrap_or_else(Access::empty);
@@ -330,7 +364,7 @@ impl Session {
                     Transaction::push(
                         Opcode::ServerMsg,
                         vec![Field::string(
-                            FieldId::Text,
+                            FieldId::Data,
                             format!(
                                 "Cannot create account \"{login}\" because there is already an account with that login."
                             ),
@@ -369,61 +403,66 @@ mod tests {
     use hotline_proto::text_encoding;
 
     #[tokio::test]
-    async fn account_create_then_read_round_trips() {
+    async fn new_user_then_get_user_round_trips() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
 
         let create = Transaction::request(
-            Opcode::AccountCreate,
+            Opcode::NewUser,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "bob"),
-                Field::obfuscated_string(FieldId::Password, "secret"),
-                Field::string(FieldId::Name, "Bob"),
-                Field::u64(FieldId::Access, Access::SEND_CHAT.bits()),
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::obfuscated_string(FieldId::UserPassword, "secret"),
+                Field::string(FieldId::UserName, "Bob"),
+                Field::u64(FieldId::UserAccess, Access::SEND_CHAT.bits()),
             ],
         );
-        let replies = session.on_account_create(&create, &state).await;
+        let replies = session.on_new_user(&create, &state).await;
         assert!(!replies[0].is_error());
 
         let read = Transaction::request(
-            Opcode::AccountRead,
+            Opcode::GetUser,
             2,
-            vec![Field::obfuscated_string(FieldId::Login, "bob")],
+            vec![Field::obfuscated_string(FieldId::UserLogin, "bob")],
         );
-        let replies = session.on_account_read(&read, &state).await;
+        let replies = session.on_get_user(&read, &state).await;
         assert!(!replies[0].is_error());
-        assert_eq!(replies[0].string(FieldId::Name, encoding).unwrap(), "Bob");
         assert_eq!(
-            replies[0].field(FieldId::Access).and_then(Field::as_u64),
+            replies[0].string(FieldId::UserName, encoding).unwrap(),
+            "Bob"
+        );
+        assert_eq!(
+            replies[0]
+                .field(FieldId::UserAccess)
+                .and_then(Field::as_u64),
             Some(Access::SEND_CHAT.bits())
         );
     }
 
     #[tokio::test]
-    async fn account_create_folds_the_login_to_lowercase() {
+    async fn new_user_folds_the_login_to_lowercase() {
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
 
         let create = Transaction::request(
-            Opcode::AccountCreate,
+            Opcode::NewUser,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "Bob"),
-                Field::obfuscated_string(FieldId::Password, "secret"),
-                Field::string(FieldId::Name, "Bob"),
-                Field::u64(FieldId::Access, Access::SEND_CHAT.bits()),
+                Field::obfuscated_string(FieldId::UserLogin, "Bob"),
+                Field::obfuscated_string(FieldId::UserPassword, "secret"),
+                Field::string(FieldId::UserName, "Bob"),
+                Field::u64(FieldId::UserAccess, Access::SEND_CHAT.bits()),
             ],
         );
-        assert!(!session.on_account_create(&create, &state).await[0].is_error());
+        assert!(!session.on_new_user(&create, &state).await[0].is_error());
 
         assert!(state.account("bob").await.is_some());
         assert!(state.account("Bob").await.is_none());
     }
 
     #[tokio::test]
-    async fn account_delete_matches_the_login_regardless_of_case() {
+    async fn delete_user_matches_the_login_regardless_of_case() {
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -440,16 +479,16 @@ mod tests {
             .unwrap();
 
         let delete = Transaction::request(
-            Opcode::AccountDelete,
+            Opcode::DeleteUser,
             1,
-            vec![Field::obfuscated_string(FieldId::Login, "BOB")],
+            vec![Field::obfuscated_string(FieldId::UserLogin, "BOB")],
         );
-        assert!(!session.on_account_delete(&delete, &state).await[0].is_error());
+        assert!(!session.on_delete_user(&delete, &state).await[0].is_error());
         assert!(state.account("bob").await.is_none());
     }
 
     #[tokio::test]
-    async fn account_modify_only_overwrites_fields_present() {
+    async fn set_user_only_overwrites_fields_present() {
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -467,15 +506,15 @@ mod tests {
 
         // Password unchanged via the sentinel, not by omitting the field.
         let modify = Transaction::request(
-            Opcode::AccountModify,
+            Opcode::SetUser,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "bob"),
-                Field::string(FieldId::Name, "Bobby"),
-                Field::bytes(FieldId::Password, vec![0]),
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::string(FieldId::UserName, "Bobby"),
+                Field::bytes(FieldId::UserPassword, vec![0]),
             ],
         );
-        session.on_account_modify(&modify, &state).await;
+        session.on_set_user(&modify, &state).await;
 
         let account = state.account("bob").await.unwrap();
         assert_eq!(account.name, "Bobby");
@@ -484,7 +523,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_modify_without_a_password_field_at_all_clears_it() {
+    async fn set_user_without_a_password_field_at_all_clears_it() {
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -503,21 +542,21 @@ mod tests {
         // No PASSWORD field at all, not the "unchanged" sentinel: this
         // clears the password, matching openline's own behavior.
         let modify = Transaction::request(
-            Opcode::AccountModify,
+            Opcode::SetUser,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "bob"),
-                Field::string(FieldId::Name, "Bobby"),
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::string(FieldId::UserName, "Bobby"),
             ],
         );
-        session.on_account_modify(&modify, &state).await;
+        session.on_set_user(&modify, &state).await;
 
         let account = state.account("bob").await.unwrap();
         assert_eq!(account.password, "");
     }
 
     #[tokio::test]
-    async fn account_read_never_echoes_the_real_password() {
+    async fn get_user_never_echoes_the_real_password() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
@@ -548,20 +587,20 @@ mod tests {
 
         let read = |login: &str| {
             Transaction::request(
-                Opcode::AccountRead,
+                Opcode::GetUser,
                 1,
-                vec![Field::obfuscated_string(FieldId::Login, login)],
+                vec![Field::obfuscated_string(FieldId::UserLogin, login)],
             )
         };
 
         let [with_password] = session
-            .on_account_read(&read("bob"), &state)
+            .on_get_user(&read("bob"), &state)
             .await
             .try_into()
             .unwrap();
         assert_eq!(
             with_password
-                .field(FieldId::Password)
+                .field(FieldId::UserPassword)
                 .unwrap()
                 .as_bytes(encoding)
                 .as_ref(),
@@ -569,13 +608,13 @@ mod tests {
         );
 
         let [without_password] = session
-            .on_account_read(&read("carol"), &state)
+            .on_get_user(&read("carol"), &state)
             .await
             .try_into()
             .unwrap();
         assert_eq!(
             without_password
-                .field(FieldId::Password)
+                .field(FieldId::UserPassword)
                 .unwrap()
                 .as_bytes(encoding)
                 .as_ref(),
@@ -584,7 +623,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_modify_propagates_to_a_live_session_without_reconnect() {
+    async fn set_user_propagates_to_a_live_session_without_reconnect() {
         let admin = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -624,14 +663,14 @@ mod tests {
         let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let modify = Transaction::request(
-            Opcode::AccountModify,
+            Opcode::SetUser,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "bob"),
-                Field::u64(FieldId::Access, Access::BROADCAST.bits()),
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::u64(FieldId::UserAccess, Access::BROADCAST.bits()),
             ],
         );
-        admin.on_account_modify(&modify, &state).await;
+        admin.on_set_user(&modify, &state).await;
 
         // Simulate bob's session loop applying the access update.
         let received = bob_rx
@@ -648,13 +687,13 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("the live update should also push a UserChange");
         assert_eq!(
-            notify.field(FieldId::UserId).and_then(Field::as_u16),
+            notify.field(FieldId::UserID).and_then(Field::as_u16),
             Some(bob.user_id)
         );
     }
 
     #[tokio::test]
-    async fn account_modify_renames_only_when_use_any_name_is_revoked() {
+    async fn set_user_renames_only_when_use_any_name_is_revoked() {
         let admin = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -694,14 +733,14 @@ mod tests {
         let mut bob_rx = state.register_recipient(bob.user_id).await;
 
         let revoke = Transaction::request(
-            Opcode::AccountModify,
+            Opcode::SetUser,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "bob"),
-                Field::u64(FieldId::Access, Access::empty().bits()),
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::u64(FieldId::UserAccess, Access::empty().bits()),
             ],
         );
-        admin.on_account_modify(&revoke, &state).await;
+        admin.on_set_user(&revoke, &state).await;
         let update = next_access_update(&mut bob_rx);
         bob.apply_access_update(update, &state).await;
         assert_eq!(bob.name, "Bob");
@@ -710,24 +749,24 @@ mod tests {
         bob.name = "Bobby Returns".to_string();
         bob.access = Access::ANY_NAME;
         let regrant = Transaction::request(
-            Opcode::AccountModify,
+            Opcode::SetUser,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "bob"),
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
                 Field::u64(
-                    FieldId::Access,
+                    FieldId::UserAccess,
                     (Access::ANY_NAME | Access::SEND_CHAT).bits(),
                 ),
             ],
         );
-        admin.on_account_modify(&regrant, &state).await;
+        admin.on_set_user(&regrant, &state).await;
         let update = next_access_update(&mut bob_rx);
         bob.apply_access_update(update, &state).await;
         assert_eq!(bob.name, "Bobby Returns");
     }
 
     #[tokio::test]
-    async fn account_delete_removes_it() {
+    async fn delete_user_removes_it() {
         let session = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -744,11 +783,11 @@ mod tests {
             .unwrap();
 
         let delete = Transaction::request(
-            Opcode::AccountDelete,
+            Opcode::DeleteUser,
             1,
-            vec![Field::obfuscated_string(FieldId::Login, "bob")],
+            vec![Field::obfuscated_string(FieldId::UserLogin, "bob")],
         );
-        let replies = session.on_account_delete(&delete, &state).await;
+        let replies = session.on_delete_user(&delete, &state).await;
         assert!(!replies[0].is_error());
         assert!(state.account("bob").await.is_none());
     }
@@ -757,23 +796,25 @@ mod tests {
     async fn account_crud_denied_without_matching_privilege() {
         let session = test_session("Alice", Access::empty());
         let state = SharedState::default();
-        let login_field = Field::obfuscated_string(FieldId::Login, "bob");
+        let login_field = Field::obfuscated_string(FieldId::UserLogin, "bob");
 
-        let create = Transaction::request(Opcode::AccountCreate, 1, vec![login_field.clone()]);
-        assert!(session.on_account_create(&create, &state).await[0].is_error());
+        let create = Transaction::request(Opcode::NewUser, 1, vec![login_field.clone()]);
+        assert!(session.on_new_user(&create, &state).await[0].is_error());
 
-        let read = Transaction::request(Opcode::AccountRead, 2, vec![login_field.clone()]);
-        assert!(session.on_account_read(&read, &state).await[0].is_error());
+        let read = Transaction::request(Opcode::GetUser, 2, vec![login_field.clone()]);
+        assert!(session.on_get_user(&read, &state).await[0].is_error());
 
-        let modify = Transaction::request(Opcode::AccountModify, 3, vec![login_field.clone()]);
-        assert!(session.on_account_modify(&modify, &state).await[0].is_error());
+        let modify = Transaction::request(Opcode::SetUser, 3, vec![login_field.clone()]);
+        assert!(session.on_set_user(&modify, &state).await[0].is_error());
 
-        let delete = Transaction::request(Opcode::AccountDelete, 4, vec![login_field]);
-        assert!(session.on_account_delete(&delete, &state).await[0].is_error());
+        let delete = Transaction::request(Opcode::DeleteUser, 4, vec![login_field]);
+        assert!(session.on_delete_user(&delete, &state).await[0].is_error());
     }
 
-    /// One `myTran_SetUserList` record: `old_login` is the account's
+    /// One [`myTran_SetUserList`] (349) record: `old_login` is the account's
     /// login before this edit, `None` for a brand new record.
+    ///
+    /// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
     fn user_list_record(
         old_login: Option<&str>,
         name: &str,
@@ -784,17 +825,17 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let mut fields = Vec::new();
         if let Some(old_login) = old_login {
-            fields.push(Field::obfuscated_string(FieldId::Text, old_login));
+            fields.push(Field::obfuscated_string(FieldId::Data, old_login));
         }
         if !name.is_empty() {
-            fields.push(Field::string(FieldId::Name, name));
+            fields.push(Field::string(FieldId::UserName, name));
         }
         if !login.is_empty() {
-            fields.push(Field::obfuscated_string(FieldId::Login, login));
+            fields.push(Field::obfuscated_string(FieldId::UserLogin, login));
         }
         fields.push(password);
-        fields.push(Field::u64(FieldId::Access, access.bits()));
-        Field::bytes(FieldId::Text, FieldList::encode(&fields, encoding).unwrap())
+        fields.push(Field::u64(FieldId::UserAccess, access.bits()));
+        Field::bytes(FieldId::Data, FieldList::encode(&fields, encoding).unwrap())
     }
 
     #[tokio::test]
@@ -831,20 +872,20 @@ mod tests {
             .unwrap();
 
         // The seeded admin/guest accounts plus the one just added.
-        let records: Vec<_> = reply.fields(FieldId::Text).collect();
+        let records: Vec<_> = reply.fields(FieldId::Data).collect();
         assert_eq!(records.len(), 3);
 
         let bob = records
             .iter()
             .map(|f| FieldList::decode(&f.as_bytes(encoding)).unwrap())
-            .find(|fields| fields.string(FieldId::Name, encoding).as_deref() == Some("Bob"))
+            .find(|fields| fields.string(FieldId::UserName, encoding).as_deref() == Some("Bob"))
             .expect("bob's record");
         let login = bob
-            .field(FieldId::Login)
+            .field(FieldId::UserLogin)
             .unwrap()
             .as_deobfuscated_string(encoding);
         assert_eq!(login, "bob");
-        let password = bob.field(FieldId::Password).unwrap();
+        let password = bob.field(FieldId::UserPassword).unwrap();
         assert_eq!(password.as_bytes(encoding).as_ref(), b"x");
     }
 
@@ -857,7 +898,7 @@ mod tests {
             None,
             "Bob",
             "bob",
-            Field::obfuscated_string(FieldId::Password, "secret"),
+            Field::obfuscated_string(FieldId::UserPassword, "secret"),
             Access::SEND_CHAT,
         );
         let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
@@ -879,7 +920,7 @@ mod tests {
             None,
             "Bob",
             "bob",
-            Field::obfuscated_string(FieldId::Password, "secret"),
+            Field::obfuscated_string(FieldId::UserPassword, "secret"),
             Access::all(),
         );
         let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
@@ -910,7 +951,7 @@ mod tests {
             None,
             "Bob Two",
             "bob",
-            Field::obfuscated_string(FieldId::Password, "new"),
+            Field::obfuscated_string(FieldId::UserPassword, "new"),
             Access::SEND_CHAT,
         );
         let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
@@ -942,7 +983,7 @@ mod tests {
             Some("bob"),
             "Bobby",
             "bobby",
-            Field::bytes(FieldId::Password, vec![0u8]),
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
             Access::SEND_CHAT,
         );
         let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
@@ -995,7 +1036,7 @@ mod tests {
             Some("bob"),
             "",
             "",
-            Field::bytes(FieldId::Password, vec![]),
+            Field::bytes(FieldId::UserPassword, vec![]),
             Access::empty(),
         );
         let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
@@ -1007,8 +1048,8 @@ mod tests {
             .try_recv()
             .ok()
             .and_then(RecipientMessage::into_push)
-            .expect("expected a Politequit push");
-        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::Politequit));
+            .expect("expected a DisconnectMsg push");
+        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::DisconnectMsg));
     }
 
     #[tokio::test]
@@ -1020,7 +1061,7 @@ mod tests {
             None,
             "Bob",
             "bob",
-            Field::obfuscated_string(FieldId::Password, "secret"),
+            Field::obfuscated_string(FieldId::UserPassword, "secret"),
             Access::empty(),
         );
         let request = Transaction::request(Opcode::SetUserList, 1, vec![create]);

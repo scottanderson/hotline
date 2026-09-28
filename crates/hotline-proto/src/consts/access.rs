@@ -1,14 +1,19 @@
-//! Access privilege bits carried in the 64-bit `USER_ACCESS` field.
+//! Access privilege bits carried in the 64-bit [`myField_UserAccess`] (110)
+//! field.
 //!
 //! Two big-endian `u32` words concatenated (high word first): the
 //! first-declared flag is bit 63, counting down. Reserved bits should
 //! always be zero on the wire.
+//!
+//! [`myField_UserAccess`]: crate::FieldId::UserAccess
 
 use super::RequireFlags;
 
 bitflags::bitflags! {
-    /// The 64-bit `USER_ACCESS` privilege bitmap. Bits 51, 50, 45, and 44 are
+    /// The 64-bit [`myField_UserAccess`] (110) privilege bitmap. Bits 51, 50, 45, and 44 are
     /// named, but have no use. Bits 22..=0 are reserved.
+    ///
+    /// [`myField_UserAccess`]: crate::FieldId::UserAccess
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct Access: u64 {
         /// Delete a file.

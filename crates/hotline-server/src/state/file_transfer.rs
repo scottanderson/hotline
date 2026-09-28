@@ -6,7 +6,10 @@ use crate::state::TransferTarget;
 pub struct FileTransfer {
     /// The file's login and path.
     pub target: TransferTarget,
-    /// `myTran_DownloadFile` (202) with `myField_FileXferOptions` (204)
+    /// [`myTran_DownloadFile`] (202) with [`myField_FileXferOptions`] (204)
     /// `== 2`: raw file bytes, with no flattened file object and no resume.
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+    /// [`myField_FileXferOptions`]: hotline_proto::FieldId::FileXferOptions
     pub raw: bool,
 }

@@ -1,11 +1,14 @@
-//! [`UserNameWithInfo`]: the packed `USER_NAME_WITH_INFO` (300) record.
+//! [`UserNameWithInfo`]: the packed `myField_UserNameWithInfo` (300) record.
 
 use crate::error::{ProtoError, Result};
 use crate::text_encoding::{self, Encoding};
 use crate::types::UserFlags;
 use crate::wire::{PacketReader, VecWriter};
 
-/// The packed `USER_NAME_WITH_INFO` (300) record from userlist replies.
+/// The packed [`myField_UserNameWithInfo`] (300) record from userlist
+/// replies.
+///
+/// [`myField_UserNameWithInfo`]: crate::FieldId::UserNameWithInfo
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserNameWithInfo {
     /// Socket / connection ID for this user.

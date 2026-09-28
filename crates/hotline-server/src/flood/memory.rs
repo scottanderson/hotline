@@ -84,9 +84,18 @@ mod tests {
             kick_threshold: 25,
         });
 
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Allow);
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Throttle);
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Kick);
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Allow
+        );
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Throttle
+        );
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Kick
+        );
     }
 
     #[tokio::test]
@@ -98,12 +107,24 @@ mod tests {
             throttle_threshold: 15,
             kick_threshold: 25,
         });
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Allow);
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Throttle);
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Kick);
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Allow
+        );
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Throttle
+        );
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Kick
+        );
 
         policy.reset(1).await;
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Allow);
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Allow
+        );
     }
 
     #[tokio::test]
@@ -112,7 +133,13 @@ mod tests {
             default_points: 30,
             ..FloodConfig::default()
         });
-        assert_eq!(policy.check(1, Opcode::Ping).await, FloodDecision::Kick);
-        assert_eq!(policy.check(2, Opcode::Ping).await, FloodDecision::Kick);
+        assert_eq!(
+            policy.check(1, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Kick
+        );
+        assert_eq!(
+            policy.check(2, Opcode::KeepConnectionAlive).await,
+            FloodDecision::Kick
+        );
     }
 }

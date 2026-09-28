@@ -53,14 +53,14 @@ invite reply behavior, dropbox path substring matching, login case
 folding, agreement push branching, the `USER_GETLIST` access check,
 `AccessExtra::CHAT_PRIVATE` gating chat-room membership opcodes, and
 `AccessExtra::MSG_OVERRIDE` as an alternative to `Access::SEND_MESSAGE`.
-One exception: `on_chat_create`'s invite-target handling matched neither and
+One exception: `on_invite_new_chat`'s invite-target handling matched neither and
 was fixed toward openline's shape (loop over every `Uid`, one shared room,
 skip undeliverable targets), since that fits this server's existing
 one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **No live per-transfer-progress tracker.** `on_user_get_info`'s
+1. **No live per-transfer-progress tracker.** `on_get_client_info_text`'s
    file-transfer sections always read `"None."`, with no in-progress
    transfer ever reported. The concurrent-download queue itself
    (Resolved) tracks which references hold an active slot, but not
@@ -73,27 +73,7 @@ one-shared-room model.
    invisible to those operations by design, not by omission — flagged in
    case that turns out to matter for a real client.
 
-3. **Enum variant naming isn't consistently the openline constant's tail
-   yet.** `FieldId`/`Opcode` already follow this (see AGENTS.md's Naming
-   section); other enums need the same audit. First pass (every `pub enum`
-   in `hotline-proto`/`hotline-server`/`hotline-client`, plus session.rs's
-   private `KickBan`) found one real match and fixed it: `HtxfType::FileTransfer`
-   renamed to `HtxfType::File`, matching the secondary reference's own
-   `HTXF_TYPE_FILE` (the primary reference has no named constant for this
-   field at all; `HtxfType::Banner` already matched `HTXF_TYPE_BANNER`).
-   Everything else checked this pass — `TransferKind`/`TransferDirection`
-   (`state.rs`), `BannerKind` (`banner.rs`), `NewsItemKind`/`NewsListKind`
-   (`news.rs`), `KickBan` (`session.rs`) — turned out to be locally
-   invented bookkeeping with no openline-named constant list behind them
-   (news bundle/category distinction reuses the reference's generic
-   `fsItemType_Folder`/`fsItemType_File` filesystem enum, which would be
-   actively misleading to copy here), so left as is; same reasoning kept
-   each of them in its current crate rather than moving to `hotline-proto`.
-   Left open rather than marked resolved: re-run this audit once the rest
-   of the backlog lands, since later items are likely to add more enums
-   this pass didn't have to consider.
-
-4. **Threaded news storage does not match openline's on-disk
+3. **Threaded news storage does not match openline's on-disk
    binary database format.** Openline stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -114,14 +94,14 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-5. **Open design question from news article/category JSON storage.**
+4. **Open design question from news article/category JSON storage.**
    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
    `BTreeMap`, so once an article legitimately holds more than one
    flavor, "primary" means alphabetically-first MIME type, not
    first-posted or preferred — harmless today (always exactly one
    entry) but worth deciding before multi-flavor posting is wired up.
 
-6. **`on_newsfile_get`'s clamp can split a multi-byte character.**
+5. **`on_get_msgs`'s clamp can split a multi-byte character.**
    The reply is truncated to 65535 encoded bytes. Under the Mac OS
    Roman default every character is one byte, so this is invisible;
    under `utf-8` or `shift-jis` the last character can arrive as a
@@ -129,29 +109,29 @@ one-shared-room model.
    openline. Worth deciding only if a multi-byte encoding is
    ever made selectable per connection.
 
-7. **Reassembly's memory bound is per connection, not global.**
+6. **Reassembly's memory bound is per connection, not global.**
    `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
    nothing caps how many connections a server accepts. Total
    reassembly memory is therefore unbounded. Needs a connection limit
    or a shared budget, plus a decision on which.
 
-8. **The tracker beacon counts logged-in users.** openline sends
+7. **The tracker beacon counts logged-in users.** openline sends
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
 
-9. **The download queue does not watch the `HTXF` socket.** A queued
+8. **The download queue does not watch the `HTXF` socket.** A queued
    download that closes its connection keeps its place until it is
    promoted. A disconnect frees an active slot, but the transfer keeps
    running, so the active count can pass `max_downloads` for a while.
 
-10. **No per-address connection limit.** openline refuses a connection
-    past `nMaxConnectionsIP` (default 5) from one address
-    (`HotlineServ.cp`). This also bounds item 5.
+9. **No per-address connection limit.** openline refuses a connection
+   past `nMaxConnectionsIP` (default 5) from one address
+   (`HotlineServ.cp`). This also bounds item 5.
 
-11. **No login timeout.** openline disconnects a client that has not
+10. **No login timeout.** openline disconnects a client that has not
     logged in after 60 seconds (`HotlineServ.cp`).
 
-12. **Flood control does not ban.** openline adds a 30-minute temporary
+11. **Flood control does not ban.** openline adds a 30-minute temporary
     ban for each of these: more than 10 consecutive connections from one
     address within 30 seconds, more than 120 transactions in a minute,
     five identical private messages, more than 20 messages in a minute,
@@ -160,14 +140,14 @@ one-shared-room model.
     only disconnects, from one points policy with fixed thresholds
     (`FloodConfig::default()`).
 
-13. **`hls` cannot set the download limits.** `ServerConfig` has
+12. **`hls` cannot set the download limits.** `ServerConfig` has
     `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
     for them.
 
-14. **No activity log.** openline logs downloads, uploads, connections,
+13. **No activity log.** openline logs downloads, uploads, connections,
     and account changes, each behind its own option (`myOpt_Log*`).
 
-15. **No HTTP tunnel listeners.** openline also listens on the base port
+14. **No HTTP tunnel listeners.** openline also listens on the base port
     plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
     The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
     `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -175,14 +155,14 @@ one-shared-room model.
     padding. `HLProtocol.md` does not document it and mhxd does not
     implement it, so no client is at hand to test against.
 
-16. **Small cleanups found in review.** The `*b"fldr"` check repeats
+15. **Small cleanups found in review.** The `*b"fldr"` check repeats
     across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
     helper would fit. `start_folder_upload` repeats
     `authorize_upload`'s destination rule. `prepare_folder_upload_item`
     ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
     `login`, `dir`, and `name`.
 
-17. **`hlc` covers only chat and lists.** It logs in, shows the
+16. **`hlc` covers only chat and lists.** It logs in, shows the
     agreement, chats in public, and lists users, files, and tracker
     servers. It cannot transfer files or folders, read or post classic or
     threaded news, send private messages, use private chat rooms, get
@@ -191,32 +171,33 @@ one-shared-room model.
 
 ## Resolved
 
-1. `UserSelfinfo`'s `Access` field now sends the session's real privileges
+1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
    (`self.access.bits()`), matching openline.
-2. `on_file_getinfo` intentionally omits `FileType`/`FileCreator`/
-   `FileDateCreate`/`FileComment` — no real HFS metadata to source them
+2. `on_get_file_info` intentionally omits `FileTypeString`/`FileCreatorString`/
+   `FileCreateDate`/`FileComment` — no real HFS metadata to source them
    from, matching a widely used non-HFS server's own trimmed field set.
-3. `on_file_setinfo` no longer errors on an absent `FileNewName`; it just
+3. `on_set_file_info` no longer errors on an absent `FileNewName`; it just
    skips the rename and replies success.
-4. `on_file_mkdir`/`on_file_getinfo` support the `FileName`-absent
+4. `on_new_folder`/`on_get_file_info` support the `FileName`-absent
    fallback via `Session::file_name_and_dir_from_path_tail`.
 5. Threaded news implemented in `crate::news` (bundles/categories/
    articles, all eight `News*` opcodes, `NEWS_*` privilege gating).
    `NewsArticle::data` stores a map from MIME type to body, so it can
    already hold more than one flavor. The wire protocol still posts and
-   asks for one flavor at a time; revisit `on_news_postthread`/
-   `on_news_getthread` and `NewsArticleSummary::encode`'s flavor count if
+   asks for one flavor at a time; revisit `on_post_news_art`/
+   `on_get_news_art_data` and `NewsArticleSummary::encode`'s flavor count if
    multi-flavor posting is ever needed.
-6. HTXF resume support: `FILE_GET` honors `FileResumeData` on download;
-   `FILE_PUT`'s `opts == 1` resumes an upload via a `.hpf` working-name
+6. HTXF resume support: `myTran_DownloadFile` (202) honors
+   `FileResumeData` on download; `opts == 1` on `myTran_UploadFile` (203)
+   resumes an upload via a `.hpf` working-name
    convention (`FileProvider::finish_upload`/`partial_upload_name`),
    following mhxd's non-HFS codepath. Resource-fork (`"MACR"`)
    upload data needed no code change — already discarded by tag like
    mhxd's own data-fork-only storage.
 7. Private-message/chat refusal and automatic response implemented:
-   `on_user_change` persists refuse-message/refuse-chat/auto-response
+   `on_set_client_user_info` persists refuse-message/refuse-chat/auto-response
    preferences; `Session::refusal_bounce` bounces or auto-replies on
-   `on_private_msg`/`on_chat_invite`.
+   `on_send_instant_msg`/`on_invite_to_chat`.
 8. `FieldId::Options` (113) added (needed by item 7's bounce push);
    module docs updated to note it now carries different meanings per
    direction.
@@ -252,31 +233,31 @@ one-shared-room model.
     call site avoided a clone (`Session` and `UserEntry` are independently
     owned with no common borrow scope), reverted.
 18. Chat room password/invite gating kept matching mhxd;
-    `on_chat_create`'s invite-target handling fixed to match openline's
+    `on_invite_new_chat`'s invite-target handling fixed to match openline's
     one-shared-room, skip-undeliverable-targets shape (see "openline vs.
     mhxd" section above).
-19. `on_chat_subject` kept matching mhxd (access check, membership
+19. `on_set_chat_subject` kept matching mhxd (access check, membership
     requirement, room password).
-20. `on_chat_invite` kept matching mhxd (always replies, requires prior
+20. `on_invite_to_chat` kept matching mhxd (always replies, requires prior
     membership, rejects a repeat invite).
-21. `on_chat_part` now sends no reply on success, matching openline's
+21. `on_leave_chat` now sends no reply on success, matching openline's
     own never-reply behavior.
-22. `on_chat_decline` now sends no reply on success and broadcasts a
+22. `on_reject_chat_invite` now sends no reply on success and broadcasts a
     decline notice to the room, matching openline.
-23. `on_chat` now supports the emote/action style (`Style` == 1 renders
+23. `on_chat_send` now supports the emote/action style (`ChatOptions` == 1 renders
     as `"*** {name} ..."` instead of the normal prefix).
-24. `on_msg_broadcast` now excludes the sender from the fan-out
+24. `on_user_broadcast` now excludes the sender from the fan-out
     (`state.announce` instead of `state.publish`).
 25. `on_get_file_name_list` now gates on `AccessExtra::FILE_LIST` instead
     of the unrelated `Access::DOWNLOAD_FILE`.
-26. `on_file_delete`/`_move`/`_symlink` no longer route through the
+26. `on_delete_file`/`_move`/`_symlink` no longer route through the
     drop-box visibility check; only their type-specific privilege remains
     (mkdir/rename are unaffected, still gated).
-27. `on_file_put`'s drop-box/upload-folder ancestor-substring match kept
+27. `on_upload_file`'s drop-box/upload-folder ancestor-substring match kept
     matching mhxd.
-28. `on_file_get`'s reply now also sends raw `FileSize` alongside
-    `TransferId`/`TransferSize`.
-29. `on_newsfile_post` now rejects posts over 8192 bytes with openline's
+28. `on_download_file`'s reply now also sends raw `FileSize` alongside
+    `RefNum`/`TransferSize`.
+29. `on_old_post_news` now rejects posts over 8192 bytes with openline's
     own error text before appending.
 30. Logins are now case-folded to lowercase consistently at every entry
     point (create/read/modify/delete/lookup), avoiding openline's own
@@ -285,32 +266,33 @@ one-shared-room model.
     matching openline's `psUserName[0] && nIconID` check.
 32. `on_login`'s agreement-push logic kept its two-way branch, matching
     mhxd over openline's three-way branch.
-33. `on_login` now sends `Bannerid` (161) via the pre-existing
+33. `on_login` now sends `CommunityBannerID` (161) via the pre-existing
     `FieldId::Bannerid` variant.
 34. `on_login` now always sends `ServerName`, empty when unconfigured.
-35. `on_user_get_list`'s `AccessExtra::USER_GETLIST` gate kept as is.
-36. `on_user_kick`'s plain kick now sends `RecipientMessage::Disconnect`
+35. `on_get_user_name_list`'s `AccessExtra::USER_GETLIST` gate kept as is.
+36. `on_disconnect_user`'s plain kick now sends `RecipientMessage::Disconnect`
     instead of a `Politequit` push; a missing `Uid` defaults to 0 and
     still replies success; temp/perm ban options implemented (see
     resolved item "ban/mute list" below).
-37. `on_user_get_info`'s reply reshaped to openline's own labels/section
+37. `on_get_client_info_text`'s reply reshaped to openline's own labels/section
     order and field set, plus an `Online` duration and `Icon`/`Version`
     lines not in either. File-transfer sections
     still always read `"None."` — needs the transfer-progress tracker
     from the open "HTXF transfer queue" backlog item.
 38. Banner support implemented: `Opcode::BannerGet`/`Banner` added,
-    login pushes a `ServerBanner` for `Vers` >= 151 clients, `BANNER_GET`
-    streams the image over the HTXF connection unframed
+    login pushes `myTran_ServerBanner` (122) for `Vers` >= 151 clients,
+    and `myTran_DownloadBanner` (212) streams the image over the HTXF
+    connection unframed
     (`TransferKind::Banner`). `AccessExtra::BANNER_GET` is this server's
     own opt-in gate, on by default.
 39. `RequireFlags::require` now renders each missing flag through a
     per-flag `actions()` denial-text table (`Access`/`AccessExtra`),
     matching openline's own fixed strings verbatim where one exists.
-40. `on_file_get` now checks `Access::DOWNLOAD_FILE` (was
+40. `on_download_file` now checks `Access::DOWNLOAD_FILE` (was
     `AccessExtra::FILE_GETINFO`, a copy/paste from the metadata-only
     handler). File/folder comments implemented end to end
-    (`FileProvider::comment`/`set_comment`, `on_file_setinfo`/
-    `on_file_getinfo`, both `InMemoryFileProvider` and
+    (`FileProvider::comment`/`set_comment`, `on_set_file_info`/
+    `on_get_file_info`, both `InMemoryFileProvider` and
     `FileFileProvider`), gated on `Access::SET_FILE_COMMENT`/
     `SET_FOLDER_COMMENT` and routed through `RequireFlags::require` via a
     `dropbox_access` helper. Fallible `state.rs` functions in this area
@@ -327,7 +309,7 @@ one-shared-room model.
     `encoding_rs`) instead of lossy UTF-8 everywhere.
 43. Pluggable ban/mute list added (`BanProvider`, `InMemoryBanProvider`,
     `hotline-daemon`'s `FileBanProvider`), keyed by exact IP address;
-    `on_user_kick`'s ban options now actually ban (temp 30 min / perm).
+    `on_disconnect_user`'s ban options now actually ban (temp 30 min / perm).
     No admin-facing unban command yet — `unban` has no caller.
 44. Pluggable flood/spam policy added (`FloodPolicy`,
     `InMemoryFloodPolicy`), checked once per inbound transaction in
@@ -336,10 +318,10 @@ one-shared-room model.
 45. Banner content now has a provider seam too (`BannerProvider`,
     `NoBanner`/`UrlBannerProvider`/`hotline-daemon`'s `FileBannerProvider`),
     resolved together with item 38 above.
-46. `on_chat_invite`/`_join`/`_part`/`_decline`/`_subject` now all require
+46. `on_invite_to_chat`/`_join`/`_part`/`_decline`/`_subject` now all require
     `AccessExtra::CHAT_PRIVATE` up front, matching mhxd's dispatch-level
     gate.
-47. `on_private_msg` now allows `AccessExtra::MSG_OVERRIDE` as an alternative to
+47. `on_send_instant_msg` now allows `AccessExtra::MSG_OVERRIDE` as an alternative to
     `Access::SEND_MESSAGE`, matching mhxd's client compatibility
     allowance.
 48. `NewsProvider`'s tree/flat caches switched from `RwLock` to
@@ -376,7 +358,7 @@ one-shared-room model.
     `IS_0WN3D`: both are target-eligibility checks that never reach
     `RequireFlags::require`. AGENTS.md records this exception.
 
-50. `on_chat` now checks `Access::SEND_CHAT` before testing for the
+50. `on_chat_send` now checks `Access::SEND_CHAT` before testing for the
     console prefix, matching mhxd's own dispatch-table gate (`send_chat`
     gates the whole chat opcode, including any
     console command inside it), so a chat-muted user can no longer
@@ -422,7 +404,7 @@ one-shared-room model.
     written to the board.
     Wall-clock time comes from the new `chrono` dependency.
 
-57. `on_newsfile_get` clamps its reply to 65535 bytes, matching
+57. `on_get_msgs` clamps its reply to 65535 bytes, matching
     openline's `if (s > max_Uint16) s = max_Uint16;`
     (`HotlineServTrans.cp`) and mhxd's `MAX_NEWS_SIZE`. A field's length
     is a `u16`, so a larger board previously failed to encode and the
@@ -543,7 +525,7 @@ one-shared-room model.
     `ServerConfig::max_downloads`/`max_downloads_per_client` (openline's
     own defaults, 100/10, `HotlineServ.cp`'s `mOptions.nMaxDownloads`/
     `nMaxDownloadsClient`), a waiting list in `SharedState` past either
-    cap, `WaitingCount` (116) on `on_file_get`'s own reply when queued,
+    cap, `WaitingCount` (116) on `on_download_file`'s own reply when queued,
     and `myTran_DownloadInfo` (211) pushes as a queued download's
     position changes or it is promoted to an active slot. This follows
     openline's soft-queue shape (no hard reject). mhxd rejects uploads
@@ -586,6 +568,19 @@ one-shared-room model.
     is dropped, queued or running. A running `HTXF` send stops, a pending
     reference refuses its later connection, and the queue promotes the
     next download.
+
+73. Re-ran the enum variant naming audit, a since-closed backlog item,
+    over every `pub enum` added since the first pass: `RecipientMessage`/
+    `FloodDecision`/`TransferDirection` (reshaped `TransferKind`)/
+    `ServerError` (`hotline-server`), `ClientError` (`hotline-client`),
+    `NewsCategoryListEntry` (`hotline-proto`), `NewsNode` (`hotline-server`),
+    and the console-command/`hotline-cli` types (`Mode`/`EventOutcome`/
+    `LineKind`). None correspond to an openline-named constant list:
+    `NewsCategoryListEntry::Bundle`/`Category` already match
+    `HLProtocol.md`'s own prose ("Bundle (2) or category (3)") for
+    `myField_NewsCatListData15` (323), the only one of these with wire
+    values behind it. Everything else is local bookkeeping with no
+    openline name to match. No renames needed this pass.
 
 ## Needs manual verification against the real client
 

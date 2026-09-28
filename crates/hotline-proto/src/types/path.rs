@@ -10,7 +10,9 @@ use crate::wire::{PacketReader, VecWriter};
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HlPath {
     /// Directory components, root-to-leaf (does not include the file name
-    /// itself for file operations, that's a separate `FILE_NAME` field).
+    /// itself for file operations, that's a separate [`myField_FileName`] (201) field).
+    ///
+    /// [`myField_FileName`]: crate::FieldId::FileName
     pub components: Vec<String>,
 }
 
@@ -27,10 +29,14 @@ impl HlPath {
         }
     }
 
-    /// Encode to bytes suitable for a `FILE_PATH` / `NEWS_PATH` field.
+    /// Encode to bytes suitable for a [`myField_FilePath`] (202) or [`myField_NewsPath`] (325)
+    /// field.
     ///
     /// Fails if any component name is longer than 255 bytes, since each
     /// is written with a 1-byte length prefix.
+    ///
+    /// [`myField_FilePath`]: crate::FieldId::FilePath
+    /// [`myField_NewsPath`]: crate::FieldId::NewsPath
     pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         let mut w = VecWriter::new()
             .u16(self.components.len() as u16)

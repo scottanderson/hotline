@@ -1,11 +1,14 @@
-//! [`FileNameWithInfo`]: the packed `FILE_NAME_WITH_INFO` (200) record.
+//! [`FileNameWithInfo`]: the packed `myField_FileNameWithInfo` (200) record.
 
 use crate::error::{ProtoError, Result};
 use crate::text_encoding::{self, Encoding};
 use crate::wire::{PacketReader, VecWriter};
 
-/// The packed `FILE_NAME_WITH_INFO` (200) record from `myTran_GetFileNameList`
-/// replies.
+/// The packed [`myField_FileNameWithInfo`] (200) record from
+/// [`myTran_GetFileNameList`] (200) replies.
+///
+/// [`myField_FileNameWithInfo`]: crate::FieldId::FileNameWithInfo
+/// [`myTran_GetFileNameList`]: crate::Opcode::GetFileNameList
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileNameWithInfo {
     /// 4-character Mac type code, or `"fldr"` for a folder.

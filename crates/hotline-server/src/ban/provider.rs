@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use super::BanRecord;
 
 /// Ban storage, checked on connect and written by the kick-to-ban `Options`
-/// bit on `myTran_DisconnectUser` (110).
+/// bit on [`myTran_DisconnectUser`] (110).
+///
+/// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
 #[async_trait]
 pub trait BanProvider: Send + Sync {
     /// The active ban on `ip`, or `None` if it isn't banned or its ban

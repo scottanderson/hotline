@@ -15,18 +15,18 @@
 //! [`TransactionType::from_client_wire`]/[`from_server_wire`](TransactionType::from_server_wire)),
 //! only which table a decoder should have consulted to get here.
 //!
-//! Variant names track the tail of the original wire constant;
-//! `opcode_names!`'s invocation pairs each variant with that original
-//! name once, and `Debug` reads it back via `Opcode::original_name`
-//! rather than storing the string a second time. A few names (`ChatSend`/
-//! `ChatMsg` for the two different `Chat` opcodes, `OldPostNews`/`NewMsg`
-//! for the two different `NewsfilePost` opcodes, ...) exist only because
-//! merging client and server opcodes into one enum forced a rename where
-//! the two directions used to share a same-sounding but numerically
-//! different Rust name.
+//! Each variant is the exact tail of its `myTran_*` constant, so
+//! `myTran_GetMsgs` is [`Opcode::GetMsgs`]. `Debug` prints that name.
 //!
-//! [`Opcode::Ping`] (500) doesn't appear in `HLProtocol.md`; its name
-//! cites openline's `HotlineClientServerCommon.h` constant instead.
+//! `HLProtocol.md` does not list [`myTran_KillDownload`] (214),
+//! [`myTran_GetUserList`] (348), [`myTran_SetUserList`] (349), or
+//! [`myTran_KeepConnectionAlive`] (500). Their names come from openline's
+//! `HotlineClientServerCommon.h`.
+//!
+//! [`myTran_KillDownload`]: crate::Opcode::KillDownload
+//! [`myTran_GetUserList`]: crate::Opcode::GetUserList
+//! [`myTran_SetUserList`]: crate::Opcode::SetUserList
+//! [`myTran_KeepConnectionAlive`]: crate::Opcode::KeepConnectionAlive
 
 use num_enum::{FromPrimitive, IntoPrimitive};
 
@@ -42,7 +42,7 @@ const TASK_REPLY: u32 = 0x0001_0000;
 pub enum Opcode {
     /// Read articles from the classic (non-threaded) news (101).
     /// Original: `myTran_GetMsgs`.
-    NewsfileGet = 101,
+    GetMsgs = 101,
     /// A new (non-threaded) news post arrived (102).
     /// Original: `myTran_NewMsg`.
     NewMsg = 102,
@@ -66,35 +66,35 @@ pub enum Opcode {
     SendInstantMsg = 108,
     /// The server's usage agreement text, part of login (109).
     /// Original: `myTran_ShowAgreement`.
-    Agreement = 109,
+    ShowAgreement = 109,
     /// Kick (and optionally ban) a user (110).
     /// Original: `myTran_DisconnectUser`.
-    UserKick = 110,
+    DisconnectUser = 110,
     /// The server is disconnecting this client, with a reason (111).
     /// Original: `myTran_DisconnectMsg`.
-    Politequit = 111,
+    DisconnectMsg = 111,
     /// Open/create a private chat room (112).
     /// Original: `myTran_InviteNewChat`.
-    ChatCreate = 112,
+    InviteNewChat = 112,
     /// Invite a user to a private chat room, client request and the
     /// server's resulting push to the invitee (113).
     /// Original: `myTran_InviteToChat`.
-    ChatInvite = 113,
+    InviteToChat = 113,
     /// Decline an invitation to a private chat room (114).
     /// Original: `myTran_RejectChatInvite`.
-    ChatDecline = 114,
+    RejectChatInvite = 114,
     /// Join a private chat room, accepting an invitation (115).
     /// Original: `myTran_JoinChat`.
-    ChatJoin = 115,
+    JoinChat = 115,
     /// Leave a private chat room (116).
     /// Original: `myTran_LeaveChat`.
-    ChatPart = 116,
+    LeaveChat = 116,
     /// A user joined a private chat room (117).
     /// Original: `myTran_NotifyChatChangeUser`.
-    ChatUserChange = 117,
+    NotifyChatChangeUser = 117,
     /// A user left a private chat room (118).
     /// Original: `myTran_NotifyChatDeleteUser`.
-    ChatUserPart = 118,
+    NotifyChatDeleteUser = 118,
     /// A private chat room's subject changed (119).
     /// Original: `myTran_NotifyChatSubject`.
     NotifyChatSubject = 119,
@@ -106,44 +106,46 @@ pub enum Opcode {
     Agreed = 121,
     /// The server banner's type and, for a URL banner, its target (122).
     /// Original: `myTran_ServerBanner`.
-    Banner = 122,
+    ServerBanner = 122,
     /// List files in a folder (200).
     /// Original: `myTran_GetFileNameList`.
-    FileList = 200,
+    GetFileNameList = 200,
     /// Begin downloading a file (202).
     /// Original: `myTran_DownloadFile`.
-    FileGet = 202,
+    DownloadFile = 202,
     /// Begin uploading a file (203).
     /// Original: `myTran_UploadFile`.
-    FilePut = 203,
+    UploadFile = 203,
     /// Delete a file or folder (204).
     /// Original: `myTran_DeleteFile`.
-    FileDelete = 204,
+    DeleteFile = 204,
     /// Create a folder (205).
     /// Original: `myTran_NewFolder`.
-    FileMkdir = 205,
+    NewFolder = 205,
     /// Fetch a file's metadata (206).
     /// Original: `myTran_GetFileInfo`.
-    FileGetinfo = 206,
+    GetFileInfo = 206,
     /// Rename/comment a file (207).
     /// Original: `myTran_SetFileInfo`.
-    FileSetinfo = 207,
+    SetFileInfo = 207,
     /// Move a file to another folder (208).
     /// Original: `myTran_MoveFile`.
-    FileMove = 208,
+    MoveFile = 208,
     /// Create a file alias (209).
     /// Original: `myTran_MakeFileAlias`.
-    FileSymlink = 209,
+    MakeFileAlias = 209,
     /// Begin downloading a folder and its contents (210).
     /// Original: `myTran_DownloadFldr`.
     DownloadFldr = 210,
     /// Server push: a queued download's position changed (211). Sent
-    /// while `myField_WaitingCount` (116) is nonzero.
+    /// while [`myField_WaitingCount`] (116) is nonzero.
     /// Original: `myTran_DownloadInfo`.
+    ///
+    /// [`myField_WaitingCount`]: crate::FieldId::WaitingCount
     DownloadInfo = 211,
     /// Fetch the server banner image over `HTXF` (212).
     /// Original: `myTran_DownloadBanner`.
-    BannerGet = 212,
+    DownloadBanner = 212,
     /// Begin uploading a folder and its contents (213).
     /// Original: `myTran_UploadFldr`.
     UploadFldr = 213,
@@ -152,16 +154,16 @@ pub enum Opcode {
     KillDownload = 214,
     /// Fetch the connected-user list (300).
     /// Original: `myTran_GetUserNameList`.
-    UserGetlist = 300,
+    GetUserNameList = 300,
     /// A user's info changed, or a user joined (301).
     /// Original: `myTran_NotifyChangeUser`.
     NotifyChangeUser = 301,
     /// A user disconnected (302).
     /// Original: `myTran_NotifyDeleteUser`.
-    UserPart = 302,
+    NotifyDeleteUser = 302,
     /// Fetch another user's info text (303).
     /// Original: `myTran_GetClientInfoText`.
-    UserGetinfo = 303,
+    GetClientInfoText = 303,
     /// Announce this client's nick/icon/options (304).
     /// Original: `myTran_SetClientUserInfo`.
     SetClientUserInfo = 304,
@@ -173,131 +175,133 @@ pub enum Opcode {
     SetUserList = 349,
     /// Create an account (350).
     /// Original: `myTran_NewUser`.
-    AccountCreate = 350,
+    NewUser = 350,
     /// Delete an account (351).
     /// Original: `myTran_DeleteUser`.
-    AccountDelete = 351,
+    DeleteUser = 351,
     /// Fetch an account's details (352).
     /// Original: `myTran_GetUser`.
-    AccountRead = 352,
+    GetUser = 352,
     /// Update an account's details (353).
     /// Original: `myTran_SetUser`.
-    AccountModify = 353,
+    SetUser = 353,
     /// This client's access privileges were (re)set (354).
     /// Original: `myTran_UserAccess`.
-    UserSelfinfo = 354,
+    UserAccess = 354,
     /// Broadcast a message to every connected user, client request and
     /// the resulting server push (355).
     /// Original: `myTran_UserBroadcast`.
-    MsgBroadcast = 355,
+    UserBroadcast = 355,
     /// List news categories at a path (370).
     /// Original: `myTran_GetNewsCatNameList`.
-    NewsListdir = 370,
+    GetNewsCatNameList = 370,
     /// List news articles at a path (371).
     /// Original: `myTran_GetNewsArtNameList`.
-    NewsListcategory = 371,
+    GetNewsArtNameList = 371,
     /// Delete a news folder/category (380).
     /// Original: `myTran_DelNewsItem`.
-    NewsDelete = 380,
+    DelNewsItem = 380,
     /// Create a news folder (381).
     /// Original: `myTran_NewNewsFldr`.
-    NewsMkdir = 381,
+    NewNewsFldr = 381,
     /// Create a news category (382).
     /// Original: `myTran_NewNewsCat`.
-    NewsMkcategory = 382,
+    NewNewsCat = 382,
     /// Fetch one news article's data (400).
     /// Original: `myTran_GetNewsArtData`.
-    NewsGetthread = 400,
+    GetNewsArtData = 400,
     /// Post a threaded news article (410).
     /// Original: `myTran_PostNewsArt`.
-    NewsPostthread = 410,
+    PostNewsArt = 410,
     /// Delete a threaded news article (411).
     /// Original: `myTran_DelNewsArt`.
-    NewsDeletethread = 411,
+    DelNewsArt = 411,
     /// Idle keep-alive ping (500); not documented in `HLProtocol.md`.
     /// Original: `myTran_KeepConnectionAlive`.
-    Ping = 500,
+    KeepConnectionAlive = 500,
     /// Not recognized by this build. Carries the raw wire value so
     /// callers can still log/forward it.
     #[num_enum(catch_all)]
     Unknown(u32),
 }
 
-/// Declares a `const fn original_name(&self) -> &'static str` from a list
-/// of `(ORIGINAL_WIRE_NAME, Variant)` pairs, so `Debug` doesn't need to
-/// store each variant's original wire constant name a second time.
+/// Declares `Opcode::original_name`, the `myTran_` constant each listed
+/// variant is named for.
 macro_rules! opcode_names {
-    ($(($orig:ident, $variant:ident)),* $(,)?) => {
+    ($($variant:ident),* $(,)?) => {
         impl Opcode {
             const fn original_name(&self) -> &'static str {
                 match self {
-                    $(Self::$variant => stringify!($orig),)*
+                    $(Self::$variant => concat!("myTran_", stringify!($variant)),)*
                     Self::Unknown(_) => "(unrecognized)",
                 }
             }
+
+            #[cfg(test)]
+            const ALL: &[Self] = &[$(Self::$variant),*];
         }
     };
 }
 
 opcode_names!(
-    (myTran_GetMsgs, NewsfileGet),
-    (myTran_NewMsg, NewMsg),
-    (myTran_OldPostNews, OldPostNews),
-    (myTran_ServerMsg, ServerMsg),
-    (myTran_ChatSend, ChatSend),
-    (myTran_ChatMsg, ChatMsg),
-    (myTran_Login, Login),
-    (myTran_SendInstantMsg, SendInstantMsg),
-    (myTran_ShowAgreement, Agreement),
-    (myTran_DisconnectUser, UserKick),
-    (myTran_DisconnectMsg, Politequit),
-    (myTran_InviteNewChat, ChatCreate),
-    (myTran_InviteToChat, ChatInvite),
-    (myTran_RejectChatInvite, ChatDecline),
-    (myTran_JoinChat, ChatJoin),
-    (myTran_LeaveChat, ChatPart),
-    (myTran_NotifyChatChangeUser, ChatUserChange),
-    (myTran_NotifyChatDeleteUser, ChatUserPart),
-    (myTran_NotifyChatSubject, NotifyChatSubject),
-    (myTran_SetChatSubject, SetChatSubject),
-    (myTran_Agreed, Agreed),
-    (myTran_ServerBanner, Banner),
-    (myTran_GetFileNameList, FileList),
-    (myTran_DownloadFile, FileGet),
-    (myTran_UploadFile, FilePut),
-    (myTran_DeleteFile, FileDelete),
-    (myTran_NewFolder, FileMkdir),
-    (myTran_GetFileInfo, FileGetinfo),
-    (myTran_SetFileInfo, FileSetinfo),
-    (myTran_MoveFile, FileMove),
-    (myTran_MakeFileAlias, FileSymlink),
-    (myTran_DownloadFldr, DownloadFldr),
-    (myTran_DownloadInfo, DownloadInfo),
-    (myTran_DownloadBanner, BannerGet),
-    (myTran_UploadFldr, UploadFldr),
-    (myTran_KillDownload, KillDownload),
-    (myTran_GetUserNameList, UserGetlist),
-    (myTran_NotifyChangeUser, NotifyChangeUser),
-    (myTran_NotifyDeleteUser, UserPart),
-    (myTran_GetClientInfoText, UserGetinfo),
-    (myTran_SetClientUserInfo, SetClientUserInfo),
-    (myTran_GetUserList, GetUserList),
-    (myTran_SetUserList, SetUserList),
-    (myTran_NewUser, AccountCreate),
-    (myTran_DeleteUser, AccountDelete),
-    (myTran_GetUser, AccountRead),
-    (myTran_SetUser, AccountModify),
-    (myTran_UserAccess, UserSelfinfo),
-    (myTran_UserBroadcast, MsgBroadcast),
-    (myTran_GetNewsCatNameList, NewsListdir),
-    (myTran_GetNewsArtNameList, NewsListcategory),
-    (myTran_DelNewsItem, NewsDelete),
-    (myTran_NewNewsFldr, NewsMkdir),
-    (myTran_NewNewsCat, NewsMkcategory),
-    (myTran_GetNewsArtData, NewsGetthread),
-    (myTran_PostNewsArt, NewsPostthread),
-    (myTran_DelNewsArt, NewsDeletethread),
-    (myTran_KeepConnectionAlive, Ping),
+    GetMsgs,
+    NewMsg,
+    OldPostNews,
+    ServerMsg,
+    ChatSend,
+    ChatMsg,
+    Login,
+    SendInstantMsg,
+    ShowAgreement,
+    DisconnectUser,
+    DisconnectMsg,
+    InviteNewChat,
+    InviteToChat,
+    RejectChatInvite,
+    JoinChat,
+    LeaveChat,
+    NotifyChatChangeUser,
+    NotifyChatDeleteUser,
+    NotifyChatSubject,
+    SetChatSubject,
+    Agreed,
+    ServerBanner,
+    GetFileNameList,
+    DownloadFile,
+    UploadFile,
+    DeleteFile,
+    NewFolder,
+    GetFileInfo,
+    SetFileInfo,
+    MoveFile,
+    MakeFileAlias,
+    DownloadFldr,
+    DownloadInfo,
+    DownloadBanner,
+    UploadFldr,
+    KillDownload,
+    GetUserNameList,
+    NotifyChangeUser,
+    NotifyDeleteUser,
+    GetClientInfoText,
+    SetClientUserInfo,
+    GetUserList,
+    SetUserList,
+    NewUser,
+    DeleteUser,
+    GetUser,
+    SetUser,
+    UserAccess,
+    UserBroadcast,
+    GetNewsCatNameList,
+    GetNewsArtNameList,
+    DelNewsItem,
+    NewNewsFldr,
+    NewNewsCat,
+    GetNewsArtData,
+    PostNewsArt,
+    DelNewsArt,
+    KeepConnectionAlive,
 );
 
 impl std::fmt::Debug for Opcode {
@@ -351,6 +355,20 @@ impl TransactionType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hl_protocol_md;
+
+    #[test]
+    fn every_variant_is_named_for_its_hlprotocol_md_constant() {
+        let documented = hl_protocol_md::constants("myTran_");
+        for &opcode in Opcode::ALL {
+            let value = u32::from(opcode);
+            let names: Vec<_> = documented.iter().filter(|(v, _)| *v == value).collect();
+            assert!(!names.is_empty(), "opcode {value} has no constant");
+            for (_, name) in names {
+                assert_eq!(opcode.original_name(), name, "opcode {value}");
+            }
+        }
+    }
 
     #[test]
     fn task_reply_sentinel_is_recognized_exactly() {
@@ -393,18 +411,20 @@ mod tests {
         );
     }
 
-    /// `113` (`myTran_InviteToChat`) is both the client's invite request
+    /// [`myTran_InviteToChat`] (113) is both the client's invite request
     /// and the server's resulting push; direction still comes from which
     /// wire the value was read off of, not from the opcode itself.
+    ///
+    /// [`myTran_InviteToChat`]: crate::Opcode::InviteToChat
     #[test]
     fn the_same_wire_value_is_a_request_from_a_client_and_a_push_from_a_server() {
         assert_eq!(
             TransactionType::from_client_wire(113),
-            TransactionType::Request(Opcode::ChatInvite)
+            TransactionType::Request(Opcode::InviteToChat)
         );
         assert_eq!(
             TransactionType::from_server_wire(113),
-            TransactionType::Push(Opcode::ChatInvite)
+            TransactionType::Push(Opcode::InviteToChat)
         );
     }
 
@@ -414,23 +434,23 @@ mod tests {
     fn debug_reconstructs_every_opcodes_original_name() {
         use Opcode::*;
         let cases = [
-            ("101 myTran_GetMsgs", NewsfileGet),
+            ("101 myTran_GetMsgs", GetMsgs),
             ("102 myTran_NewMsg", NewMsg),
             ("103 myTran_OldPostNews", OldPostNews),
             ("104 myTran_ServerMsg", ServerMsg),
             ("105 myTran_ChatSend", ChatSend),
             ("106 myTran_ChatMsg", ChatMsg),
-            ("117 myTran_NotifyChatChangeUser", ChatUserChange),
-            ("207 myTran_SetFileInfo", FileSetinfo),
-            ("300 myTran_GetUserNameList", UserGetlist),
+            ("117 myTran_NotifyChatChangeUser", NotifyChatChangeUser),
+            ("207 myTran_SetFileInfo", SetFileInfo),
+            ("300 myTran_GetUserNameList", GetUserNameList),
             ("301 myTran_NotifyChangeUser", NotifyChangeUser),
             ("304 myTran_SetClientUserInfo", SetClientUserInfo),
             ("348 myTran_GetUserList", GetUserList),
             ("349 myTran_SetUserList", SetUserList),
-            ("354 myTran_UserAccess", UserSelfinfo),
-            ("355 myTran_UserBroadcast", MsgBroadcast),
-            ("371 myTran_GetNewsArtNameList", NewsListcategory),
-            ("500 myTran_KeepConnectionAlive", Ping),
+            ("354 myTran_UserAccess", UserAccess),
+            ("355 myTran_UserBroadcast", UserBroadcast),
+            ("371 myTran_GetNewsArtNameList", GetNewsArtNameList),
+            ("500 myTran_KeepConnectionAlive", KeepConnectionAlive),
             ("57005 (unrecognized)", Unknown(0xDEAD)),
         ];
         for (expected, opcode) in cases {

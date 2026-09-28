@@ -5,9 +5,13 @@ use crate::state::{FileTransfer, FolderTransfer};
 /// Which way a pending `HTXF` transfer moves file bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferDirection {
-    /// Client downloading a file from the server (`FILE_GET`).
+    /// Client downloading a file from the server, [`myTran_DownloadFile`] (202).
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     Get,
-    /// Client uploading a file to the server (`FILE_PUT`).
+    /// Client uploading a file to the server, [`myTran_UploadFile`] (203).
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     Put,
 }
 
@@ -23,13 +27,18 @@ pub enum TransferKind {
     Banner,
 }
 
-/// A transfer awaiting its data connection: allocated when `FILE_GET`/
-/// `FILE_PUT`/`myTran_DownloadBanner` replies with a reference number,
-/// consumed once the client opens the second connection and sends that
-/// reference back. A [`TransferKind::File`] identifies the file by
+/// A transfer awaiting its data connection: allocated when
+/// [`myTran_DownloadFile`] (202), [`myTran_UploadFile`] (203), or
+/// [`myTran_DownloadBanner`] (212) replies with a reference number, consumed
+/// once the client opens the second connection and sends that reference
+/// back. A [`TransferKind::File`] identifies the file by
 /// [`crate::FileRequester`] login plus directory/name, not a raw path, so
 /// completing the transfer still goes through the [`crate::FileProvider`]
 /// rather than assuming filesystem storage.
+///
+/// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+/// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
+/// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
 #[derive(Debug, Clone)]
 pub struct PendingTransfer {
     /// Which storage backs this transfer, and its kind-specific data.

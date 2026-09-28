@@ -1,9 +1,11 @@
-//! Named accounts: login, password, display name, and the `USER_ACCESS`
+//! Named accounts: login, password, display name, and the [`myField_UserAccess`] (110)
 //! privileges granted on successful login.
 //!
 //! [`AccountProvider`] is the storage interface; `hotline-server` only
 //! defines it and provides [`InMemoryAccountProvider`] as a default. The
 //! embedding application supplies the real backend to [`crate::Server::new`].
+//!
+//! [`myField_UserAccess`]: hotline_proto::FieldId::UserAccess
 
 mod access_extra;
 mod memory;

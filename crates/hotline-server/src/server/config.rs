@@ -12,7 +12,9 @@ pub struct ServerConfig {
     pub bind_addr: String,
     /// Agreement text shown to clients on login (empty = no agreement).
     pub agreement: String,
-    /// Name reported in the `Login` reply (protocol version >= 151).
+    /// Name reported in the [`myTran_Login`] (107) reply (protocol version >= 151).
+    ///
+    /// [`myTran_Login`]: hotline_proto::Opcode::Login
     pub server_name: String,
     /// Chat prefix for console commands; `None` relays all chat.
     pub console_prefix: Option<char>,

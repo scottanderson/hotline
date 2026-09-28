@@ -5,10 +5,15 @@ use hotline_proto::types::{FileNameWithInfo, HlPath};
 
 use super::{partial_upload_name, BoxedReader, BoxedWriter, FileRequester, FolderItem};
 
-/// Storage backing `FILE_LIST`/`FILE_GET`/`FILE_PUT`. `hotline-server`
-/// doesn't own file storage any more than it owns account storage (see
-/// [`crate::AccountProvider`]'s module docs); the embedding application
-/// supplies the concrete backend to [`crate::Server::new`].
+/// Storage backing [`myTran_GetFileNameList`] (200),
+/// [`myTran_DownloadFile`] (202), and [`myTran_UploadFile`] (203).
+/// `hotline-server` doesn't own file storage any more than it owns account
+/// storage (see [`crate::AccountProvider`]'s module docs); the embedding
+/// application supplies the concrete backend to [`crate::Server::new`].
+///
+/// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
+/// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+/// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
 #[async_trait]
 pub trait FileProvider: Send + Sync {
     /// List a directory as seen by `requester`. `None` if it doesn't
@@ -77,7 +82,9 @@ pub trait FileProvider: Send + Sync {
     /// Whether a file or folder already exists at this path.
     async fn exists(&self, requester: FileRequester<'_>, dir: &HlPath, name: &str) -> bool;
 
-    /// Open a file for reading, for a `FILE_GET` download.
+    /// Open a file for reading, for a [`myTran_DownloadFile`] (202) download.
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     async fn open_read(
         &self,
         requester: FileRequester<'_>,
@@ -85,9 +92,11 @@ pub trait FileProvider: Send + Sync {
         name: &str,
     ) -> io::Result<BoxedReader>;
 
-    /// Create a file for writing, for a `FILE_PUT` upload. Writes to
-    /// [`partial_upload_name`] until [`Self::finish_upload`] renames it
-    /// to `name`.
+    /// Create a file for writing, for a [`myTran_UploadFile`] (203) upload.
+    /// Writes to [`partial_upload_name`] until [`Self::finish_upload`] renames
+    /// it to `name`.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     async fn create_write(
         &self,
         requester: FileRequester<'_>,
@@ -95,9 +104,11 @@ pub trait FileProvider: Send + Sync {
         name: &str,
     ) -> io::Result<BoxedWriter>;
 
-    /// Open an in-progress upload for writing from `at` onward, resuming
-    /// an interrupted `FILE_PUT`. Seeks to `at`, truncating anything past
-    /// it. `Err` if there isn't an in-progress upload to resume.
+    /// Open an in-progress upload for writing from `at` onward, resuming an
+    /// interrupted [`myTran_UploadFile`] (203). Seeks to `at`, truncating
+    /// anything past it. `Err` if there isn't an in-progress upload to resume.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     async fn open_write_resume(
         &self,
         requester: FileRequester<'_>,

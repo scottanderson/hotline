@@ -9,6 +9,8 @@ pub mod consts;
 pub mod error;
 pub mod field;
 pub mod handshake;
+#[cfg(test)]
+mod hl_protocol_md;
 pub mod htxf;
 pub mod numbers;
 pub mod opcode;

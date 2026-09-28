@@ -78,7 +78,9 @@ async fn handle_htxf_connection(
 }
 
 /// Run `send` once download `reference` holds a slot, then free the slot.
-/// A `myTran_KillDownload` (214) stops it early.
+/// A [`myTran_KillDownload`] (214) stops it early.
+///
+/// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
 async fn run_download(
     state: &SharedState,
     reference: TransferRef,
@@ -98,8 +100,10 @@ async fn run_download(
     result
 }
 
-/// Send a `BANNER_GET` download: the banner image's raw bytes, with none
-/// of a file transfer's flattened-object framing.
+/// Send a [`myTran_DownloadBanner`] (212) download: the banner image's raw bytes,
+/// with none of a file transfer's flattened-object framing.
+///
+/// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
 async fn send_banner(stream: &mut TcpStream, state: &SharedState) -> Result<()> {
     let mut reader = state.open_banner_read().await?;
     tokio::io::copy(&mut reader, stream).await?;
@@ -116,11 +120,13 @@ async fn drain_stream(stream: &mut TcpStream) -> Result<()> {
     Ok(())
 }
 
-/// Send a `FILE_GET` download: the flattened-file-object header, then
-/// the file's raw bytes. `transfer.raw` sends the raw bytes alone, with
-/// no header, like [`send_banner`]. `transfer.resume_offset` skips that
-/// many leading bytes of the data fork, reducing the header's declared
-/// size to match, for a client resuming an interrupted download.
+/// Send a [`myTran_DownloadFile`] (202) download: the flattened-file-object
+/// header, then the file's raw bytes. `transfer.raw` sends the raw bytes alone,
+/// with no header, like [`send_banner`]. `transfer.resume_offset` skips that
+/// many leading bytes of the data fork, reducing the header's declared size to
+/// match, for a client resuming an interrupted download.
+///
+/// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
 async fn send_file(
     stream: &mut TcpStream,
     file: &FileTransfer,
@@ -170,13 +176,15 @@ async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result
     Ok(())
 }
 
-/// Receive a `FILE_PUT` upload: parse the client's flattened-file-object
-/// framing, writing the `DATA` fork's bytes to storage and discarding
-/// any other fork (e.g. a resource fork this server doesn't keep).
-/// `transfer.resume_offset > 0` seeks the destination to that offset
-/// instead of creating it fresh. Renames the upload to its real name
-/// (see [`SharedState::finish_upload`]) on success; an error leaves it
-/// under its working name for a later resume.
+/// Receive a [`myTran_UploadFile`] (203) upload: parse the client's
+/// flattened-file-object framing, writing the `DATA` fork's bytes to storage
+/// and discarding any other fork (e.g. a resource fork this server doesn't
+/// keep). `transfer.resume_offset > 0` seeks the destination to that offset
+/// instead of creating it fresh. Renames the upload to its real name (see
+/// [`SharedState::finish_upload`]) on success; an error leaves it under its
+/// working name for a later resume.
+///
+/// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
 async fn receive_file(
     stream: &mut TcpStream,
     file: &FileTransfer,
@@ -232,10 +240,12 @@ async fn receive_flat_file(
     Ok(())
 }
 
-/// Send a `myTran_DownloadFldr` (210) download: the next item's
+/// Send a [`myTran_DownloadFldr`] (210) download: the next item's
 /// [`FolderItemHeader`] on each `NextFile`, then a file's size and
 /// flattened object on `SendFile`/`ResumeFile`. Ends once the items run
 /// out or the client closes.
+///
+/// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
 async fn send_folder(
     stream: &mut TcpStream,
     folder: &FolderTransfer,
@@ -288,10 +298,12 @@ async fn send_folder(
     Ok(())
 }
 
-/// Receive a `myTran_UploadFldr` (213) upload: ask for each item's header with
+/// Receive a [`myTran_UploadFldr`] (213) upload: ask for each item's header with
 /// `NextFile`, then receive it with [`receive_folder_item`]. Ends after
 /// the declared item count. Every item gets a `NextFile` after it except
 /// a last item whose data was received.
+///
+/// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
 async fn receive_folder(
     stream: &mut TcpStream,
     folder: &FolderTransfer,

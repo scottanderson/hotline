@@ -14,10 +14,15 @@ pub enum HtxfType {
     /// A single file.
     File = 0,
 
-    /// A folder, `myTran_DownloadFldr` (210) or `myTran_UploadFldr` (213).
+    /// A folder, [`myTran_DownloadFldr`] (210) or [`myTran_UploadFldr`] (213).
+    ///
+    /// [`myTran_DownloadFldr`]: crate::Opcode::DownloadFldr
+    /// [`myTran_UploadFldr`]: crate::Opcode::UploadFldr
     Folder = 1,
 
-    /// The server banner image (`myTran_DownloadBanner`, 212).
+    /// The server banner image, [`myTran_DownloadBanner`] (212).
+    ///
+    /// [`myTran_DownloadBanner`]: crate::Opcode::DownloadBanner
     Banner = 2,
 
     /// Not recognized by this build. Carries the raw wire value so
@@ -30,8 +35,12 @@ pub enum HtxfType {
 /// directions: `"HTXF" | ref | len | type | reserved`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HtxfHeader {
-    /// Reference number from the `FILE_GET`/`FILE_PUT` reply this
+    /// Reference number from the [`myTran_DownloadFile`] (202) or
+    /// [`myTran_UploadFile`] (203) reply this
     /// connection is completing.
+    ///
+    /// [`myTran_DownloadFile`]: crate::Opcode::DownloadFile
+    /// [`myTran_UploadFile`]: crate::Opcode::UploadFile
     pub reference: u32,
     /// `0` for a download; the file's byte count for an upload.
     pub len: u32,

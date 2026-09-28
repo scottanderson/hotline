@@ -1,7 +1,7 @@
 //! [`TransactionHeader`]: a transaction's raw 20-byte wire prefix,
 //! decoded before its fields are readable. See the
 //! [module docs](crate::transaction) for why this is a separate type
-//! from [`Transaction`](crate::transaction::Transaction).
+//! from [`crate::transaction::Transaction`].
 
 use crate::error::Result;
 use crate::field::FieldList;

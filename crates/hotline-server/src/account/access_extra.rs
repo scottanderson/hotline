@@ -23,8 +23,10 @@ bitflags::bitflags! {
         /// Get a file's hash.
         /// Config key: `file_hash`.
         const FILE_HASH          = 1 << 5;
-        /// May process `myTran_Login`; cleared once logged in.
+        /// May process [`myTran_Login`] (107); cleared once logged in.
         /// Config key: `can_login`.
+        ///
+        /// [`myTran_Login`]: hotline_proto::Opcode::Login
         const CAN_LOGIN          = 1 << 6;
         /// May be hidden from `GETLIST` while invisible.
         /// Config key: `user_visibility`.

@@ -1,12 +1,14 @@
-//! [`NewsArticleListData`]: the whole `NEWS_ARTICLE_LIST_DATA` (321) field.
+//! [`NewsArticleListData`]: the whole `myField_NewsArtListData` (321) field.
 
 use crate::error::Result;
 use crate::text_encoding::Encoding;
 use crate::types::NewsArticleSummary;
 use crate::wire::VecWriter;
 
-/// The whole `NEWS_ARTICLE_LIST_DATA` (321) field: one category's thread,
+/// The whole [`myField_NewsArtListData`] (321) field: one category's thread,
 /// flattened into listing order.
+///
+/// [`myField_NewsArtListData`]: crate::FieldId::NewsArtListData
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NewsArticleListData {
     /// Every article in the category, in listing order.

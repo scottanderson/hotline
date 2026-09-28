@@ -12,8 +12,10 @@ use crate::state::SharedState;
 use super::connection::{Session, MAX_FLAT_NEWS_LEN};
 
 impl Session {
-    /// 101: read the classic (non-threaded) news.
-    pub(super) async fn on_newsfile_get(
+    /// [`myTran_GetMsgs`] (101): read the classic (non-threaded) news.
+    ///
+    /// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
+    pub(super) async fn on_get_msgs(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -23,11 +25,13 @@ impl Session {
         }
         let mut news = text_encoding::encode(self.encoding(), &state.news().await);
         news.truncate(MAX_FLAT_NEWS_LEN);
-        vec![tx.reply(vec![Field::bytes(FieldId::Text, news)])]
+        vec![tx.reply(vec![Field::bytes(FieldId::Data, news)])]
     }
 
-    /// 103: post to the classic (non-threaded) news.
-    pub(super) async fn on_newsfile_post(
+    /// [`myTran_OldPostNews`] (103): post to the classic (non-threaded) news.
+    ///
+    /// [`myTran_OldPostNews`]: hotline_proto::Opcode::OldPostNews
+    pub(super) async fn on_old_post_news(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -36,7 +40,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
-        let Some((text, len)) = tx.string_len(FieldId::Text, encoding) else {
+        let Some((text, len)) = tx.string_len(FieldId::Data, encoding) else {
             return vec![tx.reply_error("missing post text")];
         };
         if len > 8192 {
@@ -47,13 +51,15 @@ impl Session {
         state
             .publish(Transaction::push(
                 Opcode::NewMsg,
-                vec![Field::string(FieldId::Text, entry)],
+                vec![Field::string(FieldId::Data, entry)],
             ))
             .await;
         vec![tx.reply(vec![])]
     }
 
-    /// A `myField_NewsPath` (325) field, decoded, or root if absent.
+    /// A [`myField_NewsPath`] (325) field, decoded, or root if absent.
+    ///
+    /// [`myField_NewsPath`]: hotline_proto::FieldId::NewsPath
     pub(super) fn news_path(&self, tx: &Transaction) -> std::result::Result<HlPath, &'static str> {
         let encoding = self.encoding();
         match tx.news_path(encoding) {
@@ -63,8 +69,11 @@ impl Session {
         }
     }
 
-    /// 370: list a threaded news bundle's own contents.
-    pub(super) async fn on_news_listdir(
+    /// [`myTran_GetNewsCatNameList`] (370): list a threaded news bundle's own
+    /// contents.
+    ///
+    /// [`myTran_GetNewsCatNameList`]: hotline_proto::Opcode::GetNewsCatNameList
+    pub(super) async fn on_get_news_cat_name_list(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -81,15 +90,18 @@ impl Session {
         let mut fields = Vec::with_capacity(entries.len());
         for entry in entries {
             match entry.encode(encoding) {
-                Ok(bytes) => fields.push(Field::bytes(FieldId::NewsDirlistExtended, bytes)),
+                Ok(bytes) => fields.push(Field::bytes(FieldId::NewsCatListData15, bytes)),
                 Err(_) => return vec![tx.reply_error("news listing too large to encode")],
             }
         }
         vec![tx.reply(fields)]
     }
 
-    /// 371: list a threaded news category's articles.
-    pub(super) async fn on_news_listcategory(
+    /// [`myTran_GetNewsArtNameList`] (371): list a threaded news category's
+    /// articles.
+    ///
+    /// [`myTran_GetNewsArtNameList`]: hotline_proto::Opcode::GetNewsArtNameList
+    pub(super) async fn on_get_news_art_name_list(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -109,8 +121,10 @@ impl Session {
         vec![tx.reply(vec![Field::bytes(FieldId::NewsArtListData, bytes)])]
     }
 
-    /// 380: delete a threaded news bundle or category.
-    pub(super) async fn on_news_delete(
+    /// [`myTran_DelNewsItem`] (380): delete a threaded news bundle or category.
+    ///
+    /// [`myTran_DelNewsItem`]: hotline_proto::Opcode::DelNewsItem
+    pub(super) async fn on_del_news_item(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -125,8 +139,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 381: create a threaded news bundle (folder).
-    pub(super) async fn on_news_mkdir(
+    /// [`myTran_NewNewsFldr`] (381): create a threaded news bundle (folder).
+    ///
+    /// [`myTran_NewNewsFldr`]: hotline_proto::Opcode::NewNewsFldr
+    pub(super) async fn on_new_news_fldr(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -148,8 +164,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 382: create a threaded news category.
-    pub(super) async fn on_news_mkcategory(
+    /// [`myTran_NewNewsCat`] (382): create a threaded news category.
+    ///
+    /// [`myTran_NewNewsCat`]: hotline_proto::Opcode::NewNewsCat
+    pub(super) async fn on_new_news_cat(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -171,8 +189,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 400: fetch one threaded news article's data.
-    pub(super) async fn on_news_getthread(
+    /// [`myTran_GetNewsArtData`] (400): fetch one threaded news article's data.
+    ///
+    /// [`myTran_GetNewsArtData`]: hotline_proto::Opcode::GetNewsArtData
+    pub(super) async fn on_get_news_art_data(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -206,7 +226,7 @@ impl Session {
         let encoding = self.encoding();
         let requested_flavor = tx.news_article_flavor(encoding).unwrap_or_default();
         fields.push(Field::string(
-            FieldId::NewsArtDataFlavor,
+            FieldId::NewsArtDataFlav,
             requested_flavor.clone(),
         ));
         if let Some(data) = detail.data.get(&requested_flavor) {
@@ -215,8 +235,10 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// 410: post a threaded news article.
-    pub(super) async fn on_news_postthread(
+    /// [`myTran_PostNewsArt`] (410): post a threaded news article.
+    ///
+    /// [`myTran_PostNewsArt`]: hotline_proto::Opcode::PostNewsArt
+    pub(super) async fn on_post_news_art(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -261,8 +283,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 411: delete a threaded news article.
-    pub(super) async fn on_news_deletethread(
+    /// [`myTran_DelNewsArt`] (411): delete a threaded news article.
+    ///
+    /// [`myTran_DelNewsArt`]: hotline_proto::Opcode::DelNewsArt
+    pub(super) async fn on_del_news_art(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -302,21 +326,21 @@ mod tests {
         let post = Transaction::request(
             Opcode::OldPostNews,
             1,
-            vec![Field::string(FieldId::Text, "hello news")],
+            vec![Field::string(FieldId::Data, "hello news")],
         );
-        session.on_newsfile_post(&post, &state).await;
+        session.on_old_post_news(&post, &state).await;
 
-        let get = Transaction::request(Opcode::NewsfileGet, 2, vec![]);
-        let reply = session.on_newsfile_get(&get, &state).await;
+        let get = Transaction::request(Opcode::GetMsgs, 2, vec![]);
+        let reply = session.on_get_msgs(&get, &state).await;
         let [reply] = reply.try_into().unwrap();
-        let news = reply.string(FieldId::Text, encoding).unwrap();
+        let news = reply.string(FieldId::Data, encoding).unwrap();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
     }
 
     /// A board past a field's `u16` length sends its newest 65535 bytes.
     #[tokio::test]
-    async fn newsfile_get_clamps_a_board_past_the_field_limit() {
+    async fn get_msgs_clamps_a_board_past_the_field_limit() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
@@ -326,20 +350,16 @@ mod tests {
             let post = Transaction::request(
                 Opcode::OldPostNews,
                 1,
-                vec![Field::string(FieldId::Text, body)],
+                vec![Field::string(FieldId::Data, body)],
             );
-            session.on_newsfile_post(&post, &state).await;
+            session.on_old_post_news(&post, &state).await;
         }
         assert!(state.news().await.len() > MAX_FLAT_NEWS_LEN);
 
-        let get = Transaction::request(Opcode::NewsfileGet, 2, vec![]);
-        let [reply] = session
-            .on_newsfile_get(&get, &state)
-            .await
-            .try_into()
-            .unwrap();
+        let get = Transaction::request(Opcode::GetMsgs, 2, vec![]);
+        let [reply] = session.on_get_msgs(&get, &state).await.try_into().unwrap();
 
-        let data = reply.field(FieldId::Text).unwrap().as_bytes(encoding);
+        let data = reply.field(FieldId::Data).unwrap().as_bytes(encoding);
         assert_eq!(data.len(), MAX_FLAT_NEWS_LEN);
         // Posts are prepended, so the clamp keeps the newest.
         assert!(data.starts_with(b"From Alice"));
@@ -349,16 +369,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newsfile_post_publishes_once() {
+    async fn old_post_news_publishes_once() {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut rx = state.register_recipient(1).await;
         let post = Transaction::request(
             Opcode::OldPostNews,
             1,
-            vec![Field::string(FieldId::Text, "hello news")],
+            vec![Field::string(FieldId::Data, "hello news")],
         );
-        session.on_newsfile_post(&post, &state).await;
+        session.on_old_post_news(&post, &state).await;
 
         let notify = rx
             .try_recv()
@@ -370,7 +390,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newsfile_post_rejects_oversized_text() {
+    async fn old_post_news_rejects_oversized_text() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
@@ -378,9 +398,9 @@ mod tests {
         let post = Transaction::request(
             Opcode::OldPostNews,
             1,
-            vec![Field::string(FieldId::Text, "a".repeat(8193))],
+            vec![Field::string(FieldId::Data, "a".repeat(8193))],
         );
-        let replies = session.on_newsfile_post(&post, &state).await;
+        let replies = session.on_old_post_news(&post, &state).await;
 
         assert_eq!(replies.len(), 1);
         assert!(replies[0].is_error());
@@ -393,37 +413,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn news_mkdir_and_mkcategory_create_items_listdir_can_see() {
+    async fn new_news_fldr_and_new_news_cat_create_items_get_news_cat_name_list_can_see() {
         let state = SharedState::default();
         let session = test_session("Alice", Access::all());
 
         let mkdir = Transaction::request(
-            Opcode::NewsMkdir,
+            Opcode::NewNewsFldr,
             1,
             vec![Field::string(FieldId::FileName, "Bundle")],
         );
         let [reply] = session
-            .on_news_mkdir(&mkdir, &state)
+            .on_new_news_fldr(&mkdir, &state)
             .await
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
 
         let mkcategory = Transaction::request(
-            Opcode::NewsMkcategory,
+            Opcode::NewNewsCat,
             2,
             vec![Field::string(FieldId::NewsCatName, "General")],
         );
         let [reply] = session
-            .on_news_mkcategory(&mkcategory, &state)
+            .on_new_news_cat(&mkcategory, &state)
             .await
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
 
-        let listdir = Transaction::request(Opcode::NewsListdir, 3, vec![]);
+        let listdir = Transaction::request(Opcode::GetNewsCatNameList, 3, vec![]);
         let [reply] = session
-            .on_news_listdir(&listdir, &state)
+            .on_get_news_cat_name_list(&listdir, &state)
             .await
             .try_into()
             .unwrap();
@@ -432,19 +452,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn news_mkdir_denied_without_news_create_fldr() {
+    async fn new_news_fldr_denied_without_news_create_fldr() {
         let state = SharedState::default();
         let mut access = Access::all();
         access.remove(Access::NEWS_CREATE_FLDR);
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
-            Opcode::NewsMkdir,
+            Opcode::NewNewsFldr,
             1,
             vec![Field::string(FieldId::FileName, "Bundle")],
         );
         let [reply] = session
-            .on_news_mkdir(&mkdir, &state)
+            .on_new_news_fldr(&mkdir, &state)
             .await
             .try_into()
             .unwrap();
@@ -452,7 +472,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn news_delete_removes_a_bundle_and_requires_news_delete_fldr() {
+    async fn del_news_item_removes_a_bundle_and_requires_news_delete_fldr() {
         let encoding = text_encoding::DEFAULT;
         let state = SharedState::default();
         let session = test_session("Alice", Access::all());
@@ -465,7 +485,7 @@ mod tests {
         denied_access.remove(Access::NEWS_DELETE_FLDR);
         let denied_session = test_session("Bob", denied_access);
         let delete = Transaction::request(
-            Opcode::NewsDelete,
+            Opcode::DelNewsItem,
             1,
             vec![Field::bytes(
                 FieldId::NewsPath,
@@ -473,21 +493,21 @@ mod tests {
             )],
         );
         let [reply] = denied_session
-            .on_news_delete(&delete, &state)
+            .on_del_news_item(&delete, &state)
             .await
             .try_into()
             .unwrap();
         assert!(reply.is_error());
 
         let [reply] = session
-            .on_news_delete(&delete, &state)
+            .on_del_news_item(&delete, &state)
             .await
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let listdir = Transaction::request(Opcode::NewsListdir, 2, vec![]);
+        let listdir = Transaction::request(Opcode::GetNewsCatNameList, 2, vec![]);
         let [reply] = session
-            .on_news_listdir(&listdir, &state)
+            .on_get_news_cat_name_list(&listdir, &state)
             .await
             .try_into()
             .unwrap();
@@ -495,7 +515,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn news_postthread_getthread_and_listcategory_round_trip_an_article() {
+    async fn post_news_art_get_news_art_data_and_get_news_art_name_list_round_trip_an_article() {
         let encoding = text_encoding::DEFAULT;
         let state = SharedState::default();
         let session = test_session("Alice", Access::all());
@@ -511,25 +531,25 @@ mod tests {
         };
 
         let post = Transaction::request(
-            Opcode::NewsPostthread,
+            Opcode::PostNewsArt,
             1,
             vec![
                 path_field(),
                 Field::string(FieldId::NewsArtTitle, "Hello"),
-                Field::string(FieldId::NewsArtDataFlavor, "text/plain"),
+                Field::string(FieldId::NewsArtDataFlav, "text/plain"),
                 Field::bytes(FieldId::NewsArtData, b"body text".to_vec()),
             ],
         );
         let [reply] = session
-            .on_news_postthread(&post, &state)
+            .on_post_news_art(&post, &state)
             .await
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
 
-        let listcategory = Transaction::request(Opcode::NewsListcategory, 2, vec![path_field()]);
+        let listcategory = Transaction::request(Opcode::GetNewsArtNameList, 2, vec![path_field()]);
         let [reply] = session
-            .on_news_listcategory(&listcategory, &state)
+            .on_get_news_art_name_list(&listcategory, &state)
             .await
             .try_into()
             .unwrap();
@@ -537,16 +557,16 @@ mod tests {
         assert_eq!(reply.fields.len(), 1);
 
         let getthread = Transaction::request(
-            Opcode::NewsGetthread,
+            Opcode::GetNewsArtData,
             3,
             vec![
                 path_field(),
-                Field::u32(FieldId::NewsArtId, 1),
-                Field::string(FieldId::NewsArtDataFlavor, "text/plain"),
+                Field::u32(FieldId::NewsArtID, 1),
+                Field::string(FieldId::NewsArtDataFlav, "text/plain"),
             ],
         );
         let [reply] = session
-            .on_news_getthread(&getthread, &state)
+            .on_get_news_art_data(&getthread, &state)
             .await
             .try_into()
             .unwrap();
@@ -561,19 +581,19 @@ mod tests {
         );
 
         let delete = Transaction::request(
-            Opcode::NewsDeletethread,
+            Opcode::DelNewsArt,
             4,
-            vec![path_field(), Field::u32(FieldId::NewsArtId, 1)],
+            vec![path_field(), Field::u32(FieldId::NewsArtID, 1)],
         );
         let [reply] = session
-            .on_news_deletethread(&delete, &state)
+            .on_del_news_art(&delete, &state)
             .await
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let listcategory = Transaction::request(Opcode::NewsListcategory, 5, vec![path_field()]);
+        let listcategory = Transaction::request(Opcode::GetNewsArtNameList, 5, vec![path_field()]);
         let [reply] = session
-            .on_news_listcategory(&listcategory, &state)
+            .on_get_news_art_name_list(&listcategory, &state)
             .await
             .try_into()
             .unwrap();
@@ -581,7 +601,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn news_postthread_denied_without_post_news_art() {
+    async fn post_news_art_denied_without_post_news_art() {
         let encoding = text_encoding::DEFAULT;
         let state = SharedState::default();
         let mut access = Access::all();
@@ -593,7 +613,7 @@ mod tests {
             .unwrap();
 
         let post = Transaction::request(
-            Opcode::NewsPostthread,
+            Opcode::PostNewsArt,
             1,
             vec![
                 Field::bytes(
@@ -605,7 +625,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_news_postthread(&post, &state)
+            .on_post_news_art(&post, &state)
             .await
             .try_into()
             .unwrap();

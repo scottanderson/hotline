@@ -14,7 +14,9 @@ use crate::state::TransferRef;
 struct Waiting {
     reference: TransferRef,
     user_id: u16,
-    /// `myField_WaitingCount` (116) last pushed, to skip unchanged updates.
+    /// [`myField_WaitingCount`] (116) last pushed, to skip unchanged updates.
+    ///
+    /// [`myField_WaitingCount`]: hotline_proto::FieldId::WaitingCount
     last_reported: u32,
 }
 
@@ -68,7 +70,9 @@ const fn ahead(count: usize, max: usize) -> u32 {
     }
 }
 
-/// One promotion or position update to push as `myTran_DownloadInfo` (211).
+/// One promotion or position update to push as [`myTran_DownloadInfo`] (211).
+///
+/// [`myTran_DownloadInfo`]: hotline_proto::Opcode::DownloadInfo
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct QueueUpdate {
     pub(crate) user_id: u16,
@@ -89,8 +93,10 @@ impl DownloadQueue {
     }
 
     /// Admit a newly registered download. Returns the
-    /// `myField_WaitingCount` (116) for its own reply, `0` if it starts in
+    /// [`myField_WaitingCount`] (116) for its own reply, `0` if it starts in
     /// an active slot.
+    ///
+    /// [`myField_WaitingCount`]: hotline_proto::FieldId::WaitingCount
     pub(crate) fn admit(&self, reference: TransferRef, user_id: u16) -> u32 {
         let mut inner = self.inner.lock().unwrap();
         inner.cancel.insert(reference, CancellationToken::new());

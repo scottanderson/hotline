@@ -1,5 +1,8 @@
 //! [`FieldList`]: the parsed body of a transaction, or a nested account
-//! record inside `myTran_GetUserList` (348) / `myTran_SetUserList` (349).
+//! record inside [`myTran_GetUserList`] (348) / [`myTran_SetUserList`] (349).
+//!
+//! [`myTran_GetUserList`]: crate::Opcode::GetUserList
+//! [`myTran_SetUserList`]: crate::Opcode::SetUserList
 
 use crate::error::{ProtoError, Result};
 use crate::field::id::FieldId;
@@ -8,9 +11,12 @@ use crate::text_encoding::Encoding;
 use crate::wire::{PacketReader, VecWriter};
 
 /// A list of fields: a transaction's body, or the shape of one nested
-/// account record inside `myTran_GetUserList` (348) /
-/// `myTran_SetUserList` (349). `Deref`s to `[Field]` for anything not
+/// account record inside [`myTran_GetUserList`] (348) /
+/// [`myTran_SetUserList`] (349). `Deref`s to `[Field]` for anything not
 /// covered by its own lookup methods below.
+///
+/// [`myTran_GetUserList`]: crate::Opcode::GetUserList
+/// [`myTran_SetUserList`]: crate::Opcode::SetUserList
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FieldList(Vec<Field>);
 
@@ -24,10 +30,13 @@ impl FieldList {
 
     /// Encode as a `count`-prefixed field list: a transaction's own body
     /// shape, and also the shape of one nested account record inside
-    /// `myTran_GetUserList` (348) / `myTran_SetUserList` (349).
+    /// [`myTran_GetUserList`] (348) / [`myTran_SetUserList`] (349).
     ///
     /// Fails if `fields.len()` or any field's data exceeds a `u16`
     /// (65535), reachable with attacker-controlled input.
+    ///
+    /// [`myTran_GetUserList`]: crate::Opcode::GetUserList
+    /// [`myTran_SetUserList`]: crate::Opcode::SetUserList
     pub fn encode(fields: &[Field], encoding: &'static Encoding) -> Result<Vec<u8>> {
         let count = fields.len();
         let count = u16::try_from(count).map_err(|_| ProtoError::TooLong {

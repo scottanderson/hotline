@@ -35,10 +35,12 @@ const RESUME_DATA_ENTRY_LEN: usize = 16;
 /// its two fork entries (`DATA`, `MACR`).
 const RESUME_DATA_LEN: usize = RESUME_DATA_PREFIX_LEN + 2 * RESUME_DATA_ENTRY_LEN;
 
-/// Decode a `FileResumeData` blob (`myField_FileResumeData`, 203): how many bytes
-/// of the `DATA` fork the sender already has, so a resumed transfer only
-/// sends the remainder. Ignores any other fork entry, e.g. a resource
-/// fork position this server doesn't track.
+/// Decode a `FileResumeData` blob, [`myField_FileResumeData`] (203): how many
+/// bytes of the `DATA` fork the sender already has, so a resumed transfer only
+/// sends the remainder. Ignores any other fork entry, e.g. a resource fork
+/// position this server doesn't track.
+///
+/// [`myField_FileResumeData`]: crate::FieldId::FileResumeData
 pub fn decode_resume_data(buf: &[u8]) -> Result<u32> {
     if buf.len() < RESUME_DATA_PREFIX_LEN {
         return Err(ProtoError::UnexpectedEof {
@@ -91,9 +93,11 @@ pub fn decode_resume_data(buf: &[u8]) -> Result<u32> {
     ))
 }
 
-/// Build a `FileResumeData` blob (`myField_FileResumeData`, 203) claiming
+/// Build a `FileResumeData` blob, [`myField_FileResumeData`] (203), claiming
 /// `already_have` bytes of the `DATA` fork, plus an always-empty `MACR`
 /// fork, the shape [`decode_resume_data`] parses.
+///
+/// [`myField_FileResumeData`]: crate::FieldId::FileResumeData
 pub fn encode_resume_data(already_have: u32) -> [u8; RESUME_DATA_LEN] {
     PacketWriter::new()
         .bytes(b"RFLT")

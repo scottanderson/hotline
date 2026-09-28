@@ -221,12 +221,12 @@ mod tests {
         let tx = Transaction::request(
             Opcode::ChatSend,
             1,
-            vec![Field::string(FieldId::Text, konnichiwa)],
+            vec![Field::string(FieldId::Data, konnichiwa)],
         );
         server.encode(tx, &mut buf).unwrap();
         let decoded = server.decode(&mut buf).unwrap().unwrap();
         assert_ne!(
-            decoded.field(FieldId::Text).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(encoding),
             konnichiwa
         );
 
@@ -236,12 +236,12 @@ mod tests {
         let tx = Transaction::request(
             Opcode::ChatSend,
             2,
-            vec![Field::string(FieldId::Text, konnichiwa)],
+            vec![Field::string(FieldId::Data, konnichiwa)],
         );
         server.encode(tx, &mut buf).unwrap();
         let decoded = server.decode(&mut buf).unwrap().unwrap();
         assert_eq!(
-            decoded.field(FieldId::Text).unwrap().as_string(sjis),
+            decoded.field(FieldId::Data).unwrap().as_string(sjis),
             konnichiwa
         );
     }
@@ -252,7 +252,7 @@ mod tests {
         let tx = Transaction::request(
             Opcode::ChatSend,
             1,
-            vec![Field::string(FieldId::Text, "hello")],
+            vec![Field::string(FieldId::Data, "hello")],
         );
 
         let mut buf = BytesMut::new();
@@ -263,7 +263,7 @@ mod tests {
         // decode produces FieldValue::Bytes, so compare interpreted values
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded.field(FieldId::Text).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(encoding),
             "hello"
         );
         assert!(buf.is_empty(), "decode should consume exactly one frame");
@@ -298,9 +298,9 @@ mod tests {
             Opcode::Login,
             7,
             vec![
-                Field::string(FieldId::Name, "RustHL"),
+                Field::string(FieldId::UserName, "RustHL"),
                 Field::string(
-                    FieldId::Text,
+                    FieldId::Data,
                     "a slightly longer field to cross a few byte boundaries",
                 ),
             ],
@@ -308,11 +308,14 @@ mod tests {
         let decoded = feed_byte_by_byte(&tx);
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded.field(FieldId::Name).unwrap().as_string(encoding),
+            decoded
+                .field(FieldId::UserName)
+                .unwrap()
+                .as_string(encoding),
             "RustHL"
         );
         assert_eq!(
-            decoded.field(FieldId::Text).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(encoding),
             "a slightly longer field to cross a few byte boundaries"
         );
     }
@@ -320,11 +323,11 @@ mod tests {
     #[test]
     fn decodes_two_back_to_back_transactions_from_one_buffer() {
         let encoding = hotline_proto::text_encoding::DEFAULT;
-        let first = Transaction::request(Opcode::Ping, 1, vec![]);
+        let first = Transaction::request(Opcode::KeepConnectionAlive, 1, vec![]);
         let second = Transaction::request(
             Opcode::ChatSend,
             2,
-            vec![Field::string(FieldId::Text, "second frame")],
+            vec![Field::string(FieldId::Data, "second frame")],
         );
 
         let mut buf = BytesMut::new();
@@ -339,7 +342,7 @@ mod tests {
         assert_eq!(decoded_second.trans(), second.trans());
         assert_eq!(
             decoded_second
-                .field(FieldId::Text)
+                .field(FieldId::Data)
                 .unwrap()
                 .as_string(encoding),
             "second frame"
@@ -405,8 +408,8 @@ mod tests {
             Opcode::Login,
             7,
             vec![
-                Field::string(FieldId::Name, "RustHL"),
-                Field::string(FieldId::Text, "a body long enough to split in two"),
+                Field::string(FieldId::UserName, "RustHL"),
+                Field::string(FieldId::Data, "a body long enough to split in two"),
             ],
         );
         let whole_body_len = tx.encode(encoding).unwrap().len() - TransactionHeader::LEN;
@@ -428,11 +431,14 @@ mod tests {
 
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded.field(FieldId::Name).unwrap().as_string(encoding),
+            decoded
+                .field(FieldId::UserName)
+                .unwrap()
+                .as_string(encoding),
             "RustHL"
         );
         assert_eq!(
-            decoded.field(FieldId::Text).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(encoding),
             "a body long enough to split in two"
         );
         assert!(buf.is_empty());
@@ -444,7 +450,7 @@ mod tests {
         let tx = Transaction::request(
             Opcode::Login,
             9,
-            vec![Field::string(FieldId::Text, "split vs whole")],
+            vec![Field::string(FieldId::Data, "split vs whole")],
         );
         let whole_body_len = tx.encode(encoding).unwrap().len() - TransactionHeader::LEN;
 
@@ -469,8 +475,8 @@ mod tests {
         assert_eq!(from_whole.trans(), from_split.trans());
         assert_eq!(from_whole.is_error(), from_split.is_error());
         assert_eq!(
-            from_whole.field(FieldId::Text).unwrap().as_string(encoding),
-            from_split.field(FieldId::Text).unwrap().as_string(encoding)
+            from_whole.field(FieldId::Data).unwrap().as_string(encoding),
+            from_split.field(FieldId::Data).unwrap().as_string(encoding)
         );
     }
 
@@ -540,7 +546,7 @@ mod tests {
         let tx = Transaction::request(
             Opcode::Login,
             7,
-            vec![Field::string(FieldId::Text, "a body long enough to split")],
+            vec![Field::string(FieldId::Data, "a body long enough to split")],
         );
         let whole = tx.encode(encoding).unwrap();
         let body = &whole[TransactionHeader::LEN..];
@@ -562,7 +568,7 @@ mod tests {
 
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded.field(FieldId::Text).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(encoding),
             "a body long enough to split"
         );
         assert!(codec.partials.is_empty(), "no partial may be stranded");

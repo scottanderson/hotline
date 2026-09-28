@@ -122,69 +122,82 @@ impl HotlineClient {
         Ok(reply)
     }
 
-    /// Log in with the given credentials (`myTran_Login`, 107). `login`
+    /// Log in with the given credentials, [`myTran_Login`] (107). `login`
     /// and `password` are obfuscated with Hotline's XOR-0xFF transform
     /// before going on the wire.
     ///
-    /// The server follows the reply with a `myTran_ShowAgreement` (109)
+    /// The server follows the reply with a [`myTran_ShowAgreement`] (109)
     /// push on the event stream returned by [`Self::connect`], carrying
     /// either agreement text or a no-agreement marker. Call [`Self::agree`]
     /// with the caller's name/icon after handling it to complete login.
+    ///
+    /// [`myTran_Login`]: hotline_proto::Opcode::Login
+    /// [`myTran_ShowAgreement`]: hotline_proto::Opcode::ShowAgreement
     pub async fn login(&self, login: &str, password: &str) -> Result<LoginResult> {
         let reply = self
             .request(
                 Opcode::Login,
                 vec![
-                    Field::obfuscated_string(FieldId::Login, login),
-                    Field::obfuscated_string(FieldId::Password, password),
-                    Field::u16(FieldId::Version, 151),
+                    Field::obfuscated_string(FieldId::UserLogin, login),
+                    Field::obfuscated_string(FieldId::UserPassword, password),
+                    Field::u16(FieldId::Vers, 151),
                 ],
             )
             .await?;
 
         let encoding = self.encoding.get();
         Ok(LoginResult {
-            version: reply.field(FieldId::Version).and_then(Field::as_u16),
-            banner_id: reply.field(FieldId::Bannerid).and_then(Field::as_u16),
-            server_name: reply.string(FieldId::Servername, encoding),
+            version: reply.field(FieldId::Vers).and_then(Field::as_u16),
+            banner_id: reply
+                .field(FieldId::CommunityBannerID)
+                .and_then(Field::as_u16),
+            server_name: reply.string(FieldId::ServerName, encoding),
         })
     }
 
-    /// Accept the server's agreement, completing login (`myTran_Agreed`, 121).
+    /// Accept the server's agreement, completing login, [`myTran_Agreed`] (121).
+    ///
+    /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
     pub async fn agree(&self, nick: &str, icon: u16) -> Result<()> {
         self.request(
             Opcode::Agreed,
             vec![
-                Field::string(FieldId::Name, nick),
-                Field::u16(FieldId::Icon, icon),
+                Field::string(FieldId::UserName, nick),
+                Field::u16(FieldId::UserIconID, icon),
             ],
         )
         .await?;
         Ok(())
     }
 
-    /// Send a public chat message (`myTran_ChatSend`, 105).
+    /// Send a public chat message, [`myTran_ChatSend`] (105).
+    ///
+    /// [`myTran_ChatSend`]: hotline_proto::Opcode::ChatSend
     pub async fn send_chat(&self, message: &str) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(
             Opcode::ChatSend,
             id,
-            vec![Field::string(FieldId::Text, message)],
+            vec![Field::string(FieldId::Data, message)],
         );
         self.writer.lock().await.send(tx).await?;
         Ok(())
     }
 
-    /// Fetch the connected-user list (`myTran_GetUserNameList`, 300).
+    /// Fetch the connected-user list, [`myTran_GetUserNameList`] (300).
+    ///
+    /// [`myTran_GetUserNameList`]: hotline_proto::Opcode::GetUserNameList
     pub async fn get_user_name_list(&self) -> Result<Vec<UserNameWithInfo>> {
-        let reply = self.request(Opcode::UserGetlist, vec![]).await?;
+        let reply = self.request(Opcode::GetUserNameList, vec![]).await?;
         let encoding = self.encoding.get();
         Ok(reply.user_list_entries(encoding)?)
     }
 
-    /// Fetch the root folder's file listing (`myTran_GetFileNameList`, 200).
+    /// Fetch the root folder's file listing, [`myTran_GetFileNameList`] (200).
+    ///
+    /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
     pub async fn get_file_name_list(&self) -> Result<Vec<FileNameWithInfo>> {
-        let reply = self.request(Opcode::FileList, vec![]).await?;
+        let reply = self.request(Opcode::GetFileNameList, vec![]).await?;
         let encoding = self.encoding.get();
         Ok(reply.file_list_entries(encoding)?)
     }

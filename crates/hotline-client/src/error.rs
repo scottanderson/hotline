@@ -17,7 +17,9 @@ pub enum ClientError {
     Proto(#[from] hotline_proto::ProtoError),
 
     /// The server replied with a nonzero error code. Carries the
-    /// `ERROR_TEXT` field if the server sent one.
+    /// [`myField_ErrorText`] (100) field if the server sent one.
+    ///
+    /// [`myField_ErrorText`]: hotline_proto::FieldId::ErrorText
     #[error("server error: {0}")]
     Server(String),
 

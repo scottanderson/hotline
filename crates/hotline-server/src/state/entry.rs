@@ -20,12 +20,16 @@ pub struct UserEntry {
     /// The account's own registered display name, which can differ from
     /// `name` if `USE_ANY_NAME` lets this session pick its own.
     pub account_name: String,
-    /// Display name (post `SET_CLIENT_USER_INFO`).
+    /// Display name, as last set by [`myTran_SetClientUserInfo`] (304).
+    ///
+    /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
     pub name: String,
     /// Icon ID.
     pub icon: u16,
-    /// Client-reported protocol version (`myField_Vers`, field
-    /// 160), `None` if the login request never sent one.
+    /// Client-reported protocol version, [`myField_Vers`] (160). `None` if
+    /// the login request never sent one.
+    ///
+    /// [`myField_Vers`]: hotline_proto::FieldId::Vers
     pub client_version: Option<u16>,
     /// Remote socket address this connection was accepted from.
     pub remote_addr: SocketAddr,

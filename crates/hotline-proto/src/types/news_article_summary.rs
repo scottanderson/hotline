@@ -1,11 +1,13 @@
-//! [`NewsArticleSummary`]: one entry inside a `NEWS_ARTICLE_LIST_DATA` (321) field.
+//! [`NewsArticleSummary`]: one entry inside a `myField_NewsArtListData` (321) field.
 
 use crate::error::Result;
 use crate::text_encoding::Encoding;
 use crate::types::HlDate;
 use crate::wire::VecWriter;
 
-/// One article summary inside a `NEWS_ARTICLE_LIST_DATA` (321) field.
+/// One article summary inside a [`myField_NewsArtListData`] (321) field.
+///
+/// [`myField_NewsArtListData`]: crate::FieldId::NewsArtListData
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewsArticleSummary {
     /// Article ID.

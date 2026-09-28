@@ -95,8 +95,12 @@ pub(super) fn state_with_banner(
     })
 }
 
-/// A fixed-bytes [`crate::banner::BannerProvider`], for exercising
-/// the `BANNER_GET`/`myTran_ServerBanner` login push paths.
+/// A fixed-bytes [`crate::banner::BannerProvider`], for exercising the
+/// [`myTran_DownloadBanner`] (212) and [`myTran_ServerBanner`] (122) login push
+/// paths.
+///
+/// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
+/// [`myTran_ServerBanner`]: hotline_proto::Opcode::ServerBanner
 pub(super) struct TestImageBanner {
     pub(super) format: [u8; 4],
     pub(super) bytes: Vec<u8>,

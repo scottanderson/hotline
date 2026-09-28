@@ -16,7 +16,9 @@ use crate::news::NewsArticle;
 pub(crate) const MAX_REPLY_CHAIN_LEN: usize = 32;
 
 /// A leaf category: a thread of articles plus the bookkeeping mirrored
-/// into `myField_NewsCatListData15` (323).
+/// into [`myField_NewsCatListData15`] (323).
+///
+/// [`myField_NewsCatListData15`]: hotline_proto::FieldId::NewsCatListData15
 #[derive(Debug, Clone)]
 pub struct NewsCategory {
     pub guid: Uuid,

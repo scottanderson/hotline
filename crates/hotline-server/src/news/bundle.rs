@@ -94,9 +94,11 @@ impl NewsBundle {
 
     /// Create a new bundle named `name` under `components`.
     /// `Err` if `components` isn't a bundle, `name` already exists, or
-    /// `name` is too long for the `myField_NewsCatListData15` (323)
+    /// `name` is too long for the [`myField_NewsCatListData15`] (323)
     /// listing entry it will need to encode into (a 1-byte length prefix).
     /// Also `Err` past `MAX_BUNDLE_DEPTH`.
+    ///
+    /// [`myField_NewsCatListData15`]: hotline_proto::FieldId::NewsCatListData15
     pub fn mkdir(&mut self, components: &[String], name: &str) -> Result<(), &'static str> {
         if components.len() >= MAX_BUNDLE_DEPTH {
             return Err("news bundles are nested too deep");
@@ -170,7 +172,7 @@ impl NewsBundle {
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
         // Each is wire-encoded with a 1-byte length prefix in the
-        // article listing (`myField_NewsArtListData`, 321). Openline
+        // article listing (`myField_NewsArtListData` (321)). Openline
         // actually caps title/flavor at a much smaller fixed buffer and
         // truncates silently rather than rejecting; this server accepts
         // up to the wire format's real 255-byte limit and errors past
@@ -207,7 +209,9 @@ impl NewsBundle {
     }
 
     /// One article's data, plus its sibling/child linkage for a
-    /// `myTran_GetNewsArtData` (400) reply.
+    /// [`myTran_GetNewsArtData`] (400) reply.
+    ///
+    /// [`myTran_GetNewsArtData`]: hotline_proto::Opcode::GetNewsArtData
     pub fn article(&self, components: &[String], id: u32) -> Option<NewsArticleView<'_>> {
         let category = self.category(components)?;
         let article = category.articles.get(&id)?;

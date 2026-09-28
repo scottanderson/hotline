@@ -16,7 +16,9 @@ use crate::state::{
 use super::connection::Session;
 
 impl Session {
-    /// 200
+    /// [`myTran_GetFileNameList`] (200)
+    ///
+    /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
     pub(super) async fn on_get_file_name_list(
         &self,
         tx: &Transaction,
@@ -26,7 +28,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
 
-        // FILE_PATH (202) is optional in the request; root is assumed
+        // `myField_FilePath` (202) is optional in the request; root is assumed
         // when absent.
         let encoding = self.encoding();
         let dir = match tx.file_path(FieldId::FilePath, encoding) {
@@ -41,13 +43,17 @@ impl Session {
         };
         let fields = entries
             .into_iter()
-            .map(|entry| Field::bytes(FieldId::FileList, entry.encode(encoding)))
+            .map(|entry| Field::bytes(FieldId::FileNameWithInfo, entry.encode(encoding)))
             .collect();
         vec![tx.reply(fields)]
     }
 
-    /// Decode a `FILE_PATH`-shaped field (`FilePath` or `FileNewPath`).
+    /// Decode a path field, [`myField_FilePath`] (202) or [`myField_FileNewPath`]
+    /// (212).
     /// An absent field is the root directory.
+    ///
+    /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
+    /// [`myField_FileNewPath`]: hotline_proto::FieldId::FileNewPath
     pub(super) fn path_field(
         &self,
         tx: &Transaction,
@@ -64,7 +70,11 @@ impl Session {
         }
     }
 
-    /// A request's `FILE_NAME` (201) and `FILE_PATH` (202) fields.
+    /// A request's [`myField_FileName`] (201) and [`myField_FilePath`] (202)
+    /// fields.
+    ///
+    /// [`myField_FileName`]: hotline_proto::FieldId::FileName
+    /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
     pub(super) fn file_name_and_dir(
         &self,
         tx: &Transaction,
@@ -77,9 +87,12 @@ impl Session {
         Ok((name, dir))
     }
 
-    /// Like `file_name_and_dir`, but when `FILE_NAME` (201) is absent,
-    /// derives the target name and containing directory from `FILE_PATH`
-    /// (202)'s last component instead of erroring.
+    /// Like `file_name_and_dir`, but when [`myField_FileName`] (201) is
+    /// absent, derives the target name and containing directory from
+    /// [`myField_FilePath`] (202)'s last component instead of erroring.
+    ///
+    /// [`myField_FileName`]: hotline_proto::FieldId::FileName
+    /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
     pub(super) fn file_name_and_dir_from_path_tail(
         &self,
         tx: &Transaction,
@@ -95,13 +108,17 @@ impl Session {
         Ok((name.clone(), HlPath::new(dir.to_vec())))
     }
 
-    /// 202: start a download. Allocates a transfer reference and tells
-    /// the client the total byte count (flattened-object overhead plus
-    /// the file's own bytes) to expect on the data connection. A client
-    /// resuming an interrupted download sends `myField_FileResumeData` (203) with
-    /// the byte count it already has; that portion of the data fork is
-    /// skipped, though the flattened-object header is always resent.
-    pub(super) async fn on_file_get(
+    /// [`myTran_DownloadFile`] (202): start a download. Allocates a transfer
+    /// reference and tells the client the total byte count (flattened-object
+    /// overhead plus the file's own bytes) to expect on the data connection. A
+    /// client resuming an interrupted download sends
+    /// [`myField_FileResumeData`] (203) with the byte count it already has; that
+    /// portion of the data fork is skipped, though the flattened-object header
+    /// is always resent.
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+    /// [`myField_FileResumeData`]: hotline_proto::FieldId::FileResumeData
+    pub(super) async fn on_download_file(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -120,14 +137,14 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
 
-        // `FileXferOptions` (204) == 2 requests the raw file bytes with
+        // `myField_FileXferOptions` (204) == 2 requests the raw file bytes with
         // no resume support.
         let raw = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(2);
         let encoding = self.encoding();
         let (resume_offset, total_size) = if raw {
             (0, data_size)
         } else {
-            let resume_offset = match tx.field(FieldId::ResumeFileTransfer) {
+            let resume_offset = match tx.field(FieldId::FileResumeData) {
                 Some(field) => match types::decode_resume_data(&field.as_bytes(encoding)) {
                     Ok(already_have) => (already_have as u64).min(data_size),
                     Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
@@ -156,8 +173,11 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// Register and admit a download. Returns its `myField_RefNum` (107)
-    /// field, then `myField_WaitingCount` (116) if it is queued.
+    /// Register and admit a download. Returns its [`myField_RefNum`] (107)
+    /// field, then [`myField_WaitingCount`] (116) if it is queued.
+    ///
+    /// [`myField_RefNum`]: hotline_proto::FieldId::RefNum
+    /// [`myField_WaitingCount`]: hotline_proto::FieldId::WaitingCount
     async fn register_download(
         &self,
         kind: TransferKind,
@@ -175,18 +195,21 @@ impl Session {
             })
             .await;
         let waiting_count = state.admit_download(reference, self.user_id).await;
-        let mut fields = vec![Field::u32(FieldId::TransferId, reference.0)];
+        let mut fields = vec![Field::u32(FieldId::RefNum, reference.0)];
         if waiting_count > 0 {
-            fields.push(Field::u32(FieldId::QueuePosition, waiting_count));
+            fields.push(Field::u32(FieldId::WaitingCount, waiting_count));
         }
         fields
     }
 
-    /// 212: request the server banner image over `HTXF`, the same
-    /// download-reference-and-second-connection dance as `FILE_GET`.
-    /// `Err` if no image banner is configured (a URL banner has nothing
-    /// to fetch this way).
-    pub(super) async fn on_banner_get(
+    /// [`myTran_DownloadBanner`] (212): request the server banner image over
+    /// `HTXF`, the same download-reference-and-second-connection dance as
+    /// [`myTran_DownloadFile`] (202). `Err` if no image banner is configured (a
+    /// URL banner has nothing to fetch this way).
+    ///
+    /// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+    pub(super) async fn on_download_banner(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -199,18 +222,22 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         vec![tx.reply(vec![
-            Field::u32(FieldId::TransferId, reference.0),
+            Field::u32(FieldId::RefNum, reference.0),
             Field::u32(FieldId::TransferSize, size as u32),
         ])]
     }
 
-    /// 203: start an upload. The destination must be under a folder
-    /// named "Upload" or "Drop Box" unless the account can upload
-    /// anywhere. `FileXferOptions` (204) == 1 resumes an interrupted
-    /// upload instead of rejecting an existing file at the destination;
-    /// the reply then also carries `FileResumeData` (203) telling the
-    /// client how many bytes to skip.
-    pub(super) async fn on_file_put(
+    /// [`myTran_UploadFile`] (203): start an upload. The destination must be
+    /// under a folder named "Upload" or "Drop Box" unless the account can
+    /// upload anywhere. [`myField_FileXferOptions`] (204) == 1 resumes an
+    /// interrupted upload instead of rejecting an existing file at the
+    /// destination; the reply then also carries [`myField_FileResumeData`] (203)
+    /// telling the client how many bytes to skip.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
+    /// [`myField_FileXferOptions`]: hotline_proto::FieldId::FileXferOptions
+    /// [`myField_FileResumeData`]: hotline_proto::FieldId::FileResumeData
+    pub(super) async fn on_upload_file(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -254,19 +281,21 @@ impl Session {
             })
             .await;
 
-        let mut fields = vec![Field::u32(FieldId::TransferId, reference.0)];
+        let mut fields = vec![Field::u32(FieldId::RefNum, reference.0)];
         if resume {
             fields.push(Field::bytes(
-                FieldId::ResumeFileTransfer,
+                FieldId::FileResumeData,
                 types::encode_resume_data(resume_offset as u32).to_vec(),
             ));
         }
         vec![tx.reply(fields)]
     }
 
-    /// `myTran_DownloadFldr` (210): start a folder download. Replies with the
+    /// [`myTran_DownloadFldr`] (210): start a folder download. Replies with the
     /// total byte count of the folder's files and its item count. An empty
     /// folder gets no transfer reference.
+    ///
+    /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
     pub(super) async fn on_download_fldr(
         &self,
         tx: &Transaction,
@@ -289,7 +318,7 @@ impl Session {
         let item_count = items.len() as u32;
         let mut fields = vec![
             Field::u32(FieldId::TransferSize, total_size as u32),
-            Field::u32(FieldId::FolderItemCount, item_count),
+            Field::u32(FieldId::FldrItemCount, item_count),
         ];
         if items.is_empty() {
             return vec![tx.reply(fields)];
@@ -309,11 +338,16 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// `myTran_UploadFldr` (213): start a folder upload, creating the folder
-    /// right away. The destination rule matches `myTran_UploadFile` (203).
-    /// `myField_FileXferOptions` (204) == 1 resumes into an existing folder
-    /// instead. A zero `myField_FldrItemCount` (220) gets no transfer
+    /// [`myTran_UploadFldr`] (213): start a folder upload, creating the folder
+    /// right away. The destination rule matches [`myTran_UploadFile`] (203).
+    /// [`myField_FileXferOptions`] (204) == 1 resumes into an existing folder
+    /// instead. A zero [`myField_FldrItemCount`] (220) gets no transfer
     /// reference.
+    ///
+    /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
+    /// [`myField_FileXferOptions`]: hotline_proto::FieldId::FileXferOptions
+    /// [`myField_FldrItemCount`]: hotline_proto::FieldId::FldrItemCount
     pub(super) async fn on_upload_fldr(
         &self,
         tx: &Transaction,
@@ -337,7 +371,7 @@ impl Session {
         }
 
         let item_count = tx
-            .field(FieldId::FolderItemCount)
+            .field(FieldId::FldrItemCount)
             .and_then(Field::as_u32)
             .unwrap_or(0);
         if item_count == 0 {
@@ -365,18 +399,20 @@ impl Session {
                 client_ip: self.remote_addr.ip(),
             })
             .await;
-        vec![tx.reply(vec![Field::u32(FieldId::TransferId, reference.0)])]
+        vec![tx.reply(vec![Field::u32(FieldId::RefNum, reference.0)])]
     }
 
-    /// `myTran_KillDownload` (214): cancel one of this session's downloads,
+    /// [`myTran_KillDownload`] (214): cancel one of this session's downloads,
     /// queued or running.
+    ///
+    /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
     pub(super) async fn on_kill_download(
         &self,
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Some(reference) = tx
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .map(TransferRef)
         {
@@ -385,8 +421,11 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 204: delete a file, or a folder and everything under it.
-    pub(super) async fn on_file_delete(
+    /// [`myTran_DeleteFile`] (204): delete a file, or a folder and everything
+    /// under it.
+    ///
+    /// [`myTran_DeleteFile`]: hotline_proto::Opcode::DeleteFile
+    pub(super) async fn on_delete_file(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -402,8 +441,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 205: create a folder.
-    pub(super) async fn on_file_mkdir(
+    /// [`myTran_NewFolder`] (205): create a folder.
+    ///
+    /// [`myTran_NewFolder`]: hotline_proto::Opcode::NewFolder
+    pub(super) async fn on_new_folder(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -422,10 +463,13 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 206: fetch a file or folder's metadata. Type/creator/creation date
-    /// are omitted; nothing in this server persists real HFS metadata for
-    /// them (see `HTXF`'s `INFO` fork). Comment is sent when one is stored.
-    pub(super) async fn on_file_getinfo(
+    /// [`myTran_GetFileInfo`] (206): fetch a file or folder's metadata.
+    /// Type/creator/creation date are omitted; nothing in this server persists
+    /// real HFS metadata for them (see `HTXF`'s `INFO` fork). Comment is sent
+    /// when one is stored.
+    ///
+    /// [`myTran_GetFileInfo`]: hotline_proto::Opcode::GetFileInfo
+    pub(super) async fn on_get_file_info(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -459,7 +503,7 @@ impl Session {
         let mut fields = vec![
             Field::string(FieldId::FileName, info.name),
             Field::u32(FieldId::FileSize, info.size),
-            Field::bytes(FieldId::FileDateModify, zero_date),
+            Field::bytes(FieldId::FileModifyDate, zero_date),
         ];
         if let Some(comment) = comment {
             fields.push(Field::string(FieldId::FileComment, comment));
@@ -467,10 +511,14 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// 207: rename a file or folder, and/or set its `FILE_COMMENT`. A
-    /// rename, if present, applies before the comment, so a comment sent
-    /// alongside a rename lands on the renamed entry.
-    pub(super) async fn on_file_setinfo(
+    /// [`myTran_SetFileInfo`] (207): rename a file or folder, and/or set its
+    /// [`myField_FileComment`] (210). A rename, if present, applies before the
+    /// comment, so a comment sent alongside a rename lands on the renamed
+    /// entry.
+    ///
+    /// [`myTran_SetFileInfo`]: hotline_proto::Opcode::SetFileInfo
+    /// [`myField_FileComment`]: hotline_proto::FieldId::FileComment
+    pub(super) async fn on_set_file_info(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -507,8 +555,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 208: move a file or folder into another folder.
-    pub(super) async fn on_file_move(
+    /// [`myTran_MoveFile`] (208): move a file or folder into another folder.
+    ///
+    /// [`myTran_MoveFile`]: hotline_proto::Opcode::MoveFile
+    pub(super) async fn on_move_file(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -531,8 +581,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// 209: create an alias pointing at another file.
-    pub(super) async fn on_file_symlink(
+    /// [`myTran_MakeFileAlias`] (209): create an alias pointing at another file.
+    ///
+    /// [`myTran_MakeFileAlias`]: hotline_proto::Opcode::MakeFileAlias
+    pub(super) async fn on_make_file_alias(
         &self,
         tx: &Transaction,
         state: &SharedState,
@@ -572,7 +624,7 @@ mod tests {
     use hotline_proto::text_encoding;
 
     #[tokio::test]
-    async fn banner_get_denied_without_access_extra_banner_get() {
+    async fn download_banner_denied_without_access_extra_banner_get() {
         let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
             format: *b"JPEG",
             bytes: b"hi".to_vec(),
@@ -580,9 +632,9 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::BANNER_GET);
 
-        let get = Transaction::request(Opcode::BannerGet, 1, vec![]);
+        let get = Transaction::request(Opcode::DownloadBanner, 1, vec![]);
         let [reply] = session
-            .on_banner_get(&get, &state)
+            .on_download_banner(&get, &state)
             .await
             .try_into()
             .unwrap();
@@ -590,7 +642,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn banner_get_replies_with_ref_and_size_and_registers_a_banner_transfer() {
+    async fn download_banner_replies_with_ref_and_size_and_registers_a_banner_transfer() {
         let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
             format: *b"JPEG",
             bytes: b"hello".to_vec(),
@@ -598,16 +650,16 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::BANNER_GET);
 
-        let get = Transaction::request(Opcode::BannerGet, 1, vec![]);
+        let get = Transaction::request(Opcode::DownloadBanner, 1, vec![]);
         let [reply] = session
-            .on_banner_get(&get, &state)
+            .on_download_banner(&get, &state)
             .await
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
 
         let reference = reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
         let size = reply
@@ -623,16 +675,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn banner_get_denied_when_only_a_url_banner_is_configured() {
+    async fn download_banner_denied_when_only_a_url_banner_is_configured() {
         let state = state_with_banner(std::sync::Arc::new(crate::banner::UrlBannerProvider::new(
             "https://example.com/banner.jpg",
         )));
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::BANNER_GET);
 
-        let get = Transaction::request(Opcode::BannerGet, 1, vec![]);
+        let get = Transaction::request(Opcode::DownloadBanner, 1, vec![]);
         let [reply] = session
-            .on_banner_get(&get, &state)
+            .on_download_banner(&get, &state)
             .await
             .try_into()
             .unwrap();
@@ -653,36 +705,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_get_denied_without_download_files() {
+    async fn download_file_denied_without_download_files() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::empty());
 
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(reply.is_error());
     }
 
     #[tokio::test]
-    async fn file_get_replies_with_ref_and_total_size() {
+    async fn download_file_replies_with_ref_and_total_size() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
 
         assert!(!reply.is_error());
         let reference = reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
         let total_size = reply
@@ -704,19 +764,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_get_reply_carries_no_waiting_count_under_the_download_cap() {
+    async fn download_file_reply_carries_no_waiting_count_under_the_download_cap() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
-        assert!(reply.field(FieldId::QueuePosition).is_none());
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.field(FieldId::WaitingCount).is_none());
     }
 
     /// openline's `ProcessTran_KillDownload` always replies with no error.
@@ -727,20 +791,24 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
         let reference = reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
 
         let kill = Transaction::request(
             Opcode::KillDownload,
             2,
-            vec![Field::u32(FieldId::TransferId, reference)],
+            vec![Field::u32(FieldId::RefNum, reference)],
         );
         let [reply] = session
             .on_kill_download(&kill, &state)
@@ -753,7 +821,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_get_past_the_download_cap_queues_and_reports_waiting_count() {
+    async fn download_file_past_the_download_cap_queues_and_reports_waiting_count() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         files.seed(&HlPath::default(), "b.txt", *b"world");
@@ -765,29 +833,29 @@ mod tests {
         second_session.user_id = 2;
 
         let first_get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [first_reply] = first_session
-            .on_file_get(&first_get, &state)
+            .on_download_file(&first_get, &state)
             .await
             .try_into()
             .unwrap();
-        assert!(first_reply.field(FieldId::QueuePosition).is_none());
+        assert!(first_reply.field(FieldId::WaitingCount).is_none());
 
         let second_get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             2,
             vec![Field::string(FieldId::FileName, "b.txt")],
         );
         let [second_reply] = second_session
-            .on_file_get(&second_get, &state)
+            .on_download_file(&second_get, &state)
             .await
             .try_into()
             .unwrap();
         let waiting_count = second_reply
-            .field(FieldId::QueuePosition)
+            .field(FieldId::WaitingCount)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(waiting_count, 1);
@@ -795,7 +863,7 @@ mod tests {
         let mut second_recipient = state.register_recipient(2).await;
 
         let first_reference = first_reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
         state
@@ -803,7 +871,7 @@ mod tests {
             .await;
 
         let second_reference = second_reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
 
@@ -816,11 +884,11 @@ mod tests {
             hotline_proto::opcode::TransactionType::Push(Opcode::DownloadInfo)
         );
         assert_eq!(
-            push.field(FieldId::TransferId).and_then(Field::as_u32),
+            push.field(FieldId::RefNum).and_then(Field::as_u32),
             Some(second_reference)
         );
         assert_eq!(
-            push.field(FieldId::QueuePosition).and_then(Field::as_u32),
+            push.field(FieldId::WaitingCount).and_then(Field::as_u32),
             Some(0)
         );
 
@@ -834,21 +902,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_get_with_resume_data_shrinks_the_transfer_and_records_the_offset() {
+    async fn download_file_with_resume_data_shrinks_the_transfer_and_records_the_offset() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello world");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
-                Field::bytes(FieldId::ResumeFileTransfer, types::encode_resume_data(6)),
+                Field::bytes(FieldId::FileResumeData, types::encode_resume_data(6)),
             ],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
 
         assert!(!reply.is_error());
         let total_size = reply
@@ -863,7 +935,7 @@ mod tests {
         assert_eq!(file_size, 11);
 
         let reference = reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
@@ -872,21 +944,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_get_with_resume_data_past_eof_clamps_to_zero_remaining() {
+    async fn download_file_with_resume_data_past_eof_clamps_to_zero_remaining() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
-                Field::bytes(FieldId::ResumeFileTransfer, types::encode_resume_data(999)),
+                Field::bytes(FieldId::FileResumeData, types::encode_resume_data(999)),
             ],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
 
         assert!(!reply.is_error());
         let total_size = reply
@@ -897,36 +973,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_get_with_malformed_resume_data_is_an_error() {
+    async fn download_file_with_malformed_resume_data_is_an_error() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
-                Field::bytes(FieldId::ResumeFileTransfer, vec![1, 2, 3]),
+                Field::bytes(FieldId::FileResumeData, vec![1, 2, 3]),
             ],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
 
         assert!(reply.is_error());
     }
 
     #[tokio::test]
-    async fn file_get_missing_file_is_an_error() {
+    async fn download_file_missing_file_is_an_error() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
         let get = Transaction::request(
-            Opcode::FileGet,
+            Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "missing.txt")],
         );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(reply.is_error());
     }
 
@@ -941,7 +1025,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let list = Transaction::request(
-            Opcode::FileList,
+            Opcode::GetFileNameList,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -966,7 +1050,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let list = Transaction::request(
-            Opcode::FileList,
+            Opcode::GetFileNameList,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -983,7 +1067,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_get_from_a_dropbox_is_denied_without_view_drop_boxes() {
+    async fn download_file_from_a_dropbox_is_denied_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
@@ -993,32 +1077,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let get = Transaction::request(
-            Opcode::FileGet,
-            1,
-            vec![
-                Field::string(FieldId::FileName, "secret.txt"),
-                Field::bytes(
-                    FieldId::FilePath,
-                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
-                ),
-            ],
-        );
-        let [reply] = session.on_file_get(&get, &state).await.try_into().unwrap();
-        assert!(reply.is_error());
-    }
-
-    #[tokio::test]
-    async fn file_delete_in_a_dropbox_succeeds_without_view_drop_boxes() {
-        let encoding = text_encoding::DEFAULT;
-        let files = crate::file::InMemoryFileProvider::default();
-        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
-        let state = state_with_files(files);
-        let mut access = Access::all();
-        access.remove(Access::VIEW_DROP_BOXES);
-        let session = test_session("Alice", access);
-
-        let delete = Transaction::request(
-            Opcode::FileDelete,
+            Opcode::DownloadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -1029,7 +1088,36 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_delete(&delete, &state)
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn delete_file_in_a_dropbox_succeeds_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let delete = Transaction::request(
+            Opcode::DeleteFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "secret.txt"),
+                Field::bytes(
+                    FieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_delete_file(&delete, &state)
             .await
             .try_into()
             .unwrap();
@@ -1043,7 +1131,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_getinfo_in_a_dropbox_is_denied_without_view_drop_boxes() {
+    async fn get_file_info_in_a_dropbox_is_denied_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
@@ -1054,7 +1142,7 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            Opcode::FileGetinfo,
+            Opcode::GetFileInfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -1065,7 +1153,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_getinfo(&getinfo, &state)
+            .on_get_file_info(&getinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1073,7 +1161,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_mkdir_in_a_dropbox_is_denied_without_view_drop_boxes() {
+    async fn new_folder_in_a_dropbox_is_denied_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let mut access = Access::all();
@@ -1081,7 +1169,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
-            Opcode::FileMkdir,
+            Opcode::NewFolder,
             1,
             vec![
                 Field::string(FieldId::FileName, "Drop Box"),
@@ -1092,7 +1180,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_mkdir(&mkdir, &state)
+            .on_new_folder(&mkdir, &state)
             .await
             .try_into()
             .unwrap();
@@ -1100,7 +1188,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_setinfo_in_a_dropbox_is_denied_without_view_drop_boxes() {
+    async fn set_file_info_in_a_dropbox_is_denied_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
@@ -1110,7 +1198,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            Opcode::FileSetinfo,
+            Opcode::SetFileInfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -1122,7 +1210,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_setinfo(&setinfo, &state)
+            .on_set_file_info(&setinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1130,7 +1218,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_move_into_a_dropbox_succeeds_without_view_drop_boxes() {
+    async fn move_file_into_a_dropbox_succeeds_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
@@ -1141,7 +1229,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let move_tx = Transaction::request(
-            Opcode::FileMove,
+            Opcode::MoveFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -1152,7 +1240,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_move(&move_tx, &state)
+            .on_move_file(&move_tx, &state)
             .await
             .try_into()
             .unwrap();
@@ -1166,7 +1254,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_symlink_of_a_dropbox_target_succeeds_without_view_drop_boxes() {
+    async fn make_file_alias_of_a_dropbox_target_succeeds_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
@@ -1176,7 +1264,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let symlink = Transaction::request(
-            Opcode::FileSymlink,
+            Opcode::MakeFileAlias,
             1,
             vec![
                 Field::string(FieldId::FileName, "secret.txt"),
@@ -1191,7 +1279,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_symlink(&symlink, &state)
+            .on_make_file_alias(&symlink, &state)
             .await
             .try_into()
             .unwrap();
@@ -1246,11 +1334,11 @@ mod tests {
         assert!(!reply.is_error());
         let u32_field = |id| reply.field(id).and_then(Field::as_u32).unwrap();
         assert_eq!(u32_field(FieldId::TransferSize), 7);
-        assert_eq!(u32_field(FieldId::FolderItemCount), 3);
-        assert!(reply.field(FieldId::QueuePosition).is_none());
+        assert_eq!(u32_field(FieldId::FldrItemCount), 3);
+        assert!(reply.field(FieldId::WaitingCount).is_none());
 
         let transfer = state
-            .take_transfer(TransferRef(u32_field(FieldId::TransferId)))
+            .take_transfer(TransferRef(u32_field(FieldId::RefNum)))
             .await
             .unwrap();
         assert_eq!(transfer.direction, TransferDirection::Get);
@@ -1281,12 +1369,10 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert_eq!(
-            reply
-                .field(FieldId::FolderItemCount)
-                .and_then(Field::as_u32),
+            reply.field(FieldId::FldrItemCount).and_then(Field::as_u32),
             Some(0)
         );
-        assert!(reply.field(FieldId::TransferId).is_none());
+        assert!(reply.field(FieldId::RefNum).is_none());
     }
 
     #[tokio::test]
@@ -1350,7 +1436,7 @@ mod tests {
             &["Uploads"],
             "New",
             vec![
-                Field::u32(FieldId::FolderItemCount, 2),
+                Field::u32(FieldId::FldrItemCount, 2),
                 Field::u32(FieldId::TransferSize, 10),
             ],
         );
@@ -1367,7 +1453,7 @@ mod tests {
         assert_eq!(info.file_type, *b"fldr");
 
         let reference = reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
@@ -1392,7 +1478,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        assert!(reply.field(FieldId::TransferId).is_none());
+        assert!(reply.field(FieldId::RefNum).is_none());
         assert!(
             state
                 .file_exists(requester, &HlPath::default(), "New")
@@ -1425,23 +1511,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_put_outside_a_dropbox_is_denied_without_upload_anywhere() {
+    async fn upload_file_outside_a_dropbox_is_denied_without_upload_anywhere() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let mut access = Access::all();
         access.remove(Access::UPLOAD_ANYWHERE);
         let session = test_session("Alice", access);
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(reply.is_error());
     }
 
     #[tokio::test]
-    async fn file_put_into_a_dropbox_is_allowed_without_upload_anywhere() {
+    async fn upload_file_into_a_dropbox_is_allowed_without_upload_anywhere() {
         let encoding = text_encoding::DEFAULT;
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let mut access = Access::all();
@@ -1449,7 +1539,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -1461,29 +1551,37 @@ mod tests {
                 ),
             ],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(!reply.is_error());
-        assert!(reply.field(FieldId::TransferId).is_some());
+        assert!(reply.field(FieldId::RefNum).is_some());
     }
 
     #[tokio::test]
-    async fn file_put_rejects_an_existing_file() {
+    async fn upload_file_rejects_an_existing_file() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"existing");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(reply.is_error());
     }
 
     #[tokio::test]
-    async fn file_put_resumes_into_a_partial_upload() {
+    async fn upload_file_resumes_into_a_partial_upload() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(
             &HlPath::default(),
@@ -1494,21 +1592,25 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
                 Field::u16(FieldId::FileXferOptions, 1),
             ],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(!reply.is_error());
         let reference = reply
-            .field(FieldId::TransferId)
+            .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
 
-        let resume_field = reply.field(FieldId::ResumeFileTransfer).unwrap();
+        let resume_field = reply.field(FieldId::FileResumeData).unwrap();
         let already_have =
             types::decode_resume_data(&resume_field.as_bytes(text_encoding::DEFAULT)).unwrap();
         assert_eq!(already_have, 5);
@@ -1519,26 +1621,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_put_resume_of_a_completed_upload_is_an_error() {
+    async fn upload_file_resume_of_a_completed_upload_is_an_error() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
                 Field::u16(FieldId::FileXferOptions, 1),
             ],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(reply.is_error());
     }
 
     #[tokio::test]
-    async fn file_put_resume_of_an_empty_partial_upload_still_sends_resume_data() {
+    async fn upload_file_resume_of_an_empty_partial_upload_still_sends_resume_data() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(
             &HlPath::default(),
@@ -1549,20 +1655,24 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
                 Field::u16(FieldId::FileXferOptions, 1),
             ],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(!reply.is_error());
-        assert!(reply.field(FieldId::ResumeFileTransfer).is_some());
+        assert!(reply.field(FieldId::FileResumeData).is_some());
     }
 
     #[tokio::test]
-    async fn file_put_resumes_an_upload_left_partial_by_an_earlier_attempt() {
+    async fn upload_file_resumes_an_upload_left_partial_by_an_earlier_attempt() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
         let requester = crate::file::FileRequester { login: "Alice" };
@@ -1588,18 +1698,22 @@ mod tests {
         assert_eq!(info.creator, crate::file::PARTIAL_CREATOR);
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
                 Field::u16(FieldId::FileXferOptions, 1),
             ],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(!reply.is_error());
         let already_have = types::decode_resume_data(
             &reply
-                .field(FieldId::ResumeFileTransfer)
+                .field(FieldId::FileResumeData)
                 .unwrap()
                 .as_bytes(text_encoding::DEFAULT),
         )
@@ -1618,36 +1732,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_put_resume_of_a_missing_file_is_an_error() {
+    async fn upload_file_resume_of_a_missing_file_is_an_error() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
         let put = Transaction::request(
-            Opcode::FilePut,
+            Opcode::UploadFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
                 Field::u16(FieldId::FileXferOptions, 1),
             ],
         );
-        let [reply] = session.on_file_put(&put, &state).await.try_into().unwrap();
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
         assert!(reply.is_error());
     }
 
     #[tokio::test]
-    async fn file_delete_removes_a_file() {
+    async fn delete_file_removes_a_file() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"bye");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let delete = Transaction::request(
-            Opcode::FileDelete,
+            Opcode::DeleteFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
-            .on_file_delete(&delete, &state)
+            .on_delete_file(&delete, &state)
             .await
             .try_into()
             .unwrap();
@@ -1660,7 +1778,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_delete_denied_without_delete_files() {
+    async fn delete_file_denied_without_delete_files() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"bye");
         let state = state_with_files(files);
@@ -1669,12 +1787,12 @@ mod tests {
         let session = test_session("Alice", access);
 
         let delete = Transaction::request(
-            Opcode::FileDelete,
+            Opcode::DeleteFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
-            .on_file_delete(&delete, &state)
+            .on_delete_file(&delete, &state)
             .await
             .try_into()
             .unwrap();
@@ -1682,17 +1800,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_delete_missing_file_is_an_error() {
+    async fn delete_file_missing_file_is_an_error() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
         let delete = Transaction::request(
-            Opcode::FileDelete,
+            Opcode::DeleteFile,
             1,
             vec![Field::string(FieldId::FileName, "missing.txt")],
         );
         let [reply] = session
-            .on_file_delete(&delete, &state)
+            .on_delete_file(&delete, &state)
             .await
             .try_into()
             .unwrap();
@@ -1700,17 +1818,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_mkdir_creates_a_folder() {
+    async fn new_folder_creates_a_folder() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
         let mkdir = Transaction::request(
-            Opcode::FileMkdir,
+            Opcode::NewFolder,
             1,
             vec![Field::string(FieldId::FileName, "NewFolder")],
         );
         let [reply] = session
-            .on_file_mkdir(&mkdir, &state)
+            .on_new_folder(&mkdir, &state)
             .await
             .try_into()
             .unwrap();
@@ -1723,19 +1841,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_mkdir_denied_without_create_folders() {
+    async fn new_folder_denied_without_create_folders() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let mut access = Access::all();
         access.remove(Access::CREATE_FOLDER);
         let session = test_session("Alice", access);
 
         let mkdir = Transaction::request(
-            Opcode::FileMkdir,
+            Opcode::NewFolder,
             1,
             vec![Field::string(FieldId::FileName, "NewFolder")],
         );
         let [reply] = session
-            .on_file_mkdir(&mkdir, &state)
+            .on_new_folder(&mkdir, &state)
             .await
             .try_into()
             .unwrap();
@@ -1750,7 +1868,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::FILE_LIST);
 
-        let list = Transaction::request(Opcode::FileList, 1, vec![]);
+        let list = Transaction::request(Opcode::GetFileNameList, 1, vec![]);
         let [reply] = session
             .on_get_file_name_list(&list, &state)
             .await
@@ -1760,7 +1878,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_getinfo_denied_without_access_extra() {
+    async fn get_file_info_denied_without_access_extra() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -1768,12 +1886,12 @@ mod tests {
         session.access_extra.remove(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            Opcode::FileGetinfo,
+            Opcode::GetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
-            .on_file_getinfo(&getinfo, &state)
+            .on_get_file_info(&getinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1781,7 +1899,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_getinfo_returns_name_and_size() {
+    async fn get_file_info_returns_name_and_size() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
@@ -1790,12 +1908,12 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            Opcode::FileGetinfo,
+            Opcode::GetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
-            .on_file_getinfo(&getinfo, &state)
+            .on_get_file_info(&getinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1807,14 +1925,14 @@ mod tests {
         );
         // No real HFS metadata is persisted, so these are omitted rather
         // than sent zeroed.
-        assert!(reply.field(FieldId::FileType).is_none());
-        assert!(reply.field(FieldId::FileCreator).is_none());
-        assert!(reply.field(FieldId::FileDateCreate).is_none());
+        assert!(reply.field(FieldId::FileTypeString).is_none());
+        assert!(reply.field(FieldId::FileCreatorString).is_none());
+        assert!(reply.field(FieldId::FileCreateDate).is_none());
         assert!(reply.field(FieldId::FileComment).is_none());
     }
 
     #[tokio::test]
-    async fn file_getinfo_derives_name_from_file_path_when_file_name_is_absent() {
+    async fn get_file_info_derives_name_from_file_path_when_file_name_is_absent() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hello");
@@ -1823,7 +1941,7 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let getinfo = Transaction::request(
-            Opcode::FileGetinfo,
+            Opcode::GetFileInfo,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -1831,7 +1949,7 @@ mod tests {
             )],
         );
         let [reply] = session
-            .on_file_getinfo(&getinfo, &state)
+            .on_get_file_info(&getinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1840,14 +1958,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_setinfo_renames_a_file() {
+    async fn set_file_info_renames_a_file() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let setinfo = Transaction::request(
-            Opcode::FileSetinfo,
+            Opcode::SetFileInfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -1855,7 +1973,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_setinfo(&setinfo, &state)
+            .on_set_file_info(&setinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1874,7 +1992,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_setinfo_denied_without_rename_files() {
+    async fn set_file_info_denied_without_rename_files() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -1883,7 +2001,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            Opcode::FileSetinfo,
+            Opcode::SetFileInfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -1891,7 +2009,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_setinfo(&setinfo, &state)
+            .on_set_file_info(&setinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1899,19 +2017,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_setinfo_without_a_new_name_is_a_no_op() {
+    async fn set_file_info_without_a_new_name_is_a_no_op() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
         let setinfo = Transaction::request(
-            Opcode::FileSetinfo,
+            Opcode::SetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
-            .on_file_setinfo(&setinfo, &state)
+            .on_set_file_info(&setinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1925,7 +2043,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_setinfo_sets_a_comment_returned_by_getinfo() {
+    async fn set_file_info_sets_a_comment_returned_by_getinfo() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
@@ -1934,7 +2052,7 @@ mod tests {
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
         let setinfo = Transaction::request(
-            Opcode::FileSetinfo,
+            Opcode::SetFileInfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -1942,19 +2060,19 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_setinfo(&setinfo, &state)
+            .on_set_file_info(&setinfo, &state)
             .await
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
 
         let getinfo = Transaction::request(
-            Opcode::FileGetinfo,
+            Opcode::GetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         let [reply] = session
-            .on_file_getinfo(&getinfo, &state)
+            .on_get_file_info(&getinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1965,7 +2083,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_setinfo_comment_denied_without_set_file_comment() {
+    async fn set_file_info_comment_denied_without_set_file_comment() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -1974,7 +2092,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            Opcode::FileSetinfo,
+            Opcode::SetFileInfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -1982,7 +2100,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_setinfo(&setinfo, &state)
+            .on_set_file_info(&setinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -1990,7 +2108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_setinfo_folder_comment_denied_without_set_folder_comment() {
+    async fn set_file_info_folder_comment_denied_without_set_folder_comment() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Folder"]), "a.txt", *b"hi");
         let state = state_with_files(files);
@@ -1999,7 +2117,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let setinfo = Transaction::request(
-            Opcode::FileSetinfo,
+            Opcode::SetFileInfo,
             1,
             vec![
                 Field::string(FieldId::FileName, "Folder"),
@@ -2007,7 +2125,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_setinfo(&setinfo, &state)
+            .on_set_file_info(&setinfo, &state)
             .await
             .try_into()
             .unwrap();
@@ -2015,13 +2133,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_mkdir_derives_name_from_file_path_when_file_name_is_absent() {
+    async fn new_folder_derives_name_from_file_path_when_file_name_is_absent() {
         let encoding = text_encoding::DEFAULT;
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
         let mkdir = Transaction::request(
-            Opcode::FileMkdir,
+            Opcode::NewFolder,
             1,
             vec![Field::bytes(
                 FieldId::FilePath,
@@ -2029,7 +2147,7 @@ mod tests {
             )],
         );
         let [reply] = session
-            .on_file_mkdir(&mkdir, &state)
+            .on_new_folder(&mkdir, &state)
             .await
             .try_into()
             .unwrap();
@@ -2042,7 +2160,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_move_relocates_a_file() {
+    async fn move_file_relocates_a_file() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
@@ -2051,7 +2169,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let move_tx = Transaction::request(
-            Opcode::FileMove,
+            Opcode::MoveFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -2062,7 +2180,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_move(&move_tx, &state)
+            .on_move_file(&move_tx, &state)
             .await
             .try_into()
             .unwrap();
@@ -2081,7 +2199,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_move_to_root_treats_an_absent_new_path_as_root() {
+    async fn move_file_to_root_treats_an_absent_new_path_as_root() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Sub"]), "a.txt", *b"hi");
@@ -2089,7 +2207,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let move_tx = Transaction::request(
-            Opcode::FileMove,
+            Opcode::MoveFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -2101,7 +2219,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_move(&move_tx, &state)
+            .on_move_file(&move_tx, &state)
             .await
             .try_into()
             .unwrap();
@@ -2120,7 +2238,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_move_denied_without_move_files() {
+    async fn move_file_denied_without_move_files() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
@@ -2130,7 +2248,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let move_tx = Transaction::request(
-            Opcode::FileMove,
+            Opcode::MoveFile,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -2141,7 +2259,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_move(&move_tx, &state)
+            .on_move_file(&move_tx, &state)
             .await
             .try_into()
             .unwrap();
@@ -2149,7 +2267,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_symlink_denied_without_make_aliases() {
+    async fn make_file_alias_denied_without_make_aliases() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
@@ -2159,7 +2277,7 @@ mod tests {
         let session = test_session("Alice", access);
 
         let symlink = Transaction::request(
-            Opcode::FileSymlink,
+            Opcode::MakeFileAlias,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -2170,7 +2288,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_symlink(&symlink, &state)
+            .on_make_file_alias(&symlink, &state)
             .await
             .try_into()
             .unwrap();
@@ -2178,7 +2296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_symlink_creates_an_alias_reachable_at_the_new_location() {
+    async fn make_file_alias_creates_an_alias_reachable_at_the_new_location() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
@@ -2186,7 +2304,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let symlink = Transaction::request(
-            Opcode::FileSymlink,
+            Opcode::MakeFileAlias,
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
@@ -2197,7 +2315,7 @@ mod tests {
             ],
         );
         let [reply] = session
-            .on_file_symlink(&symlink, &state)
+            .on_make_file_alias(&symlink, &state)
             .await
             .try_into()
             .unwrap();

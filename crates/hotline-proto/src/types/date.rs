@@ -4,8 +4,13 @@ use crate::error::{ProtoError, Result};
 use crate::wire::{PacketReader, PacketWriter};
 
 /// A Hotline date: `year(2) | milliseconds(2) | seconds-since-midnight(4)`.
-/// Used by `FILE_CREATE_DATE`, `FILE_MODIFY_DATE`, `NEWS_ART_DATE`, and the
+/// Used by [`myField_FileCreateDate`] (208), [`myField_FileModifyDate`] (209),
+/// [`myField_NewsArtDate`] (330), and the
 /// old-guide `datetime` object (base year 1904, Mac HFS style).
+///
+/// [`myField_FileCreateDate`]: crate::FieldId::FileCreateDate
+/// [`myField_FileModifyDate`]: crate::FieldId::FileModifyDate
+/// [`myField_NewsArtDate`]: crate::FieldId::NewsArtDate
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HlDate {
     /// Calendar year, e.g. `1998`.

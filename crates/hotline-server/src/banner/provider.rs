@@ -6,8 +6,10 @@ use super::BannerKind;
 use crate::file::BoxedReader;
 
 /// Server banner storage. `kind` answers the login-time push; `open_read`/
-/// `size` serve `myTran_DownloadBanner`'s `HTXF` download and are only ever
-/// called for a [`BannerKind::Image`] banner.
+/// `size` serve the `HTXF` download for [`myTran_DownloadBanner`] (212), and
+/// are only ever called for a [`BannerKind::Image`] banner.
+///
+/// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
 #[async_trait]
 pub trait BannerProvider: Send + Sync {
     /// The currently configured banner, or `None` if none is set.

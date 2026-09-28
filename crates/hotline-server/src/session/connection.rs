@@ -30,9 +30,14 @@ use crate::state::{
 
 use super::options::UserChangeOptions;
 
-/// `Options` (113) values on `myTran_SendInstantMsg` (108)/`myTran_ServerMsg` (104):
-/// which kind of instant message this is, or which kind of bounce a
+/// [`myField_Options`] (113) values on
+/// [`myTran_SendInstantMsg`] (108)/[`myTran_ServerMsg`] (104): which kind of
+/// instant message this is, or which kind of bounce a
 /// refusal/automatic-response reply carries.
+///
+/// [`myField_Options`]: hotline_proto::FieldId::Options
+/// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
+/// [`myTran_ServerMsg`]: hotline_proto::Opcode::ServerMsg
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
@@ -47,8 +52,11 @@ pub(super) enum MsgOption {
     Unknown(u16),
 }
 
-/// `Options` (113) values on `myTran_DisconnectUser` (110): whether the kick
-/// also imposes an address ban, and for how long.
+/// [`myField_Options`] (113) values on [`myTran_DisconnectUser`] (110): whether the
+/// kick also imposes an address ban, and for how long.
+///
+/// [`myField_Options`]: hotline_proto::FieldId::Options
+/// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum KickBan {
     None,
@@ -66,16 +74,22 @@ impl From<u16> for KickBan {
     }
 }
 
-/// Cap on the classic news text in one `myTran_GetMsgs` (101) reply,
+/// Cap on the classic news text in one [`myTran_GetMsgs`] (101) reply,
 /// the most a `u16` field length allows.
+///
+/// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
 pub(super) const MAX_FLAT_NEWS_LEN: usize = u16::MAX as usize;
 
-/// Duration of a temporary kick-to-ban (`Options` (113) value 1). Not yet
-/// configurable; a fixed default until this gets a `ServerConfig` knob.
+/// Duration of a temporary kick-to-ban ([`myField_Options`] (113) value 1). Not
+/// yet configurable; a fixed default until this gets a `ServerConfig` knob.
+///
+/// [`myField_Options`]: hotline_proto::FieldId::Options
 pub(super) const TEMP_BAN_DURATION: Duration = Duration::from_secs(30 * 60);
 
-/// How long a kicked client may drain its `myTran_DisconnectMsg` (111)
+/// How long a kicked client may drain its [`myTran_DisconnectMsg`] (111)
 /// notice. openline closes at once.
+///
+/// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
 const KICK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Reads and discards `stream` until it ends or `timeout` elapses.
@@ -85,7 +99,10 @@ async fn drain_with_timeout<S: Stream + Unpin>(mut stream: S, timeout: Duration)
 
 /// Which opcodes a session may currently send.
 pub(super) enum SessionState {
-    /// Before `myTran_Login` (107) or `myTran_Agreed` (121) complete login.
+    /// Before [`myTran_Login`] (107) or [`myTran_Agreed`] (121) complete login.
+    ///
+    /// [`myTran_Login`]: hotline_proto::Opcode::Login
+    /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
     Agreement,
     /// Login has completed.
     Joined,
@@ -119,15 +136,21 @@ pub struct Session {
     pub(super) access: Access,
     /// Server-side-only account settings; no client opcode reads or sets them.
     pub(super) access_extra: AccessExtra,
-    /// Client-reported protocol version (`myField_Vers`, field
-    /// 160) from login, `None` if it never sent one.
+    /// Client-reported protocol version, [`myField_Vers`] (160), from
+    /// login. `None` if it never sent one.
+    ///
+    /// [`myField_Vers`]: hotline_proto::FieldId::Vers
     pub(super) client_version: Option<u16>,
     pub(super) state: SessionState,
     /// Whether the last broadcast `UserChange` marked this session away.
     pub(super) is_away: bool,
-    /// Refuses incoming private messages, set via `myTran_SetClientUserInfo` (304).
+    /// Refuses incoming private messages, set via [`myTran_SetClientUserInfo`] (304).
+    ///
+    /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
     pub(super) refuses_pm: bool,
-    /// Refuses incoming private chat invites, set via `myTran_SetClientUserInfo` (304).
+    /// Refuses incoming private chat invites, set via [`myTran_SetClientUserInfo`] (304).
+    ///
+    /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
     pub(super) refuses_chat: bool,
     /// Custom automatic-response text sent to private-message senders, `None` when off.
     pub(super) automatic_response: Option<String>,
@@ -230,7 +253,7 @@ impl Session {
                     match msg {
                         Some(RecipientMessage::Push(tx)) => {
                             let opcode = tx.r#type();
-                            let is_kick = opcode == TransactionType::Push(Opcode::Politequit);
+                            let is_kick = opcode == TransactionType::Push(Opcode::DisconnectMsg);
                             if session.may_receive(opcode) {
                                 writer.send(tx).await?;
                             }
@@ -259,10 +282,10 @@ impl Session {
         state.reset_flood(session.user_id).await;
         for (chat_id, remaining) in state.leave_all_chat_rooms(session.user_id).await {
             let notify = Transaction::push(
-                Opcode::ChatUserPart,
+                Opcode::NotifyChatDeleteUser,
                 vec![
-                    Field::u32(FieldId::ChatId, chat_id),
-                    Field::u16(FieldId::UserId, session.user_id),
+                    Field::u32(FieldId::ChatID, chat_id),
+                    Field::u16(FieldId::UserID, session.user_id),
                 ],
             );
             for member in remaining {
@@ -270,8 +293,8 @@ impl Session {
             }
         }
         let leave = Transaction::push(
-            Opcode::UserPart,
-            vec![Field::u16(FieldId::UserId, session.user_id)],
+            Opcode::NotifyDeleteUser,
+            vec![Field::u16(FieldId::UserID, session.user_id)],
         );
         state.publish(leave).await;
     }
@@ -295,7 +318,7 @@ impl Session {
     const fn may_receive(&self, opcode: TransactionType) -> bool {
         match opcode {
             TransactionType::Push(Opcode::NotifyChangeUser)
-            | TransactionType::Push(Opcode::UserPart) => {
+            | TransactionType::Push(Opcode::NotifyDeleteUser) => {
                 self.access_extra.contains(AccessExtra::USER_GETLIST)
             }
             TransactionType::Push(Opcode::ChatMsg) => self.access.contains(Access::READ_CHAT),
@@ -327,7 +350,7 @@ impl Session {
                 if let Err(reason) = self.access_extra.require(AccessExtra::CAN_SPAM) {
                     return vec![Transaction::push(
                         Opcode::ServerMsg,
-                        vec![Field::string(FieldId::Text, reason)],
+                        vec![Field::string(FieldId::Data, reason)],
                     )];
                 }
             }
@@ -351,7 +374,7 @@ impl Session {
         match opcode {
             /* 107 */ Opcode::Login => self.on_login(tx, state, config).await,
             /* 121 */ Opcode::Agreed => self.on_agreed(tx, state).await,
-            /* 500 */ Opcode::Ping => vec![tx.reply(vec![])],
+            /* 500 */ Opcode::KeepConnectionAlive => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "opcode not allowed before login completes");
                 vec![tx.reply_error("please finish logging in first")]
@@ -368,55 +391,58 @@ impl Session {
         config: &ServerConfig,
     ) -> Vec<Transaction> {
         match opcode {
-            /* 101 */ Opcode::NewsfileGet => self.on_newsfile_get(tx, state).await,
-            /* 103 */ Opcode::OldPostNews => self.on_newsfile_post(tx, state).await,
-            /* 105 */ Opcode::ChatSend => self.on_chat(tx, state, config).await,
+            /* 101 */ Opcode::GetMsgs => self.on_get_msgs(tx, state).await,
+            /* 103 */ Opcode::OldPostNews => self.on_old_post_news(tx, state).await,
+            /* 105 */ Opcode::ChatSend => self.on_chat_send(tx, state, config).await,
             /* 107 */ Opcode::Login => vec![tx.reply_error("already logged in")],
-            /* 108 */ Opcode::SendInstantMsg => self.on_private_msg(tx, state).await,
-            /* 110 */ Opcode::UserKick => self.on_user_kick(tx, state).await,
-            /* 112 */ Opcode::ChatCreate => vec![self.on_chat_create(tx, state).await],
-            /* 113 */ Opcode::ChatInvite => self.on_chat_invite(tx, state).await,
-            /* 114 */ Opcode::ChatDecline => self.on_chat_decline(tx, state).await,
-            /* 115 */ Opcode::ChatJoin => vec![self.on_chat_join(tx, state).await],
-            /* 116 */ Opcode::ChatPart => self.on_chat_part(tx, state).await,
-            /* 120 */ Opcode::SetChatSubject => self.on_chat_subject(tx, state).await,
+            /* 108 */ Opcode::SendInstantMsg => self.on_send_instant_msg(tx, state).await,
+            /* 110 */ Opcode::DisconnectUser => self.on_disconnect_user(tx, state).await,
+            /* 112 */ Opcode::InviteNewChat => vec![self.on_invite_new_chat(tx, state).await],
+            /* 113 */ Opcode::InviteToChat => self.on_invite_to_chat(tx, state).await,
+            /* 114 */ Opcode::RejectChatInvite => self.on_reject_chat_invite(tx, state).await,
+            /* 115 */ Opcode::JoinChat => vec![self.on_join_chat(tx, state).await],
+            /* 116 */ Opcode::LeaveChat => self.on_leave_chat(tx, state).await,
+            /* 120 */ Opcode::SetChatSubject => self.on_set_chat_subject(tx, state).await,
             /* 121 */ Opcode::Agreed => vec![tx.reply_error("already logged in")],
-            /* 200 */ Opcode::FileList => self.on_get_file_name_list(tx, state).await,
-            /* 202 */ Opcode::FileGet => self.on_file_get(tx, state).await,
-            /* 203 */ Opcode::FilePut => self.on_file_put(tx, state).await,
-            /* 204 */ Opcode::FileDelete => self.on_file_delete(tx, state).await,
-            /* 205 */ Opcode::FileMkdir => self.on_file_mkdir(tx, state).await,
-            /* 206 */ Opcode::FileGetinfo => self.on_file_getinfo(tx, state).await,
-            /* 207 */ Opcode::FileSetinfo => self.on_file_setinfo(tx, state).await,
-            /* 208 */ Opcode::FileMove => self.on_file_move(tx, state).await,
-            /* 209 */ Opcode::FileSymlink => self.on_file_symlink(tx, state).await,
+            /* 200 */ Opcode::GetFileNameList => self.on_get_file_name_list(tx, state).await,
+            /* 202 */ Opcode::DownloadFile => self.on_download_file(tx, state).await,
+            /* 203 */ Opcode::UploadFile => self.on_upload_file(tx, state).await,
+            /* 204 */ Opcode::DeleteFile => self.on_delete_file(tx, state).await,
+            /* 205 */ Opcode::NewFolder => self.on_new_folder(tx, state).await,
+            /* 206 */ Opcode::GetFileInfo => self.on_get_file_info(tx, state).await,
+            /* 207 */ Opcode::SetFileInfo => self.on_set_file_info(tx, state).await,
+            /* 208 */ Opcode::MoveFile => self.on_move_file(tx, state).await,
+            /* 209 */ Opcode::MakeFileAlias => self.on_make_file_alias(tx, state).await,
             /* 210 */ Opcode::DownloadFldr => self.on_download_fldr(tx, state).await,
-            /* 212 */ Opcode::BannerGet => self.on_banner_get(tx, state).await,
+            /* 212 */ Opcode::DownloadBanner => self.on_download_banner(tx, state).await,
             /* 213 */ Opcode::UploadFldr => self.on_upload_fldr(tx, state).await,
             /* 214 */ Opcode::KillDownload => self.on_kill_download(tx, state).await,
-            /* 300 */ Opcode::UserGetlist => self.on_user_get_list(tx, state).await,
-            /* 370 */ Opcode::NewsListdir => self.on_news_listdir(tx, state).await,
+            /* 300 */ Opcode::GetUserNameList => self.on_get_user_name_list(tx, state).await,
+            /* 370 */
+            Opcode::GetNewsCatNameList => self.on_get_news_cat_name_list(tx, state).await,
             /* 371 */
-            Opcode::NewsListcategory => self.on_news_listcategory(tx, state).await,
-            /* 380 */ Opcode::NewsDelete => self.on_news_delete(tx, state).await,
-            /* 381 */ Opcode::NewsMkdir => self.on_news_mkdir(tx, state).await,
+            Opcode::GetNewsArtNameList => self.on_get_news_art_name_list(tx, state).await,
+            /* 380 */ Opcode::DelNewsItem => self.on_del_news_item(tx, state).await,
+            /* 381 */ Opcode::NewNewsFldr => self.on_new_news_fldr(tx, state).await,
             /* 382 */
-            Opcode::NewsMkcategory => self.on_news_mkcategory(tx, state).await,
-            /* 400 */ Opcode::NewsGetthread => self.on_news_getthread(tx, state).await,
+            Opcode::NewNewsCat => self.on_new_news_cat(tx, state).await,
+            /* 400 */ Opcode::GetNewsArtData => self.on_get_news_art_data(tx, state).await,
             /* 410 */
-            Opcode::NewsPostthread => self.on_news_postthread(tx, state).await,
+            Opcode::PostNewsArt => self.on_post_news_art(tx, state).await,
             /* 411 */
-            Opcode::NewsDeletethread => self.on_news_deletethread(tx, state).await,
-            /* 303 */ Opcode::UserGetinfo => self.on_user_get_info(tx, state).await,
-            /* 304 */ Opcode::SetClientUserInfo => self.on_user_change(tx, state).await,
+            Opcode::DelNewsArt => self.on_del_news_art(tx, state).await,
+            /* 303 */
+            Opcode::GetClientInfoText => self.on_get_client_info_text(tx, state).await,
+            /* 304 */
+            Opcode::SetClientUserInfo => self.on_set_client_user_info(tx, state).await,
             /* 348 */ Opcode::GetUserList => self.on_get_user_list(tx, state).await,
             /* 349 */ Opcode::SetUserList => self.on_set_user_list(tx, state).await,
-            /* 350 */ Opcode::AccountCreate => self.on_account_create(tx, state).await,
-            /* 351 */ Opcode::AccountDelete => self.on_account_delete(tx, state).await,
-            /* 352 */ Opcode::AccountRead => self.on_account_read(tx, state).await,
-            /* 353 */ Opcode::AccountModify => self.on_account_modify(tx, state).await,
-            /* 355 */ Opcode::MsgBroadcast => self.on_msg_broadcast(tx, state).await,
-            /* 500 */ Opcode::Ping => vec![tx.reply(vec![])],
+            /* 350 */ Opcode::NewUser => self.on_new_user(tx, state).await,
+            /* 351 */ Opcode::DeleteUser => self.on_delete_user(tx, state).await,
+            /* 352 */ Opcode::GetUser => self.on_get_user(tx, state).await,
+            /* 353 */ Opcode::SetUser => self.on_set_user(tx, state).await,
+            /* 355 */ Opcode::UserBroadcast => self.on_user_broadcast(tx, state).await,
+            /* 500 */ Opcode::KeepConnectionAlive => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "unhandled opcode");
                 vec![tx.reply_error("not implemented")]
@@ -458,9 +484,9 @@ impl Session {
         };
 
         let fields = vec![
-            Field::u16(FieldId::Version, 190),
-            Field::u16(FieldId::Bannerid, 0),
-            Field::string(FieldId::Servername, config.server_name.clone()),
+            Field::u16(FieldId::Vers, 190),
+            Field::u16(FieldId::CommunityBannerID, 0),
+            Field::string(FieldId::ServerName, config.server_name.clone()),
         ];
         let mut replies = vec![tx.reply(fields)];
 
@@ -472,13 +498,13 @@ impl Session {
         let have_agreement = !config.agreement.is_empty();
         if show_agreement && have_agreement {
             replies.push(Transaction::push(
-                Opcode::Agreement,
-                vec![Field::string(FieldId::Text, config.agreement.clone())],
+                Opcode::ShowAgreement,
+                vec![Field::string(FieldId::Data, config.agreement.clone())],
             ));
         } else if modern {
             replies.push(Transaction::push(
-                Opcode::Agreement,
-                vec![Field::bytes(FieldId::Noagreement, vec![0, 1])],
+                Opcode::ShowAgreement,
+                vec![Field::bytes(FieldId::NoServerAgreement, vec![0, 1])],
             ));
         }
 
@@ -509,15 +535,18 @@ impl Session {
             .send_to(
                 self.user_id,
                 Transaction::push(
-                    Opcode::Politequit,
-                    vec![Field::string(FieldId::Text, reason)],
+                    Opcode::DisconnectMsg,
+                    vec![Field::string(FieldId::Data, reason)],
                 ),
             )
             .await;
         vec![tx.reply_error(reason)]
     }
 
-    /// Complete login after the client accepts the agreement (`myTran_Agreed`, 121).
+    /// Complete login after the client accepts the agreement,
+    /// [`myTran_Agreed`] (121).
+    ///
+    /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
     async fn on_agreed(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
         let icon = tx.icon().unwrap_or(0);
         let encoding = self.encoding();
@@ -530,25 +559,36 @@ impl Session {
         replies
     }
 
-    /// If a banner is configured and this client's reported version can
-    /// display one (`myField_Vers` >= 151), build the
-    /// `myTran_ServerBanner` push: `BannerType`, plus `BannerUrl` for a URL
-    /// banner. An image banner sends no URL; the client is expected to
-    /// follow up with `myTran_DownloadBanner`.
+    /// If a banner is configured and this client's reported version can display
+    /// one ([`myField_Vers`] (160) >= 151), build the [`myTran_ServerBanner`] (122)
+    /// push: [`myField_ServerBannerType`] (152), plus [`myField_ServerBannerUrl`]
+    /// (153) for a URL banner. An image banner sends no URL; the client is
+    /// expected to follow up with [`myTran_DownloadBanner`] (212).
+    ///
+    /// [`myField_Vers`]: hotline_proto::FieldId::Vers
+    /// [`myField_ServerBannerType`]: hotline_proto::FieldId::ServerBannerType
+    /// [`myField_ServerBannerUrl`]: hotline_proto::FieldId::ServerBannerUrl
+    /// [`myTran_ServerBanner`]: hotline_proto::Opcode::ServerBanner
+    /// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
     async fn banner_push(&self, state: &SharedState) -> Option<Transaction> {
         if self.client_version.unwrap_or(0) < 151 {
             return None;
         }
         let kind = state.banner_kind().await?;
-        let mut fields = vec![Field::bytes(FieldId::BannerType, kind.type_tag().to_vec())];
+        let mut fields = vec![Field::bytes(
+            FieldId::ServerBannerType,
+            kind.type_tag().to_vec(),
+        )];
         if let BannerKind::Url(url) = &kind {
-            fields.push(Field::string(FieldId::BannerUrl, url.clone()));
+            fields.push(Field::string(FieldId::ServerBannerUrl, url.clone()));
         }
-        Some(Transaction::push(Opcode::Banner, fields))
+        Some(Transaction::push(Opcode::ServerBanner, fields))
     }
 
     /// Register name/icon, broadcast the join excluding self, mark this
-    /// session `Joined`, and build its own `UserSelfinfo` push.
+    /// session `Joined`, and build its own [`myTran_UserAccess`] (354) push.
+    ///
+    /// [`myTran_UserAccess`]: hotline_proto::Opcode::UserAccess
     async fn complete_join(
         &mut self,
         name: Option<String>,
@@ -570,15 +610,22 @@ impl Session {
         };
 
         Transaction::push(
-            Opcode::UserSelfinfo,
+            Opcode::UserAccess,
             vec![
-                Field::u64(FieldId::Access, self.access.bits()),
-                Field::bytes(FieldId::UserList, self_entry.encode(self.encoding())),
+                Field::u64(FieldId::UserAccess, self.access.bits()),
+                Field::bytes(
+                    FieldId::UserNameWithInfo,
+                    self_entry.encode(self.encoding()),
+                ),
             ],
         )
     }
 
-    async fn on_user_change(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+    async fn on_set_client_user_info(
+        &mut self,
+        tx: &Transaction,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
         let encoding = self.encoding();
         if let Some(name) = tx.name(encoding) {
             self.name = name;
@@ -628,10 +675,10 @@ impl Session {
         let notify = Transaction::push(
             Opcode::NotifyChangeUser,
             vec![
-                Field::u16(FieldId::UserId, self.user_id),
-                Field::u16(FieldId::Icon, icon),
-                Field::string(FieldId::Name, self.name.clone()),
-                Field::u16(FieldId::Color, self.user_flags().bits()),
+                Field::u16(FieldId::UserID, self.user_id),
+                Field::u16(FieldId::UserIconID, icon),
+                Field::string(FieldId::UserName, self.name.clone()),
+                Field::u16(FieldId::UserFlags, self.user_flags().bits()),
             ],
         );
         if exclude_self {
@@ -700,10 +747,10 @@ impl Session {
             .publish(Transaction::push(
                 Opcode::NotifyChangeUser,
                 vec![
-                    Field::u16(FieldId::UserId, self.user_id),
-                    Field::u16(FieldId::Icon, entry.icon),
-                    Field::string(FieldId::Name, entry.name),
-                    Field::u16(FieldId::Color, self.user_flags().bits()),
+                    Field::u16(FieldId::UserID, self.user_id),
+                    Field::u16(FieldId::UserIconID, entry.icon),
+                    Field::string(FieldId::UserName, entry.name),
+                    Field::u16(FieldId::UserFlags, self.user_flags().bits()),
                 ],
             ))
             .await;
@@ -714,7 +761,11 @@ impl Session {
         self.encoding.get()
     }
 
-    /// This session's own admin + away flags, for `UserChange`/`UserSelfinfo`.
+    /// This session's own admin and away flags, for [`myTran_NotifyChangeUser`]
+    /// (301) and [`myTran_UserAccess`] (354).
+    ///
+    /// [`myTran_NotifyChangeUser`]: hotline_proto::Opcode::NotifyChangeUser
+    /// [`myTran_UserAccess`]: hotline_proto::Opcode::UserAccess
     pub(super) fn user_flags(&self) -> UserFlags {
         let is_admin = self.access.contains(Access::DISCON_USER);
         let mut flags = UserFlags::empty();
@@ -745,12 +796,12 @@ mod tests {
         session.access_extra.remove(AccessExtra::USER_GETLIST);
 
         assert!(!session.may_receive(TransactionType::Push(Opcode::NotifyChangeUser)));
-        assert!(!session.may_receive(TransactionType::Push(Opcode::UserPart)));
+        assert!(!session.may_receive(TransactionType::Push(Opcode::NotifyDeleteUser)));
         assert!(session.may_receive(TransactionType::Push(Opcode::ChatMsg)));
 
         session.access_extra.insert(AccessExtra::USER_GETLIST);
         assert!(session.may_receive(TransactionType::Push(Opcode::NotifyChangeUser)));
-        assert!(session.may_receive(TransactionType::Push(Opcode::UserPart)));
+        assert!(session.may_receive(TransactionType::Push(Opcode::NotifyDeleteUser)));
     }
 
     #[test]
@@ -783,7 +834,7 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].field(FieldId::Version).and_then(Field::as_u16),
+            replies[0].field(FieldId::Vers).and_then(Field::as_u16),
             Some(190)
         );
     }
@@ -798,7 +849,9 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].field(FieldId::Bannerid).and_then(Field::as_u16),
+            replies[0]
+                .field(FieldId::CommunityBannerID)
+                .and_then(Field::as_u16),
             Some(0)
         );
     }
@@ -817,7 +870,7 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].string(FieldId::Servername, encoding),
+            replies[0].string(FieldId::ServerName, encoding),
             Some(String::new())
         );
     }
@@ -831,13 +884,13 @@ mod tests {
         let mut observer = state.register_recipient(2).await;
         let mut joiner_rx = state.register_recipient(1).await;
 
-        // Name/Icon can arrive directly in Login, not just SET_CLIENT_USER_INFO.
+        // `myTran_Login` (107) can carry the name and icon too.
         let login = Transaction::request(
             Opcode::Login,
             1,
             vec![
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -847,9 +900,9 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
-        assert_eq!(notify.string(FieldId::Name, encoding).unwrap(), "Alice");
+        assert_eq!(notify.string(FieldId::UserName, encoding).unwrap(), "Alice");
         assert_eq!(
-            notify.field(FieldId::Icon).and_then(Field::as_u16),
+            notify.field(FieldId::UserIconID).and_then(Field::as_u16),
             Some(42)
         );
         assert!(
@@ -885,8 +938,8 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "alice"),
-                Field::obfuscated_string(FieldId::Password, "hunter2"),
+                Field::obfuscated_string(FieldId::UserLogin, "alice"),
+                Field::obfuscated_string(FieldId::UserPassword, "hunter2"),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -917,8 +970,8 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "ALICE"),
-                Field::obfuscated_string(FieldId::Password, "hunter2"),
+                Field::obfuscated_string(FieldId::UserLogin, "ALICE"),
+                Field::obfuscated_string(FieldId::UserPassword, "hunter2"),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -948,7 +1001,7 @@ mod tests {
         let login = Transaction::request(
             Opcode::Login,
             1,
-            vec![Field::obfuscated_string(FieldId::Login, "alice")],
+            vec![Field::obfuscated_string(FieldId::UserLogin, "alice")],
         );
         session.on_login(&login, &state, &config).await;
 
@@ -978,8 +1031,8 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "alice"),
-                Field::obfuscated_string(FieldId::Password, "wrong"),
+                Field::obfuscated_string(FieldId::UserLogin, "alice"),
+                Field::obfuscated_string(FieldId::UserPassword, "wrong"),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
@@ -989,8 +1042,8 @@ mod tests {
             .try_recv()
             .ok()
             .and_then(RecipientMessage::into_push)
-            .expect("expected a Politequit push");
-        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::Politequit));
+            .expect("expected a DisconnectMsg push");
+        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::DisconnectMsg));
     }
 
     #[tokio::test]
@@ -1015,8 +1068,8 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "alice"),
-                Field::obfuscated_string(FieldId::Password, "anything"),
+                Field::obfuscated_string(FieldId::UserLogin, "alice"),
+                Field::obfuscated_string(FieldId::UserPassword, "anything"),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
@@ -1034,7 +1087,7 @@ mod tests {
         let login = Transaction::request(
             Opcode::Login,
             1,
-            vec![Field::obfuscated_string(FieldId::Login, "nobody")],
+            vec![Field::obfuscated_string(FieldId::UserLogin, "nobody")],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
@@ -1066,7 +1119,7 @@ mod tests {
         let mut bystander = state.register_recipient(2).await;
 
         session.state = SessionState::Agreement;
-        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Version, 151)]);
+        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
         session.on_login(&login, &state, &config).await;
 
         assert!(bystander.try_recv().is_err());
@@ -1076,8 +1129,8 @@ mod tests {
             Opcode::Agreed,
             2,
             vec![
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         session.on_agreed(&agreed, &state).await;
@@ -1087,7 +1140,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("agreed should announce a join");
-        assert_eq!(notify.string(FieldId::Name, encoding).unwrap(), "Alice");
+        assert_eq!(notify.string(FieldId::UserName, encoding).unwrap(), "Alice");
         assert!(matches!(session.state, SessionState::Joined));
     }
 
@@ -1122,8 +1175,8 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::u16(FieldId::Version, 151),
-                Field::string(FieldId::Name, "Alice"),
+                Field::u16(FieldId::Vers, 151),
+                Field::string(FieldId::UserName, "Alice"),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -1147,9 +1200,9 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::u16(FieldId::Version, 151),
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::u16(FieldId::Vers, 151),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         session.on_login(&login, &state, &config).await;
@@ -1175,26 +1228,26 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::u16(FieldId::Version, 151),
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::u16(FieldId::Vers, 151),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
         let banner = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner))
             .expect("expected a myTran_ServerBanner push");
         assert_eq!(
             banner
-                .field(FieldId::BannerType)
+                .field(FieldId::ServerBannerType)
                 .unwrap()
                 .as_bytes(encoding)
                 .as_ref(),
             b"JPEG"
         );
-        assert!(banner.field(FieldId::BannerUrl).is_none());
+        assert!(banner.field(FieldId::ServerBannerUrl).is_none());
     }
 
     #[tokio::test]
@@ -1210,27 +1263,27 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::u16(FieldId::Version, 151),
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::u16(FieldId::Vers, 151),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
         let banner = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner))
             .expect("expected a myTran_ServerBanner push");
         assert_eq!(
             banner
-                .field(FieldId::BannerType)
+                .field(FieldId::ServerBannerType)
                 .unwrap()
                 .as_bytes(encoding)
                 .as_ref(),
             b"URL "
         );
         assert_eq!(
-            banner.string(FieldId::BannerUrl, encoding),
+            banner.string(FieldId::ServerBannerUrl, encoding),
             Some("https://example.com/banner.jpg".to_string())
         );
     }
@@ -1248,16 +1301,16 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::u16(FieldId::Version, 150),
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::u16(FieldId::Vers, 150),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(!replies
             .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner)));
+            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner)));
     }
 
     #[tokio::test]
@@ -1270,16 +1323,16 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::u16(FieldId::Version, 151),
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::u16(FieldId::Vers, 151),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(!replies
             .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Banner)));
+            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner)));
     }
 
     #[tokio::test]
@@ -1291,14 +1344,14 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Version, 151)]);
+        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
         let replies = session.on_login(&login, &state, &config).await;
 
         let agreement = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement))
             .expect("modern client should get a Noagreement marker");
-        assert!(agreement.field(FieldId::Noagreement).is_some());
+        assert!(agreement.field(FieldId::NoServerAgreement).is_some());
     }
 
     #[tokio::test]
@@ -1316,7 +1369,7 @@ mod tests {
         assert!(
             !replies
                 .iter()
-                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement)),
+                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement)),
             "pre-150 clients don't understand the agreement handshake at all"
         );
     }
@@ -1346,21 +1399,21 @@ mod tests {
             Opcode::Login,
             1,
             vec![
-                Field::obfuscated_string(FieldId::Login, "skipper"),
-                Field::u16(FieldId::Version, 151),
+                Field::obfuscated_string(FieldId::UserLogin, "skipper"),
+                Field::u16(FieldId::Vers, 151),
             ],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
         let agreement = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement))
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement))
             .expect("modern client still gets a no-agreement marker");
         assert!(
-            agreement.field(FieldId::Noagreement).is_some(),
+            agreement.field(FieldId::NoServerAgreement).is_some(),
             "DONT_SHOW_AGREEMENT must skip the real text, not just its display"
         );
-        assert!(agreement.field(FieldId::Text).is_none());
+        assert!(agreement.field(FieldId::Data).is_none());
     }
 
     #[tokio::test]
@@ -1387,13 +1440,13 @@ mod tests {
         let login = Transaction::request(
             Opcode::Login,
             1,
-            vec![Field::obfuscated_string(FieldId::Login, "skipper")],
+            vec![Field::obfuscated_string(FieldId::UserLogin, "skipper")],
         );
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(!replies
             .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::Agreement)),);
+            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement)),);
     }
 
     #[tokio::test]
@@ -1421,7 +1474,7 @@ mod tests {
         let request = Transaction::request(
             Opcode::ChatSend,
             1,
-            vec![Field::string(FieldId::Text, "hi")],
+            vec![Field::string(FieldId::Data, "hi")],
         );
         let replies = session.handle(&request, &state, &config).await;
         assert_eq!(replies.len(), 1);
@@ -1438,20 +1491,20 @@ mod tests {
             Opcode::Agreed,
             1,
             vec![
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         let replies = session.on_agreed(&agreed, &state).await;
 
         let selfinfo = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserSelfinfo))
-            .expect("on_agreed should push UserSelfinfo");
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserAccess))
+            .expect("on_agreed should push UserAccess");
         let entry = selfinfo
-            .field(FieldId::UserList)
+            .field(FieldId::UserNameWithInfo)
             .and_then(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding).ok())
-            .expect("UserSelfinfo should carry the joiner's own UserList entry");
+            .expect("UserAccess should carry the joiner's own UserList entry");
         assert_eq!(entry.user_id, 1); // test_session()'s fixed user_id
         assert_eq!(entry.name, "Alice");
         assert_eq!(entry.icon, 42);
@@ -1466,18 +1519,18 @@ mod tests {
             Opcode::Agreed,
             1,
             vec![
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Icon, 42),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
             ],
         );
         let replies = session.on_agreed(&agreed, &state).await;
 
         let selfinfo = replies
             .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserSelfinfo))
-            .expect("on_agreed should push UserSelfinfo");
+            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserAccess))
+            .expect("on_agreed should push UserAccess");
         assert_eq!(
-            selfinfo.field(FieldId::Access).and_then(Field::as_u64),
+            selfinfo.field(FieldId::UserAccess).and_then(Field::as_u64),
             Some(Access::DOWNLOAD_FILE.bits())
         );
     }
@@ -1503,8 +1556,11 @@ mod tests {
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
 
-        let login =
-            Transaction::request(Opcode::Login, 1, vec![Field::string(FieldId::Name, "Mod")]);
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![Field::string(FieldId::UserName, "Mod")],
+        );
         session.on_login(&login, &state, &config).await;
 
         let notify = bystander
@@ -1513,7 +1569,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
         let color = notify
-            .field(FieldId::Color)
+            .field(FieldId::UserFlags)
             .and_then(Field::as_u16)
             .unwrap_or(0);
         assert!(
@@ -1552,7 +1608,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a UserChange push")
-            .field(FieldId::Color)
+            .field(FieldId::UserFlags)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
             .unwrap_or_else(UserFlags::empty);
@@ -1564,7 +1620,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a UserChange push")
-            .field(FieldId::Color)
+            .field(FieldId::UserFlags)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
             .unwrap_or_else(UserFlags::empty);
@@ -1587,7 +1643,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_change_reads_the_refusal_bits_out_of_options() {
+    async fn set_client_user_info_reads_the_refusal_bits_out_of_options() {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
@@ -1595,15 +1651,15 @@ mod tests {
             Opcode::SetClientUserInfo,
             1,
             vec![
-                Field::string(FieldId::Name, "Alice".to_string()),
-                Field::u16(FieldId::Icon, 0),
+                Field::string(FieldId::UserName, "Alice".to_string()),
+                Field::u16(FieldId::UserIconID, 0),
                 Field::u16(
                     FieldId::Options,
                     (UserChangeOptions::REFUSE_PM | UserChangeOptions::REFUSE_CHAT).bits(),
                 ),
             ],
         );
-        session.on_user_change(&request, &state).await;
+        session.on_set_client_user_info(&request, &state).await;
 
         assert!(session.refuses_pm);
         assert!(session.refuses_chat);
@@ -1613,7 +1669,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_change_reads_a_custom_automatic_response() {
+    async fn set_client_user_info_reads_a_custom_automatic_response() {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
@@ -1621,19 +1677,19 @@ mod tests {
             Opcode::SetClientUserInfo,
             1,
             vec![
-                Field::string(FieldId::Name, "Alice".to_string()),
-                Field::u16(FieldId::Icon, 0),
+                Field::string(FieldId::UserName, "Alice".to_string()),
+                Field::u16(FieldId::UserIconID, 0),
                 Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
                 Field::string(FieldId::AutomaticResponse, "Back in five."),
             ],
         );
-        session.on_user_change(&request, &state).await;
+        session.on_set_client_user_info(&request, &state).await;
 
         assert_eq!(session.automatic_response.as_deref(), Some("Back in five."));
     }
 
     #[tokio::test]
-    async fn user_change_falls_back_to_a_default_automatic_response_text() {
+    async fn set_client_user_info_falls_back_to_a_default_automatic_response_text() {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
@@ -1641,12 +1697,12 @@ mod tests {
             Opcode::SetClientUserInfo,
             1,
             vec![
-                Field::string(FieldId::Name, "Alice".to_string()),
-                Field::u16(FieldId::Icon, 0),
+                Field::string(FieldId::UserName, "Alice".to_string()),
+                Field::u16(FieldId::UserIconID, 0),
                 Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
             ],
         );
-        session.on_user_change(&request, &state).await;
+        session.on_set_client_user_info(&request, &state).await;
 
         assert_eq!(
             session.automatic_response.as_deref(),

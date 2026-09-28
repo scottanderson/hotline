@@ -39,21 +39,32 @@ impl Field {
     }
 
     /// Build a field from raw bytes, e.g. a packed record
-    /// (`FILE_NAME_WITH_INFO`, `USER_NAME_WITH_INFO`) that has its own
+    /// ([`myField_FileNameWithInfo`] (200), [`myField_UserNameWithInfo`] (300))
+    /// that has its own
     /// internal encoding.
+    ///
+    /// [`myField_FileNameWithInfo`]: crate::FieldId::FileNameWithInfo
+    /// [`myField_UserNameWithInfo`]: crate::FieldId::UserNameWithInfo
     pub fn bytes(id: FieldId, data: impl Into<Vec<u8>>) -> Self {
         Self::new(id, FieldValue::Bytes(data.into()))
     }
 
-    /// Build a 16-bit integer field (`UID`, `ICON`, `CHAT_SUBJECT` length
+    /// Build a 16-bit integer field ([`myField_UserID`] (103),
+    /// [`myField_UserIconID`] (104), [`myField_ChatSubject`] (115) length
     /// prefixes, etc). Used where the exact wire width is confirmed fixed.
+    ///
+    /// [`myField_UserID`]: crate::FieldId::UserID
+    /// [`myField_UserIconID`]: crate::FieldId::UserIconID
+    /// [`myField_ChatSubject`]: crate::FieldId::ChatSubject
     pub const fn u16(id: FieldId, value: u16) -> Self {
         Self::new(id, FieldValue::U16(value))
     }
 
-    /// Build the 64-bit `USER_ACCESS` bitmask field. Not a "number" in
+    /// Build the 64-bit [`myField_UserAccess`] (110) bitmask field. Not a "number" in
     /// the [`Field::u32`] sense (it's a bitmap, not a magnitude), so it
     /// doesn't go through [`crate::numbers`].
+    ///
+    /// [`myField_UserAccess`]: crate::FieldId::UserAccess
     pub const fn u64(id: FieldId, value: u64) -> Self {
         Self::new(id, FieldValue::U64(value))
     }
@@ -115,8 +126,11 @@ impl Field {
         }
     }
 
-    /// Interpret this field's data as the 64-bit `USER_ACCESS` bitmask.
+    /// Interpret this field's data as the 64-bit [`myField_UserAccess`] (110)
+    /// bitmask.
     /// `None` unless the payload is exactly 8 bytes.
+    ///
+    /// [`myField_UserAccess`]: crate::FieldId::UserAccess
     pub fn as_u64(&self) -> Option<u64> {
         match &self.value {
             FieldValue::U64(v) => Some(*v),
@@ -232,7 +246,7 @@ mod tests {
     #[test]
     fn field_round_trips() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::string(FieldId::Name, "RustHL");
+        let f = Field::string(FieldId::UserName, "RustHL");
         let encoded = f.encode(encoding).unwrap();
         let (decoded, consumed) = Field::decode(&encoded).unwrap();
         assert_eq!(consumed, encoded.len());
@@ -243,7 +257,7 @@ mod tests {
     fn mac_roman_mappable_text_round_trips() {
         let encoding = text_encoding::DEFAULT;
         // e-acute exists in Mac OS Roman, so it round-trips exactly.
-        let f = Field::string(FieldId::Text, "h\u{e9}llo");
+        let f = Field::string(FieldId::Data, "h\u{e9}llo");
         let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
         assert_eq!(decoded.as_string(encoding), "h\u{e9}llo");
     }
@@ -252,7 +266,7 @@ mod tests {
     fn text_outside_mac_roman_falls_back_to_question_mark() {
         let encoding = text_encoding::DEFAULT;
         // An emoji has no Mac OS Roman encoding, so it's lossy.
-        let f = Field::string(FieldId::Text, "hello \u{1f389}");
+        let f = Field::string(FieldId::Data, "hello \u{1f389}");
         let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
         assert_eq!(decoded.as_string(encoding), "hello ?");
     }
@@ -260,7 +274,7 @@ mod tests {
     #[test]
     fn encode_rejects_data_over_65535_bytes_instead_of_truncating() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::bytes(FieldId::Text, vec![0u8; 65536]);
+        let f = Field::bytes(FieldId::Data, vec![0u8; 65536]);
         assert!(matches!(
             f.encode(encoding),
             Err(ProtoError::TooLong {
@@ -272,21 +286,21 @@ mod tests {
 
     #[test]
     fn u16_field_round_trips() {
-        let f = Field::u16(FieldId::UserId, 42);
+        let f = Field::u16(FieldId::UserID, 42);
         assert_eq!(f.value, FieldValue::U16(42));
         assert_eq!(f.as_u16(), Some(42));
     }
 
     #[test]
     fn u64_field_round_trips() {
-        let f = Field::u64(FieldId::Access, u64::MAX);
+        let f = Field::u64(FieldId::UserAccess, u64::MAX);
         assert_eq!(f.as_u64(), Some(u64::MAX));
     }
 
     #[test]
     fn u32_field_picks_smallest_unsigned_width() {
         let encoding = text_encoding::DEFAULT;
-        let small = Field::u32(FieldId::ChatId, 7);
+        let small = Field::u32(FieldId::ChatID, 7);
         assert_eq!(small.encode(encoding).unwrap().len(), 4 + 2);
         assert_eq!(small.as_u32(), Some(7));
 
@@ -297,19 +311,19 @@ mod tests {
 
     #[test]
     fn as_u32_accepts_either_a_2_or_4_byte_payload() {
-        let short = Field::u32(FieldId::ChatId, 7);
+        let short = Field::u32(FieldId::ChatID, 7);
         assert_eq!(short.as_u32(), Some(7));
 
         // A field just decoded off the wire is raw bytes regardless of
         // which width the sender picked.
-        let long = Field::bytes(FieldId::ChatId, vec![0, 0, 0, 7]);
+        let long = Field::bytes(FieldId::ChatID, vec![0, 0, 0, 7]);
         assert_eq!(long.as_u32(), Some(7));
     }
 
     #[test]
     fn obfuscated_string_round_trips() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::obfuscated_string(FieldId::Login, "guest");
+        let f = Field::obfuscated_string(FieldId::UserLogin, "guest");
         // On the wire it must NOT be the plaintext bytes.
         assert_ne!(f.encode(encoding).unwrap()[4..], *b"guest");
         assert_eq!(f.as_deobfuscated_string(encoding), "guest");
@@ -318,7 +332,7 @@ mod tests {
     #[test]
     fn decoded_field_debug_shows_raw_bytes_not_a_guess() {
         let encoding = text_encoding::DEFAULT;
-        let f = Field::string(FieldId::Name, "x");
+        let f = Field::string(FieldId::UserName, "x");
         let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
         let debug = format!("{decoded:?}");
         // Decode can't know this was text - it's honestly Bytes until
@@ -328,14 +342,14 @@ mod tests {
 
     #[test]
     fn locally_built_field_debug_shows_its_real_type() {
-        let f = Field::u16(FieldId::UserId, 42);
+        let f = Field::u16(FieldId::UserID, 42);
         let debug = format!("{f:?}");
         assert!(debug.contains("U16(42)"));
     }
 
     #[test]
     fn field_id_name_lookup() {
-        assert_eq!(FieldId::Name.original_name(), "myField_UserName");
+        assert_eq!(FieldId::UserName.original_name(), "myField_UserName");
     }
 
     #[test]

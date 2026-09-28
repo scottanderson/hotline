@@ -1,6 +1,9 @@
-//! `myTran_DownloadFldr` (210)/`myTran_UploadFldr` (213) item stepping: the
+//! [`myTran_DownloadFldr`] (210)/[`myTran_UploadFldr`] (213) item stepping: the
 //! per-item header sent before each file/folder, and the action a
 //! receiver replies with to control what happens next.
+//!
+//! [`myTran_DownloadFldr`]: crate::Opcode::DownloadFldr
+//! [`myTran_UploadFldr`]: crate::Opcode::UploadFldr
 
 use crate::error::{ProtoError, Result};
 use crate::text_encoding::Encoding;

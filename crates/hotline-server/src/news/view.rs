@@ -1,7 +1,9 @@
 use crate::news::NewsArticle;
 
 /// One article's data plus its resolved sibling links, for a
-/// `myTran_GetNewsArtData` (400) reply.
+/// [`myTran_GetNewsArtData`] (400) reply.
+///
+/// [`myTran_GetNewsArtData`]: hotline_proto::Opcode::GetNewsArtData
 pub struct NewsArticleView<'a> {
     pub article: &'a NewsArticle,
     pub prev_id: u32,

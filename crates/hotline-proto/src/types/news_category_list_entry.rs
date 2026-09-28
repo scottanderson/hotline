@@ -2,9 +2,11 @@ use crate::error::Result;
 use crate::text_encoding::Encoding;
 use crate::wire::VecWriter;
 
-/// One entry of a `NEWS_CATEGORY_LIST_DATA_15` (323) news bundle/category
+/// One entry of a [`myField_NewsCatListData15`] (323) news bundle/category
 /// listing: a plain folder, or a leaf category holding a thread of
 /// articles.
+///
+/// [`myField_NewsCatListData15`]: crate::FieldId::NewsCatListData15
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NewsCategoryListEntry {
     /// A folder containing other bundles/categories.

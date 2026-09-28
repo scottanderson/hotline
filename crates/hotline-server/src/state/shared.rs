@@ -49,8 +49,11 @@ pub struct SharedState {
     next_user_id: Arc<AtomicU16>,
     /// One inbound channel per currently connected recipient.
     recipients: Arc<RwLock<HashMap<u16, mpsc::Sender<RecipientMessage>>>>,
-    /// File storage backing the file listing and `FILE_GET`/`FILE_PUT`;
-    /// see [`crate::FileProvider`].
+    /// File storage backing the file listing, [`myTran_DownloadFile`] (202),
+    /// and [`myTran_UploadFile`] (203); see [`crate::FileProvider`].
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     files: Arc<dyn FileProvider>,
     /// Classic news storage, see [`crate::FlatNewsProvider`].
     flat_news: Arc<dyn FlatNewsProvider>,
@@ -408,8 +411,11 @@ impl SharedState {
         self.files.list(requester, dir).await
     }
 
-    /// A file's size in bytes, for starting a `FILE_GET` download. `Err`
-    /// if it doesn't exist, is a folder, or is a drop box `access` can't view.
+    /// A file's size in bytes, for starting a [`myTran_DownloadFile`] (202)
+    /// download. `Err` if it doesn't exist, is a folder, or is a drop box
+    /// `access` can't view.
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     pub async fn file_size(
         &self,
         requester: FileRequester<'_>,
@@ -426,9 +432,11 @@ impl SharedState {
         Ok(size)
     }
 
-    /// Every item under `dir`/`name`, for a `myTran_DownloadFldr` (210)
+    /// Every item under `dir`/`name`, for a [`myTran_DownloadFldr`] (210)
     /// download. Skips any drop box `access` can't view, with everything
     /// under it. `Err` if missing or itself drop-box-blocked.
+    ///
+    /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
     pub async fn walk_folder(
         &self,
         requester: FileRequester<'_>,
@@ -458,13 +466,15 @@ impl SharedState {
         self.files.exists(requester, dir, name).await
     }
 
-    /// Whether `requester` may start (or resume) a `FILE_PUT` upload of
-    /// `name` under `dir`: the destination must be under an "Upload"/"Drop
-    /// Box" folder unless `upload_anywhere`, and a finished file already at
-    /// `name` always rejects the request. With `resume` false that's the
-    /// only check; with `resume` true, an in-progress upload is also
-    /// required, and its current size is returned as the resume offset
-    /// (`0` otherwise).
+    /// Whether `requester` may start (or resume) a [`myTran_UploadFile`] (203)
+    /// upload of `name` under `dir`: the destination must be under an
+    /// "Upload"/"Drop Box" folder unless `upload_anywhere`, and a finished file
+    /// already at `name` always rejects the request. With `resume` false that's
+    /// the only check; with `resume` true, an in-progress upload is also
+    /// required, and its current size is returned as the resume offset (`0`
+    /// otherwise).
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     pub async fn authorize_upload(
         &self,
         requester: FileRequester<'_>,
@@ -490,11 +500,13 @@ impl SharedState {
         }
     }
 
-    /// Start (or resume) a `myTran_UploadFldr` (213) upload of folder
+    /// Start (or resume) a [`myTran_UploadFldr`] (213) upload of folder
     /// `name` under `dir`, creating the folder if it's missing. `dir` must
     /// exist, with the same destination rule as [`Self::authorize_upload`].
     /// Resuming needs a folder already at `name`; otherwise nothing may be
     /// there yet.
+    ///
+    /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
     pub async fn start_folder_upload(
         &self,
         requester: FileRequester<'_>,
@@ -528,11 +540,13 @@ impl SharedState {
         Ok(())
     }
 
-    /// Prepare one item of a `myTran_UploadFldr` (213) upload at
+    /// Prepare one item of a [`myTran_UploadFldr`] (213) upload at
     /// `dir`/`name`: create a missing folder, or pick where a file's data
     /// starts. `Some` byte offset to resume a file's upload from (`0` for a
     /// new file); `None` to skip the item, including a finished file
     /// already there and any `dir` that isn't a folder.
+    ///
+    /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
     pub async fn prepare_folder_upload_item(
         &self,
         requester: FileRequester<'_>,
@@ -553,7 +567,9 @@ impl SharedState {
         (!self.files.exists(requester, dir, name).await).then_some(0)
     }
 
-    /// Open a file for reading, for a `FILE_GET` download.
+    /// Open a file for reading, for a [`myTran_DownloadFile`] (202) download.
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     pub async fn open_file_for_read(
         &self,
         requester: FileRequester<'_>,
@@ -563,7 +579,9 @@ impl SharedState {
         self.files.open_read(requester, dir, name).await
     }
 
-    /// Create a file for writing, for a `FILE_PUT` upload.
+    /// Create a file for writing, for a [`myTran_UploadFile`] (203) upload.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     pub async fn create_file_for_write(
         &self,
         requester: FileRequester<'_>,
@@ -574,7 +592,9 @@ impl SharedState {
     }
 
     /// Open an existing file for writing from `at` onward, continuing a
-    /// resumed `FILE_PUT` upload.
+    /// resumed [`myTran_UploadFile`] (203) upload.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     pub async fn resume_file_for_write(
         &self,
         requester: FileRequester<'_>,
@@ -801,8 +821,10 @@ impl SharedState {
         self.transfers.write().await.remove(&reference)
     }
 
-    /// Admit a registered download. Returns its `myField_WaitingCount` (116),
+    /// Admit a registered download. Returns its [`myField_WaitingCount`] (116),
     /// `0` if it is active now.
+    ///
+    /// [`myField_WaitingCount`]: hotline_proto::FieldId::WaitingCount
     pub async fn admit_download(&self, reference: TransferRef, user_id: u16) -> u32 {
         let waiting_count = self.download_queue.admit(reference, user_id);
         if waiting_count == 0 {
@@ -830,7 +852,9 @@ impl SharedState {
     }
 
     /// Drop `reference`'s download, active or queued, and push
-    /// `myTran_DownloadInfo` (211) to each download it promotes or moves.
+    /// [`myTran_DownloadInfo`] (211) to each download it promotes or moves.
+    ///
+    /// [`myTran_DownloadInfo`]: hotline_proto::Opcode::DownloadInfo
     pub async fn release_download_slot(&self, reference: TransferRef) {
         let updates = self.download_queue.release(reference);
         self.push_download_updates(updates).await;
@@ -863,8 +887,10 @@ impl SharedState {
         self.push_download_updates(updates).await;
     }
 
-    /// Push one `myTran_DownloadInfo` (211) per update, starting a freshly
+    /// Push one [`myTran_DownloadInfo`] (211) per update, starting a freshly
     /// promoted entry's idle timeout.
+    ///
+    /// [`myTran_DownloadInfo`]: hotline_proto::Opcode::DownloadInfo
     async fn push_download_updates(&self, updates: Vec<QueueUpdate>) {
         for QueueUpdate {
             user_id,
@@ -878,8 +904,8 @@ impl SharedState {
             let tx = Transaction::push(
                 Opcode::DownloadInfo,
                 vec![
-                    Field::u32(FieldId::TransferId, reference.0),
-                    Field::u32(FieldId::QueuePosition, waiting_count),
+                    Field::u32(FieldId::RefNum, reference.0),
+                    Field::u32(FieldId::WaitingCount, waiting_count),
                 ],
             );
             self.send_to(user_id, tx).await;
@@ -896,8 +922,10 @@ impl SharedState {
         self.files.finish_upload(requester, dir, name).await
     }
 
-    /// The currently configured banner, for the login-time `myTran_ServerBanner`
-    /// push.
+    /// The currently configured banner, for the login-time
+    /// [`myTran_ServerBanner`] (122) push.
+    ///
+    /// [`myTran_ServerBanner`]: hotline_proto::Opcode::ServerBanner
     pub async fn banner_kind(&self) -> Option<BannerKind> {
         self.banner.kind().await
     }
@@ -930,7 +958,10 @@ impl SharedState {
         Ok((size, reference))
     }
 
-    /// Open the banner image for reading, for a `BANNER_GET` download.
+    /// Open the banner image for reading, for a [`myTran_DownloadBanner`] (212)
+    /// download.
+    ///
+    /// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
     pub async fn open_banner_read(&self) -> std::io::Result<BoxedReader> {
         self.banner.open_read().await
     }
@@ -1164,7 +1195,9 @@ impl SharedState {
 
     /// Add `user_id` to a chat room directly, no invite or password
     /// check. For internal auto-membership (room 0 on login) and test
-    /// setup, not the `CHAT_JOIN` request path.
+    /// setup, not the [`myTran_JoinChat`] (115) request path.
+    ///
+    /// [`myTran_JoinChat`]: hotline_proto::Opcode::JoinChat
     pub(crate) async fn add_chat_member(&self, chat_id: u32, user_id: u16) {
         if let Some(room) = self.chat_rooms.write().await.get_mut(&chat_id) {
             if !room.members.contains(&user_id) {
@@ -1352,7 +1385,9 @@ impl SharedState {
     }
 
     /// Every account, login and details together, sorted by login for a
-    /// deterministic listing order (`myTran_GetUserList`, 348).
+    /// deterministic listing order, [`myTran_GetUserList`] (348).
+    ///
+    /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
     pub async fn list_accounts(&self) -> Vec<(String, Account)> {
         let mut accounts = self.accounts.list().await;
         accounts.sort_by(|(a, _), (b, _)| a.cmp(b));

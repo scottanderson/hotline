@@ -1,4 +1,5 @@
-//! File storage backing `FILE_LIST`/`FILE_GET`/`FILE_PUT`.
+//! File storage backing [`myTran_GetFileNameList`] (200),
+//! [`myTran_DownloadFile`] (202), and [`myTran_UploadFile`] (203).
 //!
 //! [`FileProvider`] is the storage interface; `hotline-server` only
 //! defines it and provides [`InMemoryFileProvider`] as a default. The
@@ -9,6 +10,9 @@
 //! per-account home directory, a members-only folder, and so on.
 //!
 //! [`AccountProvider`]: crate::AccountProvider
+//! [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
+//! [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+//! [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
 
 mod dir;
 mod folder_item;

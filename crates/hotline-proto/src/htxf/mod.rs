@@ -1,7 +1,11 @@
-//! The `HTXF` file transfer handshake, sent as the first bytes on the
-//! second (data) connection a client opens after `FILE_GET`/`FILE_PUT`
-//! reports its `port + 1` transfer port, plus the flattened file object
-//! format both sides frame file bytes in on that connection.
+//! The `HTXF` file transfer handshake, sent as the first bytes on the second
+//! (data) connection a client opens after [`myTran_DownloadFile`] (202) or
+//! [`myTran_UploadFile`] (203) reports its `port + 1` transfer port, plus the
+//! flattened file object format both sides frame file bytes in on that
+//! connection.
+//!
+//! [`myTran_DownloadFile`]: crate::Opcode::DownloadFile
+//! [`myTran_UploadFile`]: crate::Opcode::UploadFile
 
 mod folder;
 mod fork_header;

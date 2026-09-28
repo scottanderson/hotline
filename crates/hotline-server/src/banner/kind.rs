@@ -4,8 +4,10 @@ pub enum BannerKind {
     /// Show a URL to the client directly; nothing to fetch over `HTXF`.
     Url(String),
     /// A fetchable image; `format` is the 4-byte type tag sent as
-    /// `myField_ServerBannerType`, e.g. `*b"JPEG"`, `*b"GIFf"`, `*b"PICT"`,
-    /// or `*b"BMP "`.
+    /// [`myField_ServerBannerType`] (152), e.g. `*b"JPEG"`, `*b"GIFf"`,
+    /// `*b"PICT"`, or `*b"BMP "`.
+    ///
+    /// [`myField_ServerBannerType`]: hotline_proto::FieldId::ServerBannerType
     Image {
         /// The 4-byte type tag, e.g. `*b"JPEG"`.
         format: [u8; 4],
@@ -13,7 +15,9 @@ pub enum BannerKind {
 }
 
 impl BannerKind {
-    /// The 4-byte tag sent as `myField_ServerBannerType`.
+    /// The 4-byte tag sent as [`myField_ServerBannerType`] (152).
+    ///
+    /// [`myField_ServerBannerType`]: hotline_proto::FieldId::ServerBannerType
     pub const fn type_tag(&self) -> [u8; 4] {
         match self {
             Self::Url(_) => *b"URL ",

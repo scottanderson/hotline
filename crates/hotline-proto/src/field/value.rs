@@ -18,8 +18,10 @@ pub enum FieldValue {
     U16(u16),
     /// A 32-bit field (file/transfer sizes, chat/thread IDs, ...).
     U32(u32),
-    /// The 64-bit `USER_ACCESS` bitmask, the only genuinely 64-bit
+    /// The 64-bit [`myField_UserAccess`] (110) bitmask, the only genuinely 64-bit
     /// field on the wire.
+    ///
+    /// [`myField_UserAccess`]: crate::FieldId::UserAccess
     U64(u64),
     /// Anything else: a packed record, an image, or, for a field just
     /// decoded off the wire, uninterpreted bytes.

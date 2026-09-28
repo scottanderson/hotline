@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use hotline_server::{BannerKind, BannerProvider, BoxedReader};
 
-/// Serves a single local file as the image a `myTran_DownloadBanner`
+/// Serves a single local file as the image a [`myTran_DownloadBanner`] (212)
 /// download returns.
+///
+/// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
 pub struct FileBannerProvider {
     path: PathBuf,
     format: [u8; 4],

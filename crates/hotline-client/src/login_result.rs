@@ -1,4 +1,6 @@
-/// Fields returned by a successful login, per the `myTran_Login` (107) reply.
+/// Fields returned by a successful login, per the [`myTran_Login`] (107) reply.
+///
+/// [`myTran_Login`]: hotline_proto::Opcode::Login
 #[derive(Debug, Clone, Default)]
 pub struct LoginResult {
     /// Server's protocol version, echoed back.

@@ -48,7 +48,9 @@ impl ClientSession {
         self.mode = Mode::Agreement(text);
     }
 
-    /// Accept the agreement (`myTran_Agreed`, 121) and switch to chat.
+    /// Accept the agreement, [`myTran_Agreed`] (121), and switch to chat.
+    ///
+    /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
     pub async fn accept_agreement(&mut self, client: &HotlineClient) {
         if let Err(e) = client.agree(&self.nick, self.icon).await {
             self.push(format!("failed to complete login: {e}"), LineKind::Error);
@@ -74,14 +76,14 @@ impl ClientSession {
             return EventOutcome::Applied;
         };
         match opcode {
-            /* 104 */ Opcode::ServerMsg => self.apply_msg(tx),
-            /* 106 */ Opcode::ChatMsg => self.apply_chat(tx),
-            /* 109 */ Opcode::Agreement => return self.apply_agreement(tx),
-            /* 111 */ Opcode::Politequit => return self.apply_politequit(tx),
-            /* 113 */ Opcode::ChatInvite => self.apply_chat_invite(tx),
-            /* 301 */ Opcode::NotifyChangeUser => self.apply_user_change(tx),
-            /* 302 */ Opcode::UserPart => self.apply_user_part(tx),
-            /* 354 */ Opcode::UserSelfinfo => self.apply_user_selfinfo(tx),
+            /* 104 */ Opcode::ServerMsg => self.apply_server_msg(tx),
+            /* 106 */ Opcode::ChatMsg => self.apply_chat_msg(tx),
+            /* 109 */ Opcode::ShowAgreement => return self.apply_show_agreement(tx),
+            /* 111 */ Opcode::DisconnectMsg => return self.apply_disconnect_msg(tx),
+            /* 113 */ Opcode::InviteToChat => self.apply_invite_to_chat(tx),
+            /* 301 */ Opcode::NotifyChangeUser => self.apply_notify_change_user(tx),
+            /* 302 */ Opcode::NotifyDeleteUser => self.apply_notify_delete_user(tx),
+            /* 354 */ Opcode::UserAccess => self.apply_user_access(tx),
             _ => {
                 for line in format!("Unrecognized opcode for transaction: {tx:#?}").lines() {
                     self.push(line, LineKind::Error);
@@ -91,13 +93,13 @@ impl ClientSession {
         EventOutcome::Applied
     }
 
-    // 109
-    //
-    // Text means show it and wait for acceptance; no text means there's
-    // nothing to accept, so the caller should accept right away.
-    fn apply_agreement(&mut self, tx: &Transaction) -> EventOutcome {
+    /// [`myTran_ShowAgreement`] (109): show the text and wait for acceptance.
+    /// With no text, the caller accepts right away.
+    ///
+    /// [`myTran_ShowAgreement`]: hotline_proto::Opcode::ShowAgreement
+    fn apply_show_agreement(&mut self, tx: &Transaction) -> EventOutcome {
         let encoding = self.encoding.get();
-        match tx.string(FieldId::Text, encoding) {
+        match tx.string(FieldId::Data, encoding) {
             Some(text) => {
                 self.show_agreement(text);
                 EventOutcome::Applied
@@ -106,11 +108,13 @@ impl ClientSession {
         }
     }
 
-    // 104
-    fn apply_msg(&mut self, tx: &Transaction) {
+    /// [`myTran_ServerMsg`] (104).
+    ///
+    /// [`myTran_ServerMsg`]: hotline_proto::Opcode::ServerMsg
+    fn apply_server_msg(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
-        let text = tx.string(FieldId::Text, encoding);
-        let from = tx.string(FieldId::Name, encoding);
+        let text = tx.string(FieldId::Data, encoding);
+        let from = tx.string(FieldId::UserName, encoding);
         match (from, text) {
             // A private message carries the sender's name; a
             // permission-denied or admin broadcast notice
@@ -128,31 +132,37 @@ impl ClientSession {
         }
     }
 
-    // 106
-    fn apply_chat(&mut self, tx: &Transaction) {
+    /// [`myTran_ChatMsg`] (106).
+    ///
+    /// [`myTran_ChatMsg`]: hotline_proto::Opcode::ChatMsg
+    fn apply_chat_msg(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
-        if let Some(text) = tx.string(FieldId::Text, encoding) {
+        if let Some(text) = tx.string(FieldId::Data, encoding) {
             self.push(display_text(&text), LineKind::Chat);
         }
     }
 
-    // 111
-    fn apply_politequit(&mut self, tx: &Transaction) -> EventOutcome {
+    /// [`myTran_DisconnectMsg`] (111).
+    ///
+    /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
+    fn apply_disconnect_msg(&mut self, tx: &Transaction) -> EventOutcome {
         let encoding = self.encoding.get();
         let reason = tx
-            .string(FieldId::Text, encoding)
+            .string(FieldId::Data, encoding)
             .unwrap_or_else(|| "disconnected by the server".to_string());
         self.push(display_text(&reason), LineKind::Error);
         EventOutcome::Quit
     }
 
-    // 113
-    fn apply_chat_invite(&mut self, tx: &Transaction) {
+    /// [`myTran_InviteToChat`] (113).
+    ///
+    /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
+    fn apply_invite_to_chat(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
         let from = tx
-            .string(FieldId::Name, encoding)
+            .string(FieldId::UserName, encoding)
             .unwrap_or_else(|| "someone".to_string());
-        let chat_id = tx.field(FieldId::ChatId).and_then(Field::as_u32);
+        let chat_id = tx.field(FieldId::ChatID).and_then(Field::as_u32);
         self.push(
             format!(
                 "{from} invited you to a private chat (id {})",
@@ -162,19 +172,21 @@ impl ClientSession {
         );
     }
 
-    // 301
-    fn apply_user_change(&mut self, tx: &Transaction) {
-        let Some(user_id) = tx.field(FieldId::UserId).and_then(Field::as_u16) else {
+    /// [`myTran_NotifyChangeUser`] (301).
+    ///
+    /// [`myTran_NotifyChangeUser`]: hotline_proto::Opcode::NotifyChangeUser
+    fn apply_notify_change_user(&mut self, tx: &Transaction) {
+        let Some(user_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
             return;
         };
         let encoding = self.encoding.get();
-        let name = tx.string(FieldId::Name, encoding).unwrap_or_default();
+        let name = tx.string(FieldId::UserName, encoding).unwrap_or_default();
         let icon = tx
-            .field(FieldId::Icon)
+            .field(FieldId::UserIconID)
             .and_then(Field::as_u16)
             .unwrap_or_default();
         let flags = tx
-            .field(FieldId::Color)
+            .field(FieldId::UserFlags)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_retain)
             .unwrap_or_else(UserFlags::empty);
@@ -207,9 +219,11 @@ impl ClientSession {
         }
     }
 
-    // 302
-    fn apply_user_part(&mut self, tx: &Transaction) {
-        let Some(user_id) = tx.field(FieldId::UserId).and_then(Field::as_u16) else {
+    /// [`myTran_NotifyDeleteUser`] (302).
+    ///
+    /// [`myTran_NotifyDeleteUser`]: hotline_proto::Opcode::NotifyDeleteUser
+    fn apply_notify_delete_user(&mut self, tx: &Transaction) {
+        let Some(user_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
             return;
         };
         if let Some(pos) = self.users.iter().position(|u| u.user_id == user_id) {
@@ -218,8 +232,10 @@ impl ClientSession {
         }
     }
 
-    // 354
-    fn apply_user_selfinfo(&mut self, tx: &Transaction) {
+    /// [`myTran_UserAccess`] (354).
+    ///
+    /// [`myTran_UserAccess`]: hotline_proto::Opcode::UserAccess
+    fn apply_user_access(&mut self, tx: &Transaction) {
         self.access = tx.access().unwrap_or(self.access);
 
         // This session's own uid/icon/name.
@@ -267,9 +283,11 @@ mod tests {
         assert_eq!(display_text("Alice: hi"), "Alice: hi");
     }
 
-    /// `113` (`myTran_InviteToChat`) is both the client's invite request
+    /// [`myTran_InviteToChat`] (113) is both the client's invite request
     /// and the server's resulting push; a value-based classification
     /// would misread this push and silently drop it here.
+    ///
+    /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     #[test]
     fn chat_invite_push_is_recognized_despite_sharing_its_wire_value_with_a_client_opcode() {
         use hotline_proto::opcode::Opcode;
@@ -277,10 +295,10 @@ mod tests {
 
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
         let invite = Transaction::push(
-            Opcode::ChatInvite,
+            Opcode::InviteToChat,
             vec![
-                Field::string(FieldId::Name, "Alice"),
-                Field::u32(FieldId::ChatId, 7),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u32(FieldId::ChatID, 7),
             ],
         );
         let _ = session.apply_server_event(&invite);
@@ -290,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_user_change_carries_admin_color_for_new_and_existing_users() {
+    fn notify_change_user_carries_admin_color_for_new_and_existing_users() {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
@@ -298,10 +316,10 @@ mod tests {
         let admin_change = Transaction::push(
             Opcode::NotifyChangeUser,
             vec![
-                Field::u16(FieldId::UserId, 2),
-                Field::u16(FieldId::Icon, 0),
-                Field::string(FieldId::Name, "Root"),
-                Field::u16(FieldId::Color, UserFlags::ADMIN.bits()),
+                Field::u16(FieldId::UserID, 2),
+                Field::u16(FieldId::UserIconID, 0),
+                Field::string(FieldId::UserName, "Root"),
+                Field::u16(FieldId::UserFlags, UserFlags::ADMIN.bits()),
             ],
         );
 
@@ -314,10 +332,10 @@ mod tests {
         let demoted = Transaction::push(
             Opcode::NotifyChangeUser,
             vec![
-                Field::u16(FieldId::UserId, 2),
-                Field::u16(FieldId::Icon, 0),
-                Field::string(FieldId::Name, "Root"),
-                Field::u16(FieldId::Color, 0),
+                Field::u16(FieldId::UserID, 2),
+                Field::u16(FieldId::UserIconID, 0),
+                Field::string(FieldId::UserName, "Root"),
+                Field::u16(FieldId::UserFlags, 0),
             ],
         );
         let _ = session.apply_server_event(&demoted);
@@ -326,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_user_change_notes_a_rename() {
+    fn notify_change_user_notes_a_rename() {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
@@ -334,10 +352,10 @@ mod tests {
         let joined = Transaction::push(
             Opcode::NotifyChangeUser,
             vec![
-                Field::u16(FieldId::UserId, 2),
-                Field::u16(FieldId::Icon, 0),
-                Field::string(FieldId::Name, "Alice"),
-                Field::u16(FieldId::Color, 0),
+                Field::u16(FieldId::UserID, 2),
+                Field::u16(FieldId::UserIconID, 0),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserFlags, 0),
             ],
         );
         let _ = session.apply_server_event(&joined);
@@ -345,10 +363,10 @@ mod tests {
         let renamed = Transaction::push(
             Opcode::NotifyChangeUser,
             vec![
-                Field::u16(FieldId::UserId, 2),
-                Field::u16(FieldId::Icon, 0),
-                Field::string(FieldId::Name, "Alicia"),
-                Field::u16(FieldId::Color, 0),
+                Field::u16(FieldId::UserID, 2),
+                Field::u16(FieldId::UserIconID, 0),
+                Field::string(FieldId::UserName, "Alicia"),
+                Field::u16(FieldId::UserFlags, 0),
             ],
         );
         let _ = session.apply_server_event(&renamed);
