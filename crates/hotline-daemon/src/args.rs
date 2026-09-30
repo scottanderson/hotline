@@ -1,4 +1,5 @@
 use clap::Parser;
+use hotline_server::{DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS};
 
 /// A minimal Hotline server.
 #[derive(Parser, Debug)]
@@ -51,6 +52,15 @@ pub struct Args {
     /// Chat prefix for console commands, such as `/`; unset relays all chat.
     #[arg(long)]
     pub console_prefix: Option<char>,
+
+    /// Open connections before further ones are refused (0 means no limit).
+    #[arg(long, default_value_t = DEFAULT_MAX_CONNECTIONS)]
+    pub max_connections: usize,
+
+    /// Open connections from one address before further ones are refused
+    /// (0 means no limit).
+    #[arg(long, default_value_t = DEFAULT_MAX_CONNECTIONS_PER_ADDRESS)]
+    pub max_connections_per_address: usize,
 
     /// Tracker to register with, as `[password@]host[:port]`, repeatable.
     /// The port defaults to 5499. Unset disables registration.

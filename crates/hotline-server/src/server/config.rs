@@ -4,6 +4,13 @@ pub const DEFAULT_MAX_DOWNLOADS: usize = 100;
 /// `max_downloads_per_client`'s default, openline's `mOptions.nMaxDownloadsClient`.
 pub const DEFAULT_MAX_DOWNLOADS_PER_CLIENT: usize = 10;
 
+/// `max_connections`'s default.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 500;
+
+/// `max_connections_per_address`'s default, openline's
+/// `mOptions.nMaxConnectionsIP`.
+pub const DEFAULT_MAX_CONNECTIONS_PER_ADDRESS: usize = 5;
+
 /// Server configuration.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -22,6 +29,11 @@ pub struct ServerConfig {
     pub max_downloads: usize,
     /// Concurrent downloads for one user before further ones queue.
     pub max_downloads_per_client: usize,
+    /// Open connections before further ones are refused; 0 means no limit.
+    pub max_connections: usize,
+    /// Open connections from one address before further ones are refused;
+    /// 0 means no limit.
+    pub max_connections_per_address: usize,
 }
 
 impl Default for ServerConfig {
@@ -33,6 +45,8 @@ impl Default for ServerConfig {
             console_prefix: None,
             max_downloads: DEFAULT_MAX_DOWNLOADS,
             max_downloads_per_client: DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            max_connections_per_address: DEFAULT_MAX_CONNECTIONS_PER_ADDRESS,
         }
     }
 }

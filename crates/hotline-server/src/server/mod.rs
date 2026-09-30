@@ -1,6 +1,10 @@
 mod config;
+mod connections;
 mod htxf;
 mod instance;
 
-pub use config::{ServerConfig, DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
+pub use config::{
+    ServerConfig, DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS,
+    DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
+};
 pub use instance::Server;

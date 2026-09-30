@@ -34,7 +34,9 @@ pub use news::{
     NewsItemKind, NewsListKind, ThreadedNewsProvider,
 };
 pub use providers::Providers;
-pub use server::{Server, ServerConfig};
+pub use server::{
+    Server, ServerConfig, DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS,
+};
 pub use session::Session;
 pub use state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,

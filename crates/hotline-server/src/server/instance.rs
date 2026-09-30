@@ -1,9 +1,11 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
 use crate::error::Result;
 use crate::providers::Providers;
+use crate::server::connections::ConnectionLimits;
 use crate::server::htxf::run_htxf_listener;
 use crate::server::ServerConfig;
 use crate::session::Session;
@@ -13,6 +15,7 @@ use crate::state::SharedState;
 pub struct Server {
     config: ServerConfig,
     state: SharedState,
+    connections: Arc<ConnectionLimits>,
 }
 
 impl Server {
@@ -20,7 +23,13 @@ impl Server {
     pub fn new(config: ServerConfig, providers: Providers) -> Self {
         let state = SharedState::new(providers);
         state.set_download_limits(config.max_downloads, config.max_downloads_per_client);
-        Self { config, state }
+        let connections =
+            ConnectionLimits::new(config.max_connections, config.max_connections_per_address);
+        Self {
+            config,
+            state,
+            connections,
+        }
     }
 
     /// This server's cross-session state, for a caller that runs its own
@@ -51,6 +60,10 @@ impl Server {
                 tracing::debug!(%peer, "rejected connection from banned address");
                 continue;
             }
+            let Some(permit) = self.connections.try_acquire(peer.ip()) else {
+                tracing::debug!(%peer, "rejected connection over the connection limit");
+                continue;
+            };
             // Avoids Nagle delaying small replies behind the peer's ACKs.
             if let Err(e) = stream.set_nodelay(true) {
                 tracing::warn!(%peer, error = %e, "failed to set TCP_NODELAY");
@@ -58,6 +71,7 @@ impl Server {
             let state = self.state.clone();
             let config = self.config.clone();
             tokio::spawn(async move {
+                let _permit = permit;
                 tracing::debug!(%peer, "connection accepted");
                 if let Err(e) = Session::run(stream, state, config).await {
                     tracing::warn!(%peer, error = %e, "session ended with error");

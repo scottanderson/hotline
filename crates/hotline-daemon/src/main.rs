@@ -36,6 +36,8 @@ async fn main() -> anyhow::Result<()> {
         agreement: args.agreement,
         server_name: args.name.clone(),
         console_prefix: args.console_prefix,
+        max_connections: args.max_connections,
+        max_connections_per_address: args.max_connections_per_address,
         ..ServerConfig::default()
     };
 

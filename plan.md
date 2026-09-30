@@ -40,6 +40,14 @@ below, in priority order.
   and `ProcessFldrUploads` abort an upload, file or folder, once its
   client disconnects. Here only downloads have a cancel token, so an
   open upload connection keeps writing until it closes.
+- **Connection limits count from accept.** openline counts a
+  connection against `nMaxConnectionsIP` only after its handshake, and
+  it closes an over-limit connection after it accepts the handshake.
+  This server counts every accepted socket, so a connection that never
+  sends a handshake still uses a place. An over-limit socket closes at
+  once, before the handshake. This server also has a limit on all
+  connections together, `max_connections` (500 by default). openline
+  has no such limit.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -109,45 +117,35 @@ one-shared-room model.
    openline. Worth deciding only if a multi-byte encoding is
    ever made selectable per connection.
 
-6. **Reassembly's memory bound is per connection, not global.**
-   `MAX_PENDING_BYTES` caps one `TransactionCodec` at 64 MB, and
-   nothing caps how many connections a server accepts. Total
-   reassembly memory is therefore unbounded. Needs a connection limit
-   or a shared budget, plus a decision on which.
-
-7. **The tracker beacon counts logged-in users.** openline sends
+6. **The tracker beacon counts logged-in users.** openline sends
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
 
-8. **The download queue does not watch the `HTXF` socket.** A queued
+7. **The download queue does not watch the `HTXF` socket.** A queued
    download that closes its connection keeps its place until it is
    promoted. A disconnect frees an active slot, but the transfer keeps
    running, so the active count can pass `max_downloads` for a while.
 
-9. **No per-address connection limit.** openline refuses a connection
-   past `nMaxConnectionsIP` (default 5) from one address
-   (`HotlineServ.cp`). This also bounds item 5.
+8. **No login timeout.** openline disconnects a client that has not
+   logged in after 60 seconds (`HotlineServ.cp`).
 
-10. **No login timeout.** openline disconnects a client that has not
-    logged in after 60 seconds (`HotlineServ.cp`).
+9. **Flood control does not ban.** openline adds a 30-minute temporary
+   ban for each of these: more than 10 consecutive connections from one
+   address within 30 seconds, more than 120 transactions in a minute,
+   five identical private messages, more than 20 messages in a minute,
+   more than 10 KB of chat in a minute, and more than 25 name changes
+   in a minute (`HotlineServ.cp`, `HotlineServTrans.cp`). This server
+   only disconnects, from one points policy with fixed thresholds
+   (`FloodConfig::default()`).
 
-11. **Flood control does not ban.** openline adds a 30-minute temporary
-    ban for each of these: more than 10 consecutive connections from one
-    address within 30 seconds, more than 120 transactions in a minute,
-    five identical private messages, more than 20 messages in a minute,
-    more than 10 KB of chat in a minute, and more than 25 name changes
-    in a minute (`HotlineServ.cp`, `HotlineServTrans.cp`). This server
-    only disconnects, from one points policy with fixed thresholds
-    (`FloodConfig::default()`).
-
-12. **`hls` cannot set the download limits.** `ServerConfig` has
+10. **`hls` cannot set the download limits.** `ServerConfig` has
     `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
     for them.
 
-13. **No activity log.** openline logs downloads, uploads, connections,
+11. **No activity log.** openline logs downloads, uploads, connections,
     and account changes, each behind its own option (`myOpt_Log*`).
 
-14. **No HTTP tunnel listeners.** openline also listens on the base port
+12. **No HTTP tunnel listeners.** openline also listens on the base port
     plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
     The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
     `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -155,14 +153,14 @@ one-shared-room model.
     padding. `HLProtocol.md` does not document it and mhxd does not
     implement it, so no client is at hand to test against.
 
-15. **Small cleanups found in review.** The `*b"fldr"` check repeats
+13. **Small cleanups found in review.** The `*b"fldr"` check repeats
     across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
     helper would fit. `start_folder_upload` repeats
     `authorize_upload`'s destination rule. `prepare_folder_upload_item`
     ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
     `login`, `dir`, and `name`.
 
-16. **`hlc` covers only chat and lists.** It logs in, shows the
+14. **`hlc` covers only chat and lists.** It logs in, shows the
     agreement, chats in public, and lists users, files, and tracker
     servers. It cannot transfer files or folders, read or post classic or
     threaded news, send private messages, use private chat rooms, get
@@ -586,6 +584,14 @@ one-shared-room model.
     `hls` finds an empty `--accounts-dir`, it creates `admin` with 16
     random hex digits and `guest`, and prints the password once.
     `InMemoryAccountProvider` keeps its fixed seed for tests and embedders.
+
+75. The accept loop now limits open connections, in total and for each
+    address: `ServerConfig::max_connections` (500) and
+    `max_connections_per_address` (5, openline's `nMaxConnectionsIP`),
+    with `hls` flags for both. 0 means no limit, like openline's
+    `!nMaxConnectionsIP ||` check. An over-limit connection closes with
+    no message, like openline. This also bounds total reassembly memory,
+    since each connection's `TransactionCodec` holds at most 64 MB.
 
 ## Needs manual verification against the real client
 
