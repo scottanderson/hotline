@@ -22,6 +22,8 @@ pub struct ClientSession {
     pub mode: Mode,
     pub users: Vec<UserNameWithInfo>,
     pub lines: Vec<Line>,
+    /// The classic news, `None` until it is fetched.
+    pub news: Option<String>,
     pub access: Access,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
@@ -38,6 +40,7 @@ impl ClientSession {
                 text: "connected - type a message and press Enter, Esc to quit".into(),
                 kind: LineKind::System,
             }],
+            news: None,
             access: Access::empty(),
             encoding,
         }
@@ -83,6 +86,7 @@ impl ClientSession {
             return EventOutcome::Applied;
         };
         match opcode {
+            /* 102 */ Opcode::NewMsg => self.apply_new_msg(tx),
             /* 104 */ Opcode::ServerMsg => self.apply_server_msg(tx),
             /* 106 */ Opcode::ChatMsg => self.apply_chat_msg(tx),
             /* 109 */ Opcode::ShowAgreement => return self.apply_show_agreement(tx),
@@ -136,6 +140,19 @@ impl ClientSession {
                 self.push_lines(&display_text(&text), LineKind::Error);
             }
             _ => {}
+        }
+    }
+
+    /// [`myTran_NewMsg`] (102): a new classic news post.
+    ///
+    /// [`myTran_NewMsg`]: hotline_proto::Opcode::NewMsg
+    fn apply_new_msg(&mut self, tx: &Transaction) {
+        let encoding = self.encoding.get();
+        if let Some(entry) = tx.string(FieldId::Data, encoding) {
+            if let Some(news) = &mut self.news {
+                news.insert_str(0, &entry);
+            }
+            self.push("new news post", LineKind::System);
         }
     }
 
@@ -284,6 +301,19 @@ impl ClientSession {
             .ok()
     }
 
+    pub async fn get_msgs(&mut self, client: &HotlineClient) {
+        match client.get_msgs().await {
+            Ok(news) => self.news = Some(news),
+            Err(e) => self.push(format!("failed to get news: {e}"), LineKind::Error),
+        }
+    }
+
+    pub async fn old_post_news(&mut self, client: &HotlineClient, text: &str) {
+        if let Err(e) = client.old_post_news(&wire_text(text)).await {
+            self.push(format!("failed to post news: {e}"), LineKind::Error);
+        }
+    }
+
     pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {
         let text = wire_text(text);
         match client.send_instant_msg(user_id, &text).await {
@@ -313,6 +343,24 @@ fn display_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_msg_adds_the_post_to_the_top_of_the_news() {
+        use hotline_proto::opcode::Opcode;
+
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        session.news = Some("From bob\rold".to_string());
+        let post = Transaction::push(
+            Opcode::NewMsg,
+            vec![Field::string(FieldId::Data, "From alice\rhello")],
+        );
+        let _ = session.apply_server_event(&post);
+        assert_eq!(
+            session.news.as_deref(),
+            Some("From alice\rhelloFrom bob\rold")
+        );
+        assert_eq!(&*session.lines.last().unwrap().text, "new news post");
+    }
 
     #[test]
     fn wire_text_ends_each_line_with_cr() {

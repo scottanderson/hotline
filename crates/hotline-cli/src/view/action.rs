@@ -10,4 +10,6 @@ pub enum Action {
         text: String,
     },
     GetClientInfoText(u16),
+    GetMsgs,
+    OldPostNews(String),
 }

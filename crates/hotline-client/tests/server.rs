@@ -114,3 +114,18 @@ async fn get_client_info_text_names_the_user() {
         info.text
     );
 }
+
+#[tokio::test]
+async fn old_post_news_reaches_readers_and_get_msgs() {
+    let addr = start_server().await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+    let (_bob, mut bob_events) = join(addr, "bob").await;
+
+    alice.old_post_news("hello news").await.unwrap();
+
+    let post = next_push(&mut bob_events, Opcode::NewMsg).await;
+    let encoding = hotline_proto::text_encoding::DEFAULT;
+    let entry = post.string(FieldId::Data, encoding).unwrap();
+    assert!(entry.contains("hello news"), "{entry:?}");
+    assert!(alice.get_msgs().await.unwrap().contains("hello news"));
+}

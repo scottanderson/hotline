@@ -115,7 +115,7 @@ async fn run(
                         view.handle_key(key, &session.users)
                     }
                     Event::Mouse(mouse) if !matches!(session.mode, Mode::Agreement(_)) => {
-                        let areas = ui::areas(terminal.size()?, &view.input);
+                        let areas = ui::areas(terminal.size()?, view.input());
                         view.handle_mouse(mouse, &areas, &session.users, Instant::now())
                     }
                     _ => Action::None,
@@ -150,6 +150,8 @@ async fn perform(
                 });
             }
         }
+        Action::GetMsgs => session.get_msgs(client).await,
+        Action::OldPostNews(text) => session.old_post_news(client, &text).await,
     }
     false
 }

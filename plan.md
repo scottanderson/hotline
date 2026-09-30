@@ -146,12 +146,12 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-6. **`hlc` covers only chat, lists, private messages, and user
-   info.** It logs in, shows the agreement, chats in public, sends
-   private messages, shows a user's info text, and lists users, files,
-   and tracker servers. It cannot transfer files or folders, read or
-   post classic or threaded news, use private chat rooms, administer
-   accounts, or show the banner. Each area can be its own task.
+6. **`hlc` does not cover every area.** It logs in, shows the
+   agreement, chats in public, sends private messages, shows a user's
+   info text, reads and posts classic news, and lists users, files, and
+   tracker servers. It cannot transfer files or folders, read or post
+   threaded news, use private chat rooms, administer accounts, or show
+   the banner. Each area can be its own task.
 
 ## Resolved
 
@@ -680,6 +680,11 @@ one-shared-room model.
 
 89. `hlc` shows a user's `myTran_GetClientInfoText` (303) text in a box,
     from the user menu or the `i` key, one line for each `\r`.
+
+90. `hlc`'s News tab, opened with Ctrl-N or a click, reads classic news
+    with `myTran_GetMsgs` (101) and posts with `myTran_OldPostNews`
+    (103). A post may hold more than one line. Each `myTran_NewMsg`
+    (102) push adds the post at the top.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

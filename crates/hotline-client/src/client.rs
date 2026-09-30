@@ -240,6 +240,27 @@ impl HotlineClient {
         })
     }
 
+    /// Fetch the classic news text, [`myTran_GetMsgs`] (101).
+    ///
+    /// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
+    pub async fn get_msgs(&self) -> Result<String> {
+        let reply = self.request(Opcode::GetMsgs, vec![]).await?;
+        let encoding = self.encoding.get();
+        Ok(reply.string(FieldId::Data, encoding).unwrap_or_default())
+    }
+
+    /// Post to the classic news, [`myTran_OldPostNews`] (103).
+    ///
+    /// [`myTran_OldPostNews`]: hotline_proto::Opcode::OldPostNews
+    pub async fn old_post_news(&self, text: &str) -> Result<()> {
+        self.request(
+            Opcode::OldPostNews,
+            vec![Field::string(FieldId::Data, text)],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Fetch the root folder's file listing, [`myTran_GetFileNameList`] (200).
     ///
     /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList

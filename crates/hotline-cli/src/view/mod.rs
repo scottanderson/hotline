@@ -1,8 +1,9 @@
-//! [`View`]: the focus, selection, and modals. Pure: turns key presses and
-//! mouse clicks into an [`Action`] for the caller to run.
+//! [`View`]: the tab, focus, selection, and modals. Pure: turns key presses
+//! and mouse clicks into an [`Action`] for the caller to run.
 
 mod action;
 mod modal;
+mod tab;
 
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,7 @@ use crate::ui::{self, Areas};
 
 pub use action::Action;
 pub use modal::{MenuItem, Modal};
+pub use tab::Tab;
 
 /// The longest gap between the two clicks of a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
@@ -37,9 +39,13 @@ pub enum Focus {
 }
 
 pub struct View {
+    pub tab: Tab,
     pub focus: Focus,
     pub modal: Option<Modal>,
-    pub input: String,
+    pub chat_input: String,
+    pub post_input: String,
+    /// Lines of news scrolled past the top.
+    pub news_scroll: u16,
     /// The first user list row on screen, as the last draw left it.
     pub users_offset: usize,
     selected_user: Option<u16>,
@@ -49,9 +55,12 @@ pub struct View {
 impl Default for View {
     fn default() -> Self {
         Self {
+            tab: Tab::Chat,
             focus: Focus::Input,
             modal: None,
-            input: String::new(),
+            chat_input: String::new(),
+            post_input: String::new(),
+            news_scroll: 0,
             users_offset: 0,
             selected_user: None,
             last_click: None,
@@ -66,27 +75,59 @@ impl View {
             .filter(|&id| users.iter().any(|u| u.user_id == id))
     }
 
+    /// The input line for the current tab.
+    pub fn input(&self) -> &str {
+        match self.tab {
+            Tab::Chat => &self.chat_input,
+            Tab::News => &self.post_input,
+        }
+    }
+
+    const fn input_mut(&mut self) -> &mut String {
+        match self.tab {
+            Tab::Chat => &mut self.chat_input,
+            Tab::News => &mut self.post_input,
+        }
+    }
+
     /// The keys that work now, as `(key, what it does)`.
     pub const fn hints(&self) -> &'static [(&'static str, &'static str)] {
-        match (&self.modal, self.focus) {
-            (Some(Modal::InstantMsg { .. }), _) => {
+        match (&self.modal, self.focus, self.tab) {
+            (Some(Modal::InstantMsg { .. }), ..) => {
                 &[("Enter", "send"), ("⇧Enter", "new line"), ("Esc", "cancel")]
             }
-            (Some(Modal::UserMenu { .. }), _) => {
+            (Some(Modal::UserMenu { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
             }
-            (Some(Modal::Info { .. }), _) => &[("Esc", "close")],
-            (None, Focus::Users) => &[
+            (Some(Modal::Info { .. }), ..) => &[("Esc", "close")],
+            (None, Focus::Users, Tab::Chat) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
                 ("i", "info"),
                 ("Tab", "input"),
+                ("^N", "news"),
             ],
-            (None, Focus::Input) => &[
+            (None, Focus::Users, Tab::News) => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("Tab", "input"),
+                ("^N", "chat"),
+            ],
+            (None, Focus::Input, Tab::Chat) => &[
                 ("Enter", "send"),
                 ("⇧Enter", "new line"),
                 ("Tab", "users"),
+                ("^N", "news"),
                 ("Esc", "quit"),
+            ],
+            (None, Focus::Input, Tab::News) => &[
+                ("Enter", "post"),
+                ("⇧Enter", "new line"),
+                ("↑↓", "scroll"),
+                ("Tab", "users"),
+                ("^N", "chat"),
+                ("Esc", "chat"),
             ],
         }
     }
@@ -98,6 +139,13 @@ impl View {
         }
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key, users);
+        }
+        if ctrl && key.code == KeyCode::Char('n') {
+            let other = match self.tab {
+                Tab::Chat => Tab::News,
+                Tab::News => Tab::Chat,
+            };
+            return self.set_tab(other);
         }
         match self.focus {
             Focus::Users => self.users_key(key, users),
@@ -165,21 +213,30 @@ impl View {
 
     fn input_key(&mut self, key: KeyEvent) -> Action {
         if is_new_line(key) {
-            self.input.push('\n');
+            self.input_mut().push('\n');
             return Action::None;
         }
-        match key.code {
-            KeyCode::Tab => self.focus = Focus::Users,
-            KeyCode::Esc => return Action::Quit,
-            KeyCode::Enter if !self.input.is_empty() => {
-                return Action::SendChat(std::mem::take(&mut self.input));
+        match (key.code, self.tab) {
+            (KeyCode::Tab, _) => self.focus = Focus::Users,
+            (KeyCode::Esc, Tab::Chat) => return Action::Quit,
+            (KeyCode::Esc, Tab::News) => return self.set_tab(Tab::Chat),
+            (KeyCode::Enter, tab) if !self.input().is_empty() => {
+                let text = std::mem::take(self.input_mut());
+                return match tab {
+                    Tab::Chat => Action::SendChat(text),
+                    Tab::News => Action::OldPostNews(text),
+                };
             }
-            KeyCode::Backspace => {
-                self.input.pop();
+            (KeyCode::Backspace, _) => {
+                self.input_mut().pop();
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.push(c);
+            (KeyCode::Char(c), _) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input_mut().push(c);
             }
+            (KeyCode::Up, Tab::News) => self.scroll_news(-1),
+            (KeyCode::Down, Tab::News) => self.scroll_news(1),
+            (KeyCode::PageUp, Tab::News) => self.scroll_news(-10),
+            (KeyCode::PageDown, Tab::News) => self.scroll_news(10),
             _ => {}
         }
         Action::None
@@ -214,6 +271,9 @@ impl View {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(tab) = ui::tab_at(areas.tabs, x, y) {
+                    return self.set_tab(tab);
+                }
                 if let Some(user_id) = self.user_at(areas.users, x, y, users) {
                     return self.click_user(user_id, users, now);
                 }
@@ -232,6 +292,8 @@ impl View {
                     });
                 }
             }
+            MouseEventKind::ScrollUp if self.tab == Tab::News => self.scroll_news(-3),
+            MouseEventKind::ScrollDown if self.tab == Tab::News => self.scroll_news(3),
             _ => {}
         }
         Action::None
@@ -269,6 +331,20 @@ impl View {
         }
     }
 
+    fn set_tab(&mut self, tab: Tab) -> Action {
+        if self.tab == tab {
+            return Action::None;
+        }
+        self.tab = tab;
+        match tab {
+            Tab::Chat => Action::None,
+            Tab::News => {
+                self.news_scroll = 0;
+                Action::GetMsgs
+            }
+        }
+    }
+
     fn move_selection(&mut self, users: &[UserNameWithInfo], down: bool) {
         let Some(last) = users.len().checked_sub(1) else {
             return;
@@ -283,6 +359,10 @@ impl View {
             (Some(i), false) => i.saturating_sub(1),
         };
         self.selected_user = Some(users[next].user_id);
+    }
+
+    const fn scroll_news(&mut self, lines: i16) {
+        self.news_scroll = self.news_scroll.saturating_add_signed(lines);
     }
 
     /// The user on the list row at `x`, `y`.
@@ -452,19 +532,48 @@ mod tests {
         let (x, y) = user_row(0);
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
         let _ = view.handle_mouse(right, &areas(), &users(), Instant::now());
-        assert!(matches!(
-            view.modal,
-            Some(Modal::UserMenu { user_id: 1, .. })
-        ));
 
         let menu = ui::menu_rect((x, y), areas().screen);
         let inner = ui::inner(menu);
-        let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
-        let _ = view.handle_mouse(left, &areas(), &users(), Instant::now());
-        assert!(matches!(
-            view.modal,
-            Some(Modal::InstantMsg { user_id: 1, .. })
-        ));
+        let left = click(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x,
+            inner.y + 1,
+        );
+        assert_eq!(
+            view.handle_mouse(left, &areas(), &users(), Instant::now()),
+            Action::GetClientInfoText(1)
+        );
+    }
+
+    #[test]
+    fn ctrl_n_opens_the_news_tab_and_fetches_the_news() {
+        let mut view = View::default();
+        let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(view.handle_key(ctrl_n, &users()), Action::GetMsgs);
+        assert_eq!(view.tab, Tab::News);
+
+        type_text(&mut view, "hello");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users()),
+            Action::OldPostNews("hello".into())
+        );
+        assert_eq!(view.handle_key(ctrl_n, &users()), Action::None);
+        assert_eq!(view.tab, Tab::Chat);
+    }
+
+    #[test]
+    fn a_click_on_the_news_tab_fetches_the_news() {
+        let mut view = View::default();
+        let tabs = areas().tabs;
+        let x = (tabs.x..tabs.right())
+            .find(|&x| ui::tab_at(tabs, x, tabs.y) == Some(Tab::News))
+            .unwrap();
+        let left = click(MouseEventKind::Down(MouseButton::Left), x, tabs.y);
+        assert_eq!(
+            view.handle_mouse(left, &areas(), &users(), Instant::now()),
+            Action::GetMsgs
+        );
     }
 
     #[test]
