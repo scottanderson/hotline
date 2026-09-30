@@ -42,6 +42,14 @@ fn is_upload_folder(dir: &HlPath) -> bool {
     })
 }
 
+/// `Err` if `dir` is not an upload folder and `access` lacks `UPLOAD_ANYWHERE`.
+fn upload_destination_access(dir: &HlPath, access: Access) -> Result<(), Cow<'static, str>> {
+    if !is_upload_folder(dir) {
+        access.require(Access::UPLOAD_ANYWHERE)?;
+    }
+    Ok(())
+}
+
 /// `true` if `access` lacks `VIEW_DROP_BOXES` and `dir`/`name`'s path
 /// contains "drop box" (case-insensitive). `name` is `None` for a bare
 /// directory listing.

@@ -40,7 +40,7 @@ pub trait FileProvider: Send + Sync {
     ) -> Option<Vec<FolderItem>> {
         let info = self.info(requester, dir, name).await?;
         let mut items = Vec::new();
-        if info.file_type != *b"fldr" {
+        if !info.is_folder() {
             return Some(items);
         }
         let mut root = dir.components.clone();
@@ -56,7 +56,7 @@ pub trait FileProvider: Send + Sync {
             let Some((mut path, entry)) = stack.pop() else {
                 break;
             };
-            let is_folder = entry.file_type == *b"fldr";
+            let is_folder = entry.is_folder();
             let size = if is_folder {
                 0
             } else {
@@ -142,7 +142,7 @@ pub trait FileProvider: Send + Sync {
 
     /// One file or folder's listing metadata, or `None` if it doesn't
     /// exist (or isn't visible to `requester`). Whether it's a folder is
-    /// `entry.file_type == *b"fldr"`, matching [`Self::list`]'s entries.
+    /// `entry.is_folder()`, matching [`Self::list`]'s entries.
     async fn info(
         &self,
         requester: FileRequester<'_>,

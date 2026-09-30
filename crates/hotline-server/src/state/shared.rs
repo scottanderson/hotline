@@ -36,8 +36,9 @@ use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::{
-    dropbox_access, dropbox_blocked, is_upload_folder, AccessUpdate, ChatRoom, ConsoleUpdate,
-    PendingTransfer, RecipientMessage, TransferDirection, TransferKind, TransferRef, UserEntry,
+    dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom,
+    ConsoleUpdate, PendingTransfer, RecipientMessage, TransferDirection, TransferKind, TransferRef,
+    UserEntry,
 };
 
 /// How long an active download or an upload may wait for its `HTXF`
@@ -495,9 +496,7 @@ impl SharedState {
         access: Access,
         resume: bool,
     ) -> Result<u64, Cow<'static, str>> {
-        if !is_upload_folder(dir) {
-            access.require(Access::UPLOAD_ANYWHERE)?;
-        }
+        upload_destination_access(dir, access)?;
         if self.files.exists(requester, dir, name).await {
             Err("file already exists.")?;
         }
@@ -531,13 +530,11 @@ impl SharedState {
             .list(requester, dir)
             .await
             .ok_or("file or folder not found.")?;
-        if !is_upload_folder(dir) {
-            access.require(Access::UPLOAD_ANYWHERE)?;
-        }
+        upload_destination_access(dir, access)?;
         let existing = self.files.info(requester, dir, name).await;
         if resume {
             let info = existing.ok_or("file or folder not found.")?;
-            if info.file_type != *b"fldr" {
+            if !info.is_folder() {
                 Err("file already exists.")?;
             }
             return Ok(());
@@ -569,7 +566,10 @@ impl SharedState {
         self.files.list(requester, dir).await?;
         if is_folder {
             if !self.files.exists(requester, dir, name).await {
-                let _ = self.files.mkdir(requester, dir, name).await;
+                // A failed folder still moves on to the next item.
+                if let Err(error) = self.files.mkdir(requester, dir, name).await {
+                    tracing::debug!(%error, name, "folder upload item failed");
+                }
             }
             return None;
         }
@@ -649,7 +649,7 @@ impl SharedState {
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
-        let is_dir = info.file_type == *b"fldr";
+        let is_dir = info.is_folder();
         let required = if is_dir {
             Access::DELETE_FOLDER
         } else {
@@ -695,7 +695,7 @@ impl SharedState {
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
-        let is_folder = info.file_type == *b"fldr";
+        let is_folder = info.is_folder();
         access.require(if is_folder {
             Access::RENAME_FOLDER
         } else {
@@ -723,7 +723,7 @@ impl SharedState {
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
-        let required = if info.file_type == *b"fldr" {
+        let required = if info.is_folder() {
             Access::MOVE_FOLDER
         } else {
             Access::MOVE_FILE
@@ -782,7 +782,7 @@ impl SharedState {
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
-        let required = if info.file_type == *b"fldr" {
+        let required = if info.is_folder() {
             Access::SET_FOLDER_COMMENT
         } else {
             Access::SET_FILE_COMMENT

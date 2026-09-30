@@ -153,12 +153,7 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-7. **Small cleanups found in review.** The `*b"fldr"` check repeats
-   across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
-   helper would fit. `start_folder_upload` repeats
-   `authorize_upload`'s destination rule. `prepare_folder_upload_item`
-   ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
-   `login`, `dir`, and `name`. About 12 tests build a full `Providers`
+7. **Small cleanups found in review.** About 12 tests build a full `Providers`
    by hand; a fixture builder would let a new provider touch one place.
 
 8. **`hlc` covers only chat and lists.** It logs in, shows the
@@ -662,6 +657,12 @@ one-shared-room model.
     finished the handshake, logged in or not, like openline's
     `mStats.connCount` (`HotlineServ.cp`). Before, it counted only
     logged-in users.
+
+85. The file checks use `FileNameWithInfo::is_folder` instead of
+    comparing `*b"fldr"`. `authorize_upload` and `start_folder_upload`
+    share one upload destination check. A folder upload item whose
+    folder cannot be made logs the error at `debug` and moves on, like
+    openline's `ProcessFldrUploads`.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
