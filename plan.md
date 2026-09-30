@@ -65,6 +65,10 @@ below, in priority order.
   (mhxd's `can_spam`) exempts an account; openline has no exemption.
   The connection flood check counts every accepted socket. openline
   counts a connection only after its handshake.
+- **`hls` account files keep passwords as plain text.** openline
+  scrambles each password byte with bitwise NOT in its data file
+  (`HotlineServTrans.cp`). This hides a password only from a casual
+  reader, so `hls` does not scramble them.
 - **Activity logs use a different date and line format.** openline
   writes the Mac short date and `\r` line endings in the classic Mac
   text encoding. `hls` writes `YYYY-MM-DD HH:MM:SS` in local time with
@@ -645,15 +649,6 @@ one-shared-room model.
     startup.
     A connect is recorded at `myTran_Login` (107) only with a name and
     an icon, and always at `myTran_Agreed` (121).
-
-## Needs manual verification against the real client
-
-Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against
-the real Hotline 1.2.3 client), the accounts subsystem (named-account
-login, account CRUD opcodes, the seeded `admin`/`admin` and passwordless
-`guest` both providers start with), idle-to-away status broadcast, and
-chat room invite/password gating have only been unit-tested plus one
-manual `hlc` smoke test — not yet exercised against a real client.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
