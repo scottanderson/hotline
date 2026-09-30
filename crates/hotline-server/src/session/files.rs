@@ -710,15 +710,8 @@ mod tests {
 
     fn state_with_files(files: crate::file::InMemoryFileProvider) -> SharedState {
         SharedState::new(Providers {
-            accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
             files: std::sync::Arc::new(files),
-            flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-            flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
-            banner: std::sync::Arc::new(crate::banner::NoBanner),
-            commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
-            activity: std::sync::Arc::new(crate::activity::NoActivityLog),
+            ..Providers::default()
         })
     }
 

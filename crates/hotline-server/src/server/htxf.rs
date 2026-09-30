@@ -500,12 +500,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::account::InMemoryAccountProvider;
-    use crate::ban::InMemoryBanProvider;
-    use crate::banner::NoBanner;
     use crate::file::{FileRequester, InMemoryFileProvider};
-    use crate::flood::NoFloodPolicy;
-    use crate::news::InMemoryNewsProvider;
     use crate::providers::Providers;
     use hotline_proto::consts::Access;
     use hotline_proto::htxf::HtxfType;
@@ -516,15 +511,8 @@ mod tests {
 
     fn state_with_files(files: InMemoryFileProvider) -> SharedState {
         SharedState::new(Providers {
-            accounts: Arc::new(InMemoryAccountProvider::default()),
             files: Arc::new(files),
-            flat_news: Arc::new(InMemoryNewsProvider::default()),
-            threaded_news: Arc::new(InMemoryNewsProvider::default()),
-            bans: Arc::new(InMemoryBanProvider::default()),
-            flood: Arc::new(NoFloodPolicy),
-            banner: Arc::new(NoBanner),
-            commands: Arc::new(crate::console::DefaultChatCommands),
-            activity: Arc::new(crate::activity::NoActivityLog),
+            ..Providers::default()
         })
     }
 

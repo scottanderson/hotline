@@ -40,15 +40,8 @@ pub(super) fn test_session(name: &str, access: Access) -> Session {
 /// Shared state with openline's flood limits.
 pub(super) fn state_with_flood() -> SharedState {
     SharedState::new(Providers {
-        accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
-        files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
-        flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
         flood: std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::default()),
-        banner: std::sync::Arc::new(crate::banner::NoBanner),
-        commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
-        activity: std::sync::Arc::new(crate::activity::NoActivityLog),
+        ..Providers::default()
     })
 }
 
@@ -100,15 +93,8 @@ pub(super) fn state_with_banner(
     banner: std::sync::Arc<dyn crate::banner::BannerProvider>,
 ) -> SharedState {
     SharedState::new(Providers {
-        accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
-        files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
-        flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-        flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
         banner,
-        commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
-        activity: std::sync::Arc::new(crate::activity::NoActivityLog),
+        ..Providers::default()
     })
 }
 
@@ -118,14 +104,7 @@ pub(super) fn state_with_accounts(
 ) -> SharedState {
     SharedState::new(Providers {
         accounts,
-        files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
-        flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-        flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
-        banner: std::sync::Arc::new(crate::banner::NoBanner),
-        commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
-        activity: std::sync::Arc::new(crate::activity::NoActivityLog),
+        ..Providers::default()
     })
 }
 
@@ -154,15 +133,9 @@ pub(super) fn state_recording_activity(
 ) -> (SharedState, std::sync::Arc<RecordingActivityLog>) {
     let log = std::sync::Arc::new(RecordingActivityLog::default());
     let state = SharedState::new(Providers {
-        accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
         files: std::sync::Arc::new(files),
-        flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-        bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-        flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
-        banner: std::sync::Arc::new(crate::banner::NoBanner),
-        commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
         activity: log.clone(),
+        ..Providers::default()
     });
     (state, log)
 }

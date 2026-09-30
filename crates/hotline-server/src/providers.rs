@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use crate::account::AccountProvider;
-use crate::activity::ActivityLog;
-use crate::ban::BanProvider;
-use crate::banner::BannerProvider;
-use crate::console::ChatCommandDispatcher;
-use crate::file::FileProvider;
-use crate::flood::FloodPolicy;
-use crate::news::{FlatNewsProvider, ThreadedNewsProvider};
+use crate::account::{AccountProvider, InMemoryAccountProvider};
+use crate::activity::{ActivityLog, NoActivityLog};
+use crate::ban::{BanProvider, InMemoryBanProvider};
+use crate::banner::{BannerProvider, NoBanner};
+use crate::console::{ChatCommandDispatcher, DefaultChatCommands};
+use crate::file::{FileProvider, InMemoryFileProvider};
+use crate::flood::{FloodPolicy, NoFloodPolicy};
+use crate::news::{FlatNewsProvider, InMemoryNewsProvider, ThreadedNewsProvider};
 
 /// The pluggable backends [`crate::Server`]/[`crate::SharedState`] run on,
 /// each supplied by the embedding application.
@@ -30,4 +30,23 @@ pub struct Providers {
     pub commands: Arc<dyn ChatCommandDispatcher>,
     /// See [`ActivityLog`].
     pub activity: Arc<dyn ActivityLog>,
+}
+
+/// In-memory storage, no flood policy, no banner, and no activity log.
+/// Classic and threaded news share one provider.
+impl Default for Providers {
+    fn default() -> Self {
+        let news = Arc::new(InMemoryNewsProvider::default());
+        Self {
+            accounts: Arc::new(InMemoryAccountProvider::default()),
+            files: Arc::new(InMemoryFileProvider::default()),
+            flat_news: news.clone(),
+            threaded_news: news,
+            bans: Arc::new(InMemoryBanProvider::default()),
+            flood: Arc::new(NoFloodPolicy),
+            banner: Arc::new(NoBanner),
+            commands: Arc::new(DefaultChatCommands),
+            activity: Arc::new(NoActivityLog),
+        }
+    }
 }

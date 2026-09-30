@@ -153,10 +153,7 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-7. **Small cleanups found in review.** About 12 tests build a full `Providers`
-   by hand; a fixture builder would let a new provider touch one place.
-
-8. **`hlc` covers only chat and lists.** It logs in, shows the
+7. **`hlc` covers only chat and lists.** It logs in, shows the
    agreement, chats in public, and lists users, files, and tracker
    servers. It cannot transfer files or folders, read or post classic or
    threaded news, send private messages, use private chat rooms, get
@@ -663,6 +660,10 @@ one-shared-room model.
     share one upload destination check. A folder upload item whose
     folder cannot be made logs the error at `debug` and moves on, like
     openline's `ProcessFldrUploads`.
+
+86. `Providers` implements `Default` with the in-memory backends that
+    `SharedState::default` used. A test names only the providers it
+    changes and takes the rest from `..Providers::default()`.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
