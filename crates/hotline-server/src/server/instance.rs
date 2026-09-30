@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::error::Result;
+use crate::flood::FloodDecision;
 use crate::providers::Providers;
 use crate::server::connections::ConnectionLimits;
 use crate::server::htxf::run_htxf_listener;
@@ -64,6 +65,11 @@ impl Server {
                 tracing::debug!(%peer, "rejected connection over the connection limit");
                 continue;
             };
+            if self.state.check_connection_flood(peer.ip()).await == FloodDecision::Ban {
+                tracing::info!(%peer, "banned for connection flooding");
+                self.state.temp_ban(peer.ip()).await;
+                continue;
+            }
             // Avoids Nagle delaying small replies behind the peer's ACKs.
             if let Err(e) = stream.set_nodelay(true) {
                 tracing::warn!(%peer, error = %e, "failed to set TCP_NODELAY");

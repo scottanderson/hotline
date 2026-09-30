@@ -9,6 +9,11 @@ mod memory;
 mod provider;
 mod record;
 
+use std::time::Duration;
+
 pub use memory::InMemoryBanProvider;
 pub use provider::BanProvider;
 pub use record::BanRecord;
+
+/// How long a temporary ban lasts, openline's `kBanTimeLimitSecs`.
+pub(crate) const TEMP_BAN_DURATION: Duration = Duration::from_secs(30 * 60);

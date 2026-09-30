@@ -1,5 +1,6 @@
 //! The per-connection `Session`: handshake, run loop, and dispatch.
 
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
 use hotline_proto::types::{UserFlags, UserNameWithInfo};
@@ -22,7 +23,7 @@ use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
 use crate::account::AccessExtra;
 use crate::banner::BannerKind;
 use crate::error::{Result, ServerError};
-use crate::flood::FloodDecision;
+use crate::flood::{FloodDecision, FloodEvent};
 use crate::server::ServerConfig;
 use crate::state::{
     AccessUpdate, ConsoleUpdate, RecipientMessage, SharedState, UserEntry, IDLE_THRESHOLD,
@@ -79,12 +80,6 @@ impl From<u16> for KickBan {
 ///
 /// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
 pub(super) const MAX_FLAT_NEWS_LEN: usize = u16::MAX as usize;
-
-/// Duration of a temporary kick-to-ban ([`myField_Options`] (113) value 1). Not
-/// yet configurable; a fixed default until this gets a `ServerConfig` knob.
-///
-/// [`myField_Options`]: hotline_proto::FieldId::Options
-pub(super) const TEMP_BAN_DURATION: Duration = Duration::from_secs(30 * 60);
 
 /// How long a kicked client may drain its [`myTran_DisconnectMsg`] (111)
 /// notice. openline closes at once.
@@ -350,33 +345,41 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
+        if self.flood_banned(FloodEvent::Transaction, state).await {
+            return vec![];
+        }
         let TransactionType::Request(opcode) = tx.r#type() else {
             tracing::debug!(opcode = ?tx.r#type(), "not a recognized client request");
             return vec![tx.reply_error("not implemented")];
         };
 
-        match state.check_flood(self.user_id, opcode).await {
-            FloodDecision::Kick => {
-                if !self.access_extra.contains(AccessExtra::CAN_SPAM) {
-                    state.disconnect(self.user_id).await;
-                    return vec![];
-                }
-            }
-            FloodDecision::Throttle => {
-                if let Err(reason) = self.access_extra.require(AccessExtra::CAN_SPAM) {
-                    return vec![Transaction::push(
-                        Opcode::ServerMsg,
-                        vec![Field::string(FieldId::Data, reason)],
-                    )];
-                }
-            }
-            FloodDecision::Allow => {}
-        }
-
         match self.state {
             SessionState::Agreement => self.handle_agreement(opcode, tx, state, config).await,
             SessionState::Joined => self.handle_joined(opcode, tx, state, config).await,
         }
+    }
+
+    /// `true` if `event` makes the flood policy ban and disconnect the session.
+    pub(super) async fn flood_banned(&self, event: FloodEvent<'_>, state: &SharedState) -> bool {
+        if self.access_extra.contains(AccessExtra::CAN_SPAM)
+            || state.check_flood(self.user_id, event).await == FloodDecision::Allow
+        {
+            return false;
+        }
+        let ip = self.remote_addr.ip();
+        tracing::info!(user_id = self.user_id, %ip, "banned for flooding");
+        state.temp_ban(ip).await;
+        state.disconnect(self.user_id).await;
+        true
+    }
+
+    /// `tx`'s [`myField_Data`] (101) bytes, empty if absent.
+    ///
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
+    pub(super) fn data_bytes<'a>(&self, tx: &'a Transaction) -> Cow<'a, [u8]> {
+        tx.field(FieldId::Data)
+            .map(|field| field.as_bytes(self.encoding()))
+            .unwrap_or_default()
     }
 
     /// Opcodes valid before login completes.
@@ -413,7 +416,7 @@ impl Session {
             /* 107 */ Opcode::Login => vec![tx.reply_error("already logged in")],
             /* 108 */ Opcode::SendInstantMsg => self.on_send_instant_msg(tx, state).await,
             /* 110 */ Opcode::DisconnectUser => self.on_disconnect_user(tx, state).await,
-            /* 112 */ Opcode::InviteNewChat => vec![self.on_invite_new_chat(tx, state).await],
+            /* 112 */ Opcode::InviteNewChat => self.on_invite_new_chat(tx, state).await,
             /* 113 */ Opcode::InviteToChat => self.on_invite_to_chat(tx, state).await,
             /* 114 */ Opcode::RejectChatInvite => self.on_reject_chat_invite(tx, state).await,
             /* 115 */ Opcode::JoinChat => vec![self.on_join_chat(tx, state).await],
@@ -642,6 +645,9 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
+        if self.flood_banned(FloodEvent::NameChange, state).await {
+            return vec![];
+        }
         let encoding = self.encoding();
         if let Some(name) = tx.name(encoding) {
             self.name = name;

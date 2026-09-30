@@ -57,6 +57,14 @@ below, in priority order.
   `myTran_Login` (107) and `myTran_Agreed` (121), but this server
   answers `myTran_KeepConnectionAlive` (500) before login, so a
   resetting timer would let keep-alives hold a connection forever.
+- **Flood bans differ from openline in small ways.** A flood ban goes
+  through `BanProvider`, so `hls` keeps it in `bans.json` across a
+  restart; openline keeps at most 32 in memory. The repeated-text check
+  hashes a classic news post's body; openline hashes the stored entry,
+  whose header has the poster and the minute. `AccessExtra::CAN_SPAM`
+  (mhxd's `can_spam`) exempts an account; openline has no exemption.
+  The connection flood check counts every accepted socket. openline
+  counts a connection only after its handshake.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -130,38 +138,29 @@ one-shared-room model.
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
 
-7. **Flood control does not ban.** openline adds a 30-minute temporary
-   ban for each of these: more than 10 consecutive connections from one
-   address within 30 seconds, more than 120 transactions in a minute,
-   five identical private messages, more than 20 messages in a minute,
-   more than 10 KB of chat in a minute, and more than 25 name changes
-   in a minute (`HotlineServ.cp`, `HotlineServTrans.cp`). This server
-   only disconnects, from one points policy with fixed thresholds
-   (`FloodConfig::default()`).
-
-8. **`hls` cannot set the download limits.** `ServerConfig` has
+7. **`hls` cannot set the download limits.** `ServerConfig` has
    `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
    for them.
 
-9. **No activity log.** openline logs downloads, uploads, connections,
+8. **No activity log.** openline logs downloads, uploads, connections,
    and account changes, each behind its own option (`myOpt_Log*`).
 
-10. **No HTTP tunnel listeners.** openline also listens on the base port
-    plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
-    The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
-    `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
-    a GUID in the URL. Data then moves in coded `SData` blocks with
-    padding. `HLProtocol.md` does not document it and mhxd does not
-    implement it, so no client is at hand to test against.
+9. **No HTTP tunnel listeners.** openline also listens on the base port
+   plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
+   The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
+   `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
+   a GUID in the URL. Data then moves in coded `SData` blocks with
+   padding. `HLProtocol.md` does not document it and mhxd does not
+   implement it, so no client is at hand to test against.
 
-11. **Small cleanups found in review.** The `*b"fldr"` check repeats
+10. **Small cleanups found in review.** The `*b"fldr"` check repeats
     across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
     helper would fit. `start_folder_upload` repeats
     `authorize_upload`'s destination rule. `prepare_folder_upload_item`
     ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
     `login`, `dir`, and `name`.
 
-12. **`hlc` covers only chat and lists.** It logs in, shows the
+11. **`hlc` covers only chat and lists.** It logs in, shows the
     agreement, chats in public, and lists users, files, and tracker
     servers. It cannot transfer files or folders, read or post classic or
     threaded news, send private messages, use private chat rooms, get
@@ -607,6 +606,22 @@ one-shared-room model.
     whose `HTXF` connection closes now leaves the queue at once, like
     `ProcessDownloadsWaiting`. A new `HTXF` connection must send its
     header within 60 seconds.
+
+78. Flood control now follows openline's rules (`HotlineServ.cp`,
+    `HotlineServTrans.cp`) in place of the old points policy and its
+    throttle. Each rule disconnects the client and bans its address
+    for 30 minutes (`kBanTimeLimitSecs`). Each count uses a fixed
+    60-second window: more than 120 transactions, more than 20 private
+    messages, broadcasts, and chat invites together, more than 10240
+    bytes of relayed chat (each line counts 90 to 8192 bytes), and more
+    than 25 name or icon changes. A 6th identical chat line, private
+    message, broadcast, or news post in a row also bans, as does a 12th
+    connection in a row from one address within 30 seconds of the first.
+    Each check sits where openline makes it: before the access check for
+    a private message or chat invite, and after it for a broadcast. A
+    chat line tests the byte total before the access check and adds its
+    own bytes after it. `FloodPolicy::check` now takes a `FloodEvent`, and
+    `check_connection` covers the accept loop.
 
 ## Needs manual verification against the real client
 

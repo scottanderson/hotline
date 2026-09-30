@@ -28,7 +28,7 @@ pub use file::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
     FileRequester, FolderItem, InMemoryFileProvider, PARTIAL_CREATOR, PARTIAL_SUFFIX, PARTIAL_TYPE,
 };
-pub use flood::{FloodConfig, FloodDecision, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
+pub use flood::{FloodDecision, FloodEvent, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
 pub use news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle,
     NewsItemKind, NewsListKind, ThreadedNewsProvider,

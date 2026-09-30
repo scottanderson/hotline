@@ -7,6 +7,7 @@ use hotline_proto::types::HlPath;
 use hotline_proto::FieldId;
 use hotline_proto::{Field, Transaction};
 
+use crate::flood::FloodEvent;
 use crate::state::SharedState;
 
 use super::connection::{Session, MAX_FLAT_NEWS_LEN};
@@ -47,13 +48,17 @@ impl Session {
             return vec![tx.reply_error("Your news post was not accepted because it was too big.")];
         }
         let entry = state.post_news(&self.name, &text).await;
-
-        state
-            .publish(Transaction::push(
-                Opcode::NewMsg,
-                vec![Field::string(FieldId::Data, entry)],
-            ))
-            .await;
+        if !self
+            .flood_banned(FloodEvent::Text(&self.data_bytes(tx)), state)
+            .await
+        {
+            state
+                .publish(Transaction::push(
+                    Opcode::NewMsg,
+                    vec![Field::string(FieldId::Data, entry)],
+                ))
+                .await;
+        }
         vec![tx.reply(vec![])]
     }
 
@@ -387,6 +392,28 @@ mod tests {
             .expect("expected a NewsfilePost push");
         assert_eq!(notify.r#type(), TransactionType::Push(Opcode::NewMsg));
         assert!(rx.try_recv().is_err(), "published only once");
+    }
+
+    #[tokio::test]
+    async fn old_post_news_still_replies_to_the_post_that_bans() {
+        let state = state_with_flood();
+        let session = test_session("Alice", Access::all());
+        let post = Transaction::request(
+            Opcode::OldPostNews,
+            1,
+            vec![Field::string(FieldId::Data, "buy now")],
+        );
+        for _ in 0..5 {
+            session.on_old_post_news(&post, &state).await;
+        }
+        let mut rx = state.register_recipient(session.user_id).await;
+
+        let replies = session.on_old_post_news(&post, &state).await;
+
+        assert_eq!(replies.len(), 1);
+        assert!(!replies[0].is_error());
+        let msg = rx.try_recv().expect("a disconnect");
+        assert!(msg.is_disconnect(), "the banning post is not published");
     }
 
     #[tokio::test]

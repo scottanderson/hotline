@@ -17,7 +17,7 @@ use hotline_proto::types::{
 use hotline_proto::{Field, FieldId, Transaction};
 
 use crate::account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
-use crate::ban::{BanProvider, BanRecord, InMemoryBanProvider};
+use crate::ban::{BanProvider, BanRecord, InMemoryBanProvider, TEMP_BAN_DURATION};
 use crate::banner::{BannerKind, BannerProvider, NoBanner};
 use crate::console::fields::{
     format_access, format_access_extra, parse_0wn_fields, parse_access_fields,
@@ -26,7 +26,7 @@ use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, Defa
 use crate::file::{
     BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem, InMemoryFileProvider,
 };
-use crate::flood::{FloodDecision, FloodPolicy, NoFloodPolicy};
+use crate::flood::{FloodDecision, FloodEvent, FloodPolicy, NoFloodPolicy};
 use crate::news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
     ThreadedNewsProvider,
@@ -1375,10 +1375,23 @@ impl SharedState {
         self.bans.ban(ip, until).await
     }
 
-    /// Record one transaction from `user_id` and decide what happens to
-    /// it; see [`crate::FloodPolicy::check`].
-    pub async fn check_flood(&self, user_id: u16, opcode: Opcode) -> FloodDecision {
-        self.flood.check(user_id, opcode).await
+    /// Ban `ip` for [`TEMP_BAN_DURATION`], logging a failure.
+    pub(crate) async fn temp_ban(&self, ip: IpAddr) {
+        let until = std::time::SystemTime::now() + TEMP_BAN_DURATION;
+        if let Err(error) = self.ban(ip, Some(until)).await {
+            tracing::warn!(%ip, %error, "failed to persist ban");
+        }
+    }
+
+    /// Record one `event` from `user_id`; see [`crate::FloodPolicy::check`].
+    pub async fn check_flood(&self, user_id: u16, event: FloodEvent<'_>) -> FloodDecision {
+        self.flood.check(user_id, event).await
+    }
+
+    /// Record one new connection from `ip`; see
+    /// [`crate::FloodPolicy::check_connection`].
+    pub async fn check_connection_flood(&self, ip: IpAddr) -> FloodDecision {
+        self.flood.check_connection(ip).await
     }
 
     /// Forget `user_id`'s accumulated flood state, called on disconnect.

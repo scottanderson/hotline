@@ -36,6 +36,20 @@ pub(super) fn test_session(name: &str, access: Access) -> Session {
     }
 }
 
+/// Shared state with openline's flood limits.
+pub(super) fn state_with_flood() -> SharedState {
+    SharedState::new(Providers {
+        accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
+        files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
+        flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+        threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+        bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
+        flood: std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::default()),
+        banner: std::sync::Arc::new(crate::banner::NoBanner),
+        commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+    })
+}
+
 /// Config with console commands switched on under `/`.
 pub(super) fn console_config() -> ServerConfig {
     ServerConfig {

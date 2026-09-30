@@ -1,8 +1,6 @@
 //! Handlers that act on another connected user: listing, info,
 //! kick, private messages, and broadcast.
 
-use std::time::SystemTime;
-
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::UserNameWithInfo;
@@ -10,9 +8,10 @@ use hotline_proto::FieldId;
 use hotline_proto::{Field, Transaction};
 
 use crate::account::AccessExtra;
+use crate::flood::FloodEvent;
 use crate::state::{SharedState, UserEntry};
 
-use super::connection::{KickBan, MsgOption, Session, TEMP_BAN_DURATION};
+use super::connection::{KickBan, MsgOption, Session};
 
 impl Session {
     /// [`myTran_GetUserNameList`] (300)
@@ -135,12 +134,7 @@ impl Session {
 
         let notice = match (ban, target_ip) {
             (KickBan::Temporary, Some(ip)) => {
-                if let Err(error) = state
-                    .ban(ip, Some(SystemTime::now() + TEMP_BAN_DURATION))
-                    .await
-                {
-                    tracing::warn!(%ip, %error, "failed to persist ban");
-                }
+                state.temp_ban(ip).await;
                 Some("You are temporarily banned on this server.")
             }
             (KickBan::Permanent, Some(ip)) => {
@@ -170,6 +164,13 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
+    /// The repeat and message count checks for a private message or broadcast.
+    async fn message_flood_banned(&self, tx: &Transaction, state: &SharedState) -> bool {
+        self.flood_banned(FloodEvent::Text(&self.data_bytes(tx)), state)
+            .await
+            || self.flood_banned(FloodEvent::Message, state).await
+    }
+
     /// [`myTran_SendInstantMsg`] (108): a private instant message to one other
     /// user.
     ///
@@ -179,6 +180,9 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
+        if self.message_flood_banned(tx, state).await {
+            return vec![];
+        }
         if let Err(reason) = self.access.require(Access::SEND_MESSAGE) {
             if !self.access_extra.contains(AccessExtra::MSG_OVERRIDE) {
                 return vec![tx.reply_error(reason)];
@@ -282,6 +286,9 @@ impl Session {
         if let Err(reason) = self.access.require(Access::BROADCAST) {
             return vec![tx.reply_error(reason)];
         }
+        if self.message_flood_banned(tx, state).await {
+            return vec![];
+        }
         let encoding = self.encoding();
         let Some(message) = tx.string(FieldId::Data, encoding) else {
             return vec![tx.reply_error("missing message")];
@@ -307,13 +314,12 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::Providers;
     use crate::server::ServerConfig;
     use crate::session::test_support::*;
     use crate::state::RecipientMessage;
     use hotline_proto::opcode::TransactionType;
     use hotline_proto::text_encoding;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     #[tokio::test]
     async fn get_user_name_list_denied_without_user_getlist() {
@@ -568,70 +574,34 @@ mod tests {
         assert!(!replies[0].is_error());
     }
 
-    fn state_with_flood(config: crate::flood::FloodConfig) -> SharedState {
-        SharedState::new(Providers {
-            accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
-            files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
-            flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
-            bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
-            flood: std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::new(config)),
-            banner: std::sync::Arc::new(crate::banner::NoBanner),
-            commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
-        })
-    }
-
     #[tokio::test]
-    async fn hammering_a_session_past_the_flood_threshold_disconnects_it() {
-        let state = state_with_flood(crate::flood::FloodConfig {
-            default_points: 10,
-            chat_points: 10,
-            decay: Duration::from_secs(60),
-            throttle_threshold: 15,
-            kick_threshold: 25,
-        });
+    async fn the_122nd_transaction_in_a_minute_bans_and_disconnects() {
+        let state = state_with_flood();
         let mut session = test_session("Alice", Access::all());
         let mut rx = state.register_recipient(session.user_id).await;
         let ping = || Transaction::request(Opcode::KeepConnectionAlive, 1, vec![]);
         let config = ServerConfig::default();
 
-        // First request: 10 points, under both thresholds.
+        for _ in 0..121 {
+            assert_eq!(session.handle(&ping(), &state, &config).await.len(), 1);
+        }
         let replies = session.handle(&ping(), &state, &config).await;
-        assert_eq!(replies.len(), 1);
-        assert!(!replies[0].is_error());
 
-        // Second request: 20 points, over throttle_threshold; dropped, with
-        // a warning pushed back to the sender instead of a reply.
-        let replies = session.handle(&ping(), &state, &config).await;
-        assert_eq!(replies.len(), 1);
-        assert_eq!(
-            replies[0].r#type(),
-            TransactionType::Push(Opcode::ServerMsg)
-        );
-
-        // Third request: 30 points, over kick_threshold; disconnected.
-        let replies = session.handle(&ping(), &state, &config).await;
         assert!(replies.is_empty());
-
         let msg = rx.try_recv().expect("expected a recipient message");
-        assert!(msg.is_disconnect(), "flood kick must send no wire notice");
+        assert!(msg.is_disconnect(), "a flood ban sends no wire notice");
+        assert!(state.is_banned(session.remote_addr.ip()).await.is_some());
     }
 
     #[tokio::test]
     async fn can_spam_exempts_a_session_from_the_flood_policy() {
-        let state = state_with_flood(crate::flood::FloodConfig {
-            default_points: 100,
-            chat_points: 100,
-            decay: Duration::from_secs(60),
-            throttle_threshold: 15,
-            kick_threshold: 25,
-        });
+        let state = state_with_flood();
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::CAN_SPAM);
         let mut rx = state.register_recipient(session.user_id).await;
         let config = ServerConfig::default();
 
-        for _ in 0..5 {
+        for _ in 0..200 {
             let replies = session
                 .handle(
                     &Transaction::request(Opcode::KeepConnectionAlive, 1, vec![]),
@@ -640,12 +610,41 @@ mod tests {
                 )
                 .await;
             assert_eq!(replies.len(), 1);
-            assert!(!replies[0].is_error());
         }
         assert!(
             rx.try_recv().is_err(),
             "exempt session was never disconnected"
         );
+    }
+
+    #[tokio::test]
+    async fn the_sixth_identical_private_message_bans() {
+        let state = state_with_flood();
+        let session = test_session("Alice", Access::all());
+        let mut rx = state.register_recipient(session.user_id).await;
+        let message = || {
+            Transaction::request(
+                Opcode::SendInstantMsg,
+                1,
+                vec![
+                    Field::u16(FieldId::UserID, 2),
+                    Field::string(FieldId::Data, "buy now"),
+                ],
+            )
+        };
+
+        for _ in 0..5 {
+            assert!(!session
+                .on_send_instant_msg(&message(), &state)
+                .await
+                .is_empty());
+        }
+
+        assert!(session
+            .on_send_instant_msg(&message(), &state)
+            .await
+            .is_empty());
+        assert!(rx.try_recv().expect("a disconnect").is_disconnect());
     }
 
     #[tokio::test]

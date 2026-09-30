@@ -2,12 +2,14 @@
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
+use hotline_proto::text_encoding;
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::FieldId;
 use hotline_proto::{Field, Transaction};
 
 use crate::account::AccessExtra;
 use crate::console::{ChatCommandActor, ConsoleReply};
+use crate::flood::{FloodEvent, MAX_CHAT_LINE};
 use crate::server::ServerConfig;
 use crate::state::SharedState;
 
@@ -26,6 +28,9 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
+        if self.flood_banned(FloodEvent::Chat, state).await {
+            return Vec::new();
+        }
         let encoding = self.encoding();
         let Some(message) = tx.string(FieldId::Data, encoding) else {
             return Vec::new();
@@ -56,6 +61,16 @@ impl Session {
             false => format!("\r{:>13.13}:  ", self.name),
         };
         let text = format!("\r{message}").replace('\r', &prefix);
+        let mut sent = self.data_bytes(tx).into_owned();
+        sent.truncate(MAX_CHAT_LINE);
+        let relayed = text_encoding::encode(encoding, &text).len();
+        if self.flood_banned(FloodEvent::Text(&sent), state).await
+            || self
+                .flood_banned(FloodEvent::ChatBytes(relayed), state)
+                .await
+        {
+            return Vec::new();
+        }
         let mut fields = vec![Field::string(FieldId::Data, text)];
         if let Some(chat_id) = chat_id {
             fields.push(Field::u32(FieldId::ChatID, chat_id));
@@ -127,16 +142,19 @@ impl Session {
         &self,
         tx: &Transaction,
         state: &SharedState,
-    ) -> Transaction {
+    ) -> Vec<Transaction> {
+        if self.flood_banned(FloodEvent::Message, state).await {
+            return vec![];
+        }
         if let Err(reason) = self.access.require(Access::CREATE_CHAT) {
-            return tx.reply_error(reason);
+            return vec![tx.reply_error(reason)];
         }
         let target_ids: Vec<u16> = tx
             .fields(FieldId::UserID)
             .filter_map(Field::as_u16)
             .collect();
         if target_ids.is_empty() {
-            return tx.reply_error("missing user id");
+            return vec![tx.reply_error("missing user id")];
         }
 
         let chat_id = state.create_chat_room(self.user_id).await;
@@ -164,13 +182,13 @@ impl Session {
                 )
                 .await;
         }
-        tx.reply(vec![
+        vec![tx.reply(vec![
             Field::u32(FieldId::ChatID, chat_id),
             Field::u16(FieldId::UserID, self.user_id),
             Field::u16(FieldId::UserIconID, icon),
             Field::u16(FieldId::UserFlags, self.user_flags().bits()),
             Field::string(FieldId::UserName, self.name.clone()),
-        ])
+        ])]
     }
 
     /// [`myTran_InviteToChat`] (113): invite another user to a room this session
@@ -182,6 +200,9 @@ impl Session {
         tx: &Transaction,
         state: &SharedState,
     ) -> Vec<Transaction> {
+        if self.flood_banned(FloodEvent::Message, state).await {
+            return vec![];
+        }
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return vec![tx.reply_error(reason)];
         }
@@ -433,6 +454,33 @@ mod tests {
 
     use crate::session::test_support::*;
     use hotline_proto::text_encoding;
+
+    #[tokio::test]
+    async fn chat_send_past_the_byte_limit_bans_before_the_access_check() {
+        let state = state_with_flood();
+        let mut session = test_session("Alice", Access::all());
+        let mut rx = state.register_recipient(session.user_id).await;
+        let config = ServerConfig::default();
+        let line = |i: usize| {
+            Transaction::request(
+                Opcode::ChatSend,
+                1,
+                vec![Field::string(FieldId::Data, format!("line {i}"))],
+            )
+        };
+        // 114 short lines count 90 bytes each, 10260 in total.
+        for i in 0..114 {
+            session.on_chat_send(&line(i), &state, &config).await;
+        }
+        session.access.remove(Access::SEND_CHAT);
+
+        assert!(session
+            .on_chat_send(&line(114), &state, &config)
+            .await
+            .is_empty());
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|msg| msg.is_disconnect()));
+        assert!(state.is_banned(session.remote_addr.ip()).await.is_some());
+    }
 
     #[tokio::test]
     async fn chat_relay_starts_with_cr_for_scrollback_clients() {
@@ -853,7 +901,7 @@ mod tests {
             1,
             vec![Field::u16(FieldId::UserID, 2)],
         );
-        let reply = creator.on_invite_new_chat(&create, &state).await;
+        let reply = creator.on_invite_new_chat(&create, &state).await.remove(0);
         let chat_id = reply.field(FieldId::ChatID).unwrap().as_u32().unwrap();
 
         let invite = bob_rx
