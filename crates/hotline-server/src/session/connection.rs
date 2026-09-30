@@ -171,7 +171,14 @@ impl Session {
         config: ServerConfig,
     ) -> Result<()> {
         let remote_addr = stream.peer_addr()?;
-        Self::handshake(&mut stream).await?;
+        let login_deadline = tokio::time::Instant::now() + config.login_timeout;
+        let Ok(handshake) =
+            tokio::time::timeout_at(login_deadline, Self::handshake(&mut stream)).await
+        else {
+            tracing::debug!(%remote_addr, "handshake timed out");
+            return Ok(());
+        };
+        handshake?;
 
         let encoding = EncodingHandle::default();
         let codec = TransactionCodec::for_server(encoding.clone());
@@ -206,6 +213,7 @@ impl Session {
             &mut writer,
             &mut reader,
             &mut rx,
+            login_deadline,
         )
         .await;
         // Runs on every exit from `dispatch`, including an early `?`.
@@ -226,9 +234,12 @@ impl Session {
         writer: &mut SessionWriter,
         reader: &mut SessionReader,
         rx: &mut mpsc::Receiver<RecipientMessage>,
+        login_deadline: tokio::time::Instant,
     ) -> Result<SessionEnd> {
         let idle_sleep = tokio::time::sleep(IDLE_THRESHOLD);
         tokio::pin!(idle_sleep);
+        let login_sleep = tokio::time::sleep_until(login_deadline);
+        tokio::pin!(login_sleep);
 
         loop {
             tokio::select! {
@@ -247,6 +258,11 @@ impl Session {
                 // Fires after IDLE_THRESHOLD with no request from this client.
                 () = &mut idle_sleep, if !session.is_away && matches!(session.state, SessionState::Joined) => {
                     session.set_away(true, state).await;
+                }
+                // Activity does not extend the deadline.
+                () = &mut login_sleep, if matches!(session.state, SessionState::Agreement) => {
+                    tracing::debug!(user_id = session.user_id, "login timed out");
+                    break Ok(SessionEnd::Closed);
                 }
                 // Everything server-initiated for this session.
                 msg = rx.recv() => {
@@ -1753,5 +1769,64 @@ mod tests {
         assert!(server.await.unwrap().is_err());
         assert_eq!(state.recipient_count().await, 0);
         assert!(state.users().await.is_empty());
+    }
+
+    /// Runs one session with a short login timeout. Returns its task, a
+    /// client socket, and the state.
+    async fn run_with_short_login_timeout() -> (
+        tokio::task::JoinHandle<Result<()>>,
+        tokio::net::TcpStream,
+        SharedState,
+    ) {
+        let state = SharedState::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = ServerConfig {
+            login_timeout: Duration::from_millis(300),
+            ..ServerConfig::default()
+        };
+        let server_state = state.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            Session::run(stream, server_state, config).await
+        });
+        let client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        (server, client, state)
+    }
+
+    #[tokio::test]
+    async fn a_client_that_never_sends_a_handshake_is_closed() {
+        let (server, mut client, _) = run_with_short_login_timeout().await;
+
+        let finished = tokio::time::timeout(Duration::from_secs(5), server).await;
+
+        assert!(finished.unwrap().unwrap().is_ok());
+        let mut byte = [0u8; 1];
+        assert_eq!(client.read(&mut byte).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn keep_alives_do_not_extend_the_login_timeout() {
+        let (server, mut client, state) = run_with_short_login_timeout().await;
+        client
+            .write_all(&ClientHandshake::default().encode())
+            .await
+            .unwrap();
+        let mut reply = [0u8; ServerHandshake::LEN];
+        client.read_exact(&mut reply).await.unwrap();
+
+        let keep_alive = Transaction::request(Opcode::KeepConnectionAlive, 1, vec![])
+            .encode(hotline_proto::text_encoding::DEFAULT)
+            .unwrap();
+        let pinger = tokio::spawn(async move {
+            while client.write_all(&keep_alive).await.is_ok() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+        let finished = tokio::time::timeout(Duration::from_secs(5), server).await;
+        pinger.abort();
+
+        assert!(finished.unwrap().unwrap().is_ok());
+        assert_eq!(state.recipient_count().await, 0);
     }
 }

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 /// `max_downloads`'s default, openline's `mOptions.nMaxDownloads`.
 pub const DEFAULT_MAX_DOWNLOADS: usize = 100;
 
@@ -10,6 +12,9 @@ pub const DEFAULT_MAX_CONNECTIONS: usize = 500;
 /// `max_connections_per_address`'s default, openline's
 /// `mOptions.nMaxConnectionsIP`.
 pub const DEFAULT_MAX_CONNECTIONS_PER_ADDRESS: usize = 5;
+
+/// `login_timeout`'s default, openline's 60 seconds.
+pub const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Server configuration.
 #[derive(Debug, Clone)]
@@ -34,6 +39,8 @@ pub struct ServerConfig {
     /// Open connections from one address before further ones are refused;
     /// 0 means no limit.
     pub max_connections_per_address: usize,
+    /// Time from accept to a completed login before the connection closes.
+    pub login_timeout: Duration,
 }
 
 impl Default for ServerConfig {
@@ -47,6 +54,7 @@ impl Default for ServerConfig {
             max_downloads_per_client: DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_connections_per_address: DEFAULT_MAX_CONNECTIONS_PER_ADDRESS,
+            login_timeout: DEFAULT_LOGIN_TIMEOUT,
         }
     }
 }

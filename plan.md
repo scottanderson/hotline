@@ -48,6 +48,14 @@ below, in priority order.
   once, before the handshake. This server also has a limit on all
   connections together, `max_connections` (500 by default). openline
   has no such limit.
+- **The login timeout is a fixed deadline from accept.** openline
+  closes a client that has not logged in 60 seconds after its last
+  transaction. This server closes it 60 seconds after accept, like
+  mhxd's `login_timeout` (10 seconds there), and activity does not
+  extend it. openline disconnects on any pre-login opcode except
+  `myTran_Login` (107) and `myTran_Agreed` (121), but this server
+  answers `myTran_KeepConnectionAlive` (500) before login, so a
+  resetting timer would let keep-alives hold a connection forever.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -126,10 +134,7 @@ one-shared-room model.
    promoted. A disconnect frees an active slot, but the transfer keeps
    running, so the active count can pass `max_downloads` for a while.
 
-8. **No login timeout.** openline disconnects a client that has not
-   logged in after 60 seconds (`HotlineServ.cp`).
-
-9. **Flood control does not ban.** openline adds a 30-minute temporary
+8. **Flood control does not ban.** openline adds a 30-minute temporary
    ban for each of these: more than 10 consecutive connections from one
    address within 30 seconds, more than 120 transactions in a minute,
    five identical private messages, more than 20 messages in a minute,
@@ -138,14 +143,14 @@ one-shared-room model.
    only disconnects, from one points policy with fixed thresholds
    (`FloodConfig::default()`).
 
-10. **`hls` cannot set the download limits.** `ServerConfig` has
-    `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
-    for them.
+9. **`hls` cannot set the download limits.** `ServerConfig` has
+   `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
+   for them.
 
-11. **No activity log.** openline logs downloads, uploads, connections,
+10. **No activity log.** openline logs downloads, uploads, connections,
     and account changes, each behind its own option (`myOpt_Log*`).
 
-12. **No HTTP tunnel listeners.** openline also listens on the base port
+11. **No HTTP tunnel listeners.** openline also listens on the base port
     plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
     The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
     `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -153,14 +158,14 @@ one-shared-room model.
     padding. `HLProtocol.md` does not document it and mhxd does not
     implement it, so no client is at hand to test against.
 
-13. **Small cleanups found in review.** The `*b"fldr"` check repeats
+12. **Small cleanups found in review.** The `*b"fldr"` check repeats
     across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
     helper would fit. `start_folder_upload` repeats
     `authorize_upload`'s destination rule. `prepare_folder_upload_item`
     ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
     `login`, `dir`, and `name`.
 
-14. **`hlc` covers only chat and lists.** It logs in, shows the
+13. **`hlc` covers only chat and lists.** It logs in, shows the
     agreement, chats in public, and lists users, files, and tracker
     servers. It cannot transfer files or folders, read or post classic or
     threaded news, send private messages, use private chat rooms, get
@@ -592,6 +597,10 @@ one-shared-room model.
     `!nMaxConnectionsIP ||` check. An over-limit connection closes with
     no message, like openline. This also bounds total reassembly memory,
     since each connection's `TransactionCodec` holds at most 64 MB.
+
+76. A connection that has not logged in 60 seconds after accept now
+    closes (`ServerConfig::login_timeout`). The deadline covers the
+    handshake too, which had no timeout before.
 
 ## Needs manual verification against the real client
 
