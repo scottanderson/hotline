@@ -171,11 +171,6 @@ impl SharedState {
         users
     }
 
-    /// How many users are currently connected.
-    pub async fn user_count(&self) -> usize {
-        self.users.read().await.len()
-    }
-
     /// Look up one connected user by ID.
     pub async fn user(&self, user_id: u16) -> Option<UserEntry> {
         self.users.read().await.get(&user_id).cloned()
@@ -249,9 +244,8 @@ impl SharedState {
         Some(async move { sender.closed().await })
     }
 
-    /// How many recipients are registered.
-    #[cfg(test)]
-    pub(crate) async fn recipient_count(&self) -> usize {
+    /// How many connections have finished the handshake, logged in or not.
+    pub async fn connection_count(&self) -> usize {
         self.recipients.read().await.len()
     }
 
@@ -1442,6 +1436,17 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    #[tokio::test]
+    async fn connection_count_includes_a_connection_before_login() {
+        let state = SharedState::default();
+        let _rx = state.register_recipient(1).await;
+        assert!(state.users().await.is_empty());
+        assert_eq!(state.connection_count().await, 1);
+
+        state.remove_recipient(1).await;
+        assert_eq!(state.connection_count().await, 0);
+    }
 
     /// Two `SharedState`s sharing a news provider see each other's writes.
     #[tokio::test]

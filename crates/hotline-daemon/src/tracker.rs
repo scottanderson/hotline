@@ -81,7 +81,7 @@ pub async fn run_beacon(
         .context("failed to open the tracker beacon socket")?;
 
     loop {
-        let user_count = u16::try_from(state.user_count().await).unwrap_or(u16::MAX);
+        let user_count = u16::try_from(state.connection_count().await).unwrap_or(u16::MAX);
 
         for target in &targets {
             let payload = beacon(target, &name, &description, port, user_count, pass_id)

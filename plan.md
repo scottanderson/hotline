@@ -145,11 +145,7 @@ one-shared-room model.
    openline. Worth deciding only if a multi-byte encoding is
    ever made selectable per connection.
 
-6. **The tracker beacon counts logged-in users.** openline sends
-   `mStats.connCount`, which counts a connection when it is accepted,
-   before login (`HotlineServ.cp`).
-
-7. **No HTTP tunnel listeners.** openline also listens on the base port
+6. **No HTTP tunnel listeners.** openline also listens on the base port
    plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
    The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
    `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -157,7 +153,7 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-8. **Small cleanups found in review.** The `*b"fldr"` check repeats
+7. **Small cleanups found in review.** The `*b"fldr"` check repeats
    across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
    helper would fit. `start_folder_upload` repeats
    `authorize_upload`'s destination rule. `prepare_folder_upload_item`
@@ -165,7 +161,7 @@ one-shared-room model.
    `login`, `dir`, and `name`. About 12 tests build a full `Providers`
    by hand; a fixture builder would let a new provider touch one place.
 
-9. **`hlc` covers only chat and lists.** It logs in, shows the
+8. **`hlc` covers only chat and lists.** It logs in, shows the
    agreement, chats in public, and lists users, files, and tracker
    servers. It cannot transfer files or folders, read or post classic or
    threaded news, send private messages, use private chat rooms, get
@@ -661,6 +657,11 @@ one-shared-room model.
     types, tracker entries, and `ServerConfig`. `String` stays for clap
     arguments, function parameters and return values, map keys,
     `HlPath`'s components, and text that is built up in place.
+
+84. The tracker beacon's user count counts every connection that has
+    finished the handshake, logged in or not, like openline's
+    `mStats.connCount` (`HotlineServ.cp`). Before, it counted only
+    logged-in users.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

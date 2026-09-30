@@ -1855,7 +1855,7 @@ mod tests {
         client.write_all(&[0u8; 20]).await.unwrap();
 
         assert!(server.await.unwrap().is_err());
-        assert_eq!(state.recipient_count().await, 0);
+        assert_eq!(state.connection_count().await, 0);
         assert!(state.users().await.is_empty());
     }
 
@@ -1915,6 +1915,6 @@ mod tests {
         pinger.abort();
 
         assert!(finished.unwrap().unwrap().is_ok());
-        assert_eq!(state.recipient_count().await, 0);
+        assert_eq!(state.connection_count().await, 0);
     }
 }
