@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::account::AccountProvider;
+use crate::activity::ActivityLog;
 use crate::ban::BanProvider;
 use crate::banner::BannerProvider;
 use crate::console::ChatCommandDispatcher;
@@ -27,4 +28,6 @@ pub struct Providers {
     pub banner: Arc<dyn BannerProvider>,
     /// See [`ChatCommandDispatcher`].
     pub commands: Arc<dyn ChatCommandDispatcher>,
+    /// See [`ActivityLog`].
+    pub activity: Arc<dyn ActivityLog>,
 }

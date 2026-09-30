@@ -9,6 +9,7 @@ use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 
 use crate::account::AccessExtra;
+use crate::activity::{Activity, ActivityEntry, ActivityLog};
 use crate::server::ServerConfig;
 use crate::state::{AccessUpdate, RecipientMessage, SharedState, UserEntry};
 
@@ -47,6 +48,7 @@ pub(super) fn state_with_flood() -> SharedState {
         flood: std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::default()),
         banner: std::sync::Arc::new(crate::banner::NoBanner),
         commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+        activity: std::sync::Arc::new(crate::activity::NoActivityLog),
     })
 }
 
@@ -106,7 +108,46 @@ pub(super) fn state_with_banner(
         flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
         banner,
         commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+        activity: std::sync::Arc::new(crate::activity::NoActivityLog),
     })
+}
+
+/// An [`ActivityLog`] that keeps every entry.
+#[derive(Default)]
+pub(super) struct RecordingActivityLog(std::sync::Mutex<Vec<ActivityEntry>>);
+
+impl RecordingActivityLog {
+    /// The recorded activities, oldest first.
+    pub(super) fn activities(&self) -> Vec<Activity> {
+        let entries = self.0.lock().unwrap();
+        entries.iter().map(|entry| entry.activity.clone()).collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl ActivityLog for RecordingActivityLog {
+    async fn record(&self, entry: ActivityEntry) {
+        self.0.lock().unwrap().push(entry);
+    }
+}
+
+/// State over `files` whose activity goes to the returned log.
+pub(super) fn state_recording_activity(
+    files: crate::file::InMemoryFileProvider,
+) -> (SharedState, std::sync::Arc<RecordingActivityLog>) {
+    let log = std::sync::Arc::new(RecordingActivityLog::default());
+    let state = SharedState::new(Providers {
+        accounts: std::sync::Arc::new(crate::account::InMemoryAccountProvider::default()),
+        files: std::sync::Arc::new(files),
+        flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+        threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+        bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
+        flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
+        banner: std::sync::Arc::new(crate::banner::NoBanner),
+        commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+        activity: log.clone(),
+    });
+    (state, log)
 }
 
 /// A fixed-bytes [`crate::banner::BannerProvider`], for exercising the

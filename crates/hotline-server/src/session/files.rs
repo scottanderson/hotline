@@ -7,6 +7,7 @@ use hotline_proto::FieldId;
 use hotline_proto::{Field, Transaction};
 
 use crate::account::AccessExtra;
+use crate::activity::Activity;
 use crate::file::FileRequester;
 use crate::state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
@@ -158,7 +159,7 @@ impl Session {
             target: TransferTarget {
                 login: self.login.clone(),
                 dir,
-                name,
+                name: name.clone(),
             },
             raw,
         });
@@ -170,6 +171,8 @@ impl Session {
             self.register_download(kind, data_size, resume_offset, state)
                 .await,
         );
+        self.record_activity(Activity::Download { name }, state)
+            .await;
         vec![tx.reply(fields)]
     }
 
@@ -274,7 +277,7 @@ impl Session {
                     target: TransferTarget {
                         login: self.login.clone(),
                         dir,
-                        name,
+                        name: name.clone(),
                     },
                     raw: false,
                 }),
@@ -293,6 +296,7 @@ impl Session {
                 types::encode_resume_data(resume_offset as u32).to_vec(),
             ));
         }
+        self.record_activity(Activity::Upload { name }, state).await;
         vec![tx.reply(fields)]
     }
 
@@ -333,13 +337,15 @@ impl Session {
             target: TransferTarget {
                 login: self.login.clone(),
                 dir,
-                name,
+                name: name.clone(),
             },
             items,
             item_count,
             encoding: self.encoding(),
         });
         fields.extend(self.register_download(kind, total_size, 0, state).await);
+        self.record_activity(Activity::Download { name }, state)
+            .await;
         vec![tx.reply(fields)]
     }
 
@@ -380,6 +386,7 @@ impl Session {
             .and_then(Field::as_u32)
             .unwrap_or(0);
         if item_count == 0 {
+            self.record_activity(Activity::Upload { name }, state).await;
             return vec![tx.reply(vec![])];
         }
         let size = tx
@@ -392,7 +399,7 @@ impl Session {
                     target: TransferTarget {
                         login: self.login.clone(),
                         dir,
-                        name,
+                        name: name.clone(),
                     },
                     items: Vec::new(),
                     item_count,
@@ -405,6 +412,7 @@ impl Session {
                 user_id: self.user_id,
             })
             .await;
+        self.record_activity(Activity::Upload { name }, state).await;
         vec![tx.reply(vec![Field::u32(FieldId::RefNum, reference.0)])]
     }
 
@@ -707,6 +715,7 @@ mod tests {
             flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
             banner: std::sync::Arc::new(crate::banner::NoBanner),
             commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+            activity: std::sync::Arc::new(crate::activity::NoActivityLog),
         })
     }
 
@@ -1382,6 +1391,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_file_records_the_download() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let (state, log) = state_recording_activity(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = Transaction::request(
+            Opcode::DownloadFile,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        session.on_download_file(&get, &state).await;
+        let missing = Transaction::request(
+            Opcode::DownloadFile,
+            2,
+            vec![Field::string(FieldId::FileName, "b.txt")],
+        );
+        session.on_download_file(&missing, &state).await;
+
+        let name = "a.txt".to_string();
+        assert_eq!(log.activities(), [Activity::Download { name }]);
+    }
+
+    #[tokio::test]
+    async fn download_fldr_of_an_empty_folder_records_nothing() {
+        let (state, log) = state_recording_activity(Default::default());
+        let session = test_session("Alice", Access::all());
+        let requester = FileRequester { login: "Alice" };
+        state
+            .mkdir(requester, &HlPath::default(), "Empty", Access::all())
+            .await
+            .unwrap();
+
+        let get = folder_request(Opcode::DownloadFldr, &[], "Empty", vec![]);
+        session.on_download_fldr(&get, &state).await;
+        assert_eq!(log.activities(), []);
+    }
+
+    #[tokio::test]
+    async fn download_fldr_records_the_download() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
+        let (state, log) = state_recording_activity(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = folder_request(Opcode::DownloadFldr, &[], "Top", vec![]);
+        session.on_download_fldr(&get, &state).await;
+        let name = "Top".to_string();
+        assert_eq!(log.activities(), [Activity::Download { name }]);
+    }
+
+    #[tokio::test]
+    async fn upload_file_records_the_upload() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "taken.txt", *b"hello");
+        let (state, log) = state_recording_activity(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = |name| {
+            Transaction::request(
+                Opcode::UploadFile,
+                1,
+                vec![Field::string(FieldId::FileName, name)],
+            )
+        };
+        session.on_upload_file(&put("new.txt"), &state).await;
+        let taken = session.on_upload_file(&put("taken.txt"), &state).await;
+        assert!(taken[0].is_error());
+
+        let name = "new.txt".to_string();
+        assert_eq!(log.activities(), [Activity::Upload { name }]);
+    }
+
+    #[tokio::test]
     async fn download_fldr_of_a_missing_folder_is_an_error() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
@@ -1490,6 +1573,17 @@ mod tests {
                 .file_exists(requester, &HlPath::default(), "New")
                 .await
         );
+    }
+
+    #[tokio::test]
+    async fn upload_fldr_with_no_items_records_the_upload() {
+        let (state, log) = state_recording_activity(Default::default());
+        let session = test_session("Alice", Access::all());
+
+        let put = folder_request(Opcode::UploadFldr, &[], "New", vec![]);
+        session.on_upload_fldr(&put, &state).await;
+        let name = "New".to_string();
+        assert_eq!(log.activities(), [Activity::Upload { name }]);
     }
 
     #[tokio::test]

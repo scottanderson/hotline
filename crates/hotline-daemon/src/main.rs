@@ -1,6 +1,7 @@
 //! `hls`, a Hotline server daemon built on `hotline-server`.
 
 mod accounts;
+mod activity;
 mod args;
 mod banner;
 mod bans;
@@ -19,6 +20,7 @@ use hotline_server::{
 };
 
 use accounts::{random_password, FileAccountProvider, ADMIN_LOGIN, GUEST_LOGIN};
+use activity::{FileActivityLog, LogPaths};
 use args::Args;
 use banner::FileBannerProvider;
 use bans::FileBanProvider;
@@ -115,6 +117,15 @@ async fn main() -> anyhow::Result<()> {
         None => Arc::new(NoBanner),
     };
     let commands = Arc::new(DefaultChatCommands);
+    let log_paths = LogPaths {
+        downloads: args.download_log.clone(),
+        uploads: args.upload_log.clone(),
+        connects: args.connect_log.clone(),
+        accounts: args.account_log.clone(),
+    };
+    log_paths.check().await?;
+    let (activity, _writer) = FileActivityLog::new(log_paths);
+    let activity = Arc::new(activity);
     let server = Server::new(
         config,
         Providers {
@@ -126,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
             flood,
             banner,
             commands,
+            activity,
         },
     );
 

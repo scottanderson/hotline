@@ -6,6 +6,7 @@
 //! by transaction type to the handlers registered on [`Server`].
 
 mod account;
+mod activity;
 mod ban;
 mod banner;
 mod bitflags_serde;
@@ -20,6 +21,7 @@ mod session;
 mod state;
 
 pub use account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
+pub use activity::{AccountAction, Activity, ActivityEntry, ActivityLog, NoActivityLog};
 pub use ban::{BanProvider, BanRecord, InMemoryBanProvider};
 pub use banner::{BannerKind, BannerProvider, NoBanner, UrlBannerProvider};
 pub use console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, DefaultChatCommands};

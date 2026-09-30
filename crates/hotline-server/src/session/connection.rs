@@ -21,6 +21,7 @@ use hotline_proto::FieldId;
 use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
 
 use crate::account::AccessExtra;
+use crate::activity::{Activity, ActivityEntry};
 use crate::banner::BannerKind;
 use crate::error::{Result, ServerError};
 use crate::flood::{FloodDecision, FloodEvent};
@@ -527,11 +528,15 @@ impl Session {
             ));
         }
 
-        // A name plus non-zero icon in Login, or a pre-150 client, joins right away.
+        // A named login with an icon, or a pre-150 client, joins right away.
         let icon = tx.icon().unwrap_or(0);
         let name = tx.name(encoding);
-        if (name.is_some() && icon != 0) || !modern {
+        let named = name.as_deref().is_some_and(|name| !name.is_empty()) && icon != 0;
+        if named || !modern {
             let selfinfo = self.complete_join(name, icon, state).await;
+            if named {
+                self.record_activity(Activity::Connect, state).await;
+            }
             replies.push(selfinfo);
             if let Some(banner) = self.banner_push(state).await {
                 replies.push(banner);
@@ -571,6 +576,7 @@ impl Session {
         let encoding = self.encoding();
         let name = tx.name(encoding);
         let selfinfo = self.complete_join(name, icon, state).await;
+        self.record_activity(Activity::Connect, state).await;
         let mut replies = vec![tx.reply(vec![]), selfinfo];
         if let Some(banner) = self.banner_push(state).await {
             replies.push(banner);
@@ -638,6 +644,18 @@ impl Session {
                 ),
             ],
         )
+    }
+
+    /// Report `activity` by this session to the activity log.
+    pub(super) async fn record_activity(&self, activity: Activity, state: &SharedState) {
+        state
+            .record_activity(ActivityEntry {
+                address: self.remote_addr.ip(),
+                login: self.login.clone(),
+                name: self.name.clone(),
+                activity,
+            })
+            .await;
     }
 
     async fn on_set_client_user_info(
@@ -936,6 +954,69 @@ mod tests {
         assert_eq!(joiner.name, "Alice");
         assert_eq!(joiner.icon, 42);
         assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn login_records_the_connect() {
+        let mut session = test_session("guest1", Access::default());
+        let (state, log) = state_recording_activity(Default::default());
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
+            ],
+        );
+        session
+            .on_login(&login, &state, &ServerConfig::default())
+            .await;
+        assert_eq!(log.activities(), [Activity::Connect]);
+    }
+
+    #[tokio::test]
+    async fn login_without_a_name_and_icon_records_no_connect() {
+        let mut session = test_session("guest1", Access::default());
+        let (state, log) = state_recording_activity(Default::default());
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![Field::string(FieldId::UserName, "Alice")],
+        );
+        session
+            .on_login(&login, &state, &ServerConfig::default())
+            .await;
+        assert_eq!(log.activities(), []);
+    }
+
+    #[tokio::test]
+    async fn login_with_an_empty_name_defers_join_and_records_no_connect() {
+        let mut session = test_session("guest1", Access::default());
+        let (state, log) = state_recording_activity(Default::default());
+        session.state = SessionState::Agreement;
+        let login = Transaction::request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::u16(FieldId::Vers, 151),
+                Field::string(FieldId::UserName, ""),
+                Field::u16(FieldId::UserIconID, 42),
+            ],
+        );
+        session
+            .on_login(&login, &state, &ServerConfig::default())
+            .await;
+        assert!(matches!(session.state, SessionState::Agreement));
+        assert_eq!(log.activities(), []);
+    }
+
+    #[tokio::test]
+    async fn agreed_records_the_connect() {
+        let mut session = test_session("guest1", Access::default());
+        let (state, log) = state_recording_activity(Default::default());
+        let agreed = Transaction::request(Opcode::Agreed, 1, vec![]);
+        session.on_agreed(&agreed, &state).await;
+        assert_eq!(log.activities(), [Activity::Connect]);
     }
 
     #[tokio::test]

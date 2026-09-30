@@ -17,6 +17,7 @@ use hotline_proto::types::{
 use hotline_proto::{Field, FieldId, Transaction};
 
 use crate::account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
+use crate::activity::{ActivityEntry, ActivityLog, NoActivityLog};
 use crate::ban::{BanProvider, BanRecord, InMemoryBanProvider, TEMP_BAN_DURATION};
 use crate::banner::{BannerKind, BannerProvider, NoBanner};
 use crate::console::fields::{
@@ -81,6 +82,8 @@ pub struct SharedState {
     download_queue: Arc<DownloadQueue>,
     /// Console command dispatch; see [`crate::ChatCommandDispatcher`].
     commands: Arc<dyn ChatCommandDispatcher>,
+    /// Activity reports; see [`crate::ActivityLog`].
+    activity: Arc<dyn ActivityLog>,
 }
 
 impl Default for SharedState {
@@ -95,6 +98,7 @@ impl Default for SharedState {
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),
             commands: Arc::new(DefaultChatCommands),
+            activity: Arc::new(NoActivityLog),
         })
     }
 }
@@ -119,7 +123,13 @@ impl SharedState {
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
             download_queue: Arc::new(DownloadQueue::default()),
             commands: providers.commands,
+            activity: providers.activity,
         }
+    }
+
+    /// Report `entry` to the activity log.
+    pub async fn record_activity(&self, entry: ActivityEntry) {
+        self.activity.record(entry).await;
     }
 
     /// Set the download limits. A `0` falls back to its default.
@@ -1443,6 +1453,7 @@ mod tests {
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),
             commands: Arc::new(crate::console::DefaultChatCommands),
+            activity: Arc::new(crate::activity::NoActivityLog),
         });
 
         state.post_news("alice", "hello").await;
@@ -1472,6 +1483,7 @@ mod tests {
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),
             commands: Arc::new(crate::console::DefaultChatCommands),
+            activity: Arc::new(crate::activity::NoActivityLog),
         });
 
         assert!(other.news().await.contains("hello"));
@@ -1593,6 +1605,7 @@ mod tests {
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),
             commands: Arc::new(crate::console::DefaultChatCommands),
+            activity: Arc::new(crate::activity::NoActivityLog),
         });
 
         let requester = FileRequester { login: "alice" };
@@ -1619,6 +1632,7 @@ mod tests {
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),
             commands: Arc::new(crate::console::DefaultChatCommands),
+            activity: Arc::new(crate::activity::NoActivityLog),
         })
     }
 
@@ -1666,6 +1680,7 @@ mod tests {
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),
             commands: Arc::new(crate::console::DefaultChatCommands),
+            activity: Arc::new(crate::activity::NoActivityLog),
         });
         let requester = FileRequester { login: "alice" };
 

@@ -8,6 +8,7 @@ use hotline_proto::FieldId;
 use hotline_proto::{Field, FieldList, Transaction};
 
 use crate::account::{AccessExtra, Account};
+use crate::activity::{AccountAction, Activity};
 use crate::state::SharedState;
 
 use super::connection::Session;
@@ -24,7 +25,8 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
-        self.on_new_or_set_user(tx, state).await
+        self.on_new_or_set_user(tx, AccountAction::Create, state)
+            .await
     }
 
     /// [`myTran_DeleteUser`] (351)
@@ -47,7 +49,20 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         Self::disconnect_account_sessions(&login, state).await;
+        self.record_account_change(AccountAction::Delete, login, state)
+            .await;
         vec![tx.reply(vec![])]
+    }
+
+    /// Report an account change to the activity log.
+    async fn record_account_change(
+        &self,
+        action: AccountAction,
+        account: String,
+        state: &SharedState,
+    ) {
+        self.record_activity(Activity::AccountChange { action, account }, state)
+            .await;
     }
 
     /// Disconnect every session currently logged in under `login`, with
@@ -108,7 +123,8 @@ impl Session {
         if let Err(reason) = self.access.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
-        self.on_new_or_set_user(tx, state).await
+        self.on_new_or_set_user(tx, AccountAction::Modify, state)
+            .await
     }
 
     /// Implementation for
@@ -120,6 +136,7 @@ impl Session {
     pub(super) async fn on_new_or_set_user(
         &self,
         tx: &Transaction,
+        action: AccountAction,
         state: &SharedState,
     ) -> Vec<Transaction> {
         let encoding = self.encoding();
@@ -162,7 +179,8 @@ impl Session {
         let reply = match result {
             Ok(()) => {
                 let name = (!name.is_empty()).then_some(name);
-                state.push_access_update(login, access, name).await;
+                state.push_access_update(login.clone(), access, name).await;
+                self.record_account_change(action, login, state).await;
                 tx.reply(vec![])
             }
             Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
@@ -305,6 +323,8 @@ impl Session {
             return match state.delete_account(&old_login).await {
                 Ok(()) => {
                     Self::disconnect_account_sessions(&old_login, state).await;
+                    self.record_account_change(AccountAction::Delete, old_login, state)
+                        .await;
                     Ok(true)
                 }
                 Err(_) => Ok(false),
@@ -334,7 +354,8 @@ impl Session {
             // Modify (and rename, if the login changed).
             self.access.require(Access::MODIFY_USER)?;
             let existing = state.account(&old_login).await;
-            if !old_login.eq_ignore_ascii_case(&login) {
+            let renamed = !old_login.eq_ignore_ascii_case(&login);
+            if renamed {
                 let _ = state.delete_account(&old_login).await;
             }
             let access_extra = existing
@@ -349,7 +370,14 @@ impl Session {
             return match state.put_account(login.clone(), account).await {
                 Ok(()) => {
                     let name = (!name.is_empty()).then_some(name);
-                    state.push_access_update(login, access, name).await;
+                    state.push_access_update(login.clone(), access, name).await;
+                    if renamed {
+                        let action = AccountAction::Rename { from: old_login };
+                        self.record_account_change(action, login.clone(), state)
+                            .await;
+                    }
+                    self.record_account_change(AccountAction::Modify, login, state)
+                        .await;
                     Ok(true)
                 }
                 Err(_) => Ok(false),
@@ -385,8 +413,12 @@ impl Session {
             access,
             access_extra: AccessExtra::default(),
         };
-        match state.put_account(login, account).await {
-            Ok(()) => Ok(true),
+        match state.put_account(login.clone(), account).await {
+            Ok(()) => {
+                self.record_account_change(AccountAction::Create, login, state)
+                    .await;
+                Ok(true)
+            }
             Err(_) => Ok(false),
         }
     }
@@ -994,6 +1026,76 @@ mod tests {
         let renamed = state.account("bobby").await.unwrap();
         assert_eq!(renamed.name, "Bobby");
         assert_eq!(renamed.password, "secret");
+    }
+
+    #[tokio::test]
+    async fn account_changes_are_recorded_after_they_succeed() {
+        let session = test_session("Admin", Access::all());
+        let (state, log) = state_recording_activity(Default::default());
+        let login = |login: &str| vec![Field::obfuscated_string(FieldId::UserLogin, login)];
+
+        let create = Transaction::request(Opcode::NewUser, 1, login("bob"));
+        session.on_new_user(&create, &state).await;
+        let modify = Transaction::request(Opcode::SetUser, 2, login("bob"));
+        session.on_set_user(&modify, &state).await;
+        let delete = Transaction::request(Opcode::DeleteUser, 3, login("bob"));
+        session.on_delete_user(&delete, &state).await;
+        let missing = Transaction::request(Opcode::DeleteUser, 4, login("bob"));
+        session.on_delete_user(&missing, &state).await;
+
+        let change = |action, account: &str| Activity::AccountChange {
+            action,
+            account: account.to_string(),
+        };
+        assert_eq!(
+            log.activities(),
+            [
+                change(AccountAction::Create, "bob"),
+                change(AccountAction::Modify, "bob"),
+                change(AccountAction::Delete, "bob"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn set_user_list_records_a_rename_then_a_modify() {
+        let session = test_session("Admin", Access::all());
+        let (state, log) = state_recording_activity(Default::default());
+        state
+            .put_account(
+                "bob".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "secret".to_string(),
+                    name: "Bob".to_string(),
+                    access: Access::SEND_CHAT,
+                },
+            )
+            .await
+            .unwrap();
+
+        let record = user_list_record(
+            Some("bob"),
+            "Bobby",
+            "bobby",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::SEND_CHAT,
+        );
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
+        session.on_set_user_list(&request, &state).await;
+
+        let change = |action| Activity::AccountChange {
+            action,
+            account: "bobby".to_string(),
+        };
+        let from = "bob".to_string();
+        assert_eq!(
+            log.activities(),
+            [
+                change(AccountAction::Rename { from }),
+                change(AccountAction::Modify),
+            ]
+        );
     }
 
     #[tokio::test]

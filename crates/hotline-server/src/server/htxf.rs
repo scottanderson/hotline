@@ -524,6 +524,7 @@ mod tests {
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),
             commands: Arc::new(crate::console::DefaultChatCommands),
+            activity: Arc::new(crate::activity::NoActivityLog),
         })
     }
 

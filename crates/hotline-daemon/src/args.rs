@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 use hotline_server::{
     DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS, DEFAULT_MAX_DOWNLOADS,
@@ -73,6 +75,22 @@ pub struct Args {
     /// the default).
     #[arg(long, default_value_t = DEFAULT_MAX_DOWNLOADS_PER_CLIENT)]
     pub max_downloads_per_client: usize,
+
+    /// File to log each download to (unset logs nothing).
+    #[arg(long)]
+    pub download_log: Option<PathBuf>,
+
+    /// File to log each upload to (unset logs nothing).
+    #[arg(long)]
+    pub upload_log: Option<PathBuf>,
+
+    /// File to log each completed login to (unset logs nothing).
+    #[arg(long)]
+    pub connect_log: Option<PathBuf>,
+
+    /// File to log each account change to (unset logs nothing).
+    #[arg(long)]
+    pub account_log: Option<PathBuf>,
 
     /// Tracker to register with, as `[password@]host[:port]`, repeatable.
     /// The port defaults to 5499. Unset disables registration.

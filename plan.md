@@ -65,6 +65,13 @@ below, in priority order.
   (mhxd's `can_spam`) exempts an account; openline has no exemption.
   The connection flood check counts every accepted socket. openline
   counts a connection only after its handshake.
+- **Activity logs use a different date and line format.** openline
+  writes the Mac short date and `\r` line endings in the classic Mac
+  text encoding. `hls` writes `YYYY-MM-DD HH:MM:SS` in local time with
+  `\n` line endings in UTF-8. It also replaces a tab or control
+  character in any column with a space, so a name or a file name cannot
+  add a column or a line. openline writes each line before it replies;
+  `hls` queues the line for a writer task.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -138,10 +145,7 @@ one-shared-room model.
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
 
-7. **No activity log.** openline logs downloads, uploads, connections,
-   and account changes, each behind its own option (`myOpt_Log*`).
-
-8. **No HTTP tunnel listeners.** openline also listens on the base port
+7. **No HTTP tunnel listeners.** openline also listens on the base port
    plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
    The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
    `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -149,19 +153,20 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-9. **Small cleanups found in review.** The `*b"fldr"` check repeats
+8. **Small cleanups found in review.** The `*b"fldr"` check repeats
    across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
    helper would fit. `start_folder_upload` repeats
    `authorize_upload`'s destination rule. `prepare_folder_upload_item`
    ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
-   `login`, `dir`, and `name`.
+   `login`, `dir`, and `name`. About 12 tests build a full `Providers`
+   by hand; a fixture builder would let a new provider touch one place.
 
-10. **`hlc` covers only chat and lists.** It logs in, shows the
-    agreement, chats in public, and lists users, files, and tracker
-    servers. It cannot transfer files or folders, read or post classic or
-    threaded news, send private messages, use private chat rooms, get
-    user info, administer accounts, or show the banner. Each area can be
-    its own task.
+9. **`hlc` covers only chat and lists.** It logs in, shows the
+   agreement, chats in public, and lists users, files, and tracker
+   servers. It cannot transfer files or folders, read or post classic or
+   threaded news, send private messages, use private chat rooms, get
+   user info, administer accounts, or show the banner. Each area can be
+   its own task.
 
 ## Resolved
 
@@ -627,6 +632,19 @@ one-shared-room model.
 
 80. `hls --max-downloads` and `--max-downloads-per-client` set
     `ServerConfig`'s download limits, defaulting to openline's 100 and 10.
+
+81. An `ActivityLog` provider receives openline's four activity logs:
+    a completed login, a download, an upload, and an account change
+    (create, delete, modify, or rename). Each entry is recorded where
+    openline records it: after the change succeeds, not for an empty
+    folder download, and for an empty folder upload. A rename through
+    `myTran_SetUserList` (349) records "Rename" and then "Modify", like
+    openline. `hls --download-log`, `--upload-log`, `--connect-log`,
+    and `--account-log` each append openline's tab-separated columns to
+    a file, with openline's header first. `hls` checks each path at
+    startup.
+    A connect is recorded at `myTran_Login` (107) only with a name and
+    an icon, and always at `myTran_Agreed` (121).
 
 ## Needs manual verification against the real client
 
