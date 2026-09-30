@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -229,6 +230,13 @@ impl SharedState {
     /// Drop a recipient's channel on disconnect.
     pub async fn remove_recipient(&self, user_id: u16) {
         self.recipients.write().await.remove(&user_id);
+    }
+
+    /// Resolves once `user_id`'s session drops its inbound channel. `None`
+    /// if it has already gone.
+    pub(crate) async fn session_ended(&self, user_id: u16) -> Option<impl Future<Output = ()>> {
+        let sender = self.recipients.read().await.get(&user_id)?.clone();
+        Some(async move { sender.closed().await })
     }
 
     /// How many recipients are registered.
@@ -936,6 +944,7 @@ impl SharedState {
     pub async fn start_banner_transfer(
         &self,
         client_ip: IpAddr,
+        user_id: u16,
     ) -> Result<(u64, TransferRef), &'static str> {
         match self.banner.kind().await {
             Some(BannerKind::Image { .. }) => {}
@@ -953,6 +962,7 @@ impl SharedState {
                 size,
                 resume_offset: 0,
                 client_ip,
+                user_id,
             })
             .await;
         Ok((size, reference))
@@ -1692,6 +1702,7 @@ mod tests {
             size: 0,
             resume_offset: 0,
             client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
         };
 
         let ref_a = state.register_transfer(make()).await;
@@ -1720,6 +1731,7 @@ mod tests {
                 size: 0,
                 resume_offset: 0,
                 client_ip: "127.0.0.1".parse().unwrap(),
+                user_id: 1,
             })
             .await;
 
@@ -1747,6 +1759,7 @@ mod tests {
             size: 0,
             resume_offset: 0,
             client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
         };
 
         let abandoned = state.register_transfer(make()).await;
@@ -1787,6 +1800,7 @@ mod tests {
             size: 0,
             resume_offset: 0,
             client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
         };
         let first = state.register_transfer(make()).await;
         assert_eq!(state.admit_download(first, 1).await, 0);

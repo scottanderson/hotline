@@ -31,15 +31,16 @@ below, in priority order.
   `KICK_DRAIN_TIMEOUT` (3 seconds) so the client can display the
   `myTran_DisconnectMsg` (111) notice, then closes regardless.
 - **Folder transfer drops some of openline's safeguards.** No
-  disk-space check before a `myTran_UploadFldr` (213), no 2-minute idle
-  kill once a folder upload's connection is open, and no skip for an
-  item whose path is too long for openline's fixed 1024-byte buffer.
+  disk-space check before a `myTran_UploadFldr` (213), and no skip for
+  an item whose path is too long for openline's fixed 1024-byte buffer.
   A folder download also skips a symlinked folder in `hls`; openline
   resolves aliases and skips only one that loops back to an ancestor.
-- **A running upload outlives its client.** openline's `ProcessUploads`
-  and `ProcessFldrUploads` abort an upload, file or folder, once its
-  client disconnects. Here only downloads have a cancel token, so an
-  open upload connection keeps writing until it closes.
+- **Any received byte restarts a folder upload's idle timer.** openline's
+  `ProcessFldrUploads` restarts it only while file data arrives, not
+  while item headers do.
+- **An `HTXF` connection must send its header within 60 seconds.**
+  openline has no such timer. Without it, silent sockets on the transfer
+  port, which the connection limits do not cover, stayed open forever.
 - **Connection limits count from accept.** openline counts a
   connection against `nMaxConnectionsIP` only after its handshake, and
   it closes an over-limit connection after it accepts the handshake.
@@ -129,12 +130,7 @@ one-shared-room model.
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
 
-7. **The download queue does not watch the `HTXF` socket.** A queued
-   download that closes its connection keeps its place until it is
-   promoted. A disconnect frees an active slot, but the transfer keeps
-   running, so the active count can pass `max_downloads` for a while.
-
-8. **Flood control does not ban.** openline adds a 30-minute temporary
+7. **Flood control does not ban.** openline adds a 30-minute temporary
    ban for each of these: more than 10 consecutive connections from one
    address within 30 seconds, more than 120 transactions in a minute,
    five identical private messages, more than 20 messages in a minute,
@@ -143,14 +139,14 @@ one-shared-room model.
    only disconnects, from one points policy with fixed thresholds
    (`FloodConfig::default()`).
 
-9. **`hls` cannot set the download limits.** `ServerConfig` has
+8. **`hls` cannot set the download limits.** `ServerConfig` has
    `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
    for them.
 
-10. **No activity log.** openline logs downloads, uploads, connections,
-    and account changes, each behind its own option (`myOpt_Log*`).
+9. **No activity log.** openline logs downloads, uploads, connections,
+   and account changes, each behind its own option (`myOpt_Log*`).
 
-11. **No HTTP tunnel listeners.** openline also listens on the base port
+10. **No HTTP tunnel listeners.** openline also listens on the base port
     plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
     The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
     `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -158,14 +154,14 @@ one-shared-room model.
     padding. `HLProtocol.md` does not document it and mhxd does not
     implement it, so no client is at hand to test against.
 
-12. **Small cleanups found in review.** The `*b"fldr"` check repeats
+11. **Small cleanups found in review.** The `*b"fldr"` check repeats
     across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
     helper would fit. `start_folder_upload` repeats
     `authorize_upload`'s destination rule. `prepare_folder_upload_item`
     ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
     `login`, `dir`, and `name`.
 
-13. **`hlc` covers only chat and lists.** It logs in, shows the
+12. **`hlc` covers only chat and lists.** It logs in, shows the
     agreement, chats in public, and lists users, files, and tracker
     servers. It cannot transfer files or folders, read or post classic or
     threaded news, send private messages, use private chat rooms, get
@@ -601,6 +597,16 @@ one-shared-room model.
 76. A connection that has not logged in 60 seconds after accept now
     closes (`ServerConfig::login_timeout`). The deadline covers the
     handshake too, which had no timeout before.
+
+77. Transfers no longer outlive their client. `PendingTransfer` records
+    its session's `user_id`. A file or folder upload stops when that
+    session ends, and an upload whose session has already ended is
+    refused, like openline's `!mClientList.IsInList` check in
+    `ProcessUploads`/`ProcessFldrUploads`. An upload also stops after
+    120 seconds with no byte received, like openline. A queued download
+    whose `HTXF` connection closes now leaves the queue at once, like
+    `ProcessDownloadsWaiting`. A new `HTXF` connection must send its
+    header within 60 seconds.
 
 ## Needs manual verification against the real client
 

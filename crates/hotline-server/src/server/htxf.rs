@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -10,10 +11,17 @@ use hotline_proto::types::{self, HlPath};
 
 use crate::error::Result;
 use crate::file::FileRequester;
+use crate::server::idle_stream::IdleStream;
 use crate::state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
     TransferRef, TransferTarget,
 };
+
+/// Time a new `HTXF` connection may take to send its header.
+const HEADER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Time an upload may go without receiving a byte, openline's 120 s.
+const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Accept `HTXF` data connections forever, spawning one task per
 /// connection. Each connection completes exactly one pending transfer,
@@ -44,7 +52,12 @@ async fn handle_htxf_connection(
     state: &SharedState,
 ) -> Result<()> {
     let mut header_buf = [0u8; 16];
-    stream.read_exact(&mut header_buf).await?;
+    let Ok(read) = tokio::time::timeout(HEADER_TIMEOUT, stream.read_exact(&mut header_buf)).await
+    else {
+        tracing::debug!(%peer, "htxf: header timed out");
+        return Ok(());
+    };
+    read?;
     let header = HtxfHeader::decode(&header_buf)?;
 
     let reference = TransferRef(header.reference);
@@ -58,6 +71,12 @@ async fn handle_htxf_connection(
         return Ok(());
     }
 
+    if transfer.direction == TransferDirection::Get
+        && !matches!(transfer.kind, TransferKind::Banner)
+        && !wait_for_slot_or_close(&stream, state, reference).await
+    {
+        return Ok(());
+    }
     match &transfer.kind {
         TransferKind::Banner => send_banner(&mut stream, state).await,
         TransferKind::File(file) => match transfer.direction {
@@ -65,20 +84,66 @@ async fn handle_htxf_connection(
                 let send = send_file(&mut stream, file, &transfer, state);
                 run_download(state, reference, send).await
             }
-            TransferDirection::Put => receive_file(&mut stream, file, &transfer, state).await,
+            TransferDirection::Put => {
+                let mut stream = IdleStream::new(&mut stream, UPLOAD_IDLE_TIMEOUT);
+                let receive = receive_file(&mut stream, file, &transfer, state);
+                run_upload(state, transfer.user_id, receive).await
+            }
         },
         TransferKind::Folder(folder) => match transfer.direction {
             TransferDirection::Get => {
                 let send = send_folder(&mut stream, folder, state);
                 run_download(state, reference, send).await
             }
-            TransferDirection::Put => receive_folder(&mut stream, folder, state).await,
+            TransferDirection::Put => {
+                let mut stream = IdleStream::new(&mut stream, UPLOAD_IDLE_TIMEOUT);
+                let receive = receive_folder(&mut stream, folder, state);
+                run_upload(state, transfer.user_id, receive).await
+            }
         },
     }
 }
 
-/// Run `send` once download `reference` holds a slot, then free the slot.
-/// A [`myTran_KillDownload`] (214) stops it early.
+/// `false` if download `reference` leaves the queue or `stream` closes
+/// before it holds a slot.
+async fn wait_for_slot_or_close(
+    stream: &TcpStream,
+    state: &SharedState,
+    reference: TransferRef,
+) -> bool {
+    let closed = async {
+        let mut probe = [0u8; 1];
+        if let Ok(1..) = stream.peek(&mut probe).await {
+            // Early data is not a close; keep waiting for the slot alone.
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::select! {
+        granted = state.wait_for_download_slot(reference) => granted,
+        () = closed => {
+            state.release_download_slot(reference).await;
+            false
+        }
+    }
+}
+
+/// Run `receive` until it ends or its owner's session ends.
+async fn run_upload(
+    state: &SharedState,
+    user_id: u16,
+    receive: impl Future<Output = Result<()>>,
+) -> Result<()> {
+    let Some(session_ended) = state.session_ended(user_id).await else {
+        return Ok(());
+    };
+    tokio::select! {
+        result = receive => result,
+        () = session_ended => Ok(()),
+    }
+}
+
+/// Run `send` for download `reference`, which holds a slot, then free
+/// the slot. A [`myTran_KillDownload`] (214) stops it early.
 ///
 /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
 async fn run_download(
@@ -89,9 +154,6 @@ async fn run_download(
     let Some(cancel) = state.download_cancel_token(reference) else {
         return Ok(());
     };
-    if !state.wait_for_download_slot(reference).await {
-        return Ok(());
-    }
     let result = tokio::select! {
         result = send => result,
         () = cancel.cancelled() => Ok(()),
@@ -186,7 +248,7 @@ async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result
 ///
 /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
 async fn receive_file(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     file: &FileTransfer,
     transfer: &PendingTransfer,
     state: &SharedState,
@@ -209,7 +271,7 @@ async fn receive_file(
 /// Read one flattened file object, writing its `DATA` fork to `out` and
 /// discarding any other fork.
 async fn receive_flat_file(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + Unpin),
     out: &mut (impl AsyncWrite + Unpin),
 ) -> Result<()> {
     let mut prefix = [0u8; htxf::FLAT_FILE_PREFIX_LEN];
@@ -305,7 +367,7 @@ async fn send_folder(
 ///
 /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
 async fn receive_folder(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     folder: &FolderTransfer,
     state: &SharedState,
 ) -> Result<()> {
@@ -343,7 +405,7 @@ async fn receive_folder(
 /// [`SharedState::prepare_folder_upload_item`] skips the item. `true`
 /// once a file's data is received.
 async fn receive_folder_item(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     requester: FileRequester<'_>,
     dir: &HlPath,
     name: &str,
@@ -399,7 +461,7 @@ fn split_item_path<'a>(root: &[String], path: &'a HlPath) -> Option<(HlPath, &'a
 }
 
 /// The next [`FolderAction`], or `None` once the client closes.
-async fn read_folder_action(stream: &mut TcpStream) -> Result<Option<FolderAction>> {
+async fn read_folder_action(stream: &mut (impl AsyncRead + Unpin)) -> Result<Option<FolderAction>> {
     let mut buf = [0u8; 2];
     match stream.read_exact(&mut buf).await {
         Ok(_) => Ok(Some(FolderAction::from(u16::from_be_bytes(buf)))),
@@ -409,20 +471,23 @@ async fn read_folder_action(stream: &mut TcpStream) -> Result<Option<FolderActio
 }
 
 /// Send one [`FolderAction`].
-async fn write_folder_action(stream: &mut TcpStream, action: FolderAction) -> Result<()> {
+async fn write_folder_action(
+    stream: &mut (impl AsyncWrite + Unpin),
+    action: FolderAction,
+) -> Result<()> {
     stream.write_all(&u16::from(action).to_be_bytes()).await?;
     Ok(())
 }
 
 /// A `ResumeFile` action's `size(2) | resume data`, as the byte count the
 /// client already has.
-async fn read_resume_data(stream: &mut TcpStream) -> Result<u32> {
+async fn read_resume_data(stream: &mut (impl AsyncRead + Unpin)) -> Result<u32> {
     let buf = read_u16_prefixed(stream).await?;
     Ok(types::decode_resume_data(&buf)?)
 }
 
 /// Read a `len(2)` prefix, then that many bytes.
-async fn read_u16_prefixed(stream: &mut TcpStream) -> Result<Vec<u8>> {
+async fn read_u16_prefixed(stream: &mut (impl AsyncRead + Unpin)) -> Result<Vec<u8>> {
     let mut len = [0u8; 2];
     stream.read_exact(&mut len).await?;
     let mut buf = vec![0u8; u16::from_be_bytes(len) as usize];
@@ -483,6 +548,7 @@ mod tests {
             size: 11,
             resume_offset: 0,
             client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -533,6 +599,7 @@ mod tests {
             size: 11,
             resume_offset: 6,
             client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -587,6 +654,7 @@ mod tests {
                 size: 5,
                 resume_offset: 0,
                 client_ip: "10.0.0.1".parse().unwrap(),
+                user_id: 1,
             })
             .await;
         assert_eq!(state.admit_download(held, 1).await, 0);
@@ -622,9 +690,147 @@ mod tests {
                 size: 5,
                 resume_offset: 0,
                 client_ip: "127.0.0.1".parse().unwrap(),
+                user_id: 2,
             })
             .await;
         assert_eq!(state.admit_download(second, 2).await, 0);
+    }
+
+    /// A transfer of `a.txt` in the root folder, from loopback.
+    fn a_txt_transfer(direction: TransferDirection, user_id: u16) -> PendingTransfer {
+        PendingTransfer {
+            kind: TransferKind::File(FileTransfer {
+                target: TransferTarget {
+                    login: "alice".to_string(),
+                    dir: HlPath::default(),
+                    name: "a.txt".to_string(),
+                },
+                raw: direction == TransferDirection::Get,
+            }),
+            direction,
+            size: 11,
+            resume_offset: 0,
+            client_ip: "127.0.0.1".parse().unwrap(),
+            user_id,
+        }
+    }
+
+    /// Connect over loopback and send `reference`'s `HTXF` header. Returns
+    /// the client, the server's side, and the client's address.
+    async fn connect_htxf(reference: TransferRef) -> (TcpStream, TcpStream, SocketAddr) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server_stream, peer) = listener.accept().await.unwrap();
+        let header = HtxfHeader {
+            reference: reference.0,
+            len: 0,
+            transfer_type: HtxfType::File,
+        };
+        client.write_all(&header.encode()).await.unwrap();
+        (client, server_stream, peer)
+    }
+
+    #[tokio::test]
+    async fn an_upload_stops_when_its_session_ends() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let session = state.register_recipient(1).await;
+        let reference = state
+            .register_transfer(a_txt_transfer(TransferDirection::Put, 1))
+            .await;
+        let (mut client, server_stream, peer) = connect_htxf(reference).await;
+        let full = htxf::encode_flat_file(b"hello world");
+        client.write_all(&full[..full.len() - 1]).await.unwrap();
+
+        drop(session);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle_htxf_connection(server_stream, peer, &state),
+        )
+        .await;
+
+        assert!(result.expect("the upload should stop").is_ok());
+        let requester = FileRequester { login: "alice" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn an_upload_whose_session_has_ended_is_refused() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let reference = state
+            .register_transfer(a_txt_transfer(TransferDirection::Put, 1))
+            .await;
+        let (mut client, server_stream, peer) = connect_htxf(reference).await;
+        client
+            .write_all(&htxf::encode_flat_file(b"hello world"))
+            .await
+            .unwrap();
+
+        handle_htxf_connection(server_stream, peer, &state)
+            .await
+            .unwrap();
+
+        let requester = FileRequester { login: "alice" };
+        let root = HlPath::default();
+        assert!(!state.file_exists(requester, &root, "a.txt").await);
+        assert!(!state.file_exists(requester, &root, "a.txt.hpf").await);
+    }
+
+    #[tokio::test]
+    async fn a_queued_download_leaves_the_queue_when_its_client_closes() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello world");
+        let state = state_with_files(files);
+        state.set_download_limits(1, 10);
+        let held = state
+            .register_transfer(a_txt_transfer(TransferDirection::Get, 1))
+            .await;
+        assert_eq!(state.admit_download(held, 1).await, 0);
+        let queued = state
+            .register_transfer(a_txt_transfer(TransferDirection::Get, 2))
+            .await;
+        assert_eq!(state.admit_download(queued, 2).await, 1);
+        let (client, server_stream, peer) = connect_htxf(queued).await;
+
+        drop(client);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle_htxf_connection(server_stream, peer, &state),
+        )
+        .await
+        .expect("the wait should end")
+        .unwrap();
+
+        // Only `held` is ahead of a new download now.
+        let third = state
+            .register_transfer(a_txt_transfer(TransferDirection::Get, 3))
+            .await;
+        assert_eq!(state.admit_download(third, 3).await, 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_that_sends_no_header_is_closed() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server_stream, peer) = listener.accept().await.unwrap();
+
+        tokio::time::timeout(
+            HEADER_TIMEOUT * 2,
+            handle_htxf_connection(server_stream, peer, &state),
+        )
+        .await
+        .expect("the header wait should time out")
+        .unwrap();
+        drop(client);
     }
 
     /// Register `folder`, connect to it over loopback, and send the
@@ -641,6 +847,7 @@ mod tests {
                 size: 0,
                 resume_offset: 0,
                 client_ip: "127.0.0.1".parse().unwrap(),
+                user_id: 1,
             })
             .await;
         if direction == TransferDirection::Get {
@@ -651,11 +858,14 @@ mod tests {
             .await
             .unwrap();
         let (server_stream, peer) = listener.accept().await.unwrap();
+        // User 1's session stays open for the whole transfer.
+        let session = state.register_recipient(1).await;
         let state = state.clone();
         let server = tokio::spawn(async move {
             handle_htxf_connection(server_stream, peer, &state)
                 .await
                 .unwrap();
+            drop(session);
         });
         let header = HtxfHeader {
             reference: reference.0,

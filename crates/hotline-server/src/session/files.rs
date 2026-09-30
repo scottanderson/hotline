@@ -192,6 +192,7 @@ impl Session {
                 size,
                 resume_offset,
                 client_ip: self.remote_addr.ip(),
+                user_id: self.user_id,
             })
             .await;
         let waiting_count = state.admit_download(reference, self.user_id).await;
@@ -217,7 +218,10 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::BANNER_GET) {
             return vec![tx.reply_error(reason)];
         }
-        let (size, reference) = match state.start_banner_transfer(self.remote_addr.ip()).await {
+        let (size, reference) = match state
+            .start_banner_transfer(self.remote_addr.ip(), self.user_id)
+            .await
+        {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -278,6 +282,7 @@ impl Session {
                 size: size as u64,
                 resume_offset,
                 client_ip: self.remote_addr.ip(),
+                user_id: self.user_id,
             })
             .await;
 
@@ -397,6 +402,7 @@ impl Session {
                 size: size as u64,
                 resume_offset: 0,
                 client_ip: self.remote_addr.ip(),
+                user_id: self.user_id,
             })
             .await;
         vec![tx.reply(vec![Field::u32(FieldId::RefNum, reference.0)])]

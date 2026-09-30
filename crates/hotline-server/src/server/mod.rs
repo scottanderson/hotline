@@ -1,6 +1,7 @@
 mod config;
 mod connections;
 mod htxf;
+mod idle_stream;
 mod instance;
 
 pub use config::{

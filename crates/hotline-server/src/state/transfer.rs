@@ -56,4 +56,6 @@ pub struct PendingTransfer {
     /// The control connection's remote address; the data connection must
     /// arrive from the same IP or the transfer is refused.
     pub client_ip: IpAddr,
+    /// The session that asked for this transfer.
+    pub user_id: u16,
 }
