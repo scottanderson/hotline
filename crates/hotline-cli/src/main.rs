@@ -26,7 +26,7 @@ use ratatui::Terminal;
 use args::Args;
 use hotline_client::HotlineClient;
 use session::{ClientSession, EventOutcome, Mode};
-use view::{Action, View};
+use view::{Action, Modal, View};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -120,7 +120,7 @@ async fn run(
                     }
                     _ => Action::None,
                 };
-                should_quit = perform(action, session, client).await;
+                should_quit = perform(action, session, &mut view, client).await;
             }
         }
         terminal.draw(|f| ui::draw(f, session, &mut view))?;
@@ -129,13 +129,26 @@ async fn run(
 }
 
 /// Run `action`. `true` means quit.
-async fn perform(action: Action, session: &mut ClientSession, client: &HotlineClient) -> bool {
+async fn perform(
+    action: Action,
+    session: &mut ClientSession,
+    view: &mut View,
+    client: &HotlineClient,
+) -> bool {
     match action {
         Action::None => {}
         Action::Quit => return true,
         Action::SendChat(text) => session.send_chat(client, &text).await,
         Action::SendInstantMsg { user_id, text } => {
             session.send_instant_msg(client, user_id, &text).await;
+        }
+        Action::GetClientInfoText(user_id) => {
+            if let Some(info) = session.get_client_info_text(client, user_id).await {
+                view.modal = Some(Modal::Info {
+                    name: info.name,
+                    text: info.text,
+                });
+            }
         }
     }
     false

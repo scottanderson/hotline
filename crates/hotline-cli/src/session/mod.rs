@@ -4,7 +4,7 @@
 mod event_outcome;
 mod mode;
 
-use hotline_client::HotlineClient;
+use hotline_client::{ClientInfoText, HotlineClient};
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::{UserFlags, UserNameWithInfo};
@@ -267,6 +267,21 @@ impl ClientSession {
         if let Err(e) = client.send_chat(&wire_text(line)).await {
             self.push(format!("failed to send: {e}"), LineKind::Error);
         }
+    }
+
+    /// [`myTran_GetClientInfoText`] (303), showing an error line if it fails.
+    ///
+    /// [`myTran_GetClientInfoText`]: hotline_proto::Opcode::GetClientInfoText
+    pub async fn get_client_info_text(
+        &mut self,
+        client: &HotlineClient,
+        user_id: u16,
+    ) -> Option<ClientInfoText> {
+        client
+            .get_client_info_text(user_id)
+            .await
+            .inspect_err(|e| self.push(format!("failed to get info: {e}"), LineKind::Error))
+            .ok()
     }
 
     pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {

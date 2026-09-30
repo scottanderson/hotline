@@ -54,13 +54,23 @@ async fn next_push(events: &mut UnboundedReceiver<Transaction>, opcode: Opcode) 
     .expect("push arrives")
 }
 
-/// Log in as `guest` under `nick` and accept the agreement.
-async fn join(addr: SocketAddr, nick: &str) -> (HotlineClient, UnboundedReceiver<Transaction>) {
+/// Log in as `login` under `nick` and accept the agreement.
+async fn join_as(
+    addr: SocketAddr,
+    login: &str,
+    password: &str,
+    nick: &str,
+) -> (HotlineClient, UnboundedReceiver<Transaction>) {
     let (client, mut events) = HotlineClient::connect(addr).await.unwrap();
-    client.login("guest", "").await.unwrap();
+    client.login(login, password).await.unwrap();
     next_push(&mut events, Opcode::ShowAgreement).await;
     client.agree(nick, 0).await.unwrap();
     (client, events)
+}
+
+/// Log in as `guest` under `nick` and accept the agreement.
+async fn join(addr: SocketAddr, nick: &str) -> (HotlineClient, UnboundedReceiver<Transaction>) {
+    join_as(addr, "guest", "", nick).await
 }
 
 async fn user_id(client: &HotlineClient, nick: &str) -> u16 {
@@ -86,5 +96,21 @@ async fn send_instant_msg_reaches_its_target() {
     assert_eq!(
         msg.string(FieldId::UserName, encoding).as_deref(),
         Some("alice")
+    );
+}
+
+#[tokio::test]
+async fn get_client_info_text_names_the_user() {
+    let addr = start_server().await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+    let (_bob, _bob_events) = join(addr, "bob").await;
+
+    let bob_id = user_id(&admin, "bob").await;
+    let info = admin.get_client_info_text(bob_id).await.unwrap();
+    assert_eq!(&*info.name, "bob");
+    assert!(
+        info.text.starts_with("Nickname:   bob\r"),
+        "{:?}",
+        info.text
     );
 }

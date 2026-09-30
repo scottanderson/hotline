@@ -269,5 +269,19 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             frame.render_stateful_widget(list, area, &mut state);
         }
+        Modal::Info { name, text } => {
+            let text = text.replace('\r', "\n");
+            let height = text.lines().count() as u16 + 2;
+            let area = centered(screen, 70, height);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title(format!("info for {name}"));
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
+                area,
+            );
+        }
     }
 }

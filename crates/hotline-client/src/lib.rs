@@ -9,9 +9,11 @@
 //! alongside the client.
 
 mod client;
+mod client_info_text;
 mod error;
 mod login_result;
 
 pub use client::HotlineClient;
+pub use client_info_text::ClientInfoText;
 pub use error::{ClientError, Result};
 pub use login_result::LoginResult;

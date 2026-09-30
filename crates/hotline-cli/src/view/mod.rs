@@ -75,7 +75,13 @@ impl View {
             (Some(Modal::UserMenu { .. }), _) => {
                 &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
             }
-            (None, Focus::Users) => &[("↑↓", "select"), ("Enter", "message"), ("Tab", "input")],
+            (Some(Modal::Info { .. }), _) => &[("Esc", "close")],
+            (None, Focus::Users) => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("Tab", "input"),
+            ],
             (None, Focus::Input) => &[
                 ("Enter", "send"),
                 ("⇧Enter", "new line"),
@@ -102,7 +108,7 @@ impl View {
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         match (&mut modal, key.code) {
             (Modal::InstantMsg { input, .. }, _) if is_new_line(key) => input.push('\n'),
-            (_, KeyCode::Esc) => return Action::None,
+            (_, KeyCode::Esc) | (Modal::Info { .. }, KeyCode::Enter) => return Action::None,
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::SendInstantMsg {
                     user_id: *user_id,
@@ -145,6 +151,11 @@ impl View {
             KeyCode::Enter => {
                 if let Some(user_id) = self.selected_user(users) {
                     return self.choose(user_id, MenuItem::SendMessage, users);
+                }
+            }
+            KeyCode::Char('i') => {
+                if let Some(user_id) = self.selected_user(users) {
+                    return self.choose(user_id, MenuItem::GetInfo, users);
                 }
             }
             _ => {}
@@ -195,6 +206,7 @@ impl View {
                         return self.choose(user_id, item, users);
                     }
                 }
+                Modal::Info { .. } => self.modal = None,
                 Modal::InstantMsg { .. } => {}
             }
             return Action::None;
@@ -253,6 +265,7 @@ impl View {
                 }
                 Action::None
             }
+            MenuItem::GetInfo => Action::GetClientInfoText(user_id),
         }
     }
 
@@ -411,6 +424,25 @@ mod tests {
         let now = Instant::now();
         let _ = view.handle_mouse(left, &areas(), &users(), now);
         let _ = view.handle_mouse(left, &areas(), &users(), now + Duration::from_secs(1));
+        assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn the_right_click_menu_gets_a_users_info() {
+        let mut view = View::default();
+        let (x, y) = user_row(0);
+        let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
+        let _ = view.handle_mouse(right, &areas(), &users(), Instant::now());
+        assert!(matches!(
+            view.modal,
+            Some(Modal::UserMenu { user_id: 1, .. })
+        ));
+
+        let _ = view.handle_key(key(KeyCode::Down), &users());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users()),
+            Action::GetClientInfoText(1)
+        );
         assert_eq!(view.modal, None);
     }
 

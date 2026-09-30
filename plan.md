@@ -146,12 +146,12 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-6. **`hlc` covers only chat, lists, and private messages.** It logs
-   in, shows the agreement, chats in public, sends private messages,
-   and lists users, files, and tracker servers. It cannot transfer
-   files or folders, read or post classic or threaded news, use private
-   chat rooms, get user info, administer accounts, or show the banner.
-   Each area can be its own task.
+6. **`hlc` covers only chat, lists, private messages, and user
+   info.** It logs in, shows the agreement, chats in public, sends
+   private messages, shows a user's info text, and lists users, files,
+   and tracker servers. It cannot transfer files or folders, read or
+   post classic or threaded news, use private chat rooms, administer
+   accounts, or show the banner. Each area can be its own task.
 
 ## Resolved
 
@@ -677,6 +677,9 @@ one-shared-room model.
     chat or a private message as its own line.
     `hotline-client/tests/server.rs` runs client requests against a
     real in-process server.
+
+89. `hlc` shows a user's `myTran_GetClientInfoText` (303) text in a box,
+    from the user menu or the `i` key, one line for each `\r`.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

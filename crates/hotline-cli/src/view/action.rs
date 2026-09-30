@@ -9,4 +9,5 @@ pub enum Action {
         user_id: u16,
         text: String,
     },
+    GetClientInfoText(u16),
 }

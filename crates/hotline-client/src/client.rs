@@ -14,6 +14,7 @@ use hotline_codec::TransactionCodec;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
 
+use crate::client_info_text::ClientInfoText;
 use crate::error::{ClientError, Result};
 use crate::login_result::LoginResult;
 
@@ -214,6 +215,29 @@ impl HotlineClient {
         let reply = self.request(Opcode::GetUserNameList, vec![]).await?;
         let encoding = self.encoding.get();
         Ok(reply.user_list_entries(encoding)?)
+    }
+
+    /// Fetch `user_id`'s info text, [`myTran_GetClientInfoText`] (303).
+    ///
+    /// [`myTran_GetClientInfoText`]: hotline_proto::Opcode::GetClientInfoText
+    pub async fn get_client_info_text(&self, user_id: u16) -> Result<ClientInfoText> {
+        let reply = self
+            .request(
+                Opcode::GetClientInfoText,
+                vec![Field::u16(FieldId::UserID, user_id)],
+            )
+            .await?;
+        let encoding = self.encoding.get();
+        Ok(ClientInfoText {
+            name: reply
+                .string(FieldId::UserName, encoding)
+                .unwrap_or_default()
+                .into(),
+            text: reply
+                .string(FieldId::Data, encoding)
+                .unwrap_or_default()
+                .into(),
+        })
     }
 
     /// Fetch the root folder's file listing, [`myTran_GetFileNameList`] (200).
