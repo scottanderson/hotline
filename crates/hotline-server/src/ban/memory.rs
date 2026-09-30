@@ -19,10 +19,7 @@ pub struct InMemoryBanProvider {
 impl BanProvider for InMemoryBanProvider {
     async fn is_banned(&self, ip: IpAddr) -> Option<BanRecord> {
         let record = self.bans.read().unwrap().get(&ip).cloned()?;
-        match record.until {
-            Some(until) if until <= SystemTime::now() => None,
-            _ => Some(record),
-        }
+        record.is_active().then_some(record)
     }
 
     async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), Cow<'static, str>> {
@@ -33,9 +30,9 @@ impl BanProvider for InMemoryBanProvider {
         Ok(())
     }
 
-    async fn unban(&self, ip: IpAddr) -> Result<(), Cow<'static, str>> {
-        self.bans.write().unwrap().remove(&ip);
-        Ok(())
+    async fn unban(&self, ip: IpAddr) -> Result<Option<BanRecord>, Cow<'static, str>> {
+        let record = self.bans.write().unwrap().remove(&ip);
+        Ok(record.filter(BanRecord::is_active))
     }
 }
 
@@ -62,8 +59,17 @@ mod tests {
             })
         );
 
-        provider.unban(addr()).await.unwrap();
+        assert!(provider.unban(addr()).await.unwrap().is_some());
         assert_eq!(provider.is_banned(addr()).await, None);
+        assert_eq!(provider.unban(addr()).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn unban_of_an_expired_ban_returns_none() {
+        let provider = InMemoryBanProvider::default();
+        let past = SystemTime::now() - Duration::from_secs(1);
+        provider.ban(addr(), Some(past)).await.unwrap();
+        assert_eq!(provider.unban(addr()).await.unwrap(), None);
     }
 
     #[tokio::test]

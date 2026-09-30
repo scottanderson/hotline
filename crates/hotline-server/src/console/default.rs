@@ -1,14 +1,16 @@
+use std::net::IpAddr;
+
 use async_trait::async_trait;
 
-use hotline_proto::consts::RequireFlags;
+use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::types::UserFlags;
 
 use crate::account::AccessExtra;
 use crate::console::{strtoul, ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::state::{SharedState, UserEntry};
 
-/// `/users`, `/access`, and `/0wn`. See the module docs for what's
-/// deliberately not ported.
+/// `/users`, `/access`, `/0wn`, and `/unban`. See the module docs for
+/// what's deliberately not ported.
 #[derive(Debug, Default)]
 pub struct DefaultChatCommands;
 
@@ -25,6 +27,7 @@ impl ChatCommandDispatcher for DefaultChatCommands {
             "users" => cmd_users(actor, state).await,
             "access" => cmd_access(args, actor, state).await,
             "0wn" => cmd_0wn(args, actor, state).await,
+            "unban" => cmd_unban(args, actor, state).await,
             _ => return None,
         };
         Some(reply)
@@ -170,12 +173,34 @@ async fn cmd_0wn(args: &str, actor: &ChatCommandActor, state: &SharedState) -> C
     }
 }
 
+/// `/unban <address>` lifts an address ban. Needs [`Access::DISCON_USER`],
+/// the privilege that bans through [`myTran_DisconnectUser`] (110).
+///
+/// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
+async fn cmd_unban(args: &str, actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+    if args.is_empty() {
+        return ConsoleReply::Silent;
+    }
+    if let Err(reason) = actor.access.require(Access::DISCON_USER) {
+        return cmd_err("unban", &reason);
+    }
+    let word = args.split(' ').next().unwrap_or_default();
+    let Ok(ip) = word.parse::<IpAddr>() else {
+        return cmd_err("unban", &format!("not an address \"{word}\""));
+    };
+    match state.unban(ip).await {
+        Ok(()) => {
+            tracing::info!(actor = %actor.login, actor_uid = actor.user_id, %ip, "console unban");
+            ConsoleReply::Silent
+        }
+        Err(reason) => cmd_err("unban", &reason),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
     use std::time::Instant;
-
-    use hotline_proto::consts::Access;
 
     use super::*;
 
@@ -183,6 +208,7 @@ mod tests {
         ChatCommandActor {
             user_id: 1,
             login: "admin".to_string(),
+            access: Access::all(),
             access_extra,
             prefix: '/',
         }
@@ -371,5 +397,45 @@ mod tests {
         assert_eq!(nick_to_uid(&users, "Bob rest"), Some(3));
         assert_eq!(nick_to_uid(&users, "Bo"), Some(2));
         assert_eq!(nick_to_uid(&users, "Al"), None);
+    }
+
+    const BANNED: &str = "10.0.0.1";
+
+    #[tokio::test]
+    async fn unban_denied_without_discon_user() {
+        let state = SharedState::default();
+        let actor = ChatCommandActor {
+            access: Access::empty(),
+            ..actor(AccessExtra::all())
+        };
+        let reply = chat(cmd_unban(BANNED, &actor, &state).await);
+        assert!(reply.starts_with("unban: "), "{reply}");
+        assert!(reply.contains("not allowed"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn unban_lifts_a_ban() {
+        let state = SharedState::default();
+        let ip: IpAddr = BANNED.parse().unwrap();
+        state.ban(ip, None).await.unwrap();
+
+        let reply = cmd_unban(BANNED, &actor(AccessExtra::empty()), &state).await;
+
+        assert_eq!(reply, ConsoleReply::Silent);
+        assert!(state.is_banned(ip).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn unban_reports_an_address_that_is_not_banned() {
+        let state = SharedState::default();
+        let reply = cmd_unban(BANNED, &actor(AccessExtra::empty()), &state).await;
+        assert_eq!(reply, cmd_err("unban", "address is not banned"));
+    }
+
+    #[tokio::test]
+    async fn unban_rejects_a_word_that_is_not_an_address() {
+        let state = SharedState::default();
+        let reply = cmd_unban("bob", &actor(AccessExtra::empty()), &state).await;
+        assert_eq!(reply, cmd_err("unban", "not an address \"bob\""));
     }
 }

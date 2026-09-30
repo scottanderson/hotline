@@ -623,6 +623,12 @@ one-shared-room model.
     own bytes after it. `FloodPolicy::check` now takes a `FloodEvent`, and
     `check_connection` covers the accept loop.
 
+79. `/unban <address>` lifts an address ban, giving `BanProvider::unban`
+    its first caller (item 43). It needs `Access::DISCON_USER`, the
+    privilege that bans through `myTran_DisconnectUser` (110), so
+    `ChatCommandActor` now carries `access` too. mhxd has no such
+    command. Like `/access`, success replies nothing.
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against

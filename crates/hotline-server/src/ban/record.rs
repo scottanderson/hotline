@@ -11,6 +11,13 @@ pub struct BanRecord {
     pub until: Option<SystemTime>,
 }
 
+impl BanRecord {
+    /// Whether the ban still applies now.
+    pub fn is_active(&self) -> bool {
+        self.until.is_none_or(|until| until > SystemTime::now())
+    }
+}
+
 /// Serializes `Option<SystemTime>` as an RFC 3339 (ISO 8601) timestamp
 /// string, so `bans.json` reads as a human date instead of raw epoch seconds.
 mod until_rfc3339 {

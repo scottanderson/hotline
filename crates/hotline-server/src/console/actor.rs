@@ -1,3 +1,5 @@
+use hotline_proto::consts::Access;
+
 use crate::account::AccessExtra;
 
 /// The session that runs a console command.
@@ -7,6 +9,8 @@ pub struct ChatCommandActor {
     pub user_id: u16,
     /// The invoking session's login name.
     pub login: String,
+    /// See [`Access`].
+    pub access: Access,
     /// See [`AccessExtra`].
     pub access_extra: AccessExtra,
     /// The prefix this command was typed behind; see

@@ -51,10 +51,7 @@ impl FileBanProvider {
 impl BanProvider for FileBanProvider {
     async fn is_banned(&self, ip: IpAddr) -> Option<BanRecord> {
         let record = self.cache.read().await.get(&ip).cloned()?;
-        match record.until {
-            Some(until) if until <= SystemTime::now() => None,
-            _ => Some(record),
-        }
+        record.is_active().then_some(record)
     }
 
     async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), Cow<'static, str>> {
@@ -68,15 +65,17 @@ impl BanProvider for FileBanProvider {
         Ok(())
     }
 
-    async fn unban(&self, ip: IpAddr) -> Result<(), Cow<'static, str>> {
+    async fn unban(&self, ip: IpAddr) -> Result<Option<BanRecord>, Cow<'static, str>> {
         let mut cache = self.cache.write().await;
         let mut updated = cache.clone();
-        updated.remove(&ip);
+        let Some(record) = updated.remove(&ip) else {
+            return Ok(None);
+        };
         self.write_cache(&updated)
             .await
             .map_err(|e| e.to_string())?;
         *cache = updated;
-        Ok(())
+        Ok(record.is_active().then_some(record))
     }
 }
 
@@ -102,8 +101,9 @@ mod tests {
         let reopened = FileBanProvider::open(&path).await.unwrap();
         assert!(reopened.is_banned(addr()).await.is_some());
 
-        reopened.unban(addr()).await.unwrap();
+        assert!(reopened.unban(addr()).await.unwrap().is_some());
         assert_eq!(reopened.is_banned(addr()).await, None);
+        assert_eq!(reopened.unban(addr()).await.unwrap(), None);
     }
 
     #[tokio::test]

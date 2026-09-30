@@ -1383,6 +1383,12 @@ impl SharedState {
         }
     }
 
+    /// Lift `ip`'s ban. `Err` if it isn't banned.
+    pub async fn unban(&self, ip: IpAddr) -> Result<(), Cow<'static, str>> {
+        self.bans.unban(ip).await?.ok_or("address is not banned")?;
+        Ok(())
+    }
+
     /// Record one `event` from `user_id`; see [`crate::FloodPolicy::check`].
     pub async fn check_flood(&self, user_id: u16, event: FloodEvent<'_>) -> FloodDecision {
         self.flood.check(user_id, event).await

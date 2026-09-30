@@ -107,6 +107,7 @@ impl Session {
         let actor = ChatCommandActor {
             user_id: self.user_id,
             login: self.login.clone(),
+            access: self.access,
             access_extra: self.access_extra,
             prefix,
         };
