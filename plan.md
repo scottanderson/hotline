@@ -75,7 +75,8 @@ below, in priority order.
   `\n` line endings in UTF-8. It also replaces a tab or control
   character in any column with a space, so a name or a file name cannot
   add a column or a line. openline writes each line before it replies;
-  `hls` queues the line for a writer task.
+  `hls` queues the line for a writer task, and writes the queue before
+  it exits on Ctrl-C or SIGTERM.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -685,6 +686,9 @@ one-shared-room model.
     with `myTran_GetMsgs` (101) and posts with `myTran_OldPostNews`
     (103). A post may hold more than one line. Each `myTran_NewMsg`
     (102) push adds the post at the top.
+
+91. `hls` stops on Ctrl-C or SIGTERM and first writes every queued
+    activity log line.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

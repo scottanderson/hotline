@@ -124,8 +124,7 @@ async fn main() -> anyhow::Result<()> {
         accounts: args.account_log.clone(),
     };
     log_paths.check().await?;
-    let (activity, _writer) = FileActivityLog::new(log_paths);
-    let activity = Arc::new(activity);
+    let activity = Arc::new(FileActivityLog::new(log_paths));
     let server = Server::new(
         config,
         Providers {
@@ -137,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
             flood,
             banner,
             commands,
-            activity,
+            activity: activity.clone(),
         },
     );
 
@@ -171,6 +170,26 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    server.run().await?;
+    let result = tokio::select! {
+        result = server.run() => result.map_err(anyhow::Error::from),
+        result = shutdown_signal() => result.map(|()| tracing::info!("shutting down")),
+    };
+    activity.flush().await;
+    result
+}
+
+/// Wait for Ctrl-C, or for SIGTERM on Unix.
+async fn shutdown_signal() -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut terminate = signal(SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
     Ok(())
 }

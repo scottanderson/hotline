@@ -7,8 +7,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use hotline_server::{AccountAction, Activity, ActivityEntry, ActivityLog};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, oneshot};
 
 const FILE_HEADER: &str = "Date/time\tAddress\tAccount\tName\tFile Name\n";
 const CONNECT_HEADER: &str = "Date/time\tAddress\tAccount\tName\n";
@@ -54,20 +53,36 @@ struct Line {
     text: String,
 }
 
+/// A request to the writer task.
+#[derive(Debug)]
+enum Request {
+    Append(Line),
+    /// Reply once every earlier line is written.
+    Flush(oneshot::Sender<()>),
+}
+
 /// Queues each [`ActivityEntry`] for a writer task that appends it to its
 /// file in [`LogPaths`].
 #[derive(Debug)]
 pub struct FileActivityLog {
     paths: LogPaths,
-    queue: mpsc::Sender<Line>,
+    queue: mpsc::Sender<Request>,
 }
 
 impl FileActivityLog {
     /// Start the writer task. It stops after the log is dropped.
-    pub fn new(paths: LogPaths) -> (Self, JoinHandle<()>) {
-        let (queue, lines) = mpsc::channel(QUEUE_LEN);
-        let writer = tokio::spawn(write_lines(lines));
-        (Self { paths, queue }, writer)
+    pub fn new(paths: LogPaths) -> Self {
+        let (queue, requests) = mpsc::channel(QUEUE_LEN);
+        tokio::spawn(write_lines(requests));
+        Self { paths, queue }
+    }
+
+    /// Wait until every line recorded so far is written.
+    pub async fn flush(&self) {
+        let (done, written) = oneshot::channel();
+        if self.queue.send(Request::Flush(done)).await.is_ok() {
+            let _ = written.await;
+        }
     }
 
     fn target<'a>(
@@ -107,10 +122,17 @@ async fn open_for_append(path: &Path) -> std::io::Result<tokio::fs::File> {
         .await
 }
 
-async fn write_lines(mut lines: mpsc::Receiver<Line>) {
-    while let Some(line) = lines.recv().await {
-        if let Err(error) = append(&line).await {
-            tracing::warn!(path = %line.path.display(), %error, "failed to write activity log");
+async fn write_lines(mut requests: mpsc::Receiver<Request>) {
+    while let Some(request) = requests.recv().await {
+        match request {
+            Request::Append(line) => {
+                if let Err(error) = append(&line).await {
+                    tracing::warn!(path = %line.path.display(), %error, "failed to write activity log");
+                }
+            }
+            Request::Flush(done) => {
+                let _ = done.send(());
+            }
         }
     }
 }
@@ -150,7 +172,7 @@ impl ActivityLog for FileActivityLog {
             text,
         };
         // Fails only if the writer task panicked.
-        let _ = self.queue.send(line).await;
+        let _ = self.queue.send(Request::Append(line)).await;
     }
 }
 
@@ -169,12 +191,11 @@ mod tests {
 
     /// Record each entry, then wait until the writer task has written them.
     async fn record_all(paths: LogPaths, entries: impl IntoIterator<Item = ActivityEntry>) {
-        let (log, writer) = FileActivityLog::new(paths);
+        let log = FileActivityLog::new(paths);
         for entry in entries {
             log.record(entry).await;
         }
-        drop(log);
-        writer.await.unwrap();
+        log.flush().await;
     }
 
     /// The header, then each line without its date column, which must parse.
