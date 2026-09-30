@@ -38,6 +38,8 @@ async fn main() -> anyhow::Result<()> {
         console_prefix: args.console_prefix,
         max_connections: args.max_connections,
         max_connections_per_address: args.max_connections_per_address,
+        max_downloads: args.max_downloads,
+        max_downloads_per_client: args.max_downloads_per_client,
         ..ServerConfig::default()
     };
 

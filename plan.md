@@ -138,14 +138,10 @@ one-shared-room model.
    `mStats.connCount`, which counts a connection when it is accepted,
    before login (`HotlineServ.cp`).
 
-7. **`hls` cannot set the download limits.** `ServerConfig` has
-   `max_downloads`/`max_downloads_per_client`, but `hls` has no flags
-   for them.
-
-8. **No activity log.** openline logs downloads, uploads, connections,
+7. **No activity log.** openline logs downloads, uploads, connections,
    and account changes, each behind its own option (`myOpt_Log*`).
 
-9. **No HTTP tunnel listeners.** openline also listens on the base port
+8. **No HTTP tunnel listeners.** openline also listens on the base port
    plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
    The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
    `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -153,14 +149,14 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-10. **Small cleanups found in review.** The `*b"fldr"` check repeats
-    across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
-    helper would fit. `start_folder_upload` repeats
-    `authorize_upload`'s destination rule. `prepare_folder_upload_item`
-    ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
-    `login`, `dir`, and `name`.
+9. **Small cleanups found in review.** The `*b"fldr"` check repeats
+   across `state/shared.rs` and `file/provider.rs`; an `is_folder()`
+   helper would fit. `start_folder_upload` repeats
+   `authorize_upload`'s destination rule. `prepare_folder_upload_item`
+   ignores a `mkdir` error. `FileTransfer` and `FolderTransfer` share
+   `login`, `dir`, and `name`.
 
-11. **`hlc` covers only chat and lists.** It logs in, shows the
+10. **`hlc` covers only chat and lists.** It logs in, shows the
     agreement, chats in public, and lists users, files, and tracker
     servers. It cannot transfer files or folders, read or post classic or
     threaded news, send private messages, use private chat rooms, get
@@ -628,6 +624,9 @@ one-shared-room model.
     privilege that bans through `myTran_DisconnectUser` (110), so
     `ChatCommandActor` now carries `access` too. mhxd has no such
     command. Like `/access`, success replies nothing.
+
+80. `hls --max-downloads` and `--max-downloads-per-client` set
+    `ServerConfig`'s download limits, defaulting to openline's 100 and 10.
 
 ## Needs manual verification against the real client
 

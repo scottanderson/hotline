@@ -1,5 +1,8 @@
 use clap::Parser;
-use hotline_server::{DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS};
+use hotline_server::{
+    DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS, DEFAULT_MAX_DOWNLOADS,
+    DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
+};
 
 /// A minimal Hotline server.
 #[derive(Parser, Debug)]
@@ -61,6 +64,15 @@ pub struct Args {
     /// (0 means no limit).
     #[arg(long, default_value_t = DEFAULT_MAX_CONNECTIONS_PER_ADDRESS)]
     pub max_connections_per_address: usize,
+
+    /// Concurrent downloads before further ones queue (0 uses the default).
+    #[arg(long, default_value_t = DEFAULT_MAX_DOWNLOADS)]
+    pub max_downloads: usize,
+
+    /// Concurrent downloads for one user before further ones queue (0 uses
+    /// the default).
+    #[arg(long, default_value_t = DEFAULT_MAX_DOWNLOADS_PER_CLIENT)]
+    pub max_downloads_per_client: usize,
 
     /// Tracker to register with, as `[password@]host[:port]`, repeatable.
     /// The port defaults to 5499. Unset disables registration.

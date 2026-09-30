@@ -36,7 +36,7 @@ pub use news::{
 pub use providers::Providers;
 pub use server::{
     Server, ServerConfig, DEFAULT_LOGIN_TIMEOUT, DEFAULT_MAX_CONNECTIONS,
-    DEFAULT_MAX_CONNECTIONS_PER_ADDRESS,
+    DEFAULT_MAX_CONNECTIONS_PER_ADDRESS, DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
 };
 pub use session::Session;
 pub use state::{
