@@ -6,11 +6,11 @@ use crate::file::FileRequester;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferTarget {
     /// The requesting session's account login.
-    pub login: String,
+    pub login: Box<str>,
     /// Directory the file or folder is in.
     pub dir: HlPath,
     /// File or folder name.
-    pub name: String,
+    pub name: Box<str>,
 }
 
 impl TransferTarget {

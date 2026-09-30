@@ -122,12 +122,12 @@ enum SessionEnd {
 /// dispatch loop. Not `Clone`, one per socket.
 pub struct Session {
     pub(super) user_id: u16,
-    pub(super) name: String,
+    pub(super) name: Box<str>,
     /// Account login this session authenticated as, empty until login.
-    pub(super) login: String,
+    pub(super) login: Box<str>,
     /// The account's own registered display name, empty until login. See
     /// [`crate::state::UserEntry::account_name`].
-    pub(super) account_name: String,
+    pub(super) account_name: Box<str>,
     /// Privileges granted at login.
     pub(super) access: Access,
     /// Server-side-only account settings; no client opcode reads or sets them.
@@ -149,7 +149,7 @@ pub struct Session {
     /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
     pub(super) refuses_chat: bool,
     /// Custom automatic-response text sent to private-message senders, `None` when off.
-    pub(super) automatic_response: Option<String>,
+    pub(super) automatic_response: Option<Box<str>>,
     /// Remote socket address this connection was accepted from.
     pub(super) remote_addr: SocketAddr,
     /// When this connection was accepted.
@@ -182,10 +182,10 @@ impl Session {
         let user_id = state.next_user_id();
         let mut session = Session {
             user_id,
-            name: format!("guest{user_id}"),
+            name: format!("guest{user_id}").into(),
             // Empty until on_login succeeds.
-            login: String::new(),
-            account_name: String::new(),
+            login: Box::default(),
+            account_name: Box::default(),
             access: Access::empty(),
             access_extra: AccessExtra::default(),
             client_version: None,
@@ -487,11 +487,11 @@ impl Session {
             .unwrap_or("guest");
         let password = password.as_deref().unwrap_or_default();
 
-        self.login = login.to_lowercase();
+        self.login = login.to_lowercase().into();
         let account = state.account(&self.login).await;
         self.client_version = tx.client_version();
         self.access = match account {
-            Some(account) if account.password == password => {
+            Some(account) if &*account.password == password => {
                 self.account_name = account.name.clone();
                 if !account.name.is_empty() {
                     self.name = account.name;
@@ -622,7 +622,7 @@ impl Session {
     ) -> Transaction {
         self.state = SessionState::Joined;
         if let Some(name) = name {
-            self.name = name;
+            self.name = name.into();
         }
         // Not echoed back to the joiner.
         self.announce_user_change(icon, state, true).await;
@@ -668,7 +668,7 @@ impl Session {
         }
         let encoding = self.encoding();
         if let Some(name) = tx.name(encoding) {
-            self.name = name;
+            self.name = name.into();
         }
         let icon = tx.icon().unwrap_or(0);
         let options = UserChangeOptions::from_bits_truncate(
@@ -684,6 +684,7 @@ impl Session {
                 .unwrap_or_else(|| {
                     "I'm not able to respond right now. Please try later!".to_string()
                 })
+                .into()
         });
         // Later changes are self-inclusive, unlike the join announcement.
         self.announce_user_change(icon, state, false).await;
@@ -902,7 +903,7 @@ mod tests {
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig {
-            server_name: String::new(),
+            server_name: Box::default(),
             ..ServerConfig::default()
         };
 
@@ -951,7 +952,7 @@ mod tests {
         );
 
         let joiner = state.user(1).await.expect("joiner should be registered");
-        assert_eq!(joiner.name, "Alice");
+        assert_eq!(&*joiner.name, "Alice");
         assert_eq!(joiner.icon, 42);
         assert!(matches!(session.state, SessionState::Joined));
     }
@@ -1029,8 +1030,8 @@ mod tests {
                 "alice".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "hunter2".to_string(),
-                    name: "Alice".to_string(),
+                    password: "hunter2".into(),
+                    name: "Alice".into(),
                     access: Access::BROADCAST,
                 },
             )
@@ -1048,7 +1049,7 @@ mod tests {
         session.on_login(&login, &state, &config).await;
 
         assert_eq!(session.access, Access::BROADCAST);
-        assert_eq!(session.name, "Alice");
+        assert_eq!(&*session.name, "Alice");
     }
 
     #[tokio::test]
@@ -1061,8 +1062,8 @@ mod tests {
                 "alice".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "hunter2".to_string(),
-                    name: "Alice".to_string(),
+                    password: "hunter2".into(),
+                    name: "Alice".into(),
                     access: Access::BROADCAST,
                 },
             )
@@ -1080,7 +1081,7 @@ mod tests {
         session.on_login(&login, &state, &config).await;
 
         assert_eq!(session.access, Access::BROADCAST);
-        assert_eq!(session.login, "alice");
+        assert_eq!(&*session.login, "alice");
     }
 
     #[tokio::test]
@@ -1093,8 +1094,8 @@ mod tests {
                 "alice".to_string(),
                 Account {
                     access_extra: AccessExtra::empty(),
-                    password: String::new(),
-                    name: "Alice".to_string(),
+                    password: Box::default(),
+                    name: "Alice".into(),
                     access: Access::empty(),
                 },
             )
@@ -1121,8 +1122,8 @@ mod tests {
                 "alice".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "hunter2".to_string(),
-                    name: "Alice".to_string(),
+                    password: "hunter2".into(),
+                    name: "Alice".into(),
                     access: Access::BROADCAST,
                 },
             )
@@ -1159,8 +1160,8 @@ mod tests {
                 "alice".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Alice".to_string(),
+                    password: Box::default(),
+                    name: "Alice".into(),
                     access: Access::BROADCAST,
                 },
             )
@@ -1443,7 +1444,7 @@ mod tests {
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig {
-            agreement: String::new(),
+            agreement: Box::default(),
             ..ServerConfig::default()
         };
 
@@ -1462,7 +1463,7 @@ mod tests {
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
         let config = ServerConfig {
-            agreement: String::new(),
+            agreement: Box::default(),
             ..ServerConfig::default()
         };
 
@@ -1486,15 +1487,15 @@ mod tests {
                 "skipper".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Skipper".to_string(),
+                    password: Box::default(),
+                    name: "Skipper".into(),
                     access: Access::NO_AGREEMENT,
                 },
             )
             .await
             .unwrap();
         let config = ServerConfig {
-            agreement: "please behave".to_string(),
+            agreement: "please behave".into(),
             ..ServerConfig::default()
         };
 
@@ -1528,15 +1529,15 @@ mod tests {
                 "skipper".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Skipper".to_string(),
+                    password: Box::default(),
+                    name: "Skipper".into(),
                     access: Access::NO_AGREEMENT,
                 },
             )
             .await
             .unwrap();
         let config = ServerConfig {
-            agreement: "please behave".to_string(),
+            agreement: "please behave".into(),
             ..ServerConfig::default()
         };
 
@@ -1556,9 +1557,9 @@ mod tests {
     async fn opcodes_other_than_login_agreed_ping_are_rejected_before_joining() {
         let mut session = Session {
             user_id: 1,
-            name: "guest1".to_string(),
-            login: String::new(),
-            account_name: String::new(),
+            name: "guest1".into(),
+            login: Box::default(),
+            account_name: Box::default(),
             access: Access::empty(),
             access_extra: AccessExtra::default(),
             client_version: None,
@@ -1609,7 +1610,7 @@ mod tests {
             .and_then(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding).ok())
             .expect("UserAccess should carry the joiner's own UserList entry");
         assert_eq!(entry.user_id, 1); // test_session()'s fixed user_id
-        assert_eq!(entry.name, "Alice");
+        assert_eq!(&*entry.name, "Alice");
         assert_eq!(entry.icon, 42);
     }
 
@@ -1649,8 +1650,8 @@ mod tests {
                 "guest".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: String::new(),
+                    password: Box::default(),
+                    name: Box::default(),
                     access: Access::DISCON_USER,
                 },
             )
@@ -1688,13 +1689,13 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: session.user_id,
-                login: String::new(),
+                login: Box::default(),
                 name: session.name.clone(),
                 icon: 0,
                 client_version: None,
                 access: session.access,
                 access_extra: AccessExtra::USER_GETLIST,
-                account_name: String::new(),
+                account_name: Box::default(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),

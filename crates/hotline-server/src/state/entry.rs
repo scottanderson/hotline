@@ -16,14 +16,14 @@ pub struct UserEntry {
     pub user_id: u16,
     /// Account login this session authenticated as. Also kept in
     /// [`crate::session::Session`].
-    pub login: String,
+    pub login: Box<str>,
     /// The account's own registered display name, which can differ from
     /// `name` if `USE_ANY_NAME` lets this session pick its own.
-    pub account_name: String,
+    pub account_name: Box<str>,
     /// Display name, as last set by [`myTran_SetClientUserInfo`] (304).
     ///
     /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
-    pub name: String,
+    pub name: Box<str>,
     /// Icon ID.
     pub icon: u16,
     /// Client-reported protocol version, [`myField_Vers`] (160). `None` if
@@ -53,7 +53,7 @@ pub struct UserEntry {
     /// Custom automatic-response text sent to private-message senders,
     /// `None` when the feature is off. Also kept in
     /// [`crate::session::Session`].
-    pub automatic_response: Option<String>,
+    pub automatic_response: Option<Box<str>>,
 }
 
 impl UserEntry {

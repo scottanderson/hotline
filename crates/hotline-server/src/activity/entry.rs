@@ -6,9 +6,9 @@ pub struct ActivityEntry {
     /// The session's remote address.
     pub address: IpAddr,
     /// The session's account login.
-    pub login: String,
+    pub login: Box<str>,
     /// The session's nickname.
-    pub name: String,
+    pub name: Box<str>,
     /// What the session did.
     pub activity: Activity,
 }
@@ -21,19 +21,19 @@ pub enum Activity {
     /// Started a file or folder download, openline's `LogDownload`.
     Download {
         /// The file or folder name.
-        name: String,
+        name: Box<str>,
     },
     /// Started a file or folder upload, openline's `LogUpload`.
     Upload {
         /// The file or folder name.
-        name: String,
+        name: Box<str>,
     },
     /// Changed an account, openline's `LogAccountChange`.
     AccountChange {
         /// The kind of change.
         action: AccountAction,
         /// The account's login after the change.
-        account: String,
+        account: Box<str>,
     },
 }
 
@@ -49,7 +49,7 @@ pub enum AccountAction {
     /// A changed login.
     Rename {
         /// The login before the change.
-        from: String,
+        from: Box<str>,
     },
 }
 

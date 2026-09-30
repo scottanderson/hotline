@@ -9,12 +9,12 @@ use crate::file::BoxedReader;
 /// image to fetch over `HTXF`.
 #[derive(Debug, Clone)]
 pub struct UrlBannerProvider {
-    url: String,
+    url: Box<str>,
 }
 
 impl UrlBannerProvider {
     /// Creates a provider that always reports `url`.
-    pub fn new(url: impl Into<String>) -> Self {
+    pub fn new(url: impl Into<Box<str>>) -> Self {
         Self { url: url.into() }
     }
 }
@@ -22,7 +22,7 @@ impl UrlBannerProvider {
 #[async_trait]
 impl BannerProvider for UrlBannerProvider {
     async fn kind(&self) -> Option<BannerKind> {
-        Some(BannerKind::Url(self.url.clone()))
+        Some(BannerKind::Url(self.url.to_string()))
     }
 
     async fn open_read(&self) -> io::Result<BoxedReader> {

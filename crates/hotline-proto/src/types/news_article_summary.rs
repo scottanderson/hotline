@@ -19,11 +19,11 @@ pub struct NewsArticleSummary {
     /// Article flags, as set on post.
     pub flags: u32,
     /// Article title.
-    pub title: String,
+    pub title: Box<str>,
     /// Article poster name.
-    pub poster: String,
+    pub poster: Box<str>,
     /// This article's stored MIME type, e.g. `"text/plain"`.
-    pub flavor: String,
+    pub flavor: Box<str>,
     /// This article's data size in bytes for `flavor`.
     pub flavor_size: u16,
 }

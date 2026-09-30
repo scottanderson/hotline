@@ -20,9 +20,9 @@ use crate::providers::Providers;
 pub(super) fn test_session(name: &str, access: Access) -> Session {
     Session {
         user_id: 1,
-        name: name.to_string(),
-        login: String::new(),
-        account_name: String::new(),
+        name: name.into(),
+        login: Box::default(),
+        account_name: Box::default(),
         access,
         access_extra: AccessExtra::default(),
         client_version: None,
@@ -65,9 +65,9 @@ pub(super) fn console_config() -> ServerConfig {
 pub(super) fn test_user(user_id: u16, name: &str) -> UserEntry {
     UserEntry {
         user_id,
-        login: String::new(),
-        account_name: String::new(),
-        name: name.to_string(),
+        login: Box::default(),
+        account_name: Box::default(),
+        name: name.into(),
         icon: 0,
         client_version: None,
         access: Access::all(),

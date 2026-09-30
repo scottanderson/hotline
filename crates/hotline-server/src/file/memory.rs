@@ -88,7 +88,7 @@ impl FileProvider for InMemoryFileProvider {
                     file_type,
                     creator,
                     size,
-                    name: name.clone(),
+                    name: name.as_str().into(),
                 }
             })
             .collect();
@@ -190,7 +190,7 @@ impl FileProvider for InMemoryFileProvider {
                 file_type: *b"fldr",
                 creator: *b"\0\0\0\0",
                 size: 0,
-                name: name.to_string(),
+                name: name.into(),
             },
             Node::File(data) => {
                 let (file_type, creator) = type_and_creator_for_name(name);
@@ -198,7 +198,7 @@ impl FileProvider for InMemoryFileProvider {
                     file_type,
                     creator,
                     size: data.len() as u32,
-                    name: name.to_string(),
+                    name: name.into(),
                 }
             }
         })
@@ -380,7 +380,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(&*entries[0].name, "a.txt");
         assert_eq!(entries[0].size, 5);
 
         assert_eq!(
@@ -472,7 +472,7 @@ mod tests {
             .list(requester(), &HlPath::default())
             .await
             .unwrap();
-        assert_eq!(entries[0].name, "b.txt.hpf");
+        assert_eq!(&*entries[0].name, "b.txt.hpf");
         assert_eq!(entries[0].file_type, PARTIAL_TYPE);
         assert_eq!(entries[0].creator, PARTIAL_CREATOR);
 
@@ -491,7 +491,7 @@ mod tests {
             .list(requester(), &HlPath::default())
             .await
             .unwrap();
-        assert_eq!(entries[0].name, "b.txt");
+        assert_eq!(&*entries[0].name, "b.txt");
         assert_ne!(entries[0].file_type, PARTIAL_TYPE);
     }
 
@@ -578,7 +578,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(&*entries[0].name, "a.txt");
     }
 
     #[tokio::test]
@@ -816,7 +816,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(&*entries[0].name, "a.txt");
         assert_eq!(entries[0].size, 2);
     }
 }

@@ -8,7 +8,7 @@ pub struct ChatCommandActor {
     /// The invoking session's assigned user ID.
     pub user_id: u16,
     /// The invoking session's login name.
-    pub login: String,
+    pub login: Box<str>,
     /// See [`Access`].
     pub access: Access,
     /// See [`AccessExtra`].

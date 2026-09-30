@@ -4,9 +4,9 @@ use hotline_proto::consts::Access;
 #[derive(Debug, Clone)]
 pub struct AccessUpdate {
     /// Login the modified account is stored under.
-    pub login: String,
+    pub login: Box<str>,
     /// The account's new privileges.
     pub access: Access,
     /// The account's new display name, if non-empty.
-    pub name: Option<String>,
+    pub name: Option<Box<str>>,
 }

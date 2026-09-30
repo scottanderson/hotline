@@ -34,9 +34,9 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let config = ServerConfig {
-        bind_addr: format!("{}:{}", args.bind, args.port),
-        agreement: args.agreement,
-        server_name: args.name.clone(),
+        bind_addr: format!("{}:{}", args.bind, args.port).into(),
+        agreement: args.agreement.into(),
+        server_name: args.name.as_str().into(),
         console_prefix: args.console_prefix,
         max_connections: args.max_connections,
         max_connections_per_address: args.max_connections_per_address,
@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     if accounts.is_empty().await {
         let password = random_password()?;
         accounts
-            .put(ADMIN_LOGIN.to_string(), Account::admin(&password))
+            .put(ADMIN_LOGIN.to_string(), Account::admin(password.as_str()))
             .await
             .map_err(anyhow::Error::msg)?;
         println!(

@@ -42,7 +42,7 @@ impl Server {
     /// Bind and accept connections forever, spawning one task per client.
     /// Never returns unless the listener errors.
     pub async fn run(self) -> Result<()> {
-        let listener = TcpListener::bind(&self.config.bind_addr).await?;
+        let listener = TcpListener::bind(&*self.config.bind_addr).await?;
         let local_addr = listener.local_addr()?;
         tracing::info!(addr = %self.config.bind_addr, "hotline-server listening");
 

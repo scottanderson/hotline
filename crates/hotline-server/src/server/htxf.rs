@@ -537,9 +537,9 @@ mod tests {
         let requester = FileRequester { login: "alice" };
         let file = FileTransfer {
             target: TransferTarget {
-                login: "alice".to_string(),
+                login: "alice".into(),
                 dir: HlPath::default(),
-                name: "a.txt".to_string(),
+                name: "a.txt".into(),
             },
             raw: false,
         };
@@ -588,9 +588,9 @@ mod tests {
         let requester = FileRequester { login: "alice" };
         let file = FileTransfer {
             target: TransferTarget {
-                login: "alice".to_string(),
+                login: "alice".into(),
                 dir: HlPath::default(),
-                name: "a.txt".to_string(),
+                name: "a.txt".into(),
             },
             raw: false,
         };
@@ -645,9 +645,9 @@ mod tests {
             .register_transfer(PendingTransfer {
                 kind: TransferKind::File(FileTransfer {
                     target: TransferTarget {
-                        login: "alice".to_string(),
+                        login: "alice".into(),
                         dir: HlPath::default(),
-                        name: "a.txt".to_string(),
+                        name: "a.txt".into(),
                     },
                     raw: true,
                 }),
@@ -681,9 +681,9 @@ mod tests {
             .register_transfer(PendingTransfer {
                 kind: TransferKind::File(FileTransfer {
                     target: TransferTarget {
-                        login: "bob".to_string(),
+                        login: "bob".into(),
                         dir: HlPath::default(),
-                        name: "a.txt".to_string(),
+                        name: "a.txt".into(),
                     },
                     raw: true,
                 }),
@@ -702,9 +702,9 @@ mod tests {
         PendingTransfer {
             kind: TransferKind::File(FileTransfer {
                 target: TransferTarget {
-                    login: "alice".to_string(),
+                    login: "alice".into(),
                     dir: HlPath::default(),
-                    name: "a.txt".to_string(),
+                    name: "a.txt".into(),
                 },
                 raw: direction == TransferDirection::Get,
             }),
@@ -884,9 +884,9 @@ mod tests {
     ) -> FolderTransfer {
         FolderTransfer {
             target: TransferTarget {
-                login: "alice".to_string(),
+                login: "alice".into(),
                 dir: HlPath::default(),
-                name: name.to_string(),
+                name: name.into(),
             },
             items,
             item_count,

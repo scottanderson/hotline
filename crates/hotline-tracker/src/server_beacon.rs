@@ -17,12 +17,12 @@ pub struct ServerBeacon {
     /// Random per-server ID the tracker uses to correlate updates.
     pub pass_id: u32,
     /// Server name.
-    pub name: String,
+    pub name: Box<str>,
     /// Server description.
-    pub description: String,
+    pub description: Box<str>,
     /// Tracker password, empty if the tracker takes unauthenticated
     /// registrations.
-    pub password: String,
+    pub password: Box<str>,
 }
 
 impl ServerBeacon {
@@ -58,9 +58,9 @@ mod tests {
             port: 5500,
             user_count: 2,
             pass_id: 0xdead_beef,
-            name: "Test".to_string(),
-            description: "Desc".to_string(),
-            password: "pw".to_string(),
+            name: "Test".into(),
+            description: "Desc".into(),
+            password: "pw".into(),
         };
 
         let bytes = beacon.encode(text_encoding::DEFAULT).unwrap();
@@ -85,9 +85,9 @@ mod tests {
             port: 0,
             user_count: 0,
             pass_id: 0,
-            name: "x".repeat(256),
-            description: String::new(),
-            password: String::new(),
+            name: "x".repeat(256).into(),
+            description: Box::default(),
+            password: Box::default(),
         };
         assert!(matches!(
             beacon.encode(encoding),

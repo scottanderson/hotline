@@ -162,8 +162,8 @@ mod tests {
 
         assert_eq!(list.total, 2);
         assert_eq!(list.servers.len(), 2);
-        assert_eq!(list.servers[0].name, "One");
-        assert_eq!(list.servers[1].description, "second");
+        assert_eq!(&*list.servers[0].name, "One");
+        assert_eq!(&*list.servers[1].description, "second");
     }
 
     /// A tracker splits a long list, so the decoder reads past the first
@@ -178,7 +178,7 @@ mod tests {
         let list = decode_server_list(&buf, encoding).unwrap();
 
         assert_eq!(list.total, 3);
-        let names: Vec<_> = list.servers.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<_> = list.servers.iter().map(|s| &*s.name).collect();
         assert_eq!(names, ["One", "Two", "Three"]);
     }
 
@@ -228,7 +228,7 @@ mod tests {
 
         let list = decode_server_list(&buf, encoding).unwrap();
 
-        let names: Vec<_> = list.servers.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<_> = list.servers.iter().map(|s| &*s.name).collect();
         assert_eq!(names, ["One", "Two"]);
     }
 

@@ -8,5 +8,5 @@ pub struct LoginResult {
     /// Banner ID, used to fetch the banner over HTTP (version >= 151 only).
     pub banner_id: Option<u16>,
     /// Human-readable server name (version >= 151 only).
-    pub server_name: Option<String>,
+    pub server_name: Option<Box<str>>,
 }

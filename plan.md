@@ -655,6 +655,13 @@ one-shared-room model.
     login. Before, it deleted the old login first, so a failed save lost
     the account.
 
+83. A struct field that holds a string built once and then only read or
+    replaced is a `Box<str>`: accounts, user entries, sessions, chat
+    rooms, news items, transfer targets, activity entries, the wire
+    types, tracker entries, and `ServerConfig`. `String` stays for clap
+    arguments, function parameters and return values, map keys,
+    `HlPath`'s components, and text that is built up in place.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

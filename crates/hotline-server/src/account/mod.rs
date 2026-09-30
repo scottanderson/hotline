@@ -22,9 +22,9 @@ use hotline_proto::consts::Access;
 pub struct Account {
     /// Compared for exact equality against the submitted password; an
     /// empty stored password requires an empty submission too.
-    pub password: String,
+    pub password: Box<str>,
     /// Display name shown to other users.
-    pub name: String,
+    pub name: Box<str>,
     /// Privileges granted on successful login.
     #[serde(with = "crate::bitflags_serde")]
     pub access: Access,
@@ -35,10 +35,10 @@ pub struct Account {
 
 impl Account {
     /// `Admin`, with full access.
-    pub fn admin(password: impl Into<String>) -> Self {
+    pub fn admin(password: impl Into<Box<str>>) -> Self {
         Self {
             password: password.into(),
-            name: "Admin".to_string(),
+            name: "Admin".into(),
             access: Access::all(),
             access_extra: AccessExtra::all(),
         }
@@ -47,8 +47,8 @@ impl Account {
     /// `Guest`, with default access and no password.
     pub fn guest() -> Self {
         Self {
-            password: String::new(),
-            name: "Guest".to_string(),
+            password: Box::default(),
+            name: "Guest".into(),
             access: Access::default(),
             access_extra: AccessExtra::default(),
         }

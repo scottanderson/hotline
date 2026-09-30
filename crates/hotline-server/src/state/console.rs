@@ -9,5 +9,5 @@ pub struct ConsoleUpdate {
     pub access: Option<Access>,
     pub access_extra: Option<AccessExtra>,
     pub icon: Option<u16>,
-    pub name: Option<String>,
+    pub name: Option<Box<str>>,
 }

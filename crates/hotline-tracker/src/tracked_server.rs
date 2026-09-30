@@ -13,9 +13,9 @@ pub struct TrackedServer {
     /// Number of users currently connected.
     pub user_count: u16,
     /// Server name.
-    pub name: String,
+    pub name: Box<str>,
     /// Server description.
-    pub description: String,
+    pub description: Box<str>,
 }
 
 /// Read a Pascal-style (1-byte length prefix) string starting at `offset`,
@@ -64,8 +64,8 @@ impl TrackedServer {
                 ip,
                 port,
                 user_count,
-                name,
-                description,
+                name: name.into(),
+                description: description.into(),
             },
             offset,
         ))
@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(consumed, buf.len());
         assert_eq!(server.ip, [127, 0, 0, 1]);
         assert_eq!(server.port, 5500);
-        assert_eq!(server.name, "Test Server");
-        assert_eq!(server.description, "A description");
+        assert_eq!(&*server.name, "Test Server");
+        assert_eq!(&*server.description, "A description");
     }
 }

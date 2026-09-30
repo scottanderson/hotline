@@ -123,8 +123,8 @@ mod tests {
 
     fn alice() -> Account {
         Account {
-            password: "hunter2".to_string(),
-            name: "Alice".to_string(),
+            password: "hunter2".into(),
+            name: "Alice".into(),
             access: Access::BROADCAST,
             access_extra: AccessExtra::USER_GETLIST,
         }

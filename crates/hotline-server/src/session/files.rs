@@ -159,7 +159,7 @@ impl Session {
             target: TransferTarget {
                 login: self.login.clone(),
                 dir,
-                name: name.clone(),
+                name: name.as_str().into(),
             },
             raw,
         });
@@ -171,7 +171,7 @@ impl Session {
             self.register_download(kind, data_size, resume_offset, state)
                 .await,
         );
-        self.record_activity(Activity::Download { name }, state)
+        self.record_activity(Activity::Download { name: name.into() }, state)
             .await;
         vec![tx.reply(fields)]
     }
@@ -277,7 +277,7 @@ impl Session {
                     target: TransferTarget {
                         login: self.login.clone(),
                         dir,
-                        name: name.clone(),
+                        name: name.as_str().into(),
                     },
                     raw: false,
                 }),
@@ -296,7 +296,8 @@ impl Session {
                 types::encode_resume_data(resume_offset as u32).to_vec(),
             ));
         }
-        self.record_activity(Activity::Upload { name }, state).await;
+        self.record_activity(Activity::Upload { name: name.into() }, state)
+            .await;
         vec![tx.reply(fields)]
     }
 
@@ -337,14 +338,14 @@ impl Session {
             target: TransferTarget {
                 login: self.login.clone(),
                 dir,
-                name: name.clone(),
+                name: name.as_str().into(),
             },
             items,
             item_count,
             encoding: self.encoding(),
         });
         fields.extend(self.register_download(kind, total_size, 0, state).await);
-        self.record_activity(Activity::Download { name }, state)
+        self.record_activity(Activity::Download { name: name.into() }, state)
             .await;
         vec![tx.reply(fields)]
     }
@@ -386,7 +387,8 @@ impl Session {
             .and_then(Field::as_u32)
             .unwrap_or(0);
         if item_count == 0 {
-            self.record_activity(Activity::Upload { name }, state).await;
+            self.record_activity(Activity::Upload { name: name.into() }, state)
+                .await;
             return vec![tx.reply(vec![])];
         }
         let size = tx
@@ -399,7 +401,7 @@ impl Session {
                     target: TransferTarget {
                         login: self.login.clone(),
                         dir,
-                        name: name.clone(),
+                        name: name.as_str().into(),
                     },
                     items: Vec::new(),
                     item_count,
@@ -412,7 +414,8 @@ impl Session {
                 user_id: self.user_id,
             })
             .await;
-        self.record_activity(Activity::Upload { name }, state).await;
+        self.record_activity(Activity::Upload { name: name.into() }, state)
+            .await;
         vec![tx.reply(vec![Field::u32(FieldId::RefNum, reference.0)])]
     }
 
@@ -1361,7 +1364,7 @@ mod tests {
         let TransferKind::Folder(folder) = transfer.kind else {
             panic!("expected a folder transfer");
         };
-        assert_eq!(folder.target.name, "Top");
+        assert_eq!(&*folder.target.name, "Top");
         assert_eq!(folder.item_count, 3);
         assert_eq!(folder.items.len(), 3);
     }
@@ -1410,8 +1413,12 @@ mod tests {
         );
         session.on_download_file(&missing, &state).await;
 
-        let name = "a.txt".to_string();
-        assert_eq!(log.activities(), [Activity::Download { name }]);
+        assert_eq!(
+            log.activities(),
+            [Activity::Download {
+                name: "a.txt".into()
+            }]
+        );
     }
 
     #[tokio::test]
@@ -1438,8 +1445,10 @@ mod tests {
 
         let get = folder_request(Opcode::DownloadFldr, &[], "Top", vec![]);
         session.on_download_fldr(&get, &state).await;
-        let name = "Top".to_string();
-        assert_eq!(log.activities(), [Activity::Download { name }]);
+        assert_eq!(
+            log.activities(),
+            [Activity::Download { name: "Top".into() }]
+        );
     }
 
     #[tokio::test]
@@ -1460,8 +1469,12 @@ mod tests {
         let taken = session.on_upload_file(&put("taken.txt"), &state).await;
         assert!(taken[0].is_error());
 
-        let name = "new.txt".to_string();
-        assert_eq!(log.activities(), [Activity::Upload { name }]);
+        assert_eq!(
+            log.activities(),
+            [Activity::Upload {
+                name: "new.txt".into()
+            }]
+        );
     }
 
     #[tokio::test]
@@ -1582,8 +1595,7 @@ mod tests {
 
         let put = folder_request(Opcode::UploadFldr, &[], "New", vec![]);
         session.on_upload_fldr(&put, &state).await;
-        let name = "New".to_string();
-        assert_eq!(log.activities(), [Activity::Upload { name }]);
+        assert_eq!(log.activities(), [Activity::Upload { name: "New".into() }]);
     }
 
     #[tokio::test]

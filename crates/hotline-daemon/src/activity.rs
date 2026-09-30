@@ -77,12 +77,14 @@ impl FileActivityLog {
         let paths = &self.paths;
         let (path, header, columns) = match activity {
             Activity::Connect => (&paths.connects, CONNECT_HEADER, vec![]),
-            Activity::Download { name } => (&paths.downloads, FILE_HEADER, vec![name.into()]),
-            Activity::Upload { name } => (&paths.uploads, FILE_HEADER, vec![name.into()]),
+            Activity::Download { name } => {
+                (&paths.downloads, FILE_HEADER, vec![name.as_ref().into()])
+            }
+            Activity::Upload { name } => (&paths.uploads, FILE_HEADER, vec![name.as_ref().into()]),
             Activity::AccountChange { action, account } => {
                 let affected = match action {
                     AccountAction::Rename { from } => format!("“{from}” “{account}”").into(),
-                    _ => account.into(),
+                    _ => account.as_ref().into(),
                 };
                 let columns = vec![action.label().into(), affected];
                 (&paths.accounts, ACCOUNT_HEADER, columns)
@@ -159,8 +161,8 @@ mod tests {
     fn entry(activity: Activity) -> ActivityEntry {
         ActivityEntry {
             address: "10.0.0.1".parse().unwrap(),
-            login: "guest".to_string(),
-            name: "Alice".to_string(),
+            login: "guest".into(),
+            name: "Alice".into(),
             activity,
         }
     }
@@ -202,18 +204,18 @@ mod tests {
         };
         let account_change = |action, account: &str| Activity::AccountChange {
             action,
-            account: account.to_string(),
+            account: account.into(),
         };
         let rename = AccountAction::Rename {
-            from: "carol".to_string(),
+            from: "carol".into(),
         };
         let activities = [
             Activity::Connect,
             Activity::Download {
-                name: "a.txt".to_string(),
+                name: "a.txt".into(),
             },
             Activity::Upload {
-                name: "b.txt".to_string(),
+                name: "b.txt".into(),
             },
             account_change(AccountAction::Create, "carol"),
             account_change(AccountAction::Modify, "carol"),
@@ -266,7 +268,7 @@ mod tests {
             ..LogPaths::default()
         };
         let mut entry = entry(Activity::Connect);
-        entry.name = "Al\tice\r\nfake".to_string();
+        entry.name = "Al\tice\r\nfake".into();
         record_all(paths, [entry]).await;
 
         let (_, rest) = lines(&path);
@@ -280,8 +282,13 @@ mod tests {
             connects: Some(dir.path().join("connects.log")),
             ..LogPaths::default()
         };
-        let name = "a.txt".to_string();
-        record_all(paths, [entry(Activity::Upload { name })]).await;
+        record_all(
+            paths,
+            [entry(Activity::Upload {
+                name: "a.txt".into(),
+            })],
+        )
+        .await;
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 

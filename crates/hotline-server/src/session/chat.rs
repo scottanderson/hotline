@@ -789,14 +789,14 @@ mod tests {
                     access: Some(Access::BROADCAST),
                     access_extra: None,
                     icon: Some(7),
-                    name: Some("Bobby".to_string()),
+                    name: Some("Bobby".into()),
                 },
                 &state,
             )
             .await;
 
         assert_eq!(session.access, Access::BROADCAST);
-        assert_eq!(session.name, "Bobby");
+        assert_eq!(&*session.name, "Bobby");
 
         let push = rx
             .try_recv()
@@ -862,13 +862,13 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 1,
-                login: String::new(),
-                name: "Alice".to_string(),
+                login: Box::default(),
+                name: "Alice".into(),
                 icon: 0,
                 client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
-                account_name: String::new(),
+                account_name: Box::default(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
@@ -880,13 +880,13 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 2,
-                login: String::new(),
-                name: "Bob".to_string(),
+                login: Box::default(),
+                name: "Bob".into(),
                 icon: 0,
                 client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
-                account_name: String::new(),
+                account_name: Box::default(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
@@ -1126,7 +1126,7 @@ mod tests {
         );
         let replies = outsider.on_set_chat_subject(&request, &state).await;
         assert!(replies[0].is_error());
-        assert_eq!(state.chat_room(chat_id).await.unwrap().subject, "");
+        assert_eq!(&*state.chat_room(chat_id).await.unwrap().subject, "");
     }
 
     #[tokio::test]
@@ -1147,7 +1147,10 @@ mod tests {
         );
         let replies = member.on_set_chat_subject(&request, &state).await;
         assert!(!replies[0].is_error());
-        assert_eq!(state.chat_room(chat_id).await.unwrap().password, "hunter2");
+        assert_eq!(
+            &*state.chat_room(chat_id).await.unwrap().password,
+            "hunter2"
+        );
 
         let notify = rx
             .try_recv()
@@ -1175,7 +1178,7 @@ mod tests {
         );
         let replies = guest.on_set_chat_subject(&request, &state).await;
         assert!(replies[0].is_error());
-        assert_eq!(state.chat_room(0).await.unwrap().subject, "");
+        assert_eq!(&*state.chat_room(0).await.unwrap().subject, "");
     }
 
     #[tokio::test]
@@ -1196,7 +1199,7 @@ mod tests {
         );
         let replies = admin.on_set_chat_subject(&request, &state).await;
         assert!(!replies[0].is_error());
-        assert_eq!(state.chat_room(0).await.unwrap().subject, "Welcome");
+        assert_eq!(&*state.chat_room(0).await.unwrap().subject, "Welcome");
 
         let notify = rx
             .try_recv()
@@ -1261,13 +1264,13 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 2,
-                login: String::new(),
-                name: "Bob".to_string(),
+                login: Box::default(),
+                name: "Bob".into(),
                 icon: 0,
                 client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
-                account_name: String::new(),
+                account_name: Box::default(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
@@ -1299,13 +1302,13 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 2,
-                login: String::new(),
-                name: "Bob".to_string(),
+                login: Box::default(),
+                name: "Bob".into(),
                 icon: 0,
                 client_version: None,
                 access: Access::all(),
                 access_extra: AccessExtra::default(),
-                account_name: String::new(),
+                account_name: Box::default(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),

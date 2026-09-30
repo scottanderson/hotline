@@ -15,9 +15,9 @@ pub struct NewsArticle {
     /// When it was posted.
     pub date: HlDate,
     /// The article's subject line.
-    pub title: String,
+    pub title: Box<str>,
     /// The name of the user who posted it.
-    pub poster: String,
+    pub poster: Box<str>,
     /// Stored bodies, keyed by MIME type. Always has at least one entry.
     pub data: BTreeMap<String, Vec<u8>>,
     /// Reply article IDs, oldest posted first.
@@ -52,8 +52,8 @@ mod tests {
                 milliseconds: 0,
                 seconds: 0,
             },
-            title: "Hi".to_string(),
-            poster: "alice".to_string(),
+            title: "Hi".into(),
+            poster: "alice".into(),
             data: [("text/plain".to_string(), b"hello".to_vec())].into(),
             children: Vec::new(),
         };

@@ -151,7 +151,7 @@ impl HotlineClient {
             banner_id: reply
                 .field(FieldId::CommunityBannerID)
                 .and_then(Field::as_u16),
-            server_name: reply.string(FieldId::ServerName, encoding),
+            server_name: reply.string(FieldId::ServerName, encoding).map(Into::into),
         })
     }
 

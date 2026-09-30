@@ -132,7 +132,7 @@ impl FileProvider for DiskFileProvider {
                     file_type: *b"fldr",
                     creator: *b"\0\0\0\0",
                     size: 0,
-                    name,
+                    name: name.into(),
                 }
             } else {
                 let (file_type, creator) = type_and_creator_for_name(&name);
@@ -140,7 +140,7 @@ impl FileProvider for DiskFileProvider {
                     file_type,
                     creator,
                     size: metadata.len() as u32,
-                    name,
+                    name: name.into(),
                 }
             });
         }
@@ -228,7 +228,7 @@ impl FileProvider for DiskFileProvider {
                 file_type: *b"fldr",
                 creator: *b"\0\0\0\0",
                 size: 0,
-                name: name.to_string(),
+                name: name.into(),
             });
         }
         let (file_type, creator) = type_and_creator_for_name(name);
@@ -236,7 +236,7 @@ impl FileProvider for DiskFileProvider {
             file_type,
             creator,
             size: metadata.len() as u32,
-            name: name.to_string(),
+            name: name.into(),
         })
     }
 
@@ -401,9 +401,9 @@ mod tests {
         entries.sort_by(|a, b| a.name.cmp(&b.name));
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(&*entries[0].name, "a.txt");
         assert_eq!(entries[0].size, 2);
-        assert_eq!(entries[1].name, "sub");
+        assert_eq!(&*entries[1].name, "sub");
         assert_eq!(&entries[1].file_type, b"fldr");
     }
 
@@ -807,7 +807,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(&*entries[0].name, "a.txt");
     }
 
     #[tokio::test]

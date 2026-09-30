@@ -256,11 +256,11 @@ impl Session {
             Some(response) => (MsgOption::AutomaticResponse, response.clone()),
             None if is_chat => (
                 MsgOption::RefuseChat,
-                format!("{} does not accept private chats.", target.name),
+                format!("{} does not accept private chats.", target.name).into(),
             ),
             None => (
                 MsgOption::RefuseMessage,
-                format!("{} does not accept private messages.", target.name),
+                format!("{} does not accept private messages.", target.name).into(),
             ),
         };
         Some(Transaction::push(
@@ -341,9 +341,9 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 2,
-                login: "bob".to_string(),
-                account_name: konnichiwa.to_string(),
-                name: konnichiwa.to_string(),
+                login: "bob".into(),
+                account_name: konnichiwa.into(),
+                name: konnichiwa.into(),
                 icon: 0,
                 client_version: None,
                 access: Access::all(),
@@ -363,7 +363,7 @@ mod tests {
             .field(FieldId::UserNameWithInfo)
             .map(|f| UserNameWithInfo::decode(&f.as_bytes(sjis), sjis).unwrap())
             .expect("expected bob's user list entry");
-        assert_eq!(entry.name, konnichiwa);
+        assert_eq!(&*entry.name, konnichiwa);
     }
 
     #[tokio::test]
@@ -374,9 +374,9 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 2,
-                login: "bob".to_string(),
-                account_name: "Bobby".to_string(),
-                name: "Bob".to_string(),
+                login: "bob".into(),
+                account_name: "Bobby".into(),
+                name: "Bob".into(),
                 icon: 42,
                 client_version: Some(185),
                 access: Access::all(),
@@ -422,9 +422,9 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 2,
-                login: String::new(),
-                account_name: String::new(),
-                name: "Bob".to_string(),
+                login: Box::default(),
+                account_name: Box::default(),
+                name: "Bob".into(),
                 icon: 0,
                 client_version: None,
                 access: Access::empty(),
@@ -757,7 +757,7 @@ mod tests {
         let state = SharedState::default();
         state
             .insert_user(UserEntry {
-                automatic_response: Some("At lunch, back soon.".to_string()),
+                automatic_response: Some("At lunch, back soon.".into()),
                 ..test_user(42, "Bob")
             })
             .await;

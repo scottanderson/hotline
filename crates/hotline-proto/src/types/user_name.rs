@@ -18,7 +18,7 @@ pub struct UserNameWithInfo {
     /// See [`UserFlags`] bit meanings.
     pub flags: UserFlags,
     /// Display name.
-    pub name: String,
+    pub name: Box<str>,
 }
 
 impl UserNameWithInfo {
@@ -66,7 +66,7 @@ impl UserNameWithInfo {
             user_id,
             icon,
             flags: UserFlags::from_bits_retain(flags),
-            name,
+            name: name.into(),
         })
     }
 }
@@ -83,7 +83,7 @@ mod tests {
             user_id: 7,
             icon: 128,
             flags: UserFlags::AWAY,
-            name: "Virtual1".to_string(),
+            name: "Virtual1".into(),
         };
         let bytes = user.encode(encoding);
         assert_eq!(UserNameWithInfo::decode(&bytes, encoding).unwrap(), user);
@@ -97,11 +97,11 @@ mod tests {
             user_id: 1,
             icon: 0,
             flags: UserFlags::empty(),
-            name: "Ren\u{e9}".to_string(),
+            name: "Ren\u{e9}".into(),
         };
         let bytes = user.encode(encoding);
         assert_eq!(
-            UserNameWithInfo::decode(&bytes, encoding).unwrap().name,
+            &*UserNameWithInfo::decode(&bytes, encoding).unwrap().name,
             "Ren\u{e9}"
         );
     }
@@ -114,11 +114,11 @@ mod tests {
             user_id: 1,
             icon: 0,
             flags: UserFlags::empty(),
-            name: "日本語".to_string(),
+            name: "日本語".into(),
         };
         let bytes = user.encode(encoding);
         assert_eq!(
-            UserNameWithInfo::decode(&bytes, encoding).unwrap().name,
+            &*UserNameWithInfo::decode(&bytes, encoding).unwrap().name,
             "???"
         );
     }

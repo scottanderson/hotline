@@ -61,8 +61,14 @@ impl Session {
         account: String,
         state: &SharedState,
     ) {
-        self.record_activity(Activity::AccountChange { action, account }, state)
-            .await;
+        self.record_activity(
+            Activity::AccountChange {
+                action,
+                account: account.into(),
+            },
+            state,
+        )
+        .await;
     }
 
     /// Disconnect every session currently logged in under `login`, with
@@ -151,12 +157,12 @@ impl Session {
                 .as_ref()
                 .map(|a| a.password.clone())
                 .unwrap_or_default(),
-            Some(field) => field.as_deobfuscated_string(encoding),
-            None => String::new(),
+            Some(field) => field.as_deobfuscated_string(encoding).into(),
+            None => Box::default(),
         };
         let name = tx
             .name(encoding)
-            .or_else(|| existing.as_ref().map(|a| a.name.clone()))
+            .or_else(|| existing.as_ref().map(|a| a.name.to_string()))
             .unwrap_or_default();
         // No wire field for this; unset on create means the default.
         let access_extra = existing
@@ -170,7 +176,7 @@ impl Session {
 
         let account = Account {
             password,
-            name: name.clone(),
+            name: name.as_str().into(),
             access,
             access_extra,
         };
@@ -341,8 +347,8 @@ impl Session {
                     None => return Ok(false),
                 }
             }
-            Some(f) => as_deobfuscated_string(f),
-            None => String::new(),
+            Some(f) => as_deobfuscated_string(f).into(),
+            None => Box::default(),
         };
         let access = record
             .field(FieldId::UserAccess)
@@ -360,7 +366,7 @@ impl Session {
                 .unwrap_or_else(AccessExtra::default);
             let account = Account {
                 password,
-                name: name.clone(),
+                name: name.as_str().into(),
                 access,
                 access_extra,
             };
@@ -371,7 +377,9 @@ impl Session {
                     if renamed {
                         // The old login goes only after the new one is saved.
                         let _ = state.delete_account(&old_login).await;
-                        let action = AccountAction::Rename { from: old_login };
+                        let action = AccountAction::Rename {
+                            from: old_login.into(),
+                        };
                         self.record_account_change(action, login.clone(), state)
                             .await;
                     }
@@ -408,7 +416,7 @@ impl Session {
         }
         let account = Account {
             password,
-            name,
+            name: name.into(),
             access,
             access_extra: AccessExtra::default(),
         };
@@ -502,8 +510,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "secret".to_string(),
-                    name: "Bob".to_string(),
+                    password: "secret".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -528,8 +536,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "secret".to_string(),
-                    name: "Bob".to_string(),
+                    password: "secret".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -549,8 +557,8 @@ mod tests {
         session.on_set_user(&modify, &state).await;
 
         let account = state.account("bob").await.unwrap();
-        assert_eq!(account.name, "Bobby");
-        assert_eq!(account.password, "secret");
+        assert_eq!(&*account.name, "Bobby");
+        assert_eq!(&*account.password, "secret");
         assert_eq!(account.access, Access::SEND_CHAT);
     }
 
@@ -563,8 +571,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "secret".to_string(),
-                    name: "Bob".to_string(),
+                    password: "secret".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -584,7 +592,7 @@ mod tests {
         session.on_set_user(&modify, &state).await;
 
         let account = state.account("bob").await.unwrap();
-        assert_eq!(account.password, "");
+        assert_eq!(&*account.password, "");
     }
 
     #[tokio::test]
@@ -597,8 +605,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "secret".to_string(),
-                    name: "Bob".to_string(),
+                    password: "secret".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -609,8 +617,8 @@ mod tests {
                 "carol".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Carol".to_string(),
+                    password: Box::default(),
+                    name: "Carol".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -663,8 +671,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Bob".to_string(),
+                    password: Box::default(),
+                    name: "Bob".into(),
                     access: Access::empty(),
                 },
             )
@@ -673,7 +681,7 @@ mod tests {
 
         // Bob is already connected, logged in under the "bob" account.
         let mut bob = test_session("Bob", Access::empty());
-        bob.login = "bob".to_string();
+        bob.login = "bob".into();
         state
             .insert_user(UserEntry {
                 user_id: bob.user_id,
@@ -683,7 +691,7 @@ mod tests {
                 client_version: None,
                 access: bob.access,
                 access_extra: bob.access_extra,
-                account_name: String::new(),
+                account_name: Box::default(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
@@ -733,8 +741,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Bob".to_string(),
+                    password: Box::default(),
+                    name: "Bob".into(),
                     access: Access::ANY_NAME,
                 },
             )
@@ -743,7 +751,7 @@ mod tests {
 
         // Bob is connected with USE_ANY_NAME and has picked a custom name.
         let mut bob = test_session("Bobby the Great", Access::ANY_NAME);
-        bob.login = "bob".to_string();
+        bob.login = "bob".into();
         state
             .insert_user(UserEntry {
                 user_id: bob.user_id,
@@ -753,7 +761,7 @@ mod tests {
                 client_version: None,
                 access: bob.access,
                 access_extra: bob.access_extra,
-                account_name: String::new(),
+                account_name: Box::default(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),
@@ -775,10 +783,10 @@ mod tests {
         admin.on_set_user(&revoke, &state).await;
         let update = next_access_update(&mut bob_rx);
         bob.apply_access_update(update, &state).await;
-        assert_eq!(bob.name, "Bob");
+        assert_eq!(&*bob.name, "Bob");
 
         // Still holds USE_ANY_NAME, so this modify must not touch the name.
-        bob.name = "Bobby Returns".to_string();
+        bob.name = "Bobby Returns".into();
         bob.access = Access::ANY_NAME;
         let regrant = Transaction::request(
             Opcode::SetUser,
@@ -794,7 +802,7 @@ mod tests {
         admin.on_set_user(&regrant, &state).await;
         let update = next_access_update(&mut bob_rx);
         bob.apply_access_update(update, &state).await;
-        assert_eq!(bob.name, "Bobby Returns");
+        assert_eq!(&*bob.name, "Bobby Returns");
     }
 
     #[tokio::test]
@@ -806,8 +814,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Bob".to_string(),
+                    password: Box::default(),
+                    name: "Bob".into(),
                     access: Access::empty(),
                 },
             )
@@ -888,8 +896,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "secret".to_string(),
-                    name: "Bob".to_string(),
+                    password: "secret".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -938,8 +946,8 @@ mod tests {
         assert!(!replies[0].is_error());
 
         let account = state.account("bob").await.unwrap();
-        assert_eq!(account.name, "Bob");
-        assert_eq!(account.password, "secret");
+        assert_eq!(&*account.name, "Bob");
+        assert_eq!(&*account.password, "secret");
         assert_eq!(account.access, Access::SEND_CHAT);
     }
 
@@ -970,8 +978,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "original".to_string(),
-                    name: "Bob".to_string(),
+                    password: "original".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -990,7 +998,7 @@ mod tests {
         let replies = session.on_set_user_list(&request, &state).await;
         assert!(!replies[0].is_error());
         // Untouched: the collision is a notice, not an applied overwrite.
-        assert_eq!(state.account("bob").await.unwrap().password, "original");
+        assert_eq!(&*state.account("bob").await.unwrap().password, "original");
         assert!(rx.try_recv().is_ok());
     }
 
@@ -1003,8 +1011,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "secret".to_string(),
-                    name: "Bob".to_string(),
+                    password: "secret".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -1024,8 +1032,8 @@ mod tests {
 
         assert!(state.account("bob").await.is_none());
         let renamed = state.account("bobby").await.unwrap();
-        assert_eq!(renamed.name, "Bobby");
-        assert_eq!(renamed.password, "secret");
+        assert_eq!(&*renamed.name, "Bobby");
+        assert_eq!(&*renamed.password, "secret");
     }
 
     #[tokio::test]
@@ -1045,7 +1053,7 @@ mod tests {
 
         let change = |action, account: &str| Activity::AccountChange {
             action,
-            account: account.to_string(),
+            account: account.into(),
         };
         assert_eq!(
             log.activities(),
@@ -1066,8 +1074,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: "secret".to_string(),
-                    name: "Bob".to_string(),
+                    password: "secret".into(),
+                    name: "Bob".into(),
                     access: Access::SEND_CHAT,
                 },
             )
@@ -1086,13 +1094,12 @@ mod tests {
 
         let change = |action| Activity::AccountChange {
             action,
-            account: "bobby".to_string(),
+            account: "bobby".into(),
         };
-        let from = "bob".to_string();
         assert_eq!(
             log.activities(),
             [
-                change(AccountAction::Rename { from }),
+                change(AccountAction::Rename { from: "bob".into() }),
                 change(AccountAction::Modify),
             ]
         );
@@ -1126,8 +1133,8 @@ mod tests {
         let accounts = crate::account::InMemoryAccountProvider::default();
         let bob = Account {
             access_extra: AccessExtra::default(),
-            password: "secret".to_string(),
-            name: "Bob".to_string(),
+            password: "secret".into(),
+            name: "Bob".into(),
             access: Access::SEND_CHAT,
         };
         accounts.put("bob".to_string(), bob).await.unwrap();
@@ -1156,8 +1163,8 @@ mod tests {
                 "bob".to_string(),
                 Account {
                     access_extra: AccessExtra::default(),
-                    password: String::new(),
-                    name: "Bob".to_string(),
+                    password: Box::default(),
+                    name: "Bob".into(),
                     access: Access::empty(),
                 },
             )
@@ -1166,13 +1173,13 @@ mod tests {
         state
             .insert_user(UserEntry {
                 user_id: 1,
-                login: "bob".to_string(),
-                name: "Bob".to_string(),
+                login: "bob".into(),
+                name: "Bob".into(),
                 icon: 0,
                 client_version: None,
                 access: Access::empty(),
                 access_extra: AccessExtra::default(),
-                account_name: "Bob".to_string(),
+                account_name: "Bob".into(),
                 remote_addr: "127.0.0.1:0".parse().unwrap(),
                 connected_at: Instant::now(),
                 last_active: Instant::now(),

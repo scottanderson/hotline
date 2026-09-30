@@ -17,7 +17,7 @@ pub use event_outcome::EventOutcome;
 pub use mode::Mode;
 
 pub struct ClientSession {
-    pub nick: String,
+    pub nick: Box<str>,
     pub icon: u16,
     pub mode: Mode,
     pub users: Vec<UserNameWithInfo>,
@@ -30,12 +30,12 @@ pub struct ClientSession {
 impl ClientSession {
     pub fn new(nick: String, icon: u16, encoding: EncodingHandle) -> Self {
         Self {
-            nick,
+            nick: nick.into(),
             icon,
             mode: Mode::Joining,
             users: Vec::new(),
             lines: vec![Line {
-                text: "connected - type a message and press Enter, Esc to quit".to_string(),
+                text: "connected - type a message and press Enter, Esc to quit".into(),
                 kind: LineKind::System,
             }],
             access: Access::empty(),
@@ -62,7 +62,7 @@ impl ClientSession {
         self.mode = Mode::Chat;
     }
 
-    fn push(&mut self, text: impl Into<String>, kind: LineKind) {
+    fn push(&mut self, text: impl Into<Box<str>>, kind: LineKind) {
         self.lines.push(Line {
             text: text.into(),
             kind,
@@ -194,7 +194,7 @@ impl ClientSession {
         match self.users.iter().position(|u| u.user_id == user_id) {
             Some(pos) => {
                 let old_name = self.users[pos].name.clone();
-                if !old_name.is_empty() && !name.is_empty() && old_name != name {
+                if !old_name.is_empty() && !name.is_empty() && *old_name != *name {
                     self.push(
                         format!(" <<< {old_name} is now known as {name} >>>"),
                         LineKind::System,
@@ -204,7 +204,7 @@ impl ClientSession {
                     user_id,
                     icon,
                     flags,
-                    name,
+                    name: name.into(),
                 };
             }
             None => {
@@ -213,7 +213,7 @@ impl ClientSession {
                     user_id,
                     icon,
                     flags,
-                    name,
+                    name: name.into(),
                 });
             }
         }
@@ -372,10 +372,10 @@ mod tests {
         let _ = session.apply_server_event(&renamed);
 
         assert_eq!(
-            session.lines.last().unwrap().text,
+            &*session.lines.last().unwrap().text,
             " <<< Alice is now known as Alicia >>>"
         );
         let user = session.users.iter().find(|u| u.user_id == 2).unwrap();
-        assert_eq!(user.name, "Alicia");
+        assert_eq!(&*user.name, "Alicia");
     }
 }

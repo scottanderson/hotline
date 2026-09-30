@@ -148,7 +148,7 @@ mod tests {
         let list = query(&addr, text_encoding::DEFAULT).await.unwrap();
 
         assert_eq!(list.total, 2);
-        let names: Vec<_> = list.servers.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<_> = list.servers.iter().map(|s| &*s.name).collect();
         assert_eq!(names, ["Alpha", "Beta"]);
     }
 
@@ -212,8 +212,8 @@ mod tests {
                 ip: [10, 0, 0, 1],
                 port: 5500,
                 user_count: 7,
-                name: "Test".to_string(),
-                description: "desc".to_string(),
+                name: "Test".into(),
+                description: "desc".into(),
             }],
         };
 

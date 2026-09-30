@@ -66,7 +66,7 @@ pub trait FileProvider: Send + Sync {
                     None => continue,
                 }
             };
-            path.push(entry.name);
+            path.push(entry.name.into());
             if is_folder {
                 next_dir = Some(path.clone());
             }

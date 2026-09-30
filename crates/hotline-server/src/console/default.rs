@@ -207,7 +207,7 @@ mod tests {
     fn actor(access_extra: AccessExtra) -> ChatCommandActor {
         ChatCommandActor {
             user_id: 1,
-            login: "admin".to_string(),
+            login: "admin".into(),
             access: Access::all(),
             access_extra,
             prefix: '/',
@@ -217,9 +217,9 @@ mod tests {
     fn user_entry(user_id: u16, login: &str, name: &str, access_extra: AccessExtra) -> UserEntry {
         UserEntry {
             user_id,
-            login: login.to_string(),
-            account_name: name.to_string(),
-            name: name.to_string(),
+            login: login.into(),
+            account_name: name.into(),
+            name: name.into(),
             icon: 0,
             client_version: None,
             access: Access::default(),
@@ -356,8 +356,8 @@ mod tests {
             .put_account(
                 "bob".to_string(),
                 crate::account::Account {
-                    password: String::new(),
-                    name: "Bob".to_string(),
+                    password: Box::default(),
+                    name: "Bob".into(),
                     access: Access::default(),
                     access_extra: AccessExtra::default(),
                 },

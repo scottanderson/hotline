@@ -11,9 +11,9 @@ use crate::news::NewsArticleView;
 #[derive(Debug, Clone)]
 pub struct NewsArticleDetail {
     /// The article's subject line.
-    pub title: String,
+    pub title: Box<str>,
     /// The name of the user who posted it.
-    pub poster: String,
+    pub poster: Box<str>,
     /// When it was posted.
     pub date: HlDate,
     /// The preceding sibling's article ID, or `0` if it's the first.

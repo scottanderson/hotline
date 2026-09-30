@@ -14,7 +14,7 @@ pub enum NewsCategoryListEntry {
         /// Number of items directly inside this bundle.
         count: u16,
         /// Bundle name.
-        name: String,
+        name: Box<str>,
     },
     /// A leaf category holding a thread of articles.
     Category {
@@ -27,7 +27,7 @@ pub enum NewsCategoryListEntry {
         /// This category's deletion serial number.
         del_sn: u32,
         /// Category name.
-        name: String,
+        name: Box<str>,
     },
 }
 

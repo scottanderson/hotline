@@ -21,13 +21,13 @@ pub const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct ServerConfig {
     /// Address to bind, e.g. `"0.0.0.0:5500"`. The file transfer data
     /// connection listens one port above this.
-    pub bind_addr: String,
+    pub bind_addr: Box<str>,
     /// Agreement text shown to clients on login (empty = no agreement).
-    pub agreement: String,
+    pub agreement: Box<str>,
     /// Name reported in the [`myTran_Login`] (107) reply (protocol version >= 151).
     ///
     /// [`myTran_Login`]: hotline_proto::Opcode::Login
-    pub server_name: String,
+    pub server_name: Box<str>,
     /// Chat prefix for console commands; `None` relays all chat.
     pub console_prefix: Option<char>,
     /// Concurrent downloads before further ones queue. Uploads are not capped.
@@ -46,9 +46,9 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_addr: "0.0.0.0:5500".to_string(),
-            agreement: "Hotline".to_string(),
-            server_name: "Hotline".to_string(),
+            bind_addr: "0.0.0.0:5500".into(),
+            agreement: "Hotline".into(),
+            server_name: "Hotline".into(),
             console_prefix: None,
             max_downloads: DEFAULT_MAX_DOWNLOADS,
             max_downloads_per_client: DEFAULT_MAX_DOWNLOADS_PER_CLIENT,

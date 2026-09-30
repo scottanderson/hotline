@@ -193,7 +193,7 @@ impl SharedState {
             .read()
             .await
             .values()
-            .filter(|entry| entry.login == login)
+            .filter(|entry| &*entry.login == login)
             .map(|entry| entry.user_id)
             .collect()
     }
@@ -295,9 +295,9 @@ impl SharedState {
     /// Push a live privilege change for every session logged in under `login`.
     pub async fn push_access_update(&self, login: String, access: Access, name: Option<String>) {
         let update = AccessUpdate {
-            login,
+            login: login.into(),
             access,
-            name,
+            name: name.map(Into::into),
         };
         for sender in self.recipients.read().await.values() {
             let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
@@ -369,7 +369,7 @@ impl SharedState {
             },
         )
         .await;
-        Ok(target.name)
+        Ok(target.name.into())
     }
 
     /// `/0wn <uid> icon=<n> name=<text>`: overwrites `target_id`'s live icon
@@ -396,11 +396,11 @@ impl SharedState {
                 access: None,
                 access_extra: None,
                 icon,
-                name,
+                name: name.map(Into::into),
             },
         )
         .await;
-        Ok(Some(target.name))
+        Ok(Some(target.name.into()))
     }
 
     /// Runs `command` (lowercased, without the prefix) via the
@@ -1029,13 +1029,16 @@ impl SharedState {
         Ok(entries
             .into_iter()
             .map(|(name, kind)| match kind {
-                NewsListKind::Bundle { count } => NewsCategoryListEntry::Bundle { count, name },
+                NewsListKind::Bundle { count } => NewsCategoryListEntry::Bundle {
+                    count,
+                    name: name.into(),
+                },
                 NewsListKind::Category(summary) => NewsCategoryListEntry::Category {
                     count: summary.count,
                     guid: summary.guid,
                     add_sn: summary.add_sn,
                     del_sn: summary.del_sn,
-                    name,
+                    name: name.into(),
                 },
             })
             .collect())
@@ -1064,7 +1067,7 @@ impl SharedState {
                         flags: article.flags,
                         title: article.title.clone(),
                         poster: article.poster.clone(),
-                        flavor: mime_type.to_string(),
+                        flavor: mime_type.into(),
                         flavor_size: data.len() as u16,
                     }
                 })
@@ -1203,7 +1206,7 @@ impl SharedState {
             if room.password.is_empty() {
                 return Err("not invited");
             }
-            if password != room.password {
+            if password != &*room.password {
                 return Err("wrong password");
             }
         }
@@ -1319,7 +1322,7 @@ impl SharedState {
             .await
             .get_mut(&chat_id)
             .map(|room| {
-                room.subject = subject;
+                room.subject = subject.into();
             })
             .is_some()
     }
@@ -1331,7 +1334,7 @@ impl SharedState {
             .await
             .get_mut(&chat_id)
             .map(|room| {
-                room.password = password;
+                room.password = password.into();
             })
             .is_some()
     }
@@ -1492,7 +1495,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(articles.articles.len(), 1);
-        assert_eq!(articles.articles[0].title, "Hi");
+        assert_eq!(&*articles.articles[0].title, "Hi");
     }
 
     /// Matches openline's `AddToMsgBoard` header, body, and footer shape,
@@ -1519,9 +1522,9 @@ mod tests {
             state
                 .insert_user(UserEntry {
                     user_id: id,
-                    login: String::new(),
-                    account_name: String::new(),
-                    name: format!("user{id}"),
+                    login: Box::default(),
+                    account_name: Box::default(),
+                    name: format!("user{id}").into(),
                     icon: 0,
                     client_version: None,
                     access: Access::empty(),
@@ -1562,9 +1565,9 @@ mod tests {
             state
                 .insert_user(UserEntry {
                     user_id: id,
-                    login: String::new(),
-                    account_name: String::new(),
-                    name: format!("user{id}"),
+                    login: Box::default(),
+                    account_name: Box::default(),
+                    name: format!("user{id}").into(),
                     icon: 0,
                     client_version: None,
                     access: Access::empty(),
@@ -1616,9 +1619,9 @@ mod tests {
         entries.sort_by(|a, b| a.name.cmp(&b.name));
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].name, "a.txt");
+        assert_eq!(&*entries[0].name, "a.txt");
         assert_eq!(entries[0].size, 2);
-        assert_eq!(entries[1].name, "sub");
+        assert_eq!(&*entries[1].name, "sub");
         assert_eq!(&entries[1].file_type, b"fldr");
     }
 
@@ -1698,7 +1701,7 @@ mod tests {
             .list_files(requester, &HlPath::default(), Access::all())
             .await
             .unwrap();
-        assert_eq!(entries[0].name, "a.txt.hpf");
+        assert_eq!(&*entries[0].name, "a.txt.hpf");
         assert_eq!(entries[0].file_type, crate::file::PARTIAL_TYPE);
         assert_eq!(entries[0].creator, crate::file::PARTIAL_CREATOR);
 
@@ -1726,9 +1729,9 @@ mod tests {
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
-                    login: "alice".to_string(),
+                    login: "alice".into(),
                     dir: HlPath::default(),
-                    name: "x".to_string(),
+                    name: "x".into(),
                 },
                 raw: false,
             }),
@@ -1755,9 +1758,9 @@ mod tests {
             .register_transfer(PendingTransfer {
                 kind: TransferKind::File(crate::state::FileTransfer {
                     target: crate::state::TransferTarget {
-                        login: "alice".to_string(),
+                        login: "alice".into(),
                         dir: HlPath::default(),
-                        name: "x".to_string(),
+                        name: "x".into(),
                     },
                     raw: false,
                 }),
@@ -1783,9 +1786,9 @@ mod tests {
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
-                    login: "alice".to_string(),
+                    login: "alice".into(),
                     dir: HlPath::default(),
-                    name: "x".to_string(),
+                    name: "x".into(),
                 },
                 raw: false,
             }),
@@ -1824,9 +1827,9 @@ mod tests {
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
-                    login: "alice".to_string(),
+                    login: "alice".into(),
                     dir: HlPath::default(),
-                    name: "x".to_string(),
+                    name: "x".into(),
                 },
                 raw: false,
             }),
@@ -1857,9 +1860,9 @@ mod tests {
     fn test_user_entry(user_id: u16, access_extra: AccessExtra) -> UserEntry {
         UserEntry {
             user_id,
-            login: "bob".to_string(),
-            account_name: "Bob".to_string(),
-            name: "Bob".to_string(),
+            login: "bob".into(),
+            account_name: "Bob".into(),
+            name: "Bob".into(),
             icon: 0,
             client_version: None,
             access: Access::default(),

@@ -7,9 +7,9 @@ pub struct ChatRoom {
     /// Currently joined members, in the order they joined.
     pub members: Vec<u16>,
     /// Room subject, settable by any member.
-    pub subject: String,
+    pub subject: Box<str>,
     /// Users invited but not yet joined.
     pub invited: HashSet<u16>,
     /// Join password. Empty means the room is unprotected.
-    pub password: String,
+    pub password: Box<str>,
 }

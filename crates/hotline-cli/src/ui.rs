@@ -58,7 +58,7 @@ fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, session: &Clien
                 LineKind::System => Style::default().fg(Color::DarkGray),
                 LineKind::Error => Style::default().fg(Color::Red),
             };
-            UiLine::from(Span::styled(line.text.clone(), style))
+            UiLine::from(Span::styled(&*line.text, style))
         })
         .collect();
 
@@ -89,7 +89,7 @@ fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, session: &ClientSe
             let label = if u.name.is_empty() {
                 format!("(unnamed) #{}", u.user_id)
             } else {
-                u.name.clone()
+                u.name.to_string()
             };
             let flags = u.flags;
             let mut style = Style::default();

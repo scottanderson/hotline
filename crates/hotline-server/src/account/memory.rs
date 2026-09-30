@@ -68,8 +68,8 @@ mod tests {
 
     fn alice() -> Account {
         Account {
-            password: PASS_ALICE.to_string(),
-            name: NAME_ALICE.to_string(),
+            password: PASS_ALICE.into(),
+            name: NAME_ALICE.into(),
             access: Access::BROADCAST,
             access_extra: AccessExtra::default(),
         }
@@ -102,7 +102,7 @@ mod tests {
     async fn default_seeds_an_admin_account() {
         let provider = InMemoryAccountProvider::default();
         let admin = provider.get("admin").await.expect("admin account exists");
-        assert_eq!(admin.password, "admin");
+        assert_eq!(&*admin.password, "admin");
         assert_eq!(admin.access, Access::all());
     }
 
@@ -110,7 +110,7 @@ mod tests {
     async fn default_seeds_a_guest_account() {
         let provider = InMemoryAccountProvider::default();
         let guest = provider.get("guest").await.expect("guest account exists");
-        assert_eq!(guest.password, "");
+        assert_eq!(&*guest.password, "");
         assert_eq!(guest.access, Access::default());
     }
 }

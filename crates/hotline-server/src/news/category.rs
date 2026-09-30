@@ -102,8 +102,8 @@ impl NewsCategory {
                 parent_id,
                 flags,
                 date: now_as_hl_date(),
-                title,
-                poster,
+                title: title.into(),
+                poster: poster.into(),
                 data: [(mime_type, data)].into(),
                 children: Vec::new(),
             },
@@ -245,8 +245,8 @@ struct ArticleNode {
     flags: u32,
     #[serde(with = "iso_date")]
     date: HlDate,
-    title: String,
-    poster: String,
+    title: Box<str>,
+    poster: Box<str>,
     #[serde(with = "flavor_map")]
     data: BTreeMap<String, Vec<u8>>,
     #[serde(default)]
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(round_tripped.roots, vec![root]);
         assert_eq!(round_tripped.articles[&root].children, vec![reply]);
         assert_eq!(round_tripped.articles[&reply].parent_id, root);
-        assert_eq!(round_tripped.articles[&reply].title, "Reply");
+        assert_eq!(&*round_tripped.articles[&reply].title, "Reply");
     }
 
     #[test]

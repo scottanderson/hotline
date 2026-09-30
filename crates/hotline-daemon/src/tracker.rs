@@ -16,10 +16,10 @@ pub const BEACON_INTERVAL: Duration = Duration::from_secs(300);
 #[derive(Debug, Clone)]
 pub struct TrackerTarget {
     /// `host` or `host:port`; the port defaults to [`UDP_PORT`].
-    pub address: String,
+    pub address: Box<str>,
     /// Tracker password, empty when the tracker takes unauthenticated
     /// registrations.
-    pub password: String,
+    pub password: Box<str>,
 }
 
 impl TrackerTarget {
@@ -28,8 +28,8 @@ impl TrackerTarget {
         let (password, address) = value.rsplit_once('@').unwrap_or(("", value));
         let address = with_default_port(address, UDP_PORT);
         Self {
-            address,
-            password: password.to_string(),
+            address: address.into(),
+            password: password.into(),
         }
     }
 }
@@ -60,8 +60,8 @@ fn beacon(
         port,
         user_count,
         pass_id,
-        name: name.to_string(),
-        description: description.to_string(),
+        name: name.into(),
+        description: description.into(),
         password: target.password.clone(),
     }
 }
@@ -94,7 +94,7 @@ pub async fn run_beacon(
                     continue;
                 }
             };
-            match socket.send_to(&payload, &target.address).await {
+            match socket.send_to(&payload, &*target.address).await {
                 Ok(_) => tracing::debug!(target = %target.address, user_count, "beaconed"),
                 Err(error) => {
                     tracing::warn!(target = %target.address, %error, "tracker beacon failed");
@@ -146,14 +146,14 @@ mod tests {
     #[test]
     fn a_bare_host_takes_the_default_tracker_port() {
         let target = TrackerTarget::parse("tracker.example");
-        assert_eq!(target.address, "tracker.example:5499");
-        assert_eq!(target.password, "");
+        assert_eq!(&*target.address, "tracker.example:5499");
+        assert_eq!(&*target.password, "");
     }
 
     #[test]
     fn an_explicit_port_is_kept() {
         assert_eq!(
-            TrackerTarget::parse("10.0.0.1:1234").address,
+            &*TrackerTarget::parse("10.0.0.1:1234").address,
             "10.0.0.1:1234"
         );
     }
@@ -197,8 +197,8 @@ mod tests {
     #[test]
     fn a_password_is_split_off_the_front() {
         let target = TrackerTarget::parse("s3cr3t@tracker.example:5499");
-        assert_eq!(target.address, "tracker.example:5499");
-        assert_eq!(target.password, "s3cr3t");
+        assert_eq!(&*target.address, "tracker.example:5499");
+        assert_eq!(&*target.password, "s3cr3t");
     }
 
     #[tokio::test]

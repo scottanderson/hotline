@@ -276,7 +276,7 @@ impl Session {
                 &path,
                 parent_id,
                 title,
-                self.name.clone(),
+                self.name.to_string(),
                 flags,
                 mime_type,
                 data,

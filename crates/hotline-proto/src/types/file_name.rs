@@ -18,7 +18,7 @@ pub struct FileNameWithInfo {
     /// File size in bytes (`0` for folders).
     pub size: u32,
     /// File/folder name.
-    pub name: String,
+    pub name: Box<str>,
 }
 
 impl FileNameWithInfo {
@@ -73,7 +73,7 @@ impl FileNameWithInfo {
             file_type,
             creator,
             size,
-            name,
+            name: name.into(),
         })
     }
 
@@ -94,7 +94,7 @@ mod tests {
             file_type: *b"fldr",
             creator: *b"\0\0\0\0",
             size: 0,
-            name: "Uploads".to_string(),
+            name: "Uploads".into(),
         };
         let bytes = file.encode(encoding);
         let decoded = FileNameWithInfo::decode(&bytes, encoding).unwrap();
