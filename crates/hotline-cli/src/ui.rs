@@ -1,35 +1,121 @@
-//! Rendering. Pure: takes a `&ClientSession` and the current input line, draws
-//! them, touches nothing else.
+//! Rendering, and the screen areas that mouse clicks hit.
 
 use hotline_proto::types::UserFlags;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::line::LineKind;
 use crate::session::{ClientSession, Mode};
+use crate::view::{contains, Focus, MenuItem, Modal, View};
 
-pub fn draw(frame: &mut Frame, session: &ClientSession, input: &str) {
+/// Where each part of the main screen is drawn.
+pub struct Areas {
+    pub screen: Rect,
+    pub messages: Rect,
+    pub input: Rect,
+    pub users: Rect,
+    pub hints: Rect,
+}
+
+/// The most lines a text box shows before it scrolls.
+const MAX_INPUT_ROWS: usize = 5;
+
+/// The lines a text box needs to show `text`.
+fn input_rows(text: &str) -> u16 {
+    text.split('\n').count().min(MAX_INPUT_ROWS) as u16
+}
+
+/// `input` is the text in the input line, which grows to fit it.
+pub fn areas(screen: Rect, input: &str) -> Areas {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(1)])
+        .split(screen);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(20), Constraint::Length(24)])
+        .split(rows[0]);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(input_rows(input) + 2),
+        ])
+        .split(columns[0]);
+    Areas {
+        screen,
+        messages: left[0],
+        input: left[1],
+        users: columns[1],
+        hints: rows[1],
+    }
+}
+
+/// `rect` inside its border.
+pub fn inner(rect: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(rect)
+}
+
+/// The user menu opened at `at`, kept on screen.
+pub fn menu_rect(at: (u16, u16), screen: Rect) -> Rect {
+    let width = MenuItem::ALL
+        .iter()
+        .map(|item| item.label().len() as u16)
+        .max()
+        .unwrap_or(0)
+        + 4;
+    let height = MenuItem::ALL.len() as u16 + 2;
+    let x = at.0.min(screen.right().saturating_sub(width));
+    let y = at.1.min(screen.bottom().saturating_sub(height));
+    Rect::new(x, y, width, height).intersection(screen)
+}
+
+/// The menu item at `x`, `y` in the menu drawn at `menu`.
+pub fn menu_item_at(menu: Rect, x: u16, y: u16) -> Option<MenuItem> {
+    let inner = inner(menu);
+    if !contains(inner, x, y) {
+        return None;
+    }
+    MenuItem::ALL.get(usize::from(y - inner.y)).copied()
+}
+
+/// A `width` by `height` box in the middle of `screen`.
+fn centered(screen: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(screen.width);
+    let height = height.min(screen.height);
+    Rect::new(
+        screen.x + (screen.width - width) / 2,
+        screen.y + (screen.height - height) / 2,
+        width,
+        height,
+    )
+}
+
+fn border(focused: bool) -> Style {
+    if focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    }
+}
+
+pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     if let Mode::Agreement(text) = &session.mode {
         draw_agreement(frame, text);
         return;
     }
 
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(20), Constraint::Length(24)])
-        .split(frame.size());
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
-        .split(columns[0]);
-
-    draw_messages(frame, rows[0], session);
-    draw_input(frame, rows[1], input);
-    draw_users(frame, columns[1], session);
+    let areas = areas(frame.size(), &view.input);
+    draw_messages(frame, areas.messages, session);
+    draw_input(frame, areas.input, view);
+    draw_users(frame, areas.users, session, view);
+    draw_hints(frame, areas.hints, view);
+    if let Some(modal) = &view.modal {
+        draw_modal(frame, areas.screen, modal);
+    }
 }
 
 fn draw_agreement(frame: &mut Frame, text: &str) {
@@ -48,7 +134,7 @@ fn draw_agreement(frame: &mut Frame, text: &str) {
     frame.render_widget(hint, rows[1]);
 }
 
-fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, session: &ClientSession) {
+fn draw_messages(frame: &mut Frame, area: Rect, session: &ClientSession) {
     let lines: Vec<UiLine> = session
         .lines
         .iter()
@@ -72,16 +158,36 @@ fn draw_messages(frame: &mut Frame, area: ratatui::layout::Rect, session: &Clien
     frame.render_widget(paragraph, area);
 }
 
-fn draw_input(frame: &mut Frame, area: ratatui::layout::Rect, input: &str) {
-    let paragraph =
-        Paragraph::new(input).block(Block::default().borders(Borders::ALL).title("message"));
-    frame.render_widget(paragraph, area);
-
-    // Blinking-cursor-at-end-of-input, the usual terminal chat convention.
-    frame.set_cursor(area.x + 1 + input.chars().count() as u16, area.y + 1);
+fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
+    let focused = view.focus == Focus::Input;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border(focused))
+        .title("message");
+    draw_text_box(
+        frame,
+        area,
+        block,
+        &view.input,
+        focused && view.modal.is_none(),
+    );
 }
 
-fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, session: &ClientSession) {
+/// Draw `text` scrolled to its last line, with the cursor at its end if `cursor`.
+fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor: bool) {
+    let lines = text.split('\n').count() as u16;
+    let rows = input_rows(text);
+    let paragraph = Paragraph::new(text).block(block).scroll((lines - rows, 0));
+    frame.render_widget(paragraph, area);
+
+    if cursor {
+        let last = text.rsplit('\n').next().unwrap_or_default();
+        let x = area.x + 1 + last.chars().count() as u16;
+        frame.set_cursor(x.min(area.right().saturating_sub(2)), area.y + rows);
+    }
+}
+
+fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
     let items: Vec<ListItem> = session
         .users
         .iter()
@@ -105,10 +211,63 @@ fn draw_users(frame: &mut Frame, area: ratatui::layout::Rect, session: &ClientSe
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!("users ({})", session.users.len())),
-    );
-    frame.render_widget(list, area);
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(view.focus == Focus::Users))
+                .title(format!("users ({})", session.users.len())),
+        )
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let selected = view
+        .selected_user(&session.users)
+        .and_then(|id| session.users.iter().position(|u| u.user_id == id));
+    let mut state = ListState::default()
+        .with_offset(view.users_offset)
+        .with_selected(selected);
+    frame.render_stateful_widget(list, area, &mut state);
+    view.users_offset = state.offset();
+}
+
+fn draw_hints(frame: &mut Frame, area: Rect, view: &View) {
+    let mut spans = Vec::new();
+    for (key, action) in view.hints() {
+        spans.push(Span::styled(
+            *key,
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(format!(" {action}  ")));
+    }
+    frame.render_widget(Paragraph::new(UiLine::from(spans)), area);
+}
+
+fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
+    match modal {
+        Modal::InstantMsg { name, input, .. } => {
+            let area = centered(screen, 60, input_rows(input) + 2);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title(format!("message to {name}"));
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, area, block, input, true);
+        }
+        Modal::UserMenu { at, selected, .. } => {
+            let area = menu_rect(*at, screen);
+            let items: Vec<ListItem> = MenuItem::ALL
+                .iter()
+                .map(|item| ListItem::new(item.label()))
+                .collect();
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border(true)),
+                )
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            let mut state = ListState::default().with_selected(Some(*selected));
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, &mut state);
+        }
+    }
 }

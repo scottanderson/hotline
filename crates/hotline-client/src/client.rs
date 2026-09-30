@@ -19,6 +19,13 @@ use crate::login_result::LoginResult;
 
 type Conn = Framed<TcpStream, TransactionCodec>;
 
+/// [`myField_Options`] (113) on [`myTran_SendInstantMsg`] (108) for a message
+/// a user typed.
+///
+/// [`myField_Options`]: hotline_proto::FieldId::Options
+/// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
+const USER_MESSAGE: u16 = 1;
+
 /// A pending-request table: still accepting new requests, or
 /// permanently closed because the connection ended. See [`read_loop`]'s
 /// shutdown handling.
@@ -181,6 +188,22 @@ impl HotlineClient {
             vec![Field::string(FieldId::Data, message)],
         );
         self.writer.lock().await.send(tx).await?;
+        Ok(())
+    }
+
+    /// Send a private message to `user_id`, [`myTran_SendInstantMsg`] (108).
+    ///
+    /// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
+    pub async fn send_instant_msg(&self, user_id: u16, message: &str) -> Result<()> {
+        self.request(
+            Opcode::SendInstantMsg,
+            vec![
+                Field::u16(FieldId::UserID, user_id),
+                Field::u16(FieldId::Options, USER_MESSAGE),
+                Field::string(FieldId::Data, message),
+            ],
+        )
+        .await?;
         Ok(())
     }
 

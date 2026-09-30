@@ -146,12 +146,12 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-6. **`hlc` covers only chat and lists.** It logs in, shows the
-   agreement, chats in public, and lists users, files, and tracker
-   servers. It cannot transfer files or folders, read or post classic or
-   threaded news, send private messages, use private chat rooms, get
-   user info, administer accounts, or show the banner. Each area can be
-   its own task.
+6. **`hlc` covers only chat, lists, and private messages.** It logs
+   in, shows the agreement, chats in public, sends private messages,
+   and lists users, files, and tracker servers. It cannot transfer
+   files or folders, read or post classic or threaded news, use private
+   chat rooms, get user info, administer accounts, or show the banner.
+   Each area can be its own task.
 
 ## Resolved
 
@@ -663,6 +663,20 @@ one-shared-room model.
     reports the bytes its HTXF stream has moved. A queued download is
     listed under Waiting Downloads. A size under 100 bytes reads 0%,
     where openline divides by zero.
+
+88. `hlc` sends every line on its input line as chat, a line that
+    starts with `/` too, so a server's console commands reach it. Tab
+    moves the focus to the user list. A click selects a user. A double
+    click, or Enter on the selected user, opens a box that sends
+    `myTran_SendInstantMsg` (108). A right click opens a user menu. A bar
+    at the bottom lists the keys that work now. Shift+Enter starts a
+    new line where the terminal reports it, through the kitty keyboard
+    protocol or the Windows console. Ctrl+J works in every terminal,
+    and Alt+Enter in most. A text box grows to five lines and then
+    scrolls. `hlc` sends each line break as `\r`, and shows each `\r` in
+    chat or a private message as its own line.
+    `hotline-client/tests/server.rs` runs client requests against a
+    real in-process server.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

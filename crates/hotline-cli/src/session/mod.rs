@@ -69,6 +69,13 @@ impl ClientSession {
         });
     }
 
+    /// Push one line for each `\r` in `text`.
+    fn push_lines(&mut self, text: &str, kind: LineKind) {
+        for line in text.split('\r') {
+            self.push(line, kind);
+        }
+    }
+
     /// Apply one server-initiated transaction (chat relay, user list
     /// change, permission denial, ...) to the session state.
     pub fn apply_server_event(&mut self, tx: &Transaction) -> EventOutcome {
@@ -120,13 +127,13 @@ impl ClientSession {
             // permission-denied or admin broadcast notice
             // doesn't.
             (Some(from), Some(text)) => {
-                self.push(
-                    format!("[PM] {from}: {}", display_text(&text)),
+                self.push_lines(
+                    &format!("[PM] {from}: {}", display_text(&text)),
                     LineKind::Chat,
                 );
             }
             (None, Some(text)) => {
-                self.push(display_text(&text), LineKind::Error);
+                self.push_lines(&display_text(&text), LineKind::Error);
             }
             _ => {}
         }
@@ -138,7 +145,7 @@ impl ClientSession {
     fn apply_chat_msg(&mut self, tx: &Transaction) {
         let encoding = self.encoding.get();
         if let Some(text) = tx.string(FieldId::Data, encoding) {
-            self.push(display_text(&text), LineKind::Chat);
+            self.push_lines(&display_text(&text), LineKind::Chat);
         }
     }
 
@@ -256,11 +263,30 @@ impl ClientSession {
 
     /// Send `line` as chat, reporting a failed send as a local error line
     /// (a transport error may never come back as a server push).
-    pub async fn send_chat(&mut self, client: &HotlineClient, line: String) {
-        if let Err(e) = client.send_chat(&line).await {
+    pub async fn send_chat(&mut self, client: &HotlineClient, line: &str) {
+        if let Err(e) = client.send_chat(&wire_text(line)).await {
             self.push(format!("failed to send: {e}"), LineKind::Error);
         }
     }
+
+    pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {
+        let text = wire_text(text);
+        match client.send_instant_msg(user_id, &text).await {
+            Ok(()) => {
+                let to = match self.users.iter().find(|u| u.user_id == user_id) {
+                    Some(user) => user.name.to_string(),
+                    None => format!("#{user_id}"),
+                };
+                self.push_lines(&format!("[PM to {to}] {text}"), LineKind::Chat);
+            }
+            Err(e) => self.push(format!("failed to send: {e}"), LineKind::Error),
+        }
+    }
+}
+
+/// `text` with each line break as `\r`, the Hotline line separator.
+fn wire_text(text: &str) -> String {
+    text.replace('\n', "\r")
 }
 
 /// Strip a leading `\r`/`\n` some servers prepend to chat/status text;
@@ -272,6 +298,25 @@ fn display_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_text_ends_each_line_with_cr() {
+        assert_eq!(wire_text("one\ntwo"), "one\rtwo");
+    }
+
+    #[test]
+    fn chat_msg_shows_each_line_on_its_own() {
+        use hotline_proto::opcode::Opcode;
+
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let chat = Transaction::push(
+            Opcode::ChatMsg,
+            vec![Field::string(FieldId::Data, "\rAlice: one\rtwo")],
+        );
+        let _ = session.apply_server_event(&chat);
+        let texts: Vec<&str> = session.lines.iter().map(|l| &*l.text).collect();
+        assert!(texts.ends_with(&["Alice: one", "two"]));
+    }
 
     #[test]
     fn display_text_strips_leading_cr() {
