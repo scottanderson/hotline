@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use async_trait::async_trait;
-use hotline_proto::consts::Access;
 
-use crate::account::{AccessExtra, Account, AccountProvider};
+use crate::account::{Account, AccountProvider};
 
 /// An [`AccountProvider`] that keeps accounts in memory only; nothing
 /// created at runtime survives a restart. Seeded with `admin`/`admin`
@@ -13,14 +12,6 @@ use crate::account::{AccessExtra, Account, AccountProvider};
 #[derive(Debug)]
 pub struct InMemoryAccountProvider {
     accounts: RwLock<HashMap<String, Account>>,
-}
-
-impl InMemoryAccountProvider {
-    /// Unwraps into the underlying account map, e.g. to seed another
-    /// [`AccountProvider`] with the same defaults.
-    pub fn into_inner(self) -> HashMap<String, Account> {
-        self.accounts.into_inner().unwrap()
-    }
 }
 
 impl<T: Into<HashMap<String, Account>>> From<T> for InMemoryAccountProvider {
@@ -34,24 +25,8 @@ impl<T: Into<HashMap<String, Account>>> From<T> for InMemoryAccountProvider {
 impl Default for InMemoryAccountProvider {
     fn default() -> Self {
         Self::from([
-            (
-                "admin".to_string(),
-                Account {
-                    password: "admin".to_string(),
-                    name: "Admin".to_string(),
-                    access: Access::all(),
-                    access_extra: AccessExtra::all(),
-                },
-            ),
-            (
-                "guest".to_string(),
-                Account {
-                    password: "".to_string(),
-                    name: "Guest".to_string(),
-                    access: Access::default(),
-                    access_extra: AccessExtra::default(),
-                },
-            ),
+            ("admin".to_string(), Account::admin("admin")),
+            ("guest".to_string(), Account::guest()),
         ])
     }
 }
@@ -84,6 +59,8 @@ impl AccountProvider for InMemoryAccountProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account::AccessExtra;
+    use hotline_proto::consts::Access;
 
     const USER_ALICE: &str = "alice";
     const PASS_ALICE: &str = "";

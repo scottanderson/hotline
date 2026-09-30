@@ -32,3 +32,25 @@ pub struct Account {
     #[serde(with = "crate::bitflags_serde")]
     pub access_extra: AccessExtra,
 }
+
+impl Account {
+    /// `Admin`, with full access.
+    pub fn admin(password: impl Into<String>) -> Self {
+        Self {
+            password: password.into(),
+            name: "Admin".to_string(),
+            access: Access::all(),
+            access_extra: AccessExtra::all(),
+        }
+    }
+
+    /// `Guest`, with default access and no password.
+    pub fn guest() -> Self {
+        Self {
+            password: String::new(),
+            name: "Guest".to_string(),
+            access: Access::default(),
+            access_extra: AccessExtra::default(),
+        }
+    }
+}

@@ -7,8 +7,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use hotline_server::{Account, AccountProvider, InMemoryAccountProvider};
+use hotline_server::{Account, AccountProvider};
 use tokio::sync::RwLock;
+
+/// The seeded account with full access.
+pub const ADMIN_LOGIN: &str = "admin";
+
+/// The seeded account with default access.
+pub const GUEST_LOGIN: &str = "guest";
+
+/// 16 random hex digits from the OS random source.
+pub fn random_password() -> std::io::Result<String> {
+    getrandom::u64()
+        .map(|bits| format!("{bits:016x}"))
+        .map_err(std::io::Error::other)
+}
 
 /// Persists accounts as one `<login>.json` file per account under a
 /// directory, with an in-memory cache so `get` never touches disk.
@@ -18,8 +31,7 @@ pub struct FileAccountProvider {
 }
 
 impl FileAccountProvider {
-    /// Loads every account under `dir`, seeding it with
-    /// [`InMemoryAccountProvider`]'s defaults if empty.
+    /// Loads every account under `dir`.
     pub async fn open(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
         tokio::fs::create_dir_all(&dir).await?;
@@ -40,18 +52,13 @@ impl FileAccountProvider {
             cache.insert(login.to_string(), account);
         }
 
-        let provider = if cache.is_empty() {
-            let cache = RwLock::new(InMemoryAccountProvider::default().into_inner());
-            let provider = Self { dir, cache };
-            for (login, account) in provider.cache.read().await.iter() {
-                provider.write_account(login, account).await?;
-            }
-            provider
-        } else {
-            let cache = RwLock::new(cache);
-            Self { dir, cache }
-        };
-        Ok(provider)
+        let cache = RwLock::new(cache);
+        Ok(Self { dir, cache })
+    }
+
+    /// Whether the directory holds no accounts.
+    pub async fn is_empty(&self) -> bool {
+        self.cache.read().await.is_empty()
     }
 
     /// `None` for a login that can't be a safe filename. mhxd also rejects a `/`.
@@ -158,16 +165,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_an_empty_directory_seeds_default_accounts() {
+    async fn is_empty_until_an_account_is_put() {
         let dir = tempfile::tempdir().unwrap();
-
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        assert!(provider.is_empty().await);
 
-        assert!(provider.get("admin").await.is_some());
-        assert!(provider.get("guest").await.is_some());
-        // The seed persisted to disk, not just the in-memory cache.
-        let reopened = FileAccountProvider::open(dir.path()).await.unwrap();
-        assert!(reopened.get("admin").await.is_some());
+        provider.put("alice".to_string(), alice()).await.unwrap();
+
+        assert!(!provider.is_empty().await);
+    }
+
+    #[test]
+    fn random_password_is_16_hex_digits() {
+        let password = random_password().unwrap();
+
+        assert_eq!(password.len(), 16);
+        assert!(password.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[tokio::test]

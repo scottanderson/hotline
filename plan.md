@@ -582,6 +582,11 @@ one-shared-room model.
     values behind it. Everything else is local bookkeeping with no
     openline name to match. No renames needed this pass.
 
+74. `hls` no longer seeds `admin` with the password `admin`. When
+    `hls` finds an empty `--accounts-dir`, it creates `admin` with 16
+    random hex digits and `guest`, and prints the password once.
+    `InMemoryAccountProvider` keeps its fixed seed for tests and embedders.
+
 ## Needs manual verification against the real client
 
 Unlike the `TCP_NODELAY`/push-`trans` fixes (explicitly verified against

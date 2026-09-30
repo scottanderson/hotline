@@ -14,11 +14,11 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use hotline_server::{
-    DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Providers, Server, ServerConfig,
-    UrlBannerProvider,
+    Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Providers,
+    Server, ServerConfig, UrlBannerProvider,
 };
 
-use accounts::FileAccountProvider;
+use accounts::{random_password, FileAccountProvider, ADMIN_LOGIN, GUEST_LOGIN};
 use args::Args;
 use banner::FileBannerProvider;
 use bans::FileBanProvider;
@@ -39,16 +39,30 @@ async fn main() -> anyhow::Result<()> {
         ..ServerConfig::default()
     };
 
-    let accounts = Arc::new(
-        FileAccountProvider::open(args.accounts_dir.clone())
+    let accounts = FileAccountProvider::open(args.accounts_dir.clone())
+        .await
+        .with_context(|| {
+            format!(
+                "failed to open accounts directory {} (--accounts-dir)",
+                args.accounts_dir
+            )
+        })?;
+    if accounts.is_empty().await {
+        let password = random_password()?;
+        accounts
+            .put(ADMIN_LOGIN.to_string(), Account::admin(&password))
             .await
-            .with_context(|| {
-                format!(
-                    "failed to open accounts directory {} (--accounts-dir)",
-                    args.accounts_dir
-                )
-            })?,
-    );
+            .map_err(anyhow::Error::msg)?;
+        println!(
+            "created account \"{ADMIN_LOGIN}\" with password \"{password}\" in {}",
+            args.accounts_dir
+        );
+        accounts
+            .put(GUEST_LOGIN.to_string(), Account::guest())
+            .await
+            .map_err(anyhow::Error::msg)?;
+    }
+    let accounts = Arc::new(accounts);
     let files = Arc::new(
         DiskFileProvider::open(args.files_dir.clone(), args.comments_file.clone())
             .await
