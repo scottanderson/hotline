@@ -112,6 +112,23 @@ pub(super) fn state_with_banner(
     })
 }
 
+/// State over the given account storage.
+pub(super) fn state_with_accounts(
+    accounts: std::sync::Arc<dyn crate::account::AccountProvider>,
+) -> SharedState {
+    SharedState::new(Providers {
+        accounts,
+        files: std::sync::Arc::new(crate::file::InMemoryFileProvider::default()),
+        flat_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+        threaded_news: std::sync::Arc::new(crate::news::InMemoryNewsProvider::default()),
+        bans: std::sync::Arc::new(crate::ban::InMemoryBanProvider::default()),
+        flood: std::sync::Arc::new(crate::flood::NoFloodPolicy),
+        banner: std::sync::Arc::new(crate::banner::NoBanner),
+        commands: std::sync::Arc::new(crate::console::DefaultChatCommands),
+        activity: std::sync::Arc::new(crate::activity::NoActivityLog),
+    })
+}
+
 /// An [`ActivityLog`] that keeps every entry.
 #[derive(Default)]
 pub(super) struct RecordingActivityLog(std::sync::Mutex<Vec<ActivityEntry>>);

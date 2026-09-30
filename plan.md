@@ -650,6 +650,11 @@ one-shared-room model.
     A connect is recorded at `myTran_Login` (107) only with a name and
     an icon, and always at `myTran_Agreed` (121).
 
+82. A `myTran_SetUserList` (349) rename saves the new login before it
+    deletes the old one. If the save fails, the account keeps its old
+    login. Before, it deleted the old login first, so a failed save lost
+    the account.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

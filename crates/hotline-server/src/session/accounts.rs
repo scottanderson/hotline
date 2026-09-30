@@ -355,9 +355,6 @@ impl Session {
             self.access.require(Access::MODIFY_USER)?;
             let existing = state.account(&old_login).await;
             let renamed = !old_login.eq_ignore_ascii_case(&login);
-            if renamed {
-                let _ = state.delete_account(&old_login).await;
-            }
             let access_extra = existing
                 .map(|a| a.access_extra)
                 .unwrap_or_else(AccessExtra::default);
@@ -372,6 +369,8 @@ impl Session {
                     let name = (!name.is_empty()).then_some(name);
                     state.push_access_update(login.clone(), access, name).await;
                     if renamed {
+                        // The old login goes only after the new one is saved.
+                        let _ = state.delete_account(&old_login).await;
                         let action = AccountAction::Rename { from: old_login };
                         self.record_account_change(action, login.clone(), state)
                             .await;
@@ -427,6 +426,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account::AccountProvider;
     use crate::state::{RecipientMessage, UserEntry};
     use hotline_proto::opcode::TransactionType;
     use std::time::Instant;
@@ -1096,6 +1096,55 @@ mod tests {
                 change(AccountAction::Modify),
             ]
         );
+    }
+
+    /// Account storage whose `put` always fails.
+    struct FailingPutAccounts(crate::account::InMemoryAccountProvider);
+
+    #[async_trait::async_trait]
+    impl AccountProvider for FailingPutAccounts {
+        async fn get(&self, login: &str) -> Option<Account> {
+            self.0.get(login).await
+        }
+
+        async fn put(&self, _login: String, _account: Account) -> Result<(), Cow<'static, str>> {
+            Err("disk full")?
+        }
+
+        async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>> {
+            self.0.delete(login).await
+        }
+
+        async fn list(&self) -> Vec<(String, Account)> {
+            self.0.list().await
+        }
+    }
+
+    #[tokio::test]
+    async fn set_user_list_keeps_the_old_login_when_a_rename_fails_to_save() {
+        let session = test_session("Admin", Access::all());
+        let accounts = crate::account::InMemoryAccountProvider::default();
+        let bob = Account {
+            access_extra: AccessExtra::default(),
+            password: "secret".to_string(),
+            name: "Bob".to_string(),
+            access: Access::SEND_CHAT,
+        };
+        accounts.put("bob".to_string(), bob).await.unwrap();
+        let state = state_with_accounts(std::sync::Arc::new(FailingPutAccounts(accounts)));
+
+        let record = user_list_record(
+            Some("bob"),
+            "Bobby",
+            "bobby",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::SEND_CHAT,
+        );
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
+        session.on_set_user_list(&request, &state).await;
+
+        assert!(state.account("bob").await.is_some());
+        assert!(state.account("bobby").await.is_none());
     }
 
     #[tokio::test]
