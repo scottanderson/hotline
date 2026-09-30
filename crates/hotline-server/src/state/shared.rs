@@ -32,10 +32,11 @@ use crate::news::{
 use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
+use crate::state::progress::RunningTransfers;
 use crate::state::{
     dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom,
-    ConsoleUpdate, PendingTransfer, RecipientMessage, TransferDirection, TransferKind, TransferRef,
-    UserEntry,
+    ConsoleUpdate, PendingTransfer, ProgressGuard, RecipientMessage, TransferDirection,
+    TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
 };
 
 /// How long an active download or an upload may wait for its `HTXF`
@@ -74,6 +75,8 @@ pub struct SharedState {
     /// Transfers awaiting their `HTXF` data connection, keyed by the
     /// reference number handed to the client.
     transfers: Arc<RwLock<HashMap<TransferRef, PendingTransfer>>>,
+    /// Transfers whose data connection is open.
+    running: Arc<RunningTransfers>,
     next_transfer_ref: Arc<AtomicU32>,
     /// Concurrent-download admission; see
     /// [`download_queue::DownloadQueue`](crate::state::download_queue::DownloadQueue).
@@ -107,6 +110,7 @@ impl SharedState {
             flood: providers.flood,
             banner: providers.banner,
             transfers: Arc::new(RwLock::new(HashMap::new())),
+            running: Arc::default(),
             next_transfer_ref: Arc::new(AtomicU32::new(1)),
             download_queue: Arc::new(DownloadQueue::default()),
             commands: providers.commands,
@@ -819,6 +823,39 @@ impl SharedState {
         self.transfers.write().await.remove(&reference)
     }
 
+    /// Track `reference`'s progress until the guard drops. `None` for a banner.
+    pub(crate) fn start_progress(
+        &self,
+        reference: TransferRef,
+        transfer: &PendingTransfer,
+    ) -> Option<ProgressGuard> {
+        self.running.start(reference, transfer)
+    }
+
+    /// `user_id`'s pending, running, and waiting transfers, oldest first.
+    pub async fn transfer_report(&self, user_id: u16) -> TransferReport {
+        let mut transfers = self.running.for_user(user_id);
+        for (&reference, transfer) in self.transfers.read().await.iter() {
+            if transfer.user_id != user_id {
+                continue;
+            }
+            if let Some(progress) = TransferProgress::from_pending(transfer) {
+                transfers.push((reference, progress));
+            }
+        }
+        let (waiting, active) = transfers
+            .into_iter()
+            .partition(|(reference, _)| self.download_queue.is_waiting(*reference));
+        let oldest_first = |mut list: Vec<(TransferRef, TransferProgress)>| {
+            list.sort_by_key(|(reference, _)| reference.0);
+            list.into_iter().map(|(_, progress)| progress).collect()
+        };
+        TransferReport {
+            active: oldest_first(active),
+            waiting: oldest_first(waiting),
+        }
+    }
+
     /// Admit a registered download. Returns its [`myField_WaitingCount`] (116),
     /// `0` if it is active now.
     ///
@@ -1424,6 +1461,72 @@ mod tests {
     use super::*;
     use crate::file::InMemoryFileProvider;
     use crate::news::InMemoryNewsProvider;
+
+    #[tokio::test]
+    async fn a_running_transfer_reports_its_bytes_until_its_guard_drops() {
+        let state = SharedState::default();
+        let transfer = PendingTransfer {
+            kind: TransferKind::File(crate::state::FileTransfer {
+                target: crate::state::TransferTarget {
+                    login: "bob".into(),
+                    dir: HlPath::default(),
+                    name: "a.txt".into(),
+                },
+                raw: false,
+            }),
+            direction: TransferDirection::Put,
+            size: 1000,
+            resume_offset: 0,
+            client_ip: "192.0.2.1".parse().unwrap(),
+            user_id: 2,
+        };
+        let reference = state.register_transfer(transfer.clone()).await;
+        let pending = state.transfer_report(2).await;
+        assert_eq!(pending.active.len(), 1);
+        assert_eq!(pending.active[0].done, 0);
+
+        let taken = state.take_transfer(reference).await.unwrap();
+        let guard = state.start_progress(reference, &taken).unwrap();
+        guard.counter().fetch_add(400, Ordering::Relaxed);
+        let running = state.transfer_report(2).await;
+        assert_eq!(running.active.len(), 1);
+        assert_eq!(running.active[0].done, 400);
+        assert!(state.transfer_report(3).await.active.is_empty());
+
+        drop(guard);
+        assert_eq!(state.transfer_report(2).await, TransferReport::default());
+    }
+
+    #[tokio::test]
+    async fn a_connected_download_that_waits_for_a_slot_reports_as_waiting() {
+        let state = SharedState::default();
+        state.set_download_limits(1, 1);
+        let transfer = PendingTransfer {
+            kind: TransferKind::File(crate::state::FileTransfer {
+                target: crate::state::TransferTarget {
+                    login: "bob".into(),
+                    dir: HlPath::default(),
+                    name: "a.txt".into(),
+                },
+                raw: false,
+            }),
+            direction: TransferDirection::Get,
+            size: 1000,
+            resume_offset: 0,
+            client_ip: "192.0.2.1".parse().unwrap(),
+            user_id: 2,
+        };
+        let first = state.register_transfer(transfer.clone()).await;
+        assert_eq!(state.admit_download(first, 2).await, 0);
+        let second = state.register_transfer(transfer).await;
+        assert_eq!(state.admit_download(second, 2).await, 1);
+
+        let taken = state.take_transfer(second).await.unwrap();
+        let _guard = state.start_progress(second, &taken).unwrap();
+        let report = state.transfer_report(2).await;
+        assert_eq!(report.active.len(), 1);
+        assert_eq!(report.waiting.len(), 1);
+    }
 
     #[tokio::test]
     async fn connection_count_includes_a_connection_before_login() {

@@ -9,9 +9,18 @@ use hotline_proto::{Field, Transaction};
 
 use crate::account::AccessExtra;
 use crate::flood::FloodEvent;
-use crate::state::{SharedState, UserEntry};
+use crate::state::{SharedState, TransferProgress, TransferSection, UserEntry};
 
 use super::connection::{KickBan, MsgOption, Session};
+
+/// `lines`, or `None.` when there are none.
+fn or_none(lines: String) -> String {
+    if lines.is_empty() {
+        "None.\r".to_string()
+    } else {
+        lines
+    }
+}
 
 impl Session {
     /// [`myTran_GetUserNameList`] (300)
@@ -62,6 +71,18 @@ impl Session {
             return vec![tx.reply_error("no such user")];
         };
 
+        let report = state.transfer_report(target_id).await;
+        let section = |section| {
+            let lines = report.active.iter().filter(|p| p.section == section);
+            or_none(lines.map(TransferProgress::line).collect())
+        };
+        let waiting = or_none(
+            report
+                .waiting
+                .iter()
+                .map(TransferProgress::waiting_line)
+                .collect(),
+        );
         let online = target.connected_at.elapsed();
         let version_line = target
             .client_version
@@ -75,11 +96,11 @@ impl Session {
              {version_line}\
              Address:    {addr}\r\
              Online:     {mins}m {secs}s\r\r\
-             -------- File Downloads ---------\r\rNone.\r\r\
-             ------- Folder Downloads --------\r\rNone.\r\r\
-             --------- File Uploads ----------\r\rNone.\r\r\
-             -------- Folder Uploads ---------\r\rNone.\r\r\
-             ------- Waiting Downloads -------\r\rNone.\r",
+             -------- File Downloads ---------\r\r{file_downloads}\r\
+             ------- Folder Downloads --------\r\r{folder_downloads}\r\
+             --------- File Uploads ----------\r\r{file_uploads}\r\
+             -------- Folder Uploads ---------\r\r{folder_uploads}\r\
+             ------- Waiting Downloads -------\r\r{waiting}",
             name = target.name,
             account_name = if target.account_name.is_empty() {
                 "(none)"
@@ -95,6 +116,10 @@ impl Session {
             icon = target.icon,
             mins = online.as_secs() / 60,
             secs = online.as_secs() % 60,
+            file_downloads = section(TransferSection::FileDownload),
+            folder_downloads = section(TransferSection::FolderDownload),
+            file_uploads = section(TransferSection::FileUpload),
+            folder_uploads = section(TransferSection::FolderUpload),
         );
 
         vec![tx.reply(vec![
@@ -411,6 +436,77 @@ mod tests {
              --------- File Uploads ----------\r\rNone.\r\r\
              -------- Folder Uploads ---------\r\rNone.\r\r\
              ------- Waiting Downloads -------\r\rNone.\r"
+        ));
+    }
+
+    fn file_transfer(
+        name: &str,
+        direction: crate::state::TransferDirection,
+        size: u64,
+    ) -> crate::state::PendingTransfer {
+        crate::state::PendingTransfer {
+            kind: crate::state::TransferKind::File(crate::state::FileTransfer {
+                target: crate::state::TransferTarget {
+                    login: "bob".into(),
+                    dir: Default::default(),
+                    name: name.into(),
+                },
+                raw: false,
+            }),
+            direction,
+            size,
+            resume_offset: 0,
+            client_ip: "192.0.2.1".parse().unwrap(),
+            user_id: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn get_client_info_text_lists_uploads_and_waiting_downloads() {
+        use crate::state::TransferDirection::{Get, Put};
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: "bob".into(),
+                account_name: "Bobby".into(),
+                name: "Bob".into(),
+                icon: 42,
+                client_version: None,
+                access: Access::all(),
+                access_extra: AccessExtra::default(),
+                remote_addr: "192.0.2.1:5500".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
+            })
+            .await;
+        state.set_download_limits(1, 1);
+        state
+            .register_transfer(file_transfer("up.txt", Put, 2048))
+            .await;
+        for name in ["first.txt", "second.txt"] {
+            let reference = state.register_transfer(file_transfer(name, Get, 10)).await;
+            state.admit_download(reference, 2).await;
+        }
+        let request = Transaction::request(
+            Opcode::GetClientInfoText,
+            1,
+            vec![Field::u16(FieldId::UserID, 2)],
+        );
+
+        let reply = &session.on_get_client_info_text(&request, &state).await[0];
+        let text = reply.string(FieldId::Data, encoding).unwrap();
+        assert!(text.contains(
+            "-------- File Downloads ---------\r\rfirst.txt             0%   <1K\r\r\
+             ------- Folder Downloads --------\r\rNone.\r\r\
+             --------- File Uploads ----------\r\rup.txt                0%   2K\r\r\
+             -------- Folder Uploads ---------\r\rNone.\r\r\
+             ------- Waiting Downloads -------\r\rsecond.txt            (File)\r"
         ));
     }
 

@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -11,10 +12,11 @@ use hotline_proto::types::{self, HlPath};
 
 use crate::error::Result;
 use crate::file::FileRequester;
+use crate::server::counting_stream::CountingStream;
 use crate::server::idle_stream::IdleStream;
 use crate::state::{
-    FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
-    TransferRef, TransferTarget,
+    FileTransfer, FolderTransfer, PendingTransfer, ProgressGuard, SharedState, TransferDirection,
+    TransferKind, TransferRef, TransferTarget,
 };
 
 /// Time a new `HTXF` connection may take to send its header.
@@ -71,12 +73,17 @@ async fn handle_htxf_connection(
         return Ok(());
     }
 
+    let progress = state.start_progress(reference, &transfer);
     if transfer.direction == TransferDirection::Get
         && !matches!(transfer.kind, TransferKind::Banner)
         && !wait_for_slot_or_close(&stream, state, reference).await
     {
         return Ok(());
     }
+    let count = progress
+        .as_ref()
+        .map_or_else(Arc::default, ProgressGuard::counter);
+    let mut stream = CountingStream::new(&mut stream, count);
     match &transfer.kind {
         TransferKind::Banner => send_banner(&mut stream, state).await,
         TransferKind::File(file) => match transfer.direction {
@@ -166,7 +173,10 @@ async fn run_download(
 /// with none of a file transfer's flattened-object framing.
 ///
 /// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
-async fn send_banner(stream: &mut TcpStream, state: &SharedState) -> Result<()> {
+async fn send_banner(
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    state: &SharedState,
+) -> Result<()> {
     let mut reader = state.open_banner_read().await?;
     tokio::io::copy(&mut reader, stream).await?;
     drain_stream(stream).await
@@ -176,7 +186,7 @@ async fn send_banner(stream: &mut TcpStream, state: &SharedState) -> Result<()> 
 /// side first. A client may still be draining its last buffered chunk
 /// when a server-initiated close arrives, and reports that as a failed
 /// transfer even after reading every byte.
-async fn drain_stream(stream: &mut TcpStream) -> Result<()> {
+async fn drain_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<()> {
     let mut discard = [0u8; 4096];
     while stream.read(&mut discard).await? != 0 {}
     Ok(())
@@ -190,7 +200,7 @@ async fn drain_stream(stream: &mut TcpStream) -> Result<()> {
 ///
 /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
 async fn send_file(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     file: &FileTransfer,
     transfer: &PendingTransfer,
     state: &SharedState,
@@ -210,7 +220,7 @@ async fn send_file(
 /// Write a flattened file object for `reader`'s `size` bytes, skipping
 /// the first `resume_offset` of them.
 async fn send_flat_file(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     mut reader: impl AsyncRead + Unpin,
     size: u64,
     resume_offset: u64,
@@ -309,7 +319,7 @@ async fn receive_flat_file(
 ///
 /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
 async fn send_folder(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     folder: &FolderTransfer,
     state: &SharedState,
 ) -> Result<()> {

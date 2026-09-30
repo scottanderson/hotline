@@ -1,5 +1,6 @@
 mod config;
 mod connections;
+mod counting_stream;
 mod htxf;
 mod idle_stream;
 mod instance;

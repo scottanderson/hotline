@@ -43,5 +43,5 @@ pub use server::{
 pub use session::Session;
 pub use state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
-    UserEntry,
+    TransferProgress, TransferReport, TransferSection, UserEntry,
 };

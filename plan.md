@@ -96,20 +96,13 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **No live per-transfer-progress tracker.** `on_get_client_info_text`'s
-   file-transfer sections always read `"None."`, with no in-progress
-   transfer ever reported. The concurrent-download queue itself
-   (Resolved) tracks which references hold an active slot, but not
-   their byte-level progress; this needs its own tracker fed from
-   `server/htxf.rs`'s actual read/write loop.
-
-2. **A still-uploading (`.hpf`) file can't be touched by its plain name
+1. **A still-uploading (`.hpf`) file can't be touched by its plain name
    until it finishes.** `delete`/`rename`/`r#move`/`symlink` all resolve
    only the exact name passed in, so a resumable in-progress upload is
    invisible to those operations by design, not by omission — flagged in
    case that turns out to matter for a real client.
 
-3. **Threaded news storage does not match openline's on-disk
+2. **Threaded news storage does not match openline's on-disk
    binary database format.** Openline stores each news category
    in its own file. Each file starts with an `HLNZ` header (version 2,
    `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
@@ -130,14 +123,14 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-4. **Open design question from news article/category JSON storage.**
+3. **Open design question from news article/category JSON storage.**
    `NewsArticle::primary_flavor` picks `self.data.iter().next()` on a
    `BTreeMap`, so once an article legitimately holds more than one
    flavor, "primary" means alphabetically-first MIME type, not
    first-posted or preferred — harmless today (always exactly one
    entry) but worth deciding before multi-flavor posting is wired up.
 
-5. **`on_get_msgs`'s clamp can split a multi-byte character.**
+4. **`on_get_msgs`'s clamp can split a multi-byte character.**
    The reply is truncated to 65535 encoded bytes. Under the Mac OS
    Roman default every character is one byte, so this is invisible;
    under `utf-8` or `shift-jis` the last character can arrive as a
@@ -145,7 +138,7 @@ one-shared-room model.
    openline. Worth deciding only if a multi-byte encoding is
    ever made selectable per connection.
 
-6. **No HTTP tunnel listeners.** openline also listens on the base port
+5. **No HTTP tunnel listeners.** openline also listens on the base port
    plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
    The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
    `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -153,7 +146,7 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-7. **`hlc` covers only chat and lists.** It logs in, shows the
+6. **`hlc` covers only chat and lists.** It logs in, shows the
    agreement, chats in public, and lists users, files, and tracker
    servers. It cannot transfer files or folders, read or post classic or
    threaded news, send private messages, use private chat rooms, get
@@ -664,6 +657,12 @@ one-shared-room model.
 86. `Providers` implements `Default` with the in-memory backends that
     `SharedState::default` used. A test names only the providers it
     changes and takes the rest from `..Providers::default()`.
+
+87. `myTran_GetClientInfoText` (303) lists each transfer in its section
+    with openline's name, percent, and size columns. A running transfer
+    reports the bytes its HTXF stream has moved. A queued download is
+    listed under Waiting Downloads. A size under 100 bytes reads 0%,
+    where openline divides by zero.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

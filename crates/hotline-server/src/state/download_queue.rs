@@ -144,6 +144,12 @@ impl DownloadQueue {
         recompute(&mut inner)
     }
 
+    /// Whether `reference` is waiting for a slot.
+    pub(crate) fn is_waiting(&self, reference: TransferRef) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.waiting.iter().any(|w| w.reference == reference)
+    }
+
     /// `reference`'s cancel token, `None` once it has left the queue.
     pub(crate) fn cancel_token(&self, reference: TransferRef) -> Option<CancellationToken> {
         self.inner.lock().unwrap().cancel.get(&reference).cloned()
