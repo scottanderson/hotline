@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 /// `max_downloads`'s default, openline's `mOptions.nMaxDownloads`.
@@ -34,11 +35,10 @@ pub struct ServerConfig {
     pub max_downloads: usize,
     /// Concurrent downloads for one user before further ones queue.
     pub max_downloads_per_client: usize,
-    /// Open connections before further ones are refused; 0 means no limit.
-    pub max_connections: usize,
-    /// Open connections from one address before further ones are refused;
-    /// 0 means no limit.
-    pub max_connections_per_address: usize,
+    /// Open connections before further ones are refused.
+    pub max_connections: Option<NonZeroUsize>,
+    /// Open connections from one address before further ones are refused.
+    pub max_connections_per_address: Option<NonZeroUsize>,
     /// Time from accept to a completed login before the connection closes.
     pub login_timeout: Duration,
 }
@@ -52,8 +52,8 @@ impl Default for ServerConfig {
             console_prefix: None,
             max_downloads: DEFAULT_MAX_DOWNLOADS,
             max_downloads_per_client: DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
-            max_connections: DEFAULT_MAX_CONNECTIONS,
-            max_connections_per_address: DEFAULT_MAX_CONNECTIONS_PER_ADDRESS,
+            max_connections: NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS),
+            max_connections_per_address: NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS_PER_ADDRESS),
             login_timeout: DEFAULT_LOGIN_TIMEOUT,
         }
     }

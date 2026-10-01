@@ -9,6 +9,7 @@ mod file;
 mod news;
 mod tracker;
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -38,8 +39,8 @@ async fn main() -> anyhow::Result<()> {
         agreement: args.agreement.into(),
         server_name: args.name.as_str().into(),
         console_prefix: args.console_prefix,
-        max_connections: args.max_connections,
-        max_connections_per_address: args.max_connections_per_address,
+        max_connections: NonZeroUsize::new(args.max_connections),
+        max_connections_per_address: NonZeroUsize::new(args.max_connections_per_address),
         max_downloads: args.max_downloads,
         max_downloads_per_client: args.max_downloads_per_client,
         ..ServerConfig::default()

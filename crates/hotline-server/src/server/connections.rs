@@ -1,13 +1,14 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 /// Counts open connections, in total and for each address.
 #[derive(Debug)]
 pub(crate) struct ConnectionLimits {
-    max_total: usize,
-    max_per_address: usize,
+    max_total: Option<NonZeroUsize>,
+    max_per_address: Option<NonZeroUsize>,
     open: Mutex<OpenConnections>,
 }
 
@@ -17,14 +18,20 @@ struct OpenConnections {
     by_address: HashMap<IpAddr, usize>,
 }
 
-/// `true` once `count` reaches `max`. A `max` of 0 means no limit.
-const fn at_limit(count: usize, max: usize) -> bool {
-    max != 0 && count >= max
+/// `true` once `count` reaches `max`.
+const fn at_limit(count: usize, max: Option<NonZeroUsize>) -> bool {
+    match max {
+        Some(max) => count >= max.get(),
+        None => false,
+    }
 }
 
 impl ConnectionLimits {
-    /// A limit of 0 means no limit.
-    pub(crate) fn new(max_total: usize, max_per_address: usize) -> Arc<Self> {
+    /// `None` means no limit.
+    pub(crate) fn new(
+        max_total: Option<NonZeroUsize>,
+        max_per_address: Option<NonZeroUsize>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             max_total,
             max_per_address,
@@ -75,9 +82,16 @@ mod tests {
     const ALICE: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
     const BOB: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2));
 
+    fn limits(max_total: usize, max_per_address: usize) -> Arc<ConnectionLimits> {
+        ConnectionLimits::new(
+            NonZeroUsize::new(max_total),
+            NonZeroUsize::new(max_per_address),
+        )
+    }
+
     #[test]
     fn an_address_at_its_limit_is_refused() {
-        let limits = ConnectionLimits::new(0, 2);
+        let limits = limits(0, 2);
         let _first = limits.try_acquire(ALICE).unwrap();
         let _second = limits.try_acquire(ALICE).unwrap();
 
@@ -87,7 +101,7 @@ mod tests {
 
     #[test]
     fn the_total_limit_covers_every_address() {
-        let limits = ConnectionLimits::new(2, 0);
+        let limits = limits(2, 0);
         let _first = limits.try_acquire(ALICE).unwrap();
         let _second = limits.try_acquire(BOB).unwrap();
 
@@ -96,7 +110,7 @@ mod tests {
 
     #[test]
     fn dropping_a_permit_frees_its_place() {
-        let limits = ConnectionLimits::new(1, 1);
+        let limits = limits(1, 1);
         let first = limits.try_acquire(ALICE).unwrap();
         drop(first);
 
@@ -105,8 +119,8 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_limit_means_no_limit() {
-        let limits = ConnectionLimits::new(0, 0);
+    fn no_limit_allows_any_number() {
+        let limits = ConnectionLimits::new(None, None);
         let permits: Vec<_> = (0..100).map(|_| limits.try_acquire(ALICE)).collect();
 
         assert!(permits.iter().all(Option::is_some));
