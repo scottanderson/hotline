@@ -70,7 +70,7 @@ fn log_console_change(
     uid: u32,
     fields: &str,
 ) {
-    tracing::info!(
+    tracing::debug!(
         command,
         actor = %actor.login,
         actor_uid = actor.user_id,
@@ -190,7 +190,7 @@ async fn cmd_unban(args: &str, actor: &ChatCommandActor, state: &SharedState) ->
     };
     match state.unban(ip).await {
         Ok(()) => {
-            tracing::info!(actor = %actor.login, actor_uid = actor.user_id, %ip, "console unban");
+            tracing::debug!(actor = %actor.login, actor_uid = actor.user_id, %ip, "console unban");
             ConsoleReply::Silent
         }
         Err(reason) => cmd_err("unban", &reason),
