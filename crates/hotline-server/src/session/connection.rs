@@ -738,6 +738,10 @@ impl Session {
         let losing_use_any_name =
             self.access.contains(Access::ANY_NAME) && !update.access.contains(Access::ANY_NAME);
         self.access = update.access;
+        self.account_name = update.name.clone().unwrap_or_default();
+        if let Some(login) = update.renamed_to {
+            self.login = login;
+        }
         if losing_use_any_name {
             if let Some(name) = update.name {
                 if name != self.name {

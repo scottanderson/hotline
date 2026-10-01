@@ -278,9 +278,16 @@ impl SharedState {
     }
 
     /// Push a live privilege change for every session logged in under `login`.
-    pub async fn push_access_update(&self, login: String, access: Access, name: Option<String>) {
+    pub async fn push_access_update(
+        &self,
+        login: String,
+        renamed_to: Option<String>,
+        access: Access,
+        name: Option<String>,
+    ) {
         let update = AccessUpdate {
             login: login.into(),
+            renamed_to: renamed_to.map(Into::into),
             access,
             name: name.map(Into::into),
         };

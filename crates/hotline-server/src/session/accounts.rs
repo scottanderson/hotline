@@ -185,7 +185,9 @@ impl Session {
         let reply = match result {
             Ok(()) => {
                 let name = (!name.is_empty()).then_some(name);
-                state.push_access_update(login.clone(), access, name).await;
+                state
+                    .push_access_update(login.clone(), None, access, name)
+                    .await;
                 self.record_account_change(action, login, state).await;
                 tx.reply(vec![])
             }
@@ -376,7 +378,10 @@ impl Session {
             return match state.put_account(login.clone(), account).await {
                 Ok(()) => {
                     let name = (!name.is_empty()).then_some(name);
-                    state.push_access_update(login.clone(), access, name).await;
+                    let renamed_to = renamed.then(|| login.clone());
+                    state
+                        .push_access_update(old_login.clone(), renamed_to, access, name)
+                        .await;
                     if renamed {
                         // The old login goes only after the new one is saved.
                         let _ = state.delete_account(&old_login).await;
@@ -1155,6 +1160,39 @@ mod tests {
 
         assert!(state.account("bob").await.is_some());
         assert!(state.account("bobby").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_rename_updates_sessions_under_the_old_login() {
+        let admin = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        let account = Account {
+            access_extra: AccessExtra::default(),
+            password: "secret".into(),
+            name: "Bob".into(),
+            access: Access::empty(),
+        };
+        state.put_account("bob".to_string(), account).await.unwrap();
+        let mut bob = test_session("Bob", Access::empty());
+        bob.login = "bob".into();
+        let mut bob_rx = state.register_recipient(bob.user_id).await;
+
+        let record = user_list_record(
+            Some("bob"),
+            "Robert",
+            "bobby",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::BROADCAST,
+        );
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
+        admin.on_set_user_list(&request, &state).await;
+        let update = next_access_update(&mut bob_rx);
+        bob.apply_access_update(update, &state).await;
+
+        assert_eq!(bob.access, Access::BROADCAST);
+        assert_eq!(&*bob.login, "bobby");
+        assert_eq!(&*bob.account_name, "Robert");
+        assert_eq!(state.user_ids_for_login("bobby").await, [bob.user_id]);
     }
 
     #[tokio::test]
