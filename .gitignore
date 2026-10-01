@@ -10,3 +10,4 @@ tracker-id
 Cargo.lock
 .DS_Store
 *.swp
+.claude
