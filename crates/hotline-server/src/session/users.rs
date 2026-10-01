@@ -312,7 +312,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         if self.message_flood_banned(tx, state).await {
-            return vec![];
+            return vec![tx.reply(vec![])];
         }
         let encoding = self.encoding();
         let Some(message) = tx.string(FieldId::Data, encoding) else {
@@ -740,6 +740,27 @@ mod tests {
             .on_send_instant_msg(&message(), &state)
             .await
             .is_empty());
+        assert!(rx.try_recv().expect("a disconnect").is_disconnect());
+    }
+
+    #[tokio::test]
+    async fn user_broadcast_still_replies_to_the_broadcast_that_bans() {
+        let state = state_with_flood();
+        let session = test_session("Alice", Access::all());
+        let broadcast = Transaction::request(
+            Opcode::UserBroadcast,
+            1,
+            vec![Field::string(FieldId::Data, "buy now")],
+        );
+        for _ in 0..5 {
+            session.on_user_broadcast(&broadcast, &state).await;
+        }
+        let mut rx = state.register_recipient(session.user_id).await;
+
+        let replies = session.on_user_broadcast(&broadcast, &state).await;
+
+        assert_eq!(replies.len(), 1);
+        assert!(!replies[0].is_error());
         assert!(rx.try_recv().expect("a disconnect").is_disconnect());
     }
 
