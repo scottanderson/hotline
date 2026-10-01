@@ -1,6 +1,6 @@
 [package]
 name = "hotline-codec"
-description = "tokio_util Decoder/Encoder for Transaction framing - the standard Tokio pattern for custom binary protocols, shared by hotline-client and hotline-server."
+description = "Tokio codec for Hotline transaction framing."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
