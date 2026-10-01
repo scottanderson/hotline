@@ -69,6 +69,11 @@ below, in priority order.
   scrambles each password byte with bitwise NOT in its data file
   (`HotlineServTrans.cp`). This hides a password only from a casual
   reader, so `hls` does not scramble them.
+- **A rename onto a taken login changes nothing.** openline's
+  `ProcessTran_SetUserList` fails the folder rename, then still writes
+  the record over the other account with `SetUser`. This server skips
+  the record and leaves both accounts as they were. Both reply
+  "Error saving list of accounts."
 - **Activity logs use a different date and line format.** openline
   writes the Mac short date and `\r` line endings in the classic Mac
   text encoding. `hls` writes `YYYY-MM-DD HH:MM:SS` in local time with

@@ -361,6 +361,9 @@ impl Session {
             self.access.require(Access::MODIFY_USER)?;
             let existing = state.account(&old_login).await;
             let renamed = !old_login.eq_ignore_ascii_case(&login);
+            if renamed && state.account(&login).await.is_some() {
+                return Ok(false);
+            }
             let access_extra = existing
                 .map(|a| a.access_extra)
                 .unwrap_or_else(AccessExtra::default);
@@ -1152,6 +1155,37 @@ mod tests {
 
         assert!(state.account("bob").await.is_some());
         assert!(state.account("bobby").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_rename_onto_a_taken_login_changes_nothing() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        for (login, password) in [("bob", "bob's"), ("alice", "alice's")] {
+            let account = Account {
+                access_extra: AccessExtra::default(),
+                password: password.into(),
+                name: login.into(),
+                access: Access::SEND_CHAT,
+            };
+            state.put_account(login.to_string(), account).await.unwrap();
+        }
+
+        let record = user_list_record(
+            Some("bob"),
+            "Bob",
+            "alice",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::all(),
+        );
+        let request = Transaction::request(Opcode::SetUserList, 1, vec![record]);
+        let replies = session.on_set_user_list(&request, &state).await;
+
+        assert!(replies[0].is_error());
+        assert_eq!(&*state.account("bob").await.unwrap().password, "bob's");
+        let alice = state.account("alice").await.unwrap();
+        assert_eq!(&*alice.password, "alice's");
+        assert_eq!(alice.access, Access::SEND_CHAT);
     }
 
     #[tokio::test]
