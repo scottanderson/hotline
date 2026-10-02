@@ -7,6 +7,7 @@ mod event_outcome;
 mod mode;
 #[cfg(test)]
 mod test_support;
+mod threaded_news;
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, SeekFrom};
@@ -29,6 +30,7 @@ use crate::transfer::{Conflict, Start};
 pub use chat_room::{ChatInvite, ChatRoom};
 pub use event_outcome::EventOutcome;
 pub use mode::Mode;
+pub use threaded_news::NewsItem;
 
 pub struct ClientSession {
     pub nick: Box<str>,
@@ -44,6 +46,12 @@ pub struct ClientSession {
     /// The folder that downloads are saved in.
     pub download_dir: PathBuf,
     pub access: Access,
+    /// The threaded news bundle or category on the Threaded News tab.
+    pub threaded_path: HlPath,
+    /// `true` if `threaded_path` is a category, which holds articles.
+    pub threaded_in_category: bool,
+    /// The items at `threaded_path`, `None` until they are fetched.
+    pub threaded: Option<Vec<NewsItem>>,
     /// The private chat rooms this client is in, oldest first.
     pub rooms: Vec<ChatRoom>,
     /// Invitations that wait for an answer, oldest first.
@@ -68,6 +76,9 @@ impl ClientSession {
             file_path: HlPath::default(),
             download_dir: PathBuf::from("."),
             access: Access::empty(),
+            threaded_path: HlPath::default(),
+            threaded_in_category: false,
+            threaded: None,
             rooms: Vec::new(),
             invites: VecDeque::new(),
             encoding,

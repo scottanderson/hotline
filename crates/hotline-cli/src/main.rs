@@ -136,6 +136,7 @@ async fn run(
             }
         }
         view.set_tabs(ui::tab_labels(session));
+        view.news_count = session.threaded.as_ref().map_or(0, Vec::len);
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(|invite| Modal::Invite {
                 chat_id: invite.chat_id,
@@ -247,6 +248,53 @@ async fn perform(
             let path = std::path::Path::new(&path);
             let conflict = session.upload(client, path, start, done).await;
             view.modal = conflict.map(Modal::ask);
+        }
+        Action::ListThreadedNews => {
+            session.list_threaded_news(client).await;
+            view.reset_news_selection();
+        }
+        Action::OpenNewsItem(index) => {
+            let path = session.threaded_path.clone();
+            if let Some(article) = session.open_news_item(client, index).await {
+                view.modal = Some(Modal::Article {
+                    id: article.id,
+                    title: article.title,
+                    poster: article.poster,
+                    text: article.text.into(),
+                });
+            } else if session.threaded_path != path {
+                view.reset_news_selection();
+            }
+        }
+        Action::ParentNews => {
+            session.parent_news(client).await;
+            view.reset_news_selection();
+        }
+        Action::NewPost => {
+            if session.can_post() {
+                view.modal = Some(Modal::Post {
+                    parent_id: 0,
+                    title: String::new(),
+                    body: String::new(),
+                    on_body: false,
+                });
+            }
+        }
+        Action::PostArticle {
+            parent_id,
+            title,
+            text,
+        } => session.post_article(client, parent_id, &title, &text).await,
+        Action::AskDeleteNews(index) => {
+            let item = session.threaded.as_ref().and_then(|items| items.get(index));
+            view.modal = item.map(|item| Modal::DeleteNews {
+                index,
+                name: item.name().into(),
+            });
+        }
+        Action::DeleteNewsItem(index) => session.delete_news_item(client, index).await,
+        Action::NewNewsItem { name, category } => {
+            session.new_news_item(client, &name, category).await;
         }
     }
     false

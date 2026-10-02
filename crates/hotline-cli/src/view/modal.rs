@@ -27,6 +27,25 @@ pub enum Modal {
     Invite { chat_id: u32, from: Box<str> },
     /// A new subject for the room `chat_id`.
     Subject { chat_id: u32, input: String },
+    /// A threaded news article to read.
+    Article {
+        id: u32,
+        title: Box<str>,
+        poster: Box<str>,
+        text: Box<str>,
+    },
+    /// A new article: a reply to `parent_id`, or a new thread if `0`.
+    Post {
+        parent_id: u32,
+        title: String,
+        body: String,
+        /// `true` while keys go to `body`.
+        on_body: bool,
+    },
+    /// The name of a new bundle, or a category if `category`.
+    NewsName { category: bool, input: String },
+    /// A check before the threaded news item at `index` is deleted.
+    DeleteNews { index: usize, name: Box<str> },
     /// The users to invite to the room `chat_id`, as `(user ID, name)`.
     PickUser {
         chat_id: u32,

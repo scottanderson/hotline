@@ -20,6 +20,7 @@ mod folder_sender;
 mod folder_upload;
 mod joined_chat;
 mod login_result;
+mod news;
 
 pub use client::HotlineClient;
 pub use client_info_text::ClientInfoText;
@@ -32,3 +33,4 @@ pub use folder_sender::FolderSender;
 pub use folder_upload::FolderUpload;
 pub use joined_chat::JoinedChat;
 pub use login_result::LoginResult;
+pub use news::{NewsArticle, TEXT_PLAIN};

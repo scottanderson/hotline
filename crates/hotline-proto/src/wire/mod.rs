@@ -12,8 +12,9 @@
 //! `pstring` without ever choosing an encoding is a compile error, not a
 //! silent default.
 //!
-//! [`PacketReader`] is the read-side counterpart, always fixed-size: you
-//! always know how many bytes you're about to read.
+//! [`PacketReader`] is the read-side counterpart for a fixed size.
+//! [`SliceReader`] reads a borrowed buffer of unknown length, such as one
+//! that [`VecWriter`] wrote.
 
 mod fixed;
 mod growable;
@@ -21,6 +22,7 @@ mod no_encoding;
 mod packet_builder;
 mod packet_reader;
 mod pstring_too_long;
+mod slice_reader;
 mod storage;
 mod with_encoding;
 
@@ -30,5 +32,6 @@ pub use no_encoding::NoEncoding;
 pub use packet_builder::{PacketBuilder, PacketWriter, VecWriter};
 pub use packet_reader::PacketReader;
 pub use pstring_too_long::PStringTooLong;
+pub use slice_reader::SliceReader;
 pub use storage::Storage;
 pub use with_encoding::WithEncoding;

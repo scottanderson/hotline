@@ -58,4 +58,26 @@ pub enum Action {
         path: String,
         start: Start,
     },
+    /// List the current threaded news bundle or category again.
+    ListThreadedNews,
+    /// Open the threaded news item at this index, or read the article there.
+    OpenNewsItem(usize),
+    /// List the bundle that holds the current one.
+    ParentNews,
+    /// Ask for a new article in the current category.
+    NewPost,
+    /// Post an article as a reply to `parent_id`, or `0` for a new thread.
+    PostArticle {
+        parent_id: u32,
+        title: String,
+        text: String,
+    },
+    /// Ask before the threaded news item at this index is deleted.
+    AskDeleteNews(usize),
+    DeleteNewsItem(usize),
+    /// Create a bundle, or a category if `category`, in the current bundle.
+    NewNewsItem {
+        name: String,
+        category: bool,
+    },
 }

@@ -145,9 +145,9 @@ one-shared-room model.
    agreement, chats in public, sends private messages, shows a user's
    info text, reads and posts classic news, lists users, files, and
    tracker servers, downloads and uploads files and folders, and shows
-   a banner's link, resumes transfers, and uses private chat rooms. It
-   cannot read or post threaded news or administer accounts. Each area
-   can be its own task.
+   a banner's link, resumes transfers, uses private chat rooms, and
+   reads and writes threaded news. It cannot administer accounts. Each
+   area can be its own task.
 
 ## Resolved
 
@@ -764,6 +764,19 @@ one-shared-room model.
      `myTran_LeaveChat` (116), and Ctrl-R moves to the next room. The
      pushes 117, 118, 119, and a `myTran_ChatMsg` (106) with a
      `myField_ChatID` (114) update the room.
+
+103. `hlc` reads and writes threaded news. Ctrl-B opens the "Threaded
+     News" tab. It lists bundles and categories with
+     `myTran_GetNewsCatNameList` (370) and the articles of a category,
+     indented by thread, with `myTran_GetNewsArtNameList` (371). Enter
+     opens an item or reads an article with `myTran_GetNewsArtData`
+     (400). `p` posts and `r` replies with `myTran_PostNewsArt` (410).
+     `x` deletes an article and its replies with `myTran_DelNewsArt`
+     (411), or a bundle or category with `myTran_DelNewsItem` (380).
+     `b` and `c` create a bundle with `myTran_NewNewsFldr` (381) or a
+     category with `myTran_NewNewsCat` (382). `hotline-client` has a
+     method for each of these opcodes. The new `wire::SliceReader`
+     cursor decodes the category and article listings.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

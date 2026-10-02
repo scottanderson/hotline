@@ -3,7 +3,7 @@
 use crate::error::{ProtoError, Result};
 use crate::text_encoding::Encoding;
 use crate::types::HlDate;
-use crate::wire::VecWriter;
+use crate::wire::{SliceReader, VecWriter, WithEncoding};
 
 /// One article summary inside a [`myField_NewsArtListData`] (321) field.
 ///
@@ -54,6 +54,34 @@ impl NewsArticleSummary {
         }
         Ok(w.finish())
     }
+
+    /// Read one summary from `r`.
+    pub(crate) fn read(r: &mut SliceReader<'_, WithEncoding>) -> Result<Self> {
+        let id = r.u32()?;
+        let date = HlDate::decode(r.bytes(HlDate::LEN)?)?;
+        let parent_id = r.u32()?;
+        let flags = r.u32()?;
+        let flavor_count = r.u16()?;
+        let title = r.pstring()?.into();
+        let poster = r.pstring()?.into();
+        let flavors = (0..flavor_count)
+            .map(|_| {
+                Ok(NewsFlavor {
+                    mime_type: r.pstring()?.into(),
+                    size: r.u16()?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            id,
+            date,
+            parent_id,
+            flags,
+            title,
+            poster,
+            flavors,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +118,8 @@ mod tests {
         assert_eq!(&buf[20..22], &[0, 2]);
         let tail: &[u8] = b"\x02Hi\x02al\x0atext/plain\x00\x05\x09image/gif\x01\x2c";
         assert_eq!(&buf[22..], tail);
+
+        let mut r = SliceReader::new(&buf).with_encoding(text_encoding::DEFAULT);
+        assert_eq!(NewsArticleSummary::read(&mut r).unwrap(), summary);
     }
 }

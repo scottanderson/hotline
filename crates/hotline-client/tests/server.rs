@@ -409,6 +409,59 @@ async fn download_file_of_a_missing_file_is_a_server_error() {
 }
 
 #[tokio::test]
+async fn threaded_news_lists_posts_reads_and_deletes() {
+    let addr = start_server().await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+    let root = HlPath::default();
+    let general = HlPath::new(["General"]);
+
+    admin.new_news_fldr(&root, "Archive").await.unwrap();
+    admin.new_news_cat(&root, "General").await.unwrap();
+    let mut names: Vec<_> = admin
+        .get_news_cat_name_list(&root)
+        .await
+        .unwrap()
+        .iter()
+        .map(|entry| entry.name().to_string())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Archive", "General"]);
+
+    admin
+        .post_news_art(&general, 0, "Hello", "first post")
+        .await
+        .unwrap();
+    admin
+        .post_news_art(&general, 1, "Re: Hello", "a reply")
+        .await
+        .unwrap();
+    let articles = admin.get_news_art_name_list(&general).await.unwrap();
+    let thread: Vec<_> = articles
+        .iter()
+        .map(|a| (a.id, a.parent_id, &*a.title))
+        .collect();
+    assert_eq!(thread, [(1, 0, "Hello"), (2, 1, "Re: Hello")]);
+
+    let article = admin
+        .get_news_art_data(&general, 1, hotline_client::TEXT_PLAIN)
+        .await
+        .unwrap();
+    assert_eq!(&*article.title, "Hello");
+    assert_eq!(&*article.poster, "root");
+    assert_eq!(article.first_child_id, 2);
+    assert_eq!(article.data, b"first post");
+
+    admin.del_news_art(&general, 1, true).await.unwrap();
+    assert!(admin
+        .get_news_art_name_list(&general)
+        .await
+        .unwrap()
+        .is_empty());
+    admin.del_news_item(&general).await.unwrap();
+    assert_eq!(admin.get_news_cat_name_list(&root).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn a_private_chat_room_carries_chat_subject_and_leave() {
     let addr = start_server().await;
     let (alice, mut alice_events) = join_as(addr, "admin", "admin", "alice").await;

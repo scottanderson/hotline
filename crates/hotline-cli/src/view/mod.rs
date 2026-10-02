@@ -40,6 +40,8 @@ pub enum Focus {
     Users,
     /// The file list on the Files tab.
     Files,
+    /// The item list on the Threaded News tab.
+    NewsList,
 }
 
 impl Focus {
@@ -48,6 +50,7 @@ impl Focus {
         match tab {
             Tab::Chat | Tab::News | Tab::Room(_) => Self::Input,
             Tab::Files => Self::Files,
+            Tab::Threaded => Self::NewsList,
         }
     }
 }
@@ -57,6 +60,7 @@ impl Focus {
 enum Clicked {
     User(u16),
     File(usize),
+    News(usize),
 }
 
 pub struct View {
@@ -77,6 +81,12 @@ pub struct View {
     pub files_offset: usize,
     /// The index of the selected file in the listing.
     pub selected_file: usize,
+    /// The first threaded news row on screen, as the last draw left it.
+    pub news_offset: usize,
+    /// The index of the selected threaded news item.
+    pub selected_news: usize,
+    /// The number of threaded news items listed.
+    pub news_count: usize,
     selected_user: Option<u16>,
     last_click: Option<(Clicked, Instant)>,
 }
@@ -98,6 +108,9 @@ impl Default for View {
             users_offset: 0,
             files_offset: 0,
             selected_file: 0,
+            news_offset: 0,
+            selected_news: 0,
+            news_count: 0,
             selected_user: None,
             last_click: None,
         }
@@ -116,7 +129,7 @@ impl View {
         match self.tab {
             Tab::Chat => Some(&self.chat_input),
             Tab::News => Some(&self.post_input),
-            Tab::Files => None,
+            Tab::Files | Tab::Threaded => None,
             Tab::Room(id) => Some(self.room_inputs.get(&id).map_or("", String::as_str)),
         }
     }
@@ -125,7 +138,7 @@ impl View {
         match self.tab {
             Tab::Chat => Some(&mut self.chat_input),
             Tab::News => Some(&mut self.post_input),
-            Tab::Files => None,
+            Tab::Files | Tab::Threaded => None,
             Tab::Room(id) => Some(self.room_inputs.entry(id).or_default()),
         }
     }
@@ -166,6 +179,12 @@ impl View {
         self.files_offset = 0;
     }
 
+    /// Select the first threaded news item and scroll to the top of the list.
+    pub const fn reset_news_selection(&mut self) {
+        self.selected_news = 0;
+        self.news_offset = 0;
+    }
+
     /// The keys that work now, as `(key, what it does)`.
     pub const fn hints(&self) -> &'static [(&'static str, &'static str)] {
         match (&self.modal, self.focus, self.tab) {
@@ -190,6 +209,32 @@ impl View {
             (Some(Modal::PickUser { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "invite"), ("Esc", "cancel")]
             }
+            (Some(Modal::Article { .. }), ..) => &[("r", "reply"), ("Esc", "close")],
+            (Some(Modal::Post { .. }), ..) => &[
+                ("Tab", "title or text"),
+                ("Enter", "post"),
+                ("⇧Enter", "new line"),
+                ("Esc", "cancel"),
+            ],
+            (Some(Modal::NewsName { .. }), ..) => &[("Enter", "create"), ("Esc", "cancel")],
+            (Some(Modal::DeleteNews { .. }), ..) => &[("y", "delete"), ("Esc", "cancel")],
+            (None, Focus::NewsList, _) | (None, Focus::Input, Tab::Threaded) => &[
+                ("↑↓", "select"),
+                ("Enter", "open"),
+                ("⌫", "up"),
+                ("p", "post"),
+                ("x", "delete"),
+                ("b", "new bundle"),
+                ("c", "new category"),
+                ("Esc", "chat"),
+            ],
+            (None, Focus::Users, Tab::Threaded) => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("Tab", "news"),
+                ("^B", "chat"),
+            ],
             (None, Focus::Users, Tab::Chat) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
@@ -218,6 +263,7 @@ impl View {
                 ("Tab", "users"),
                 ("^N", "news"),
                 ("^F", "files"),
+                ("^B", "threaded news"),
                 ("Esc", "quit"),
             ],
             (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => &[
@@ -271,11 +317,12 @@ impl View {
         }
         if ctrl {
             let tab = match (key.code, self.tab) {
-                (KeyCode::Char('n'), Tab::News) | (KeyCode::Char('f'), Tab::Files) => {
-                    Some(Tab::Chat)
-                }
+                (KeyCode::Char('n'), Tab::News)
+                | (KeyCode::Char('f'), Tab::Files)
+                | (KeyCode::Char('b'), Tab::Threaded) => Some(Tab::Chat),
                 (KeyCode::Char('n'), _) => Some(Tab::News),
                 (KeyCode::Char('f'), _) => Some(Tab::Files),
+                (KeyCode::Char('b'), _) => Some(Tab::Threaded),
                 (KeyCode::Char('r'), _) => self.next_room(),
                 _ => None,
             };
@@ -295,6 +342,7 @@ impl View {
             Focus::Users => self.users_key(key, users),
             Focus::Input => self.input_key(key),
             Focus::Files => self.files_key(key, files),
+            Focus::NewsList => self.news_key(key),
         }
     }
 
@@ -303,12 +351,79 @@ impl View {
             return self.confirm_key(conflict, key);
         }
         match (&mut modal, key.code) {
+            (Modal::Article { id, title, .. }, KeyCode::Char('r')) => {
+                let title = match title.strip_prefix("Re: ") {
+                    Some(_) => title.to_string(),
+                    None => format!("Re: {title}"),
+                };
+                self.modal = Some(Modal::Post {
+                    parent_id: *id,
+                    title,
+                    body: String::new(),
+                    on_body: true,
+                });
+                return Action::None;
+            }
+            (Modal::DeleteNews { index, .. }, KeyCode::Char('y')) => {
+                return Action::DeleteNewsItem(*index);
+            }
+            (Modal::Post { body, on_body, .. }, _) if is_new_line(key) => {
+                if *on_body {
+                    body.push('\n');
+                }
+            }
+            (Modal::Post { on_body, .. }, KeyCode::Tab) => *on_body = !*on_body,
+            (
+                Modal::Post {
+                    parent_id,
+                    title,
+                    body,
+                    ..
+                },
+                KeyCode::Enter,
+            ) if !title.is_empty() => {
+                return Action::PostArticle {
+                    parent_id: *parent_id,
+                    title: std::mem::take(title),
+                    text: std::mem::take(body),
+                };
+            }
+            (
+                Modal::Post {
+                    title,
+                    body,
+                    on_body,
+                    ..
+                },
+                KeyCode::Backspace,
+            ) => {
+                if *on_body { body } else { title }.pop();
+            }
+            (
+                Modal::Post {
+                    title,
+                    body,
+                    on_body,
+                    ..
+                },
+                KeyCode::Char(c),
+            ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if *on_body { body } else { title }.push(c);
+            }
+            (Modal::NewsName { category, input }, KeyCode::Enter) if !input.is_empty() => {
+                return Action::NewNewsItem {
+                    name: std::mem::take(input),
+                    category: *category,
+                };
+            }
             (Modal::Invite { chat_id, .. }, KeyCode::Enter) => return Action::JoinChat(*chat_id),
             (Modal::Invite { chat_id, .. }, KeyCode::Esc) => {
                 return Action::RejectChatInvite(*chat_id);
             }
             (Modal::InstantMsg { input, .. }, _) if is_new_line(key) => input.push('\n'),
-            (_, KeyCode::Esc) | (Modal::Info { .. }, KeyCode::Enter) => return Action::None,
+            (_, KeyCode::Esc) | (Modal::Info { .. } | Modal::Article { .. }, KeyCode::Enter) => {
+                return Action::None;
+            }
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::SendInstantMsg {
                     user_id: *user_id,
@@ -364,7 +479,8 @@ impl View {
                 Modal::InstantMsg { input, .. }
                 | Modal::Upload { input }
                 | Modal::SaveAs { input, .. }
-                | Modal::Subject { input, .. },
+                | Modal::Subject { input, .. }
+                | Modal::NewsName { input, .. },
                 KeyCode::Backspace,
             ) => {
                 input.pop();
@@ -373,7 +489,8 @@ impl View {
                 Modal::InstantMsg { input, .. }
                 | Modal::Upload { input }
                 | Modal::SaveAs { input, .. }
-                | Modal::Subject { input, .. },
+                | Modal::Subject { input, .. }
+                | Modal::NewsName { input, .. },
                 KeyCode::Char(c),
             ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 input.push(c);
@@ -491,6 +608,34 @@ impl View {
         Action::None
     }
 
+    fn news_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Tab => self.focus = Focus::Users,
+            KeyCode::Esc => return self.set_tab(Tab::Chat),
+            KeyCode::Up => self.selected_news = self.selected_news.saturating_sub(1),
+            KeyCode::Down => {
+                self.selected_news =
+                    (self.selected_news + 1).min(self.news_count.saturating_sub(1));
+            }
+            KeyCode::Enter if self.news_count > 0 => {
+                return Action::OpenNewsItem(self.selected_news);
+            }
+            KeyCode::Backspace | KeyCode::Left => return Action::ParentNews,
+            KeyCode::Char('p') => return Action::NewPost,
+            KeyCode::Char('x') if self.news_count > 0 => {
+                return Action::AskDeleteNews(self.selected_news);
+            }
+            KeyCode::Char(c @ ('b' | 'c')) => {
+                self.modal = Some(Modal::NewsName {
+                    category: c == 'c',
+                    input: String::new(),
+                });
+            }
+            _ => {}
+        }
+        Action::None
+    }
+
     pub fn handle_mouse(
         &mut self,
         mouse: MouseEvent,
@@ -520,7 +665,11 @@ impl View {
                 | Modal::Confirm(_)
                 | Modal::Invite { .. }
                 | Modal::Subject { .. }
-                | Modal::PickUser { .. } => {}
+                | Modal::PickUser { .. }
+                | Modal::Post { .. }
+                | Modal::NewsName { .. }
+                | Modal::DeleteNews { .. } => {}
+                Modal::Article { .. } => self.modal = None,
             }
             return Action::None;
         }
@@ -535,6 +684,9 @@ impl View {
                 }
                 if let Some(index) = self.file_at(areas.body, x, y, files) {
                     return self.click_file(index, files, now);
+                }
+                if let Some(index) = self.news_at(areas.body, x, y) {
+                    return self.click_news(index, now);
                 }
                 if contains(areas.input, x, y) {
                     self.focus = Focus::Input;
@@ -574,6 +726,17 @@ impl View {
         self.focus = Focus::Files;
         if self.double_click(Clicked::File(index), now) {
             return open_file(index, files);
+        }
+        Action::None
+    }
+
+    /// Select the threaded news item at `index`, or open it on the second
+    /// click of a double click.
+    fn click_news(&mut self, index: usize, now: Instant) -> Action {
+        self.selected_news = index;
+        self.focus = Focus::NewsList;
+        if self.double_click(Clicked::News(index), now) {
+            return Action::OpenNewsItem(index);
         }
         Action::None
     }
@@ -620,6 +783,7 @@ impl View {
                 Action::GetMsgs
             }
             Tab::Files => Action::ListFiles,
+            Tab::Threaded => Action::ListThreadedNews,
         }
     }
 
@@ -661,6 +825,16 @@ impl View {
         }
         let index = self.files_offset + usize::from(y - inner.y);
         (index < files.len()).then_some(index)
+    }
+
+    /// The index of the item on the list row at `x`, `y` of the Threaded News tab.
+    fn news_at(&self, body: Rect, x: u16, y: u16) -> Option<usize> {
+        let inner = ui::inner(body);
+        if self.tab != Tab::Threaded || !contains(inner, x, y) {
+            return None;
+        }
+        let index = self.news_offset + usize::from(y - inner.y);
+        (index < self.news_count).then_some(index)
     }
 }
 
@@ -1234,6 +1408,94 @@ mod tests {
                 save_as: "a.txmd".into(),
                 start: Start::New,
             }
+        );
+    }
+
+    #[test]
+    fn ctrl_b_opens_threaded_news_and_walks_its_items() {
+        let mut view = View::default();
+        assert_eq!(
+            view.handle_key(ctrl('b'), &users(), &files()),
+            Action::ListThreadedNews
+        );
+        assert_eq!((view.tab, view.focus), (Tab::Threaded, Focus::NewsList));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::None
+        );
+
+        view.news_count = 2;
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::OpenNewsItem(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('x')), &users(), &files()),
+            Action::AskDeleteNews(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('p')), &users(), &files()),
+            Action::NewPost
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Backspace), &users(), &files()),
+            Action::ParentNews
+        );
+        assert_eq!(view.handle_key(ctrl('b'), &users(), &files()), Action::None);
+        assert_eq!(view.tab, Tab::Chat);
+    }
+
+    #[test]
+    fn a_reply_to_an_article_posts_its_title_and_text() {
+        let mut view = View {
+            modal: Some(Modal::Article {
+                id: 4,
+                title: "Hello".into(),
+                poster: "Alice".into(),
+                text: "hi".into(),
+            }),
+            ..View::default()
+        };
+        let _ = view.handle_key(key(KeyCode::Char('r')), &users(), &files());
+        type_text(&mut view, "a");
+        let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        let _ = view.handle_key(shift_enter, &users(), &files());
+        type_text(&mut view, "b");
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        type_text(&mut view, "!");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::PostArticle {
+                parent_id: 4,
+                title: "Re: Hello!".into(),
+                text: "a\nb".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_new_category_takes_its_name_and_a_delete_takes_y() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('b'), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Char('c')), &users(), &files());
+        type_text(&mut view, "Gen");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::NewNewsItem {
+                name: "Gen".into(),
+                category: true,
+            }
+        );
+
+        view.modal = Some(Modal::DeleteNews {
+            index: 3,
+            name: "Gen".into(),
+        });
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('y')), &users(), &files()),
+            Action::DeleteNewsItem(3)
         );
     }
 }

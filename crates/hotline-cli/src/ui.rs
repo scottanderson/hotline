@@ -163,6 +163,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
         Tab::News => draw_news(frame, areas.body, session, view.news_scroll),
         Tab::Files => draw_files(frame, areas.body, session, view),
+        Tab::Threaded => draw_threaded_news(frame, areas.body, session, view),
         Tab::Room(id) => {
             if let Some(room) = session.room(id) {
                 draw_messages(frame, areas.body, &room.lines, &room.label());
@@ -268,6 +269,33 @@ fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
     view.files_offset = state.offset();
 }
 
+fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border(view.focus == Focus::NewsList))
+        .title(format!(
+            "threaded news /{}",
+            session.threaded_path.components.join("/")
+        ));
+    let Some(items) = &session.threaded else {
+        frame.render_widget(Paragraph::new("loading news").block(block), area);
+        return;
+    };
+    let rows: Vec<ListItem> = items.iter().map(|i| ListItem::new(i.label())).collect();
+    let list = List::new(rows)
+        .block(block)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let selected = items
+        .len()
+        .checked_sub(1)
+        .map(|last| view.selected_news.min(last));
+    let mut state = ListState::default()
+        .with_offset(view.news_offset)
+        .with_selected(selected);
+    frame.render_stateful_widget(list, area, &mut state);
+    view.news_offset = state.offset();
+}
+
 /// A folder's name with a trailing `/`, or a file's name and size.
 fn file_label(file: &FileNameWithInfo) -> String {
     if file.is_folder() {
@@ -296,7 +324,7 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
     let title = match view.tab {
         Tab::Chat | Tab::Room(_) => "message",
         Tab::News => "post",
-        Tab::Files => return,
+        Tab::Files | Tab::Threaded => return,
     };
     let focused = view.focus == Focus::Input;
     let block = Block::default()
@@ -473,6 +501,72 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             let mut state = ListState::default().with_selected(Some(*selected));
             frame.render_widget(Clear, area);
             frame.render_stateful_widget(list, area, &mut state);
+        }
+        Modal::Article {
+            title,
+            poster,
+            text,
+            ..
+        } => {
+            let text = text.replace('\r', "\n");
+            let height = text.lines().count() as u16 + 2;
+            let area = centered(screen, 76, height.min(screen.height.saturating_sub(2)));
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title(format!("{title} ({poster})"));
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
+                area,
+            );
+        }
+        Modal::Post {
+            parent_id,
+            title,
+            body,
+            on_body,
+        } => {
+            let area = centered(screen, 70, input_rows(body) + 5);
+            let title_area = Rect::new(area.x, area.y, area.width, 3);
+            let body_area = Rect::new(
+                area.x,
+                area.y + 3,
+                area.width,
+                area.height.saturating_sub(3),
+            );
+            let heading = if *parent_id == 0 { "new post" } else { "reply" };
+            let title_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(!on_body))
+                .title(heading);
+            let body_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(*on_body))
+                .title("text");
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, title_area, title_block, title, !on_body);
+            draw_text_box(frame, body_area, body_block, body, *on_body);
+        }
+        Modal::NewsName { category, input } => {
+            let area = centered(screen, 60, 3);
+            let what = if *category { "category" } else { "bundle" };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title(format!("new {what}"));
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, area, block, input, true);
+        }
+        Modal::DeleteNews { name, .. } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("delete?");
+            frame.render_widget(Clear, area);
+            let text = format!("Delete {name}?");
+            frame.render_widget(Paragraph::new(text).block(block), area);
         }
         Modal::Info { name, text } => {
             let text = text.replace('\r', "\n");
