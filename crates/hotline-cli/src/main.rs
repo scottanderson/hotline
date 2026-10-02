@@ -25,6 +25,7 @@ use ratatui::Terminal;
 
 use args::Args;
 use hotline_client::HotlineClient;
+use hotline_proto::types::HlPath;
 use session::{ClientSession, EventOutcome, Mode};
 use view::{Action, Modal, View};
 
@@ -112,11 +113,13 @@ async fn run(
                             }
                             continue;
                         }
-                        view.handle_key(key, &session.users)
+                        let files = session.files.as_deref().unwrap_or_default();
+                        view.handle_key(key, &session.users, files)
                     }
                     Event::Mouse(mouse) if !matches!(session.mode, Mode::Agreement(_)) => {
                         let areas = ui::areas(terminal.size()?, view.input());
-                        view.handle_mouse(mouse, &areas, &session.users, Instant::now())
+                        let files = session.files.as_deref().unwrap_or_default();
+                        view.handle_mouse(mouse, &areas, &session.users, files, Instant::now())
                     }
                     _ => Action::None,
                 };
@@ -152,6 +155,30 @@ async fn perform(
         }
         Action::GetMsgs => session.get_msgs(client).await,
         Action::OldPostNews(text) => session.old_post_news(client, &text).await,
+        Action::ListFiles => {
+            let path = session.file_path.clone();
+            list_files(session, view, client, path).await;
+        }
+        Action::OpenFolder(name) => {
+            let path = session.child_folder(&name);
+            list_files(session, view, client, path).await;
+        }
+        Action::ParentFolder => {
+            if let Some(path) = session.parent_folder() {
+                list_files(session, view, client, path).await;
+            }
+        }
     }
     false
+}
+
+async fn list_files(
+    session: &mut ClientSession,
+    view: &mut View,
+    client: &HotlineClient,
+    path: HlPath,
+) {
+    if session.get_file_name_list(client, path).await {
+        view.reset_file_selection();
+    }
 }

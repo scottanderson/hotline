@@ -3,15 +3,17 @@
 pub enum Tab {
     Chat,
     News,
+    Files,
 }
 
 impl Tab {
-    pub const ALL: [Self; 2] = [Self::Chat, Self::News];
+    pub const ALL: [Self; 3] = [Self::Chat, Self::News, Self::Files];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Chat => "Chat",
             Self::News => "News",
+            Self::Files => "Files",
         }
     }
 }

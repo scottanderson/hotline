@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
-use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
+use hotline_proto::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
 
 use crate::client_info_text::ClientInfoText;
@@ -261,12 +261,17 @@ impl HotlineClient {
         Ok(())
     }
 
-    /// Fetch the root folder's file listing, [`myTran_GetFileNameList`] (200).
+    /// Fetch the listing of the folder at `path`, [`myTran_GetFileNameList`] (200).
     ///
     /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
-    pub async fn get_file_name_list(&self) -> Result<Vec<FileNameWithInfo>> {
-        let reply = self.request(Opcode::GetFileNameList, vec![]).await?;
+    pub async fn get_file_name_list(&self, path: &HlPath) -> Result<Vec<FileNameWithInfo>> {
         let encoding = self.encoding.get();
+        let fields = if path.components.is_empty() {
+            vec![]
+        } else {
+            vec![Field::bytes(FieldId::FilePath, path.encode(encoding)?)]
+        };
+        let reply = self.request(Opcode::GetFileNameList, fields).await?;
         Ok(reply.file_list_entries(encoding)?)
     }
 }

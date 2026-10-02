@@ -7,7 +7,7 @@ mod mode;
 use hotline_client::{ClientInfoText, HotlineClient};
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
-use hotline_proto::types::{UserFlags, UserNameWithInfo};
+use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
 
@@ -24,6 +24,9 @@ pub struct ClientSession {
     pub lines: Vec<Line>,
     /// The classic news, `None` until it is fetched.
     pub news: Option<String>,
+    /// The listing of the folder at `file_path`, `None` until it is fetched.
+    pub files: Option<Vec<FileNameWithInfo>>,
+    pub file_path: HlPath,
     pub access: Access,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
@@ -41,6 +44,8 @@ impl ClientSession {
                 kind: LineKind::System,
             }],
             news: None,
+            files: None,
+            file_path: HlPath::default(),
             access: Access::empty(),
             encoding,
         }
@@ -308,6 +313,38 @@ impl ClientSession {
         }
     }
 
+    /// [`myTran_GetFileNameList`] (200) for `path`. On success, `path` becomes
+    /// the current folder and this returns `true`.
+    ///
+    /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
+    pub async fn get_file_name_list(&mut self, client: &HotlineClient, path: HlPath) -> bool {
+        match client.get_file_name_list(&path).await {
+            Ok(files) => {
+                self.files = Some(files);
+                self.file_path = path;
+                true
+            }
+            Err(e) => {
+                self.push(format!("failed to list files: {e}"), LineKind::Error);
+                false
+            }
+        }
+    }
+
+    /// The path of the folder `name` in the current folder.
+    pub fn child_folder(&self, name: &str) -> HlPath {
+        let mut path = self.file_path.clone();
+        path.components.push(name.to_string());
+        path
+    }
+
+    /// The path of the current folder's parent, `None` at the root.
+    pub fn parent_folder(&self) -> Option<HlPath> {
+        let mut path = self.file_path.clone();
+        path.components.pop()?;
+        Some(path)
+    }
+
     pub async fn old_post_news(&mut self, client: &HotlineClient, text: &str) {
         if let Err(e) = client.old_post_news(&wire_text(text)).await {
             self.push(format!("failed to post news: {e}"), LineKind::Error);
@@ -360,6 +397,15 @@ mod tests {
             Some("From alice\rhelloFrom bob\rold")
         );
         assert_eq!(&*session.lines.last().unwrap().text, "new news post");
+    }
+
+    #[test]
+    fn child_and_parent_folder_walk_the_path() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        assert_eq!(session.parent_folder(), None);
+        session.file_path = session.child_folder("Games");
+        assert_eq!(session.child_folder("Doom"), HlPath::new(["Games", "Doom"]));
+        assert_eq!(session.parent_folder(), Some(HlPath::default()));
     }
 
     #[test]

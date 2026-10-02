@@ -8,7 +8,7 @@ mod tab;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use hotline_proto::types::UserNameWithInfo;
+use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use ratatui::layout::Rect;
 
 use crate::ui::{self, Areas};
@@ -36,6 +36,25 @@ fn is_new_line(key: KeyEvent) -> bool {
 pub enum Focus {
     Input,
     Users,
+    /// The file list on the Files tab.
+    Files,
+}
+
+impl Focus {
+    /// The focus that leaves the user list on `tab`.
+    const fn main(tab: Tab) -> Self {
+        match tab {
+            Tab::Chat | Tab::News => Self::Input,
+            Tab::Files => Self::Files,
+        }
+    }
+}
+
+/// The row that the first click of a double click hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Clicked {
+    User(u16),
+    File(usize),
 }
 
 pub struct View {
@@ -48,8 +67,12 @@ pub struct View {
     pub news_scroll: u16,
     /// The first user list row on screen, as the last draw left it.
     pub users_offset: usize,
+    /// The first file list row on screen, as the last draw left it.
+    pub files_offset: usize,
+    /// The index of the selected file in the listing.
+    pub selected_file: usize,
     selected_user: Option<u16>,
-    last_click: Option<(u16, Instant)>,
+    last_click: Option<(Clicked, Instant)>,
 }
 
 impl Default for View {
@@ -62,6 +85,8 @@ impl Default for View {
             post_input: String::new(),
             news_scroll: 0,
             users_offset: 0,
+            files_offset: 0,
+            selected_file: 0,
             selected_user: None,
             last_click: None,
         }
@@ -75,19 +100,27 @@ impl View {
             .filter(|&id| users.iter().any(|u| u.user_id == id))
     }
 
-    /// The input line for the current tab.
-    pub fn input(&self) -> &str {
+    /// The input line for the current tab, `None` on a tab with no input line.
+    pub fn input(&self) -> Option<&str> {
         match self.tab {
-            Tab::Chat => &self.chat_input,
-            Tab::News => &self.post_input,
+            Tab::Chat => Some(&self.chat_input),
+            Tab::News => Some(&self.post_input),
+            Tab::Files => None,
         }
     }
 
-    const fn input_mut(&mut self) -> &mut String {
+    const fn input_mut(&mut self) -> Option<&mut String> {
         match self.tab {
-            Tab::Chat => &mut self.chat_input,
-            Tab::News => &mut self.post_input,
+            Tab::Chat => Some(&mut self.chat_input),
+            Tab::News => Some(&mut self.post_input),
+            Tab::Files => None,
         }
+    }
+
+    /// Select the first file and scroll to the top of the list.
+    pub const fn reset_file_selection(&mut self) {
+        self.selected_file = 0;
+        self.files_offset = 0;
     }
 
     /// The keys that work now, as `(key, what it does)`.
@@ -106,6 +139,7 @@ impl View {
                 ("i", "info"),
                 ("Tab", "input"),
                 ("^N", "news"),
+                ("^F", "files"),
             ],
             (None, Focus::Users, Tab::News) => &[
                 ("↑↓", "select"),
@@ -114,12 +148,27 @@ impl View {
                 ("Tab", "input"),
                 ("^N", "chat"),
             ],
+            (None, Focus::Users, Tab::Files) => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("Tab", "files"),
+                ("^F", "chat"),
+            ],
             (None, Focus::Input, Tab::Chat) => &[
                 ("Enter", "send"),
                 ("⇧Enter", "new line"),
                 ("Tab", "users"),
                 ("^N", "news"),
+                ("^F", "files"),
                 ("Esc", "quit"),
+            ],
+            (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => &[
+                ("↑↓", "select"),
+                ("Enter", "open"),
+                ("⌫", "up"),
+                ("Tab", "users"),
+                ("Esc", "chat"),
             ],
             (None, Focus::Input, Tab::News) => &[
                 ("Enter", "post"),
@@ -132,7 +181,12 @@ impl View {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
+    pub fn handle_key(
+        &mut self,
+        key: KeyEvent,
+        users: &[UserNameWithInfo],
+        files: &[FileNameWithInfo],
+    ) -> Action {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('c') {
             return Action::Quit;
@@ -140,16 +194,23 @@ impl View {
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key, users);
         }
-        if ctrl && key.code == KeyCode::Char('n') {
-            let other = match self.tab {
-                Tab::Chat => Tab::News,
-                Tab::News => Tab::Chat,
+        if ctrl {
+            let tab = match (key.code, self.tab) {
+                (KeyCode::Char('n'), Tab::News) | (KeyCode::Char('f'), Tab::Files) => {
+                    Some(Tab::Chat)
+                }
+                (KeyCode::Char('n'), _) => Some(Tab::News),
+                (KeyCode::Char('f'), _) => Some(Tab::Files),
+                _ => None,
             };
-            return self.set_tab(other);
+            if let Some(tab) = tab {
+                return self.set_tab(tab);
+            }
         }
         match self.focus {
             Focus::Users => self.users_key(key, users),
             Focus::Input => self.input_key(key),
+            Focus::Files => self.files_key(key, files),
         }
     }
 
@@ -193,7 +254,7 @@ impl View {
 
     fn users_key(&mut self, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         match key.code {
-            KeyCode::Tab | KeyCode::Esc => self.focus = Focus::Input,
+            KeyCode::Tab | KeyCode::Esc => self.focus = Focus::main(self.tab),
             KeyCode::Up => self.move_selection(users, false),
             KeyCode::Down => self.move_selection(users, true),
             KeyCode::Enter => {
@@ -212,31 +273,49 @@ impl View {
     }
 
     fn input_key(&mut self, key: KeyEvent) -> Action {
+        let tab = self.tab;
+        let Some(input) = self.input_mut() else {
+            return Action::None;
+        };
         if is_new_line(key) {
-            self.input_mut().push('\n');
+            input.push('\n');
             return Action::None;
         }
-        match (key.code, self.tab) {
-            (KeyCode::Tab, _) => self.focus = Focus::Users,
-            (KeyCode::Esc, Tab::Chat) => return Action::Quit,
-            (KeyCode::Esc, Tab::News) => return self.set_tab(Tab::Chat),
-            (KeyCode::Enter, tab) if !self.input().is_empty() => {
-                let text = std::mem::take(self.input_mut());
-                return match tab {
-                    Tab::Chat => Action::SendChat(text),
-                    Tab::News => Action::OldPostNews(text),
-                };
+        match (key.code, tab) {
+            (KeyCode::Enter, Tab::Chat) if !input.is_empty() => {
+                return Action::SendChat(std::mem::take(input));
+            }
+            (KeyCode::Enter, Tab::News) if !input.is_empty() => {
+                return Action::OldPostNews(std::mem::take(input));
             }
             (KeyCode::Backspace, _) => {
-                self.input_mut().pop();
+                input.pop();
             }
             (KeyCode::Char(c), _) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input_mut().push(c);
+                input.push(c);
             }
+            (KeyCode::Tab, _) => self.focus = Focus::Users,
+            (KeyCode::Esc, Tab::Chat) => return Action::Quit,
+            (KeyCode::Esc, _) => return self.set_tab(Tab::Chat),
             (KeyCode::Up, Tab::News) => self.scroll_news(-1),
             (KeyCode::Down, Tab::News) => self.scroll_news(1),
             (KeyCode::PageUp, Tab::News) => self.scroll_news(-10),
             (KeyCode::PageDown, Tab::News) => self.scroll_news(10),
+            _ => {}
+        }
+        Action::None
+    }
+
+    fn files_key(&mut self, key: KeyEvent, files: &[FileNameWithInfo]) -> Action {
+        match key.code {
+            KeyCode::Tab => self.focus = Focus::Users,
+            KeyCode::Esc => return self.set_tab(Tab::Chat),
+            KeyCode::Up => self.selected_file = self.selected_file.saturating_sub(1),
+            KeyCode::Down => {
+                self.selected_file = (self.selected_file + 1).min(files.len().saturating_sub(1));
+            }
+            KeyCode::Enter => return open_file(self.selected_file, files),
+            KeyCode::Backspace | KeyCode::Left => return Action::ParentFolder,
             _ => {}
         }
         Action::None
@@ -247,6 +326,7 @@ impl View {
         mouse: MouseEvent,
         areas: &Areas,
         users: &[UserNameWithInfo],
+        files: &[FileNameWithInfo],
         now: Instant,
     ) -> Action {
         let (x, y) = (mouse.column, mouse.row);
@@ -277,6 +357,9 @@ impl View {
                 if let Some(user_id) = self.user_at(areas.users, x, y, users) {
                     return self.click_user(user_id, users, now);
                 }
+                if let Some(index) = self.file_at(areas.body, x, y, files) {
+                    return self.click_file(index, files, now);
+                }
                 if contains(areas.input, x, y) {
                     self.focus = Focus::Input;
                 }
@@ -303,16 +386,30 @@ impl View {
     fn click_user(&mut self, user_id: u16, users: &[UserNameWithInfo], now: Instant) -> Action {
         self.selected_user = Some(user_id);
         self.focus = Focus::Users;
-        let double = matches!(
-            self.last_click,
-            Some((last, at)) if last == user_id && now.duration_since(at) <= DOUBLE_CLICK
-        );
-        if double {
-            self.last_click = None;
+        if self.double_click(Clicked::User(user_id), now) {
             return self.choose(user_id, MenuItem::SendMessage, users);
         }
-        self.last_click = Some((user_id, now));
         Action::None
+    }
+
+    /// Select the file at `index`, or open it on the second click of a double click.
+    fn click_file(&mut self, index: usize, files: &[FileNameWithInfo], now: Instant) -> Action {
+        self.selected_file = index;
+        self.focus = Focus::Files;
+        if self.double_click(Clicked::File(index), now) {
+            return open_file(index, files);
+        }
+        Action::None
+    }
+
+    /// `true` if `clicked` is the second click of a double click.
+    fn double_click(&mut self, clicked: Clicked, now: Instant) -> bool {
+        let double = matches!(
+            self.last_click,
+            Some((last, at)) if last == clicked && now.duration_since(at) <= DOUBLE_CLICK
+        );
+        self.last_click = (!double).then_some((clicked, now));
+        double
     }
 
     fn choose(&mut self, user_id: u16, item: MenuItem, users: &[UserNameWithInfo]) -> Action {
@@ -336,12 +433,16 @@ impl View {
             return Action::None;
         }
         self.tab = tab;
+        if self.focus != Focus::Users {
+            self.focus = Focus::main(tab);
+        }
         match tab {
             Tab::Chat => Action::None,
             Tab::News => {
                 self.news_scroll = 0;
                 Action::GetMsgs
             }
+            Tab::Files => Action::ListFiles,
         }
     }
 
@@ -374,6 +475,24 @@ impl View {
         let index = self.users_offset + usize::from(y - inner.y);
         users.get(index).map(|u| u.user_id)
     }
+
+    /// The index of the file on the list row at `x`, `y` of the Files tab.
+    fn file_at(&self, body: Rect, x: u16, y: u16, files: &[FileNameWithInfo]) -> Option<usize> {
+        let inner = ui::inner(body);
+        if self.tab != Tab::Files || !contains(inner, x, y) {
+            return None;
+        }
+        let index = self.files_offset + usize::from(y - inner.y);
+        (index < files.len()).then_some(index)
+    }
+}
+
+/// Open the file at `index` if it is a folder.
+fn open_file(index: usize, files: &[FileNameWithInfo]) -> Action {
+    match files.get(index) {
+        Some(file) if file.is_folder() => Action::OpenFolder(file.name.clone()),
+        _ => Action::None,
+    }
 }
 
 pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -398,8 +517,20 @@ mod tests {
             .collect()
     }
 
+    fn files() -> Vec<FileNameWithInfo> {
+        [(*b"fldr", "Games"), (*b"TEXT", "readme.txt")]
+            .into_iter()
+            .map(|(file_type, name)| FileNameWithInfo {
+                file_type,
+                creator: [0; 4],
+                size: 0,
+                name: name.into(),
+            })
+            .collect()
+    }
+
     fn areas() -> Areas {
-        ui::areas(Rect::new(0, 0, 80, 24), "")
+        ui::areas(Rect::new(0, 0, 80, 24), Some(""))
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -423,7 +554,7 @@ mod tests {
 
     fn type_text(view: &mut View, text: &str) {
         for c in text.chars() {
-            let _ = view.handle_key(key(KeyCode::Char(c)), &users());
+            let _ = view.handle_key(key(KeyCode::Char(c)), &users(), &files());
         }
     }
 
@@ -432,7 +563,7 @@ mod tests {
         let mut view = View::default();
         type_text(&mut view, "/users");
         assert_eq!(
-            view.handle_key(key(KeyCode::Enter), &users()),
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::SendChat("/users".into())
         );
     }
@@ -442,13 +573,16 @@ mod tests {
         let mut view = View::default();
         type_text(&mut view, "one");
         let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
-        assert_eq!(view.handle_key(shift_enter, &users()), Action::None);
+        assert_eq!(
+            view.handle_key(shift_enter, &users(), &files()),
+            Action::None
+        );
         type_text(&mut view, "two");
         let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
-        assert_eq!(view.handle_key(ctrl_j, &users()), Action::None);
+        assert_eq!(view.handle_key(ctrl_j, &users(), &files()), Action::None);
         type_text(&mut view, "three");
         assert_eq!(
-            view.handle_key(key(KeyCode::Enter), &users()),
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::SendChat("one\ntwo\nthree".into())
         );
     }
@@ -458,7 +592,7 @@ mod tests {
         let mut view = View::default();
         let (x, y) = user_row(1);
         let left = click(MouseEventKind::Down(MouseButton::Left), x, y);
-        let action = view.handle_mouse(left, &areas(), &users(), Instant::now());
+        let action = view.handle_mouse(left, &areas(), &users(), &files(), Instant::now());
         assert_eq!(action, Action::None);
         assert_eq!(view.selected_user(&users()), Some(2));
         assert_eq!(view.focus, Focus::Users);
@@ -471,8 +605,14 @@ mod tests {
         let (x, y) = user_row(1);
         let left = click(MouseEventKind::Down(MouseButton::Left), x, y);
         let now = Instant::now();
-        let _ = view.handle_mouse(left, &areas(), &users(), now);
-        let _ = view.handle_mouse(left, &areas(), &users(), now + Duration::from_millis(200));
+        let _ = view.handle_mouse(left, &areas(), &users(), &files(), now);
+        let _ = view.handle_mouse(
+            left,
+            &areas(),
+            &users(),
+            &files(),
+            now + Duration::from_millis(200),
+        );
         assert_eq!(
             view.modal,
             Some(Modal::InstantMsg {
@@ -484,10 +624,10 @@ mod tests {
 
         type_text(&mut view, "/hi");
         let alt_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
-        let _ = view.handle_key(alt_enter, &users());
+        let _ = view.handle_key(alt_enter, &users(), &files());
         type_text(&mut view, "there");
         assert_eq!(
-            view.handle_key(key(KeyCode::Enter), &users()),
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::SendInstantMsg {
                 user_id: 2,
                 text: "/hi\nthere".into()
@@ -502,8 +642,14 @@ mod tests {
         let (x, y) = user_row(0);
         let left = click(MouseEventKind::Down(MouseButton::Left), x, y);
         let now = Instant::now();
-        let _ = view.handle_mouse(left, &areas(), &users(), now);
-        let _ = view.handle_mouse(left, &areas(), &users(), now + Duration::from_secs(1));
+        let _ = view.handle_mouse(left, &areas(), &users(), &files(), now);
+        let _ = view.handle_mouse(
+            left,
+            &areas(),
+            &users(),
+            &files(),
+            now + Duration::from_secs(1),
+        );
         assert_eq!(view.modal, None);
     }
 
@@ -512,15 +658,15 @@ mod tests {
         let mut view = View::default();
         let (x, y) = user_row(0);
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
-        let _ = view.handle_mouse(right, &areas(), &users(), Instant::now());
+        let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
         assert!(matches!(
             view.modal,
             Some(Modal::UserMenu { user_id: 1, .. })
         ));
 
-        let _ = view.handle_key(key(KeyCode::Down), &users());
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         assert_eq!(
-            view.handle_key(key(KeyCode::Enter), &users()),
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::GetClientInfoText(1)
         );
         assert_eq!(view.modal, None);
@@ -531,7 +677,7 @@ mod tests {
         let mut view = View::default();
         let (x, y) = user_row(0);
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
-        let _ = view.handle_mouse(right, &areas(), &users(), Instant::now());
+        let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
 
         let menu = ui::menu_rect((x, y), areas().screen);
         let inner = ui::inner(menu);
@@ -541,7 +687,7 @@ mod tests {
             inner.y + 1,
         );
         assert_eq!(
-            view.handle_mouse(left, &areas(), &users(), Instant::now()),
+            view.handle_mouse(left, &areas(), &users(), &files(), Instant::now()),
             Action::GetClientInfoText(1)
         );
     }
@@ -550,15 +696,15 @@ mod tests {
     fn ctrl_n_opens_the_news_tab_and_fetches_the_news() {
         let mut view = View::default();
         let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
-        assert_eq!(view.handle_key(ctrl_n, &users()), Action::GetMsgs);
+        assert_eq!(view.handle_key(ctrl_n, &users(), &files()), Action::GetMsgs);
         assert_eq!(view.tab, Tab::News);
 
         type_text(&mut view, "hello");
         assert_eq!(
-            view.handle_key(key(KeyCode::Enter), &users()),
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::OldPostNews("hello".into())
         );
-        assert_eq!(view.handle_key(ctrl_n, &users()), Action::None);
+        assert_eq!(view.handle_key(ctrl_n, &users(), &files()), Action::None);
         assert_eq!(view.tab, Tab::Chat);
     }
 
@@ -571,7 +717,7 @@ mod tests {
             .unwrap();
         let left = click(MouseEventKind::Down(MouseButton::Left), x, tabs.y);
         assert_eq!(
-            view.handle_mouse(left, &areas(), &users(), Instant::now()),
+            view.handle_mouse(left, &areas(), &users(), &files(), Instant::now()),
             Action::GetMsgs
         );
     }
@@ -580,7 +726,68 @@ mod tests {
     fn hints_follow_the_focus() {
         let mut view = View::default();
         assert!(view.hints().contains(&("Enter", "send")));
-        let _ = view.handle_key(key(KeyCode::Tab), &users());
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
         assert!(view.hints().contains(&("Enter", "message")));
+    }
+
+    #[test]
+    fn ctrl_f_opens_the_files_tab_and_walks_the_folders() {
+        let mut view = View::default();
+        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        assert_eq!(
+            view.handle_key(ctrl_f, &users(), &files()),
+            Action::ListFiles
+        );
+        assert_eq!((view.tab, view.focus), (Tab::Files, Focus::Files));
+
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::OpenFolder("Games".into())
+        );
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Backspace), &users(), &files()),
+            Action::ParentFolder
+        );
+
+        assert_eq!(view.handle_key(ctrl_f, &users(), &files()), Action::None);
+        assert_eq!((view.tab, view.focus), (Tab::Chat, Focus::Input));
+    }
+
+    #[test]
+    fn tab_from_the_user_list_returns_to_the_file_list() {
+        let mut view = View::default();
+        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        let _ = view.handle_key(ctrl_f, &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert_eq!(view.focus, Focus::Users);
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert_eq!(view.focus, Focus::Files);
+    }
+
+    #[test]
+    fn a_double_click_on_a_folder_opens_it() {
+        let mut view = View::default();
+        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        let _ = view.handle_key(ctrl_f, &users(), &files());
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None);
+        let inner = ui::inner(areas.body);
+        let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
+        let now = Instant::now();
+
+        let first = view.handle_mouse(left, &areas, &users(), &files(), now);
+        assert_eq!(first, Action::None);
+        let second = view.handle_mouse(
+            left,
+            &areas,
+            &users(),
+            &files(),
+            now + Duration::from_millis(200),
+        );
+        assert_eq!(second, Action::OpenFolder("Games".into()));
     }
 }

@@ -12,4 +12,10 @@ pub enum Action {
     GetClientInfoText(u16),
     GetMsgs,
     OldPostNews(String),
+    /// List the current folder again.
+    ListFiles,
+    /// List the named folder in the current folder.
+    OpenFolder(Box<str>),
+    /// List the current folder's parent.
+    ParentFolder,
 }

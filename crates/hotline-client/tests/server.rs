@@ -1,12 +1,14 @@
 //! Requests against a real in-process `hotline-server`.
 
 use std::net::{SocketAddr, TcpListener};
+use std::sync::Arc;
 use std::time::Duration;
 
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
+use hotline_proto::types::HlPath;
 use hotline_proto::{FieldId, Opcode, Transaction};
-use hotline_server::{Providers, Server, ServerConfig};
+use hotline_server::{InMemoryFileProvider, Providers, Server, ServerConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
 
@@ -25,12 +27,17 @@ fn free_port() -> u16 {
 
 /// Start a server with the in-memory backends and return its address.
 async fn start_server() -> SocketAddr {
+    start_server_with(Providers::default()).await
+}
+
+/// Start a server with `providers` and return its address.
+async fn start_server_with(providers: Providers) -> SocketAddr {
     let addr = SocketAddr::from(([127, 0, 0, 1], free_port()));
     let config = ServerConfig {
         bind_addr: addr.to_string().into(),
         ..ServerConfig::default()
     };
-    tokio::spawn(Server::new(config, Providers::default()).run());
+    tokio::spawn(Server::new(config, providers).run());
     for _ in 0..50 {
         if tokio::net::TcpStream::connect(addr).await.is_ok() {
             return addr;
@@ -128,4 +135,30 @@ async fn old_post_news_reaches_readers_and_get_msgs() {
     let entry = post.string(FieldId::Data, encoding).unwrap();
     assert!(entry.contains("hello news"), "{entry:?}");
     assert!(alice.get_msgs().await.unwrap().contains("hello news"));
+}
+
+#[tokio::test]
+async fn get_file_name_list_lists_the_root_and_a_folder() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::default(), "readme.txt", *b"hi");
+    files.seed(&HlPath::new(["Games"]), "doom.wad", *b"wad");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+
+    let root = alice.get_file_name_list(&HlPath::default()).await.unwrap();
+    let mut names: Vec<_> = root.iter().map(|f| (&*f.name, f.is_folder())).collect();
+    names.sort_unstable();
+    assert_eq!(names, [("Games", true), ("readme.txt", false)]);
+
+    let games = alice
+        .get_file_name_list(&HlPath::new(["Games"]))
+        .await
+        .unwrap();
+    assert_eq!(games.len(), 1);
+    assert_eq!(&*games[0].name, "doom.wad");
+    assert_eq!(games[0].size, 3);
 }

@@ -695,6 +695,11 @@ one-shared-room model.
 91. `hls` stops on Ctrl-C or SIGTERM and first writes every queued
     activity log line.
 
+92. `hlc`'s Files tab, opened with Ctrl-F or a click, lists a folder
+    with `myTran_GetFileNameList` (200). Enter or a double click opens
+    a folder, and Backspace goes up one folder. A folder shows a
+    trailing `/`, and a file shows its size.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

@@ -1,6 +1,6 @@
 //! Rendering, and the screen areas that mouse clicks hit.
 
-use hotline_proto::types::UserFlags;
+use hotline_proto::types::{FileNameWithInfo, UserFlags};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
@@ -30,8 +30,9 @@ fn input_rows(text: &str) -> u16 {
     text.split('\n').count().min(MAX_INPUT_ROWS) as u16
 }
 
-/// `input` is the text in the input line, which grows to fit it.
-pub fn areas(screen: Rect, input: &str) -> Areas {
+/// `input` is the text in the input line, which grows to fit it. With `None`,
+/// the input line has no rows.
+pub fn areas(screen: Rect, input: Option<&str>) -> Areas {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -48,7 +49,7 @@ pub fn areas(screen: Rect, input: &str) -> Areas {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(input_rows(input) + 2),
+            Constraint::Length(input.map_or(0, |text| input_rows(text) + 2)),
         ])
         .split(columns[0]);
     Areas {
@@ -138,6 +139,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, session),
         Tab::News => draw_news(frame, areas.body, session, view.news_scroll),
+        Tab::Files => draw_files(frame, areas.body, session, view),
     }
     draw_input(frame, areas.input, view);
     draw_users(frame, areas.users, session, view);
@@ -215,10 +217,59 @@ fn draw_news(frame: &mut Frame, area: Rect, session: &ClientSession, scroll: u16
     frame.render_widget(paragraph, area);
 }
 
+fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border(view.focus == Focus::Files))
+        .title(format!("files /{}", session.file_path.components.join("/")));
+    let Some(files) = &session.files else {
+        frame.render_widget(Paragraph::new("loading files").block(block), area);
+        return;
+    };
+    let items: Vec<ListItem> = files.iter().map(|f| ListItem::new(file_label(f))).collect();
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let selected = files
+        .len()
+        .checked_sub(1)
+        .map(|last| view.selected_file.min(last));
+    let mut state = ListState::default()
+        .with_offset(view.files_offset)
+        .with_selected(selected);
+    frame.render_stateful_widget(list, area, &mut state);
+    view.files_offset = state.offset();
+}
+
+/// A folder's name with a trailing `/`, or a file's name and size.
+fn file_label(file: &FileNameWithInfo) -> String {
+    if file.is_folder() {
+        format!("{}/", file.name)
+    } else {
+        format!("{}  {}", file.name, size_text(file.size))
+    }
+}
+
+/// `bytes` in B, KB, MB, or GB.
+fn size_text(bytes: u32) -> String {
+    const UNITS: [&str; 3] = ["KB", "MB", "GB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut size = f64::from(bytes) / 1024.0;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{size:.1} {}", UNITS[unit])
+}
+
 fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
     let title = match view.tab {
         Tab::Chat => "message",
         Tab::News => "post",
+        Tab::Files => return,
     };
     let focused = view.focus == Focus::Input;
     let block = Block::default()
@@ -229,7 +280,7 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
         frame,
         area,
         block,
-        view.input(),
+        view.input().unwrap_or_default(),
         focused && view.modal.is_none(),
     );
 }
@@ -344,5 +395,29 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
                 area,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_text_picks_the_largest_unit_under_1024() {
+        assert_eq!(size_text(512), "512 B");
+        assert_eq!(size_text(1536), "1.5 KB");
+        assert_eq!(size_text(3 * 1024 * 1024), "3.0 MB");
+        assert_eq!(size_text(u32::MAX), "4.0 GB");
+    }
+
+    #[test]
+    fn file_label_marks_a_folder_with_a_slash() {
+        let folder = FileNameWithInfo {
+            file_type: *b"fldr",
+            creator: [0; 4],
+            size: 3,
+            name: "Games".into(),
+        };
+        assert_eq!(file_label(&folder), "Games/");
     }
 }
