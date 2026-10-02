@@ -107,6 +107,7 @@ impl ClientSession {
             /* 109 */ Opcode::ShowAgreement => return self.apply_show_agreement(tx),
             /* 111 */ Opcode::DisconnectMsg => return self.apply_disconnect_msg(tx),
             /* 113 */ Opcode::InviteToChat => self.apply_invite_to_chat(tx),
+            /* 122 */ Opcode::ServerBanner => self.apply_server_banner(tx),
             /* 211 */ Opcode::DownloadInfo => self.apply_download_info(tx),
             /* 301 */ Opcode::NotifyChangeUser => self.apply_notify_change_user(tx),
             /* 302 */ Opcode::NotifyDeleteUser => self.apply_notify_delete_user(tx),
@@ -210,6 +211,17 @@ impl ClientSession {
             ),
             LineKind::System,
         );
+    }
+
+    /// [`myTran_ServerBanner`] (122): show the banner's link, if it has one.
+    /// A banner image is not shown.
+    ///
+    /// [`myTran_ServerBanner`]: hotline_proto::Opcode::ServerBanner
+    fn apply_server_banner(&mut self, tx: &Transaction) {
+        let encoding = self.encoding.get();
+        if let Some(url) = tx.string(FieldId::ServerBannerUrl, encoding) {
+            self.push(format!("server banner: {url}"), LineKind::System);
+        }
     }
 
     /// [`myTran_DownloadInfo`] (211): a queued download's place in the queue.
@@ -770,6 +782,35 @@ mod tests {
         session.file_path = session.child_folder("Games");
         assert_eq!(session.child_folder("Doom"), HlPath::new(["Games", "Doom"]));
         assert_eq!(session.parent_folder(), Some(HlPath::default()));
+    }
+
+    #[test]
+    fn server_banner_shows_its_url() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let banner = Transaction::push(
+            Opcode::ServerBanner,
+            vec![
+                Field::bytes(FieldId::ServerBannerType, b"URL ".to_vec()),
+                Field::string(FieldId::ServerBannerUrl, "http://example.com"),
+            ],
+        );
+        let _ = session.apply_server_event(&banner);
+        assert_eq!(
+            &*session.lines.last().unwrap().text,
+            "server banner: http://example.com"
+        );
+    }
+
+    #[test]
+    fn server_banner_ignores_an_image_banner() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let before = session.lines.len();
+        let banner = Transaction::push(
+            Opcode::ServerBanner,
+            vec![Field::bytes(FieldId::ServerBannerType, b"JPEG".to_vec())],
+        );
+        let _ = session.apply_server_event(&banner);
+        assert_eq!(session.lines.len(), before);
     }
 
     #[test]

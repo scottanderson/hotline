@@ -139,10 +139,10 @@ one-shared-room model.
 3. **`hlc` does not cover every area.** It logs in, shows the
    agreement, chats in public, sends private messages, shows a user's
    info text, reads and posts classic news, lists users, files, and
-   tracker servers, and downloads and uploads files and folders. It
-   cannot resume a transfer, read or post threaded news, use
-   private chat rooms, administer accounts, or show the banner. Each
-   area can be its own task.
+   tracker servers, downloads and uploads files and folders, and shows
+   a banner's link. It cannot resume a transfer, read or post threaded
+   news, use private chat rooms, or administer accounts. Each area can
+   be its own task.
 
 ## Resolved
 
@@ -730,6 +730,11 @@ one-shared-room model.
     encoding. `myTran_GetMsgs` (101) cuts a long board at a whole character
     with `text_encoding::encode_truncated`. No transaction sets a
     connection's encoding yet, so every connection uses Mac OS Roman.
+
+100. `hlc` shows the `myField_ServerBannerUrl` (153) of a
+     `myTran_ServerBanner` (122) push as one line, for a link banner and
+     for the link of an image banner. It does not show a banner image,
+     because a terminal cannot show it.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
