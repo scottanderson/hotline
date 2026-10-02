@@ -13,6 +13,7 @@ use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::{
     FileNameWithInfo, HlPath, NewsArticleListData, NewsArticleSummary, NewsCategoryListEntry,
+    NewsFlavor,
 };
 use hotline_proto::{Field, FieldId, Transaction};
 
@@ -1082,18 +1083,21 @@ impl SharedState {
         Ok(NewsArticleListData {
             articles: articles
                 .into_iter()
-                .map(|(id, article)| {
-                    let (mime_type, data) = article.primary_flavor();
-                    NewsArticleSummary {
-                        id,
-                        date: article.date,
-                        parent_id: article.parent_id,
-                        flags: article.flags,
-                        title: article.title.clone(),
-                        poster: article.poster.clone(),
-                        flavor: mime_type.into(),
-                        flavor_size: data.len() as u16,
-                    }
+                .map(|(id, article)| NewsArticleSummary {
+                    id,
+                    date: article.date,
+                    parent_id: article.parent_id,
+                    flags: article.flags,
+                    title: article.title.clone(),
+                    poster: article.poster.clone(),
+                    flavors: article
+                        .data
+                        .iter()
+                        .map(|(mime_type, data)| NewsFlavor {
+                            mime_type: mime_type.as_str().into(),
+                            size: data.len() as u16,
+                        })
+                        .collect(),
                 })
                 .collect(),
         })
