@@ -176,7 +176,7 @@ async fn download_file_receives_the_data_fork() {
     let (alice, _alice_events) = join(addr, "alice").await;
 
     let download = alice
-        .download_file(&HlPath::new(["Games"]), "doom.wad")
+        .download_file(&HlPath::new(["Games"]), "doom.wad", 0)
         .await
         .unwrap();
     assert_eq!(download.file_size, 9);
@@ -191,6 +191,58 @@ async fn download_file_receives_the_data_fork() {
 }
 
 #[tokio::test]
+async fn download_file_from_an_offset_receives_the_rest() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::default(), "doom.wad", *b"IWAD data");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+
+    let download = alice
+        .download_file(&HlPath::default(), "doom.wad", 5)
+        .await
+        .unwrap();
+    let mut data = Vec::new();
+    timeout(WAIT, download.receive(&mut data))
+        .await
+        .expect("download finishes")
+        .unwrap();
+
+    assert_eq!(data, b"data");
+}
+
+#[tokio::test]
+async fn upload_file_resumes_a_partial_upload() {
+    let files = Arc::new(InMemoryFileProvider::default());
+    files.seed(&HlPath::new(["Uploads"]), "new.txt.hpf", *b"hel");
+    let providers = Providers {
+        files: files.clone(),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+    let uploads = HlPath::new(["Uploads"]);
+
+    let upload = alice
+        .upload_file(&uploads, "new.txt", 5, true)
+        .await
+        .unwrap();
+    assert_eq!(upload.offset(), 3);
+    timeout(WAIT, upload.send(&mut &b"lo"[..]))
+        .await
+        .expect("upload finishes")
+        .unwrap();
+
+    let download = alice.download_file(&uploads, "new.txt", 0).await.unwrap();
+    let mut data = Vec::new();
+    download.receive(&mut data).await.unwrap();
+    assert_eq!(data, b"hello");
+}
+
+#[tokio::test]
 async fn upload_file_stores_the_data_in_the_upload_folder() {
     let files = Arc::new(InMemoryFileProvider::default());
     files.seed(&HlPath::new(["Uploads"]), "keep.txt", *b"");
@@ -202,14 +254,17 @@ async fn upload_file_stores_the_data_in_the_upload_folder() {
     let (alice, _alice_events) = join(addr, "alice").await;
     let uploads = HlPath::new(["Uploads"]);
 
-    let upload = alice.upload_file(&uploads, "new.txt", 5).await.unwrap();
+    let upload = alice
+        .upload_file(&uploads, "new.txt", 5, false)
+        .await
+        .unwrap();
     let sent = timeout(WAIT, upload.send(&mut &b"hello"[..]))
         .await
         .expect("upload finishes")
         .unwrap();
     assert_eq!(sent, 5);
 
-    let download = alice.download_file(&uploads, "new.txt").await.unwrap();
+    let download = alice.download_file(&uploads, "new.txt", 0).await.unwrap();
     let mut data = Vec::new();
     download.receive(&mut data).await.unwrap();
     assert_eq!(data, b"hello");
@@ -255,6 +310,34 @@ async fn download_folder_steps_through_every_item() {
 }
 
 #[tokio::test]
+async fn download_folder_resumes_a_file_from_an_offset() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::new(["Games"]), "doom.wad", *b"IWAD");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+
+    let download = admin
+        .download_folder(&HlPath::default(), "Games")
+        .await
+        .unwrap();
+    let mut receiver = timeout(WAIT, download.open()).await.unwrap().unwrap();
+    let item = receiver.next_item().await.unwrap().unwrap();
+    assert_eq!(item.path.components, ["doom.wad"]);
+    let mut data = Vec::new();
+    timeout(WAIT, receiver.resume_file(&mut data, 2))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(data, b"AD");
+    assert!(receiver.next_item().await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn upload_folder_stores_every_item() {
     let files = InMemoryFileProvider::default();
     files.seed(&HlPath::new(["Uploads"]), "keep.txt", *b"");
@@ -271,7 +354,10 @@ async fn upload_folder_stores_every_item() {
         (&["Sub", "b.txt"], Some(b"beta")),
     ];
 
-    let upload = admin.upload_folder(&uploads, "Pack", 3, 9).await.unwrap();
+    let upload = admin
+        .upload_folder(&uploads, "Pack", 3, 9, false)
+        .await
+        .unwrap();
     let mut sender = upload.open().await.unwrap().expect("a transfer");
     for (path, data) in items {
         let header = FolderItemHeader {
@@ -318,6 +404,6 @@ async fn download_file_of_a_missing_file_is_a_server_error() {
     let addr = start_server().await;
     let (alice, _alice_events) = join(addr, "alice").await;
 
-    let result = alice.download_file(&HlPath::default(), "nothing").await;
+    let result = alice.download_file(&HlPath::default(), "nothing", 0).await;
     assert!(matches!(result, Err(ClientError::Server(_))), "{result:?}");
 }

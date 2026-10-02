@@ -23,5 +23,9 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 directories = "5"
 
+[dev-dependencies]
+hotline-server = { workspace = true }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

@@ -1,3 +1,5 @@
+use crate::transfer::Start;
+
 /// What the caller must do after one key press or mouse click.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -18,10 +20,20 @@ pub enum Action {
     OpenFolder(Box<str>),
     /// List the current folder's parent.
     ParentFolder,
-    /// Download the named file in the current folder.
-    DownloadFile(Box<str>),
-    /// Download the named folder in the current folder.
-    DownloadFolder(Box<str>),
-    /// Upload the local file or folder at this path to the current folder.
-    Upload(String),
+    /// Download the file `name` in the current folder as the local file `save_as`.
+    DownloadFile {
+        name: Box<str>,
+        save_as: Box<str>,
+        start: Start,
+    },
+    /// Download the folder `name` in the current folder.
+    DownloadFolder {
+        name: Box<str>,
+        start: Start,
+    },
+    /// Upload the local file or folder at `path` to the current folder.
+    Upload {
+        path: String,
+        start: Start,
+    },
 }

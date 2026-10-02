@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
-use hotline_proto::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
+use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
 
 use crate::client_info_text::ClientInfoText;
@@ -31,6 +31,11 @@ type Conn = Framed<TcpStream, TransactionCodec>;
 /// [`myField_Options`]: hotline_proto::FieldId::Options
 /// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
 const USER_MESSAGE: u16 = 1;
+
+/// [`myField_FileXferOptions`] (204) on an upload that resumes a partial one.
+///
+/// [`myField_FileXferOptions`]: hotline_proto::FieldId::FileXferOptions
+const RESUME: u16 = 1;
 
 /// A pending-request table: still accepting new requests, or
 /// permanently closed because the connection ended. See [`read_loop`]'s
@@ -281,12 +286,26 @@ impl HotlineClient {
     }
 
     /// Ask to download the file `name` in the folder at `path`,
-    /// [`myTran_DownloadFile`] (202). [`FileDownload::receive`] then reads it.
+    /// [`myTran_DownloadFile`] (202). An `offset` above 0 sends
+    /// [`myField_FileResumeData`] (203), so the server sends only the data
+    /// from `offset` on. [`FileDownload::receive`] then reads it.
     ///
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
-    pub async fn download_file(&self, path: &HlPath, name: &str) -> Result<FileDownload> {
+    /// [`myField_FileResumeData`]: hotline_proto::FieldId::FileResumeData
+    pub async fn download_file(
+        &self,
+        path: &HlPath,
+        name: &str,
+        offset: u32,
+    ) -> Result<FileDownload> {
         let mut fields = vec![Field::string(FieldId::FileName, name)];
         fields.extend(self.file_path_field(path)?);
+        if offset > 0 {
+            fields.push(Field::bytes(
+                FieldId::FileResumeData,
+                types::encode_resume_data(offset).to_vec(),
+            ));
+        }
         let reply = self.request(Opcode::DownloadFile, fields).await?;
         let u32_field = |id| reply.field(id).and_then(Field::as_u32);
         Ok(FileDownload {
@@ -318,7 +337,9 @@ impl HotlineClient {
     }
 
     /// Ask to upload `file_size` bytes as the file `name` in the folder at
-    /// `path`, [`myTran_UploadFile`] (203). [`FileUpload::send`] then sends it.
+    /// `path`, [`myTran_UploadFile`] (203). With `resume`, the upload continues
+    /// the server's partial upload, and [`FileUpload::offset`] tells where.
+    /// [`FileUpload::send`] then sends it.
     ///
     /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     pub async fn upload_file(
@@ -326,6 +347,7 @@ impl HotlineClient {
         path: &HlPath,
         name: &str,
         file_size: u64,
+        resume: bool,
     ) -> Result<FileUpload> {
         let (file_size, transfer_size) = u32::try_from(file_size)
             .ok()
@@ -333,23 +355,34 @@ impl HotlineClient {
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "the file is too large")
             })?;
-        let mut fields = vec![
-            Field::string(FieldId::FileName, name),
-            Field::u32(FieldId::TransferSize, transfer_size),
-        ];
+        let mut fields = vec![Field::string(FieldId::FileName, name)];
         fields.extend(self.file_path_field(path)?);
+        fields.push(if resume {
+            Field::u16(FieldId::FileXferOptions, RESUME)
+        } else {
+            Field::u32(FieldId::TransferSize, transfer_size)
+        });
         let reply = self.request(Opcode::UploadFile, fields).await?;
+        let offset = if resume {
+            let field = reply
+                .field(FieldId::FileResumeData)
+                .ok_or(ClientError::MissingField(FieldId::FileResumeData))?;
+            types::decode_resume_data(&field.as_bytes(self.encoding.get()))?.min(file_size)
+        } else {
+            0
+        };
         Ok(FileUpload {
             reference: reference(&reply)?,
             file_size,
-            transfer_size,
+            offset,
             transfer_addr: self.transfer_addr()?,
         })
     }
 
     /// Ask to upload a folder of `item_count` files and folders, with
     /// `total_size` bytes of file data, as the folder `name` in the folder at
-    /// `path`, [`myTran_UploadFldr`] (213). [`FolderUpload::open`] then starts
+    /// `path`, [`myTran_UploadFldr`] (213). With `resume`, the upload goes
+    /// into the server's existing folder. [`FolderUpload::open`] then starts
     /// it. It sends the low 32 bits of `total_size`.
     ///
     /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
@@ -359,6 +392,7 @@ impl HotlineClient {
         name: &str,
         item_count: u32,
         total_size: u64,
+        resume: bool,
     ) -> Result<FolderUpload> {
         let total_size = total_size as u32;
         let mut fields = vec![
@@ -367,6 +401,9 @@ impl HotlineClient {
             Field::u32(FieldId::FldrItemCount, item_count),
         ];
         fields.extend(self.file_path_field(path)?);
+        if resume {
+            fields.push(Field::u16(FieldId::FileXferOptions, RESUME));
+        }
         let reply = self.request(Opcode::UploadFldr, fields).await?;
         Ok(FolderUpload {
             reference: (item_count > 0).then(|| reference(&reply)).transpose()?,

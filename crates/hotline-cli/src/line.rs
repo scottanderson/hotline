@@ -5,7 +5,7 @@ pub struct Line {
     pub kind: LineKind,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
     Chat,
     System,

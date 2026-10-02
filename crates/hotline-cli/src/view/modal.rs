@@ -1,3 +1,5 @@
+use crate::transfer::Conflict;
+
 /// A box drawn over the main screen that takes every key until it closes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Modal {
@@ -17,6 +19,23 @@ pub enum Modal {
     Info { name: Box<str>, text: Box<str> },
     /// The local path of a file or folder to upload to the current folder.
     Upload { input: String },
+    /// A transfer that waits for resume, replace, or cancel.
+    Confirm(Conflict),
+    /// A new local name for the download of `name`.
+    SaveAs { name: Box<str>, input: String },
+}
+
+impl Modal {
+    /// The modal that asks how to start a transfer with `conflict`.
+    pub fn ask(conflict: Conflict) -> Self {
+        match conflict {
+            Conflict::LocalFileExists { name, save_as } => Self::SaveAs {
+                name,
+                input: save_as.into(),
+            },
+            conflict => Self::Confirm(conflict),
+        }
+    }
 }
 
 /// One entry in [`Modal::UserMenu`].

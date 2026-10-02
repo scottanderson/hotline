@@ -140,9 +140,9 @@ one-shared-room model.
    agreement, chats in public, sends private messages, shows a user's
    info text, reads and posts classic news, lists users, files, and
    tracker servers, downloads and uploads files and folders, and shows
-   a banner's link. It cannot resume a transfer, read or post threaded
-   news, use private chat rooms, or administer accounts. Each area can
-   be its own task.
+   a banner's link, and resumes transfers. It cannot read or post
+   threaded news, use private chat rooms, or administer accounts. Each
+   area can be its own task.
 
 ## Resolved
 
@@ -688,10 +688,11 @@ one-shared-room model.
 93. `hlc` downloads a file on Enter or a double click in the Files tab,
     with `myTran_DownloadFile` (202) and an `HTXF` connection on the
     next port. The file goes in `--download-dir`, the current folder by
-    default, and never replaces a local file. Each path separator in
-    the server's name becomes `_`. The transfer runs on its own task
-    and writes a line in chat when it ends. A `myTran_DownloadInfo`
-    (211) push shows a queued download's place in the queue.
+    default, and never replaces a complete local file. Each path
+    separator in the server's name becomes `_`. The transfer runs on its
+    own task and writes a line in chat when it ends. A
+    `myTran_DownloadInfo` (211) push shows a queued download's place in
+    the queue.
 
 94. `hlc` uploads a local file to the current folder: `u` in the Files
     tab asks for its path. `myTran_UploadFile` (203) sends the flat
@@ -702,8 +703,8 @@ one-shared-room model.
 95. `d` in `hlc`'s Files tab downloads the selected file, or a folder
     with everything inside it through `myTran_DownloadFldr` (210). The
     client sends Next File (3) for each item and Send File (1) for each
-    file. The folder goes in `--download-dir` as a new folder, and an
-    existing local folder stops it.
+    file. The folder goes in `--download-dir` as a new folder. Item 101
+    covers an existing local folder.
 
 96. `hlc` uploads a local folder, with everything inside it, through
     `myTran_UploadFldr` (213) when the path after `u` names a folder.
@@ -735,6 +736,17 @@ one-shared-room model.
      `myTran_ServerBanner` (122) push as one line, for a link banner and
      for the link of an image banner. It does not show a banner image,
      because a terminal cannot show it.
+
+101. `hlc` resumes a transfer only after the user agrees, like openline.
+     A download goes into `name.hpf` and becomes `name` when it ends. A
+     local `name.hpf` asks to resume, replace, or cancel; resume sends
+     `myField_FileResumeData` (203). A complete local file asks for a
+     new name. An upload whose `name.hpf` the server lists asks to
+     resume or cancel; resume sends `myField_FileXferOptions` (204) = 1.
+     A folder download into an existing folder asks to resume, replace,
+     or cancel. Resume skips each complete file, continues each `.hpf`
+     file with Resume File (2), and gets the rest with Send File (1). A
+     folder upload onto a listed folder asks to resume or cancel.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

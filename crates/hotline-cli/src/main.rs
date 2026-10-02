@@ -4,6 +4,7 @@ mod args;
 mod line;
 mod session;
 mod tracker;
+mod transfer;
 mod ui;
 mod view;
 
@@ -175,12 +176,24 @@ async fn perform(
                 list_files(session, view, client, path).await;
             }
         }
-        Action::DownloadFile(name) => session.download_file(client, &name, done).await,
-        Action::DownloadFolder(name) => session.download_folder(client, &name, done).await,
-        Action::Upload(path) => {
-            session
-                .upload(client, std::path::Path::new(&path), done)
+        Action::DownloadFile {
+            name,
+            save_as,
+            start,
+        } => {
+            let conflict = session
+                .download_file(client, &name, &save_as, start, done)
                 .await;
+            view.modal = conflict.map(Modal::ask);
+        }
+        Action::DownloadFolder { name, start } => {
+            let conflict = session.download_folder(client, &name, start, done).await;
+            view.modal = conflict.map(Modal::ask);
+        }
+        Action::Upload { path, start } => {
+            let path = std::path::Path::new(&path);
+            let conflict = session.upload(client, path, start, done).await;
+            view.modal = conflict.map(Modal::ask);
         }
     }
     false

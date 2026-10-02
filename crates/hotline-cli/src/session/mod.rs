@@ -3,8 +3,10 @@
 
 mod event_outcome;
 mod mode;
+#[cfg(test)]
+mod test_support;
 
-use std::io::SeekFrom;
+use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use hotline_client::{ClientInfoText, FolderDownload, FolderUpload, HotlineClient};
@@ -19,6 +21,7 @@ use tokio::io::{AsyncSeekExt, BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::line::{Line, LineKind};
+use crate::transfer::{Conflict, Start};
 
 pub use event_outcome::EventOutcome;
 pub use mode::Mode;
@@ -369,48 +372,69 @@ impl ClientSession {
     }
 
     /// Start to download the file `name` in the current folder into
-    /// `download_dir`, [`myTran_DownloadFile`] (202). The transfer runs on its
-    /// own task and sends its result line to `done`. An existing local file
-    /// stops the download.
+    /// `download_dir` as `save_as`, [`myTran_DownloadFile`] (202). The data
+    /// goes into `save_as.hpf`, which becomes `save_as` when the download
+    /// ends. The transfer runs on its own task and sends its result line to
+    /// `done`. With [`Start::New`], a local `save_as` or `save_as.hpf` stops
+    /// the download and comes back as a [`Conflict`].
     ///
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     pub async fn download_file(
         &mut self,
         client: &HotlineClient,
         name: &str,
+        save_as: &str,
+        start: Start,
         done: &UnboundedSender<Line>,
-    ) {
-        let local = self.download_dir.join(local_name(name));
-        let file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&local)
-            .await
-        {
-            Ok(file) => file,
+    ) -> Option<Conflict> {
+        let local = self.download_dir.join(local_name(save_as));
+        let partial = partial_path(&local);
+        if start == Start::New {
+            let (name, save_as) = (name.into(), save_as.into());
+            if exists(&local).await {
+                return Some(Conflict::LocalFileExists { name, save_as });
+            }
+            if exists(&partial).await {
+                return Some(Conflict::PartialDownload { name, save_as });
+            }
+        }
+        let (file, offset) = match open_partial(&partial, start).await {
+            Ok(opened) => opened,
             Err(e) => {
-                let text = format!("cannot save {}: {e}", local.display());
-                return self.push(text, LineKind::Error);
+                let text = format!("cannot save {}: {e}", partial.display());
+                self.push(text, LineKind::Error);
+                return None;
             }
         };
-        let download = match client.download_file(&self.file_path, name).await {
+        let download = match client.download_file(&self.file_path, name, offset).await {
             Ok(download) => download,
             Err(e) => {
-                let _ = tokio::fs::remove_file(&local).await;
-                return self.push(format!("failed to download {name}: {e}"), LineKind::Error);
+                if start != Start::Resume {
+                    let _ = tokio::fs::remove_file(&partial).await;
+                }
+                self.push(format!("failed to download {name}: {e}"), LineKind::Error);
+                return None;
             }
         };
         let queue = match download.waiting_count {
             0 => String::new(),
             n => format!(", {n} ahead in the queue"),
         };
-        self.push(format!("downloading {name}{queue}"), LineKind::System);
+        let from = match offset {
+            0 => String::new(),
+            n => format!(" from byte {n}"),
+        };
+        self.push(format!("downloading {name}{from}{queue}"), LineKind::System);
 
         let name = name.to_string();
         let done = done.clone();
         tokio::spawn(async move {
-            let mut out = BufWriter::new(file);
-            let line = match download.receive(&mut out).await {
+            let received = async {
+                let bytes = download.receive(&mut BufWriter::new(file)).await?;
+                tokio::fs::rename(&partial, &local).await?;
+                Ok::<_, anyhow::Error>(bytes)
+            };
+            let line = match received.await {
                 Ok(bytes) => Line {
                     text: format!("downloaded {name} ({bytes} bytes) to {}", local.display())
                         .into(),
@@ -423,30 +447,48 @@ impl ClientSession {
             };
             let _ = done.send(line);
         });
+        None
     }
 
     /// Start to download the folder `name` in the current folder, with
     /// everything inside it, into `download_dir`, [`myTran_DownloadFldr`] (210).
     /// The transfer runs on its own task and sends its result line to `done`.
-    /// An existing local folder stops the download.
+    /// With [`Start::New`], an existing local folder stops the download and
+    /// comes back as a [`Conflict`]. [`Start::Resume`] skips each file that
+    /// is there and continues each `.hpf` file.
     ///
     /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
     pub async fn download_folder(
         &mut self,
         client: &HotlineClient,
         name: &str,
+        start: Start,
         done: &UnboundedSender<Line>,
-    ) {
+    ) -> Option<Conflict> {
         let root = self.download_dir.join(local_name(name));
-        if let Err(e) = tokio::fs::create_dir(&root).await {
-            let text = format!("cannot save {}: {e}", root.display());
-            return self.push(text, LineKind::Error);
+        let created = match start {
+            Start::New => tokio::fs::create_dir(&root).await,
+            Start::Resume | Start::Replace => tokio::fs::create_dir_all(&root).await,
+        };
+        match created {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                return Some(Conflict::LocalFolderExists { name: name.into() });
+            }
+            Err(e) => {
+                let text = format!("cannot save {}: {e}", root.display());
+                self.push(text, LineKind::Error);
+                return None;
+            }
         }
         let download = match client.download_folder(&self.file_path, name).await {
             Ok(download) => download,
             Err(e) => {
-                let _ = tokio::fs::remove_dir(&root).await;
-                return self.push(format!("failed to download {name}: {e}"), LineKind::Error);
+                if start == Start::New {
+                    let _ = tokio::fs::remove_dir(&root).await;
+                }
+                self.push(format!("failed to download {name}: {e}"), LineKind::Error);
+                return None;
             }
         };
         let queue = match download.waiting_count {
@@ -462,7 +504,7 @@ impl ClientSession {
         let name = name.to_string();
         let done = done.clone();
         tokio::spawn(async move {
-            let line = match receive_folder(download, &root).await {
+            let line = match receive_folder(download, &root, start).await {
                 Ok((files, bytes)) => Line {
                     text: format!(
                         "downloaded {name} ({files} files, {bytes} bytes) to {}",
@@ -478,33 +520,61 @@ impl ClientSession {
             };
             let _ = done.send(line);
         });
+        None
     }
 
     /// Start to upload the local file or folder at `local` to the current
     /// folder under its own name. The transfer runs on its own task and sends
-    /// its result line to `done`.
+    /// its result line to `done`. With [`Start::New`], a partial upload or a
+    /// folder of that name in the listing stops the upload and comes back as
+    /// a [`Conflict`].
     pub async fn upload(
         &mut self,
         client: &HotlineClient,
         local: &Path,
+        start: Start,
         done: &UnboundedSender<Line>,
-    ) {
+    ) -> Option<Conflict> {
         let Some(name) = local.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            return self.push(
+            self.push(
                 format!("{} names no file", local.display()),
                 LineKind::Error,
             );
+            return None;
         };
+        let conflict_local = || local.to_string_lossy().into();
         match tokio::fs::metadata(local).await {
             Ok(metadata) if metadata.is_dir() => {
-                self.upload_folder(client, local, name, done).await
+                if start == Start::New && self.lists(&name, true) {
+                    return Some(Conflict::RemoteFolderExists {
+                        local: conflict_local(),
+                    });
+                }
+                self.upload_folder(client, local, name, start, done).await;
             }
-            Ok(_) => self.upload_file(client, local, name, done).await,
+            Ok(_) => {
+                if start == Start::New && self.lists(&format!("{name}.hpf"), false) {
+                    return Some(Conflict::PartialUpload {
+                        local: conflict_local(),
+                    });
+                }
+                self.upload_file(client, local, name, start, done).await;
+            }
             Err(e) => self.push(
                 format!("cannot read {}: {e}", local.display()),
                 LineKind::Error,
             ),
         }
+        None
+    }
+
+    /// `true` if the current folder's listing has a file, or a folder if
+    /// `is_folder`, called `name`.
+    fn lists(&self, name: &str, is_folder: bool) -> bool {
+        self.files
+            .iter()
+            .flatten()
+            .any(|f| &*f.name == name && f.is_folder() == is_folder)
     }
 
     /// [`myTran_UploadFile`] (203) for the local file at `local`.
@@ -515,6 +585,7 @@ impl ClientSession {
         client: &HotlineClient,
         local: &Path,
         name: String,
+        start: Start,
         done: &UnboundedSender<Line>,
     ) {
         let opened = async {
@@ -522,18 +593,31 @@ impl ClientSession {
             let size = file.metadata().await?.len();
             Ok::<_, std::io::Error>((file, size))
         };
-        let (file, size) = match opened.await {
+        let (mut file, size) = match opened.await {
             Ok(opened) => opened,
             Err(e) => {
                 let text = format!("cannot read {}: {e}", local.display());
                 return self.push(text, LineKind::Error);
             }
         };
-        let upload = match client.upload_file(&self.file_path, &name, size).await {
+        let resume = start == Start::Resume;
+        let upload = match client
+            .upload_file(&self.file_path, &name, size, resume)
+            .await
+        {
             Ok(upload) => upload,
             Err(e) => return self.push(format!("failed to upload {name}: {e}"), LineKind::Error),
         };
-        self.push(format!("uploading {name}"), LineKind::System);
+        let offset = upload.offset();
+        if let Err(e) = file.seek(SeekFrom::Start(offset.into())).await {
+            let text = format!("cannot read {}: {e}", local.display());
+            return self.push(text, LineKind::Error);
+        }
+        let from = match offset {
+            0 => String::new(),
+            n => format!(" from byte {n}"),
+        };
+        self.push(format!("uploading {name}{from}"), LineKind::System);
 
         let done = done.clone();
         tokio::spawn(async move {
@@ -560,6 +644,7 @@ impl ClientSession {
         client: &HotlineClient,
         local: &Path,
         name: String,
+        start: Start,
         done: &UnboundedSender<Line>,
     ) {
         let root = local.to_path_buf();
@@ -582,8 +667,9 @@ impl ClientSession {
             .filter_map(|item| item.file.as_ref())
             .map(|(_, size)| size)
             .sum();
+        let resume = start == Start::Resume;
         let upload = match client
-            .upload_folder(&self.file_path, &name, item_count, total_size)
+            .upload_folder(&self.file_path, &name, item_count, total_size, resume)
             .await
         {
             Ok(upload) => upload,
@@ -645,9 +731,14 @@ impl ClientSession {
     }
 }
 
-/// Save each item of `download` under the local folder `root`. Returns the
-/// number of files and bytes saved.
-async fn receive_folder(download: FolderDownload, root: &Path) -> anyhow::Result<(u32, u64)> {
+/// Save each item of `download` under the local folder `root`. With
+/// [`Start::Resume`], a file that is there is skipped and a `.hpf` file is
+/// continued. Returns the number of files and bytes saved.
+async fn receive_folder(
+    download: FolderDownload,
+    root: &Path,
+    start: Start,
+) -> anyhow::Result<(u32, u64)> {
     let mut receiver = download.open().await?;
     let (mut files, mut bytes) = (0, 0);
     while let Some(item) = receiver.next_item().await? {
@@ -660,18 +751,56 @@ async fn receive_folder(download: FolderDownload, root: &Path) -> anyhow::Result
             tokio::fs::create_dir_all(&local).await?;
             continue;
         }
+        if start == Start::Resume && exists(&local).await {
+            continue;
+        }
         if let Some(parent) = local.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&local)
-            .await?;
-        bytes += receiver.receive_file(&mut BufWriter::new(file)).await?;
+        let partial = partial_path(&local);
+        let item_start = match start {
+            Start::Resume if exists(&partial).await => Start::Resume,
+            _ => Start::Replace,
+        };
+        let (file, offset) = open_partial(&partial, item_start).await?;
+        let mut out = BufWriter::new(file);
+        bytes += match offset {
+            0 => receiver.receive_file(&mut out).await?,
+            offset => receiver.resume_file(&mut out, offset).await?,
+        };
+        tokio::fs::rename(&partial, &local).await?;
         files += 1;
     }
     Ok((files, bytes))
+}
+
+/// The working copy of the local file `local` while its download runs.
+fn partial_path(local: &Path) -> PathBuf {
+    let mut name = local.file_name().unwrap_or_default().to_os_string();
+    name.push(".hpf");
+    local.with_file_name(name)
+}
+
+/// Open the working copy `partial` for a download. [`Start::Resume`] adds to
+/// it and also returns its size; [`Start::New`] creates it.
+async fn open_partial(partial: &Path, start: Start) -> std::io::Result<(File, u32)> {
+    let mut options = OpenOptions::new();
+    match start {
+        Start::Resume => options.append(true),
+        Start::New => options.write(true).create_new(true),
+        Start::Replace => options.write(true).create(true).truncate(true),
+    };
+    let file = options.open(partial).await?;
+    let offset = match start {
+        Start::Resume => u32::try_from(file.metadata().await?.len())
+            .map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "the file is too large"))?,
+        Start::New | Start::Replace => 0,
+    };
+    Ok((file, offset))
+}
+
+async fn exists(path: &Path) -> bool {
+    tokio::fs::try_exists(path).await.unwrap_or(false)
 }
 
 /// One item inside a local folder to upload.
@@ -852,6 +981,158 @@ mod tests {
                 ("a.txt".to_string(), Some(5)),
                 ("Sub/b.txt".to_string(), Some(2)),
             ]
+        );
+    }
+
+    /// A session logged in as admin to a server with `files`, saving
+    /// downloads in `dir`.
+    async fn file_session(
+        files: hotline_server::InMemoryFileProvider,
+        dir: &Path,
+    ) -> (ClientSession, HotlineClient) {
+        let providers = hotline_server::Providers {
+            files: std::sync::Arc::new(files),
+            ..hotline_server::Providers::default()
+        };
+        let addr = test_support::start_server(providers).await;
+        let (client, _events) = test_support::join_admin(addr, "me").await;
+        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        session.download_dir = dir.to_path_buf();
+        (session, client)
+    }
+
+    /// The next line a transfer sends when it ends.
+    async fn transfer_done(done: &mut tokio::sync::mpsc::UnboundedReceiver<Line>) -> Line {
+        tokio::time::timeout(test_support::WAIT, done.recv())
+            .await
+            .expect("transfer ends")
+            .expect("channel open")
+    }
+
+    #[tokio::test]
+    async fn download_file_asks_before_it_resumes_a_partial_download() {
+        let files = hotline_server::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello world");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt.hpf"), b"hello ").unwrap();
+        let (mut session, client) = file_session(files, dir.path()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let conflict = session
+            .download_file(&client, "a.txt", "a.txt", Start::New, &tx)
+            .await;
+        assert_eq!(
+            conflict,
+            Some(Conflict::PartialDownload {
+                name: "a.txt".into(),
+                save_as: "a.txt".into()
+            })
+        );
+
+        let conflict = session
+            .download_file(&client, "a.txt", "a.txt", Start::Resume, &tx)
+            .await;
+        assert_eq!(conflict, None);
+        let line = transfer_done(&mut rx).await;
+        assert_eq!(line.kind, LineKind::System, "{}", line.text);
+        assert_eq!(
+            std::fs::read(dir.path().join("a.txt")).unwrap(),
+            b"hello world"
+        );
+        assert!(!dir.path().join("a.txt.hpf").exists());
+    }
+
+    #[tokio::test]
+    async fn download_file_asks_for_a_new_name_when_the_file_is_there() {
+        let files = hotline_server::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"new");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"old").unwrap();
+        let (mut session, client) = file_session(files, dir.path()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let conflict = session
+            .download_file(&client, "a.txt", "a.txt", Start::New, &tx)
+            .await;
+        assert!(matches!(conflict, Some(Conflict::LocalFileExists { .. })));
+
+        let conflict = session
+            .download_file(&client, "a.txt", "b.txt", Start::New, &tx)
+            .await;
+        assert_eq!(conflict, None);
+        transfer_done(&mut rx).await;
+        assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"old");
+        assert_eq!(std::fs::read(dir.path().join("b.txt")).unwrap(), b"new");
+    }
+
+    #[tokio::test]
+    async fn download_folder_resume_skips_whole_files_and_continues_partial_ones() {
+        let files = hotline_server::InMemoryFileProvider::default();
+        let games = HlPath::new(["Games"]);
+        files.seed(&games, "a.txt", *b"aaaa");
+        files.seed(&games, "b.txt", *b"bbbb");
+        files.seed(&games, "c.txt", *b"cccc");
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Games");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.txt"), b"old").unwrap();
+        std::fs::write(root.join("b.txt.hpf"), b"bb").unwrap();
+        let (mut session, client) = file_session(files, dir.path()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let conflict = session
+            .download_folder(&client, "Games", Start::New, &tx)
+            .await;
+        assert_eq!(
+            conflict,
+            Some(Conflict::LocalFolderExists {
+                name: "Games".into()
+            })
+        );
+
+        let conflict = session
+            .download_folder(&client, "Games", Start::Resume, &tx)
+            .await;
+        assert_eq!(conflict, None);
+        let line = transfer_done(&mut rx).await;
+        assert_eq!(line.kind, LineKind::System, "{}", line.text);
+        assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"old");
+        assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"bbbb");
+        assert_eq!(std::fs::read(root.join("c.txt")).unwrap(), b"cccc");
+        assert!(!root.join("b.txt.hpf").exists());
+    }
+
+    #[tokio::test]
+    async fn upload_asks_before_it_resumes_a_listed_partial_upload() {
+        let files = hotline_server::InMemoryFileProvider::default();
+        let uploads = HlPath::new(["Uploads"]);
+        files.seed(&uploads, "a.txt.hpf", *b"hel");
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a.txt");
+        std::fs::write(&local, b"hello").unwrap();
+        let (mut session, client) = file_session(files, dir.path()).await;
+        session.get_file_name_list(&client, uploads.clone()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let conflict = session.upload(&client, &local, Start::New, &tx).await;
+        assert!(matches!(conflict, Some(Conflict::PartialUpload { .. })));
+
+        let conflict = session.upload(&client, &local, Start::Resume, &tx).await;
+        assert_eq!(conflict, None);
+        let line = transfer_done(&mut rx).await;
+        assert_eq!(line.kind, LineKind::System, "{}", line.text);
+
+        let download = client.download_file(&uploads, "a.txt", 0).await.unwrap();
+        let mut data = Vec::new();
+        download.receive(&mut data).await.unwrap();
+        assert_eq!(data, b"hello");
+    }
+
+    #[test]
+    fn partial_path_adds_hpf_to_the_file_name() {
+        assert_eq!(
+            partial_path(Path::new("dl/a.txt")),
+            Path::new("dl/a.txt.hpf")
         );
     }
 

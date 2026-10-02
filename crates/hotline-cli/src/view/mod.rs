@@ -11,6 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use ratatui::layout::Rect;
 
+use crate::transfer::{Conflict, Start};
 use crate::ui::{self, Areas};
 
 pub use action::Action;
@@ -134,6 +135,14 @@ impl View {
             }
             (Some(Modal::Info { .. }), ..) => &[("Esc", "close")],
             (Some(Modal::Upload { .. }), ..) => &[("Enter", "upload"), ("Esc", "cancel")],
+            (Some(Modal::SaveAs { .. }), ..) => &[("Enter", "save"), ("Esc", "cancel")],
+            (
+                Some(Modal::Confirm(
+                    Conflict::PartialDownload { .. } | Conflict::LocalFolderExists { .. },
+                )),
+                ..,
+            ) => &[("r", "resume"), ("o", "replace"), ("Esc", "cancel")],
+            (Some(Modal::Confirm(_)), ..) => &[("r", "resume"), ("Esc", "cancel")],
             (None, Focus::Users, Tab::Chat) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
@@ -218,6 +227,9 @@ impl View {
     }
 
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
+        if let Modal::Confirm(conflict) = modal {
+            return self.confirm_key(conflict, key);
+        }
         match (&mut modal, key.code) {
             (Modal::InstantMsg { input, .. }, _) if is_new_line(key) => input.push('\n'),
             (_, KeyCode::Esc) | (Modal::Info { .. }, KeyCode::Enter) => return Action::None,
@@ -228,14 +240,32 @@ impl View {
                 };
             }
             (Modal::Upload { input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::Upload(std::mem::take(input));
+                return Action::Upload {
+                    path: std::mem::take(input),
+                    start: Start::New,
+                };
             }
-            (Modal::InstantMsg { input, .. } | Modal::Upload { input }, KeyCode::Backspace) => {
+            (Modal::SaveAs { name, input }, KeyCode::Enter) if !input.is_empty() => {
+                return Action::DownloadFile {
+                    name: std::mem::take(name),
+                    save_as: std::mem::take(input).into(),
+                    start: Start::New,
+                };
+            }
+            (
+                Modal::InstantMsg { input, .. }
+                | Modal::Upload { input }
+                | Modal::SaveAs { input, .. },
+                KeyCode::Backspace,
+            ) => {
                 input.pop();
             }
-            (Modal::InstantMsg { input, .. } | Modal::Upload { input }, KeyCode::Char(c))
-                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            (
+                Modal::InstantMsg { input, .. }
+                | Modal::Upload { input }
+                | Modal::SaveAs { input, .. },
+                KeyCode::Char(c),
+            ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 input.push(c);
             }
             (Modal::UserMenu { selected, .. }, KeyCode::Up) => {
@@ -256,6 +286,18 @@ impl View {
         }
         self.modal = Some(modal);
         Action::None
+    }
+
+    fn confirm_key(&mut self, conflict: Conflict, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Char('r') => conflict.action(Start::Resume),
+            KeyCode::Char('o') if conflict.can_replace() => conflict.action(Start::Replace),
+            KeyCode::Esc => Action::None,
+            _ => {
+                self.modal = Some(Modal::Confirm(conflict));
+                Action::None
+            }
+        }
     }
 
     fn users_key(&mut self, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
@@ -356,7 +398,10 @@ impl View {
                     }
                 }
                 Modal::Info { .. } => self.modal = None,
-                Modal::InstantMsg { .. } | Modal::Upload { .. } => {}
+                Modal::InstantMsg { .. }
+                | Modal::Upload { .. }
+                | Modal::SaveAs { .. }
+                | Modal::Confirm(_) => {}
             }
             return Action::None;
         }
@@ -503,7 +548,7 @@ impl View {
 fn open_file(index: usize, files: &[FileNameWithInfo]) -> Action {
     match files.get(index) {
         Some(file) if file.is_folder() => Action::OpenFolder(file.name.clone()),
-        Some(file) => Action::DownloadFile(file.name.clone()),
+        Some(file) => download_file(file),
         None => Action::None,
     }
 }
@@ -511,9 +556,21 @@ fn open_file(index: usize, files: &[FileNameWithInfo]) -> Action {
 /// Download the file or folder at `index`.
 fn download(index: usize, files: &[FileNameWithInfo]) -> Action {
     match files.get(index) {
-        Some(file) if file.is_folder() => Action::DownloadFolder(file.name.clone()),
-        Some(file) => Action::DownloadFile(file.name.clone()),
+        Some(file) if file.is_folder() => Action::DownloadFolder {
+            name: file.name.clone(),
+            start: Start::New,
+        },
+        Some(file) => download_file(file),
         None => Action::None,
+    }
+}
+
+/// Download `file` under its own name.
+fn download_file(file: &FileNameWithInfo) -> Action {
+    Action::DownloadFile {
+        name: file.name.clone(),
+        save_as: file.name.clone(),
+        start: Start::New,
     }
 }
 
@@ -769,7 +826,11 @@ mod tests {
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::DownloadFile("readme.txt".into())
+            Action::DownloadFile {
+                name: "readme.txt".into(),
+                save_as: "readme.txt".into(),
+                start: Start::New,
+            }
         );
         assert_eq!(
             view.handle_key(key(KeyCode::Backspace), &users(), &files()),
@@ -820,12 +881,19 @@ mod tests {
         let _ = view.handle_key(ctrl_f, &users(), &files());
         assert_eq!(
             view.handle_key(key(KeyCode::Char('d')), &users(), &files()),
-            Action::DownloadFolder("Games".into())
+            Action::DownloadFolder {
+                name: "Games".into(),
+                start: Start::New,
+            }
         );
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         assert_eq!(
             view.handle_key(key(KeyCode::Char('d')), &users(), &files()),
-            Action::DownloadFile("readme.txt".into())
+            Action::DownloadFile {
+                name: "readme.txt".into(),
+                save_as: "readme.txt".into(),
+                start: Start::New,
+            }
         );
     }
 
@@ -847,8 +915,77 @@ mod tests {
         type_text(&mut view, "t");
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::Upload("/tmp/a.txt".into())
+            Action::Upload {
+                path: "/tmp/a.txt".into(),
+                start: Start::New,
+            }
         );
         assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn confirm_resumes_or_replaces_a_partial_download() {
+        let conflict = Conflict::PartialDownload {
+            name: "a.txt".into(),
+            save_as: "a.txt".into(),
+        };
+        let mut view = View {
+            modal: Some(Modal::ask(conflict.clone())),
+            ..View::default()
+        };
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('o')), &users(), &files()),
+            conflict.clone().action(Start::Replace)
+        );
+
+        view.modal = Some(Modal::ask(conflict.clone()));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('r')), &users(), &files()),
+            conflict.action(Start::Resume)
+        );
+        assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn confirm_of_an_upload_offers_no_replace() {
+        let conflict = Conflict::PartialUpload {
+            local: "/tmp/a.txt".into(),
+        };
+        let mut view = View {
+            modal: Some(Modal::ask(conflict.clone())),
+            ..View::default()
+        };
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('o')), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.modal, Some(Modal::Confirm(conflict)));
+
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn save_as_downloads_under_the_typed_name() {
+        let mut view = View {
+            modal: Some(Modal::ask(Conflict::LocalFileExists {
+                name: "a.txt".into(),
+                save_as: "a.txt".into(),
+            })),
+            ..View::default()
+        };
+        let _ = view.handle_key(key(KeyCode::Backspace), &users(), &files());
+        type_text(&mut view, "md");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::DownloadFile {
+                name: "a.txt".into(),
+                save_as: "a.txmd".into(),
+                start: Start::New,
+            }
+        );
     }
 }
