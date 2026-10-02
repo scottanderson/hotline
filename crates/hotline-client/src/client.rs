@@ -19,6 +19,7 @@ use crate::client_info_text::ClientInfoText;
 use crate::error::{ClientError, Result};
 use crate::file_download::FileDownload;
 use crate::file_upload::FileUpload;
+use crate::folder_download::FolderDownload;
 use crate::login_result::LoginResult;
 
 type Conn = Framed<TcpStream, TransactionCodec>;
@@ -292,6 +293,26 @@ impl HotlineClient {
             waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
             reference: reference(&reply)?,
             transfer_addr: self.transfer_addr()?,
+        })
+    }
+
+    /// Ask to download the folder `name` in the folder at `path`, with
+    /// everything inside it, [`myTran_DownloadFldr`] (210).
+    /// [`FolderDownload::open`] then starts it.
+    ///
+    /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
+    pub async fn download_folder(&self, path: &HlPath, name: &str) -> Result<FolderDownload> {
+        let mut fields = vec![Field::string(FieldId::FileName, name)];
+        fields.extend(self.file_path_field(path)?);
+        let reply = self.request(Opcode::DownloadFldr, fields).await?;
+        let u32_field = |id| reply.field(id).and_then(Field::as_u32);
+        let item_count = u32_field(FieldId::FldrItemCount).unwrap_or_default();
+        Ok(FolderDownload {
+            item_count,
+            waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
+            reference: (item_count > 0).then(|| reference(&reply)).transpose()?,
+            transfer_addr: self.transfer_addr()?,
+            encoding: self.encoding.get(),
         })
     }
 

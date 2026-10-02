@@ -168,6 +168,7 @@ impl View {
                 ("↑↓", "select"),
                 ("Enter", "open or download"),
                 ("⌫", "up"),
+                ("d", "download"),
                 ("u", "upload"),
                 ("Tab", "users"),
                 ("Esc", "chat"),
@@ -321,6 +322,7 @@ impl View {
             }
             KeyCode::Enter => return open_file(self.selected_file, files),
             KeyCode::Backspace | KeyCode::Left => return Action::ParentFolder,
+            KeyCode::Char('d') => return download(self.selected_file, files),
             KeyCode::Char('u') => {
                 self.modal = Some(Modal::Upload {
                     input: String::new(),
@@ -501,6 +503,15 @@ impl View {
 fn open_file(index: usize, files: &[FileNameWithInfo]) -> Action {
     match files.get(index) {
         Some(file) if file.is_folder() => Action::OpenFolder(file.name.clone()),
+        Some(file) => Action::DownloadFile(file.name.clone()),
+        None => Action::None,
+    }
+}
+
+/// Download the file or folder at `index`.
+fn download(index: usize, files: &[FileNameWithInfo]) -> Action {
+    match files.get(index) {
+        Some(file) if file.is_folder() => Action::DownloadFolder(file.name.clone()),
         Some(file) => Action::DownloadFile(file.name.clone()),
         None => Action::None,
     }
@@ -800,6 +811,22 @@ mod tests {
             now + Duration::from_millis(200),
         );
         assert_eq!(second, Action::OpenFolder("Games".into()));
+    }
+
+    #[test]
+    fn d_on_the_file_list_downloads_a_folder_or_a_file() {
+        let mut view = View::default();
+        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        let _ = view.handle_key(ctrl_f, &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('d')), &users(), &files()),
+            Action::DownloadFolder("Games".into())
+        );
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('d')), &users(), &files()),
+            Action::DownloadFile("readme.txt".into())
+        );
     }
 
     #[test]

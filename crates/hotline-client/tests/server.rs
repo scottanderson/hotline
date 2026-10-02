@@ -215,6 +215,45 @@ async fn upload_file_stores_the_data_in_the_upload_folder() {
 }
 
 #[tokio::test]
+async fn download_folder_steps_through_every_item() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::new(["Games"]), "doom.wad", *b"IWAD");
+    files.seed(&HlPath::new(["Games", "Maps"]), "e1m1.map", *b"map");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+
+    let download = admin
+        .download_folder(&HlPath::default(), "Games")
+        .await
+        .unwrap();
+    assert_eq!(download.item_count, 3);
+    let mut receiver = timeout(WAIT, download.open()).await.unwrap().unwrap();
+    let mut items = Vec::new();
+    while let Some(item) = timeout(WAIT, receiver.next_item()).await.unwrap().unwrap() {
+        let path = item.path.components.join("/");
+        let mut data = Vec::new();
+        if path == "doom.wad" {
+            receiver.receive_file(&mut data).await.unwrap();
+        }
+        items.push((path, item.is_folder, data));
+    }
+
+    items.sort_unstable();
+    assert_eq!(
+        items,
+        [
+            ("Maps".to_string(), true, vec![]),
+            ("Maps/e1m1.map".to_string(), false, vec![]),
+            ("doom.wad".to_string(), false, b"IWAD".to_vec()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn download_file_of_a_missing_file_is_a_server_error() {
     let addr = start_server().await;
     let (alice, _alice_events) = join(addr, "alice").await;

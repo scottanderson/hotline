@@ -6,7 +6,7 @@ mod mode;
 
 use std::path::{Path, PathBuf};
 
-use hotline_client::{ClientInfoText, HotlineClient};
+use hotline_client::{ClientInfoText, FolderDownload, HotlineClient};
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
@@ -411,6 +411,61 @@ impl ClientSession {
         });
     }
 
+    /// Start to download the folder `name` in the current folder, with
+    /// everything inside it, into `download_dir`, [`myTran_DownloadFldr`] (210).
+    /// The transfer runs on its own task and sends its result line to `done`.
+    /// An existing local folder stops the download.
+    ///
+    /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
+    pub async fn download_folder(
+        &mut self,
+        client: &HotlineClient,
+        name: &str,
+        done: &UnboundedSender<Line>,
+    ) {
+        let root = self.download_dir.join(local_name(name));
+        if let Err(e) = tokio::fs::create_dir(&root).await {
+            let text = format!("cannot save {}: {e}", root.display());
+            return self.push(text, LineKind::Error);
+        }
+        let download = match client.download_folder(&self.file_path, name).await {
+            Ok(download) => download,
+            Err(e) => {
+                let _ = tokio::fs::remove_dir(&root).await;
+                return self.push(format!("failed to download {name}: {e}"), LineKind::Error);
+            }
+        };
+        let queue = match download.waiting_count {
+            0 => String::new(),
+            n => format!(", {n} ahead in the queue"),
+        };
+        let items = download.item_count;
+        self.push(
+            format!("downloading {name} ({items} items{queue})"),
+            LineKind::System,
+        );
+
+        let name = name.to_string();
+        let done = done.clone();
+        tokio::spawn(async move {
+            let line = match receive_folder(download, &root).await {
+                Ok((files, bytes)) => Line {
+                    text: format!(
+                        "downloaded {name} ({files} files, {bytes} bytes) to {}",
+                        root.display()
+                    )
+                    .into(),
+                    kind: LineKind::System,
+                },
+                Err(e) => Line {
+                    text: format!("failed to download {name}: {e}").into(),
+                    kind: LineKind::Error,
+                },
+            };
+            let _ = done.send(line);
+        });
+    }
+
     /// Start to upload the local file at `local` to the current folder under
     /// its own name, [`myTran_UploadFile`] (203). The transfer runs on its own
     /// task and sends its result line to `done`.
@@ -495,6 +550,35 @@ impl ClientSession {
             Err(e) => self.push(format!("failed to send: {e}"), LineKind::Error),
         }
     }
+}
+
+/// Save each item of `download` under the local folder `root`. Returns the
+/// number of files and bytes saved.
+async fn receive_folder(download: FolderDownload, root: &Path) -> anyhow::Result<(u32, u64)> {
+    let mut receiver = download.open().await?;
+    let (mut files, mut bytes) = (0, 0);
+    while let Some(item) = receiver.next_item().await? {
+        let local = item
+            .path
+            .components
+            .iter()
+            .fold(root.to_path_buf(), |path, name| path.join(local_name(name)));
+        if item.is_folder {
+            tokio::fs::create_dir_all(&local).await?;
+            continue;
+        }
+        if let Some(parent) = local.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&local)
+            .await?;
+        bytes += receiver.receive_file(&mut BufWriter::new(file)).await?;
+        files += 1;
+    }
+    Ok((files, bytes))
 }
 
 /// The server file name `name` as one local path component.

@@ -155,8 +155,8 @@ one-shared-room model.
 6. **`hlc` does not cover every area.** It logs in, shows the
    agreement, chats in public, sends private messages, shows a user's
    info text, reads and posts classic news, lists users, files, and
-   tracker servers, and downloads and uploads files. It cannot transfer
-   folders, resume a transfer, read or post threaded news, use
+   tracker servers, downloads files and folders, and uploads files. It
+   cannot upload folders, resume a transfer, read or post threaded news, use
    private chat rooms, administer accounts, or show the banner. Each
    area can be its own task.
 
@@ -714,6 +714,12 @@ one-shared-room model.
     object's size in `myField_TransferSize` (108). The `HTXF` connection
     carries the file's `DATA` fork, and the upload ends when the server
     closes it.
+
+95. `d` in `hlc`'s Files tab downloads the selected file, or a folder
+    with everything inside it through `myTran_DownloadFldr` (210). The
+    client sends Next File (3) for each item and Send File (1) for each
+    file. The folder goes in `--download-dir` as a new folder, and an
+    existing local folder stops it.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
