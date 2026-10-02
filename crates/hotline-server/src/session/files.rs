@@ -1923,6 +1923,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_file_removes_a_partial_upload_by_its_listed_name() {
+        let partial = crate::file::partial_upload_name("a.txt");
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"done");
+        files.seed(&HlPath::default(), &partial, *b"half");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let delete = Transaction::request(
+            Opcode::DeleteFile,
+            1,
+            vec![Field::string(FieldId::FileName, &*partial)],
+        );
+        let [reply] = session
+            .on_delete_file(&delete, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), &partial)
+                .await
+        );
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
     async fn new_folder_creates_a_folder() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
@@ -2092,6 +2125,88 @@ mod tests {
         assert!(
             state
                 .file_exists(requester, &HlPath::default(), "b.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn set_file_info_renames_a_partial_upload_by_its_listed_name() {
+        let partial = crate::file::partial_upload_name("a.txt");
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"done");
+        files.seed(&HlPath::default(), &partial, *b"half");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let setinfo = Transaction::request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, &*partial),
+                Field::string(FieldId::FileNewName, "b.txt"),
+            ],
+        );
+        let [reply] = session
+            .on_set_file_info(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), &partial)
+                .await
+        );
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "b.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn move_file_moves_a_partial_upload_by_its_listed_name() {
+        let encoding = text_encoding::DEFAULT;
+        let partial = crate::file::partial_upload_name("a.txt");
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"done");
+        files.seed(&HlPath::default(), &partial, *b"half");
+        files.seed(&HlPath::new(["Sub"]), "placeholder.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let move_tx = Transaction::request(
+            Opcode::MoveFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, &*partial),
+                Field::bytes(
+                    FieldId::FileNewPath,
+                    HlPath::new(["Sub"]).encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_move_file(&move_tx, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            state
+                .file_exists(requester, &HlPath::new(["Sub"]), &partial)
+                .await
+        );
+        assert!(
+            state
+                .file_exists(requester, &HlPath::default(), "a.txt")
                 .await
         );
     }
