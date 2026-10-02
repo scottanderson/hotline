@@ -91,6 +91,11 @@ below, in priority order.
   UTF-8, and converts each one to the connection's encoding on the
   wire. A `myTran_GetMsgs` (101) reply that is too long is cut at a
   whole character; openline cuts at a byte.
+- **`hls` replies to `myTran_InviteToChat` (113) and
+  `myTran_SetChatSubject` (120).** openline's `ProcessTran_InviteToChat`
+  and `ProcessTran_SetChatSubject` send no reply, and its client does
+  not wait for one. `hls` replies, with an error when the request
+  fails. `hlc` sends both without waiting and shows an error reply.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -140,9 +145,9 @@ one-shared-room model.
    agreement, chats in public, sends private messages, shows a user's
    info text, reads and posts classic news, lists users, files, and
    tracker servers, downloads and uploads files and folders, and shows
-   a banner's link, and resumes transfers. It cannot read or post
-   threaded news, use private chat rooms, or administer accounts. Each
-   area can be its own task.
+   a banner's link, resumes transfers, and uses private chat rooms. It
+   cannot read or post threaded news or administer accounts. Each area
+   can be its own task.
 
 ## Resolved
 
@@ -747,6 +752,18 @@ one-shared-room model.
      or cancel. Resume skips each complete file, continues each `.hpf`
      file with Resume File (2), and gets the rest with Send File (1). A
      folder upload onto a listed folder asks to resume or cancel.
+
+102. `hlc` uses private chat rooms. "Private chat" in the user menu
+     opens a room with `myTran_InviteNewChat` (112). An invitation,
+     `myTran_InviteToChat` (113), opens a box: Enter joins with
+     `myTran_JoinChat` (115), and Esc declines with
+     `myTran_RejectChatInvite` (114). Each room has its own tab, named
+     after its subject or `Chat <id>`, with its own lines, input, and
+     member list. On a room tab, Ctrl-A invites a user, Ctrl-T sets the
+     subject with `myTran_SetChatSubject` (120), Ctrl-W leaves with
+     `myTran_LeaveChat` (116), and Ctrl-R moves to the next room. The
+     pushes 117, 118, 119, and a `myTran_ChatMsg` (106) with a
+     `myField_ChatID` (114) update the room.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

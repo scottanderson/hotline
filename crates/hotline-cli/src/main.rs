@@ -120,18 +120,27 @@ async fn run(
                             }
                             continue;
                         }
+                        let users = ui::tab_users(session, view.tab);
                         let files = session.files.as_deref().unwrap_or_default();
-                        view.handle_key(key, &session.users, files)
+                        view.handle_key(key, users, files)
                     }
                     Event::Mouse(mouse) if !matches!(session.mode, Mode::Agreement(_)) => {
                         let areas = ui::areas(terminal.size()?, view.input());
+                        let users = ui::tab_users(session, view.tab);
                         let files = session.files.as_deref().unwrap_or_default();
-                        view.handle_mouse(mouse, &areas, &session.users, files, Instant::now())
+                        view.handle_mouse(mouse, &areas, users, files, Instant::now())
                     }
                     _ => Action::None,
                 };
                 should_quit = perform(action, session, &mut view, client, &done_tx).await;
             }
+        }
+        view.set_tabs(ui::tab_labels(session));
+        if view.modal.is_none() {
+            view.modal = session.invites.pop_front().map(|invite| Modal::Invite {
+                chat_id: invite.chat_id,
+                from: invite.from,
+            });
         }
         terminal.draw(|f| ui::draw(f, session, &mut view))?;
     }
@@ -150,6 +159,50 @@ async fn perform(
         Action::None => {}
         Action::Quit => return true,
         Action::SendChat(text) => session.send_chat(client, &text).await,
+        Action::SendRoomChat { chat_id, text } => {
+            session.send_room_chat(client, chat_id, &text).await;
+        }
+        Action::InviteNewChat(user_id) => {
+            if let Some(chat_id) = session.invite_new_chat(client, user_id).await {
+                view.set_tabs(ui::tab_labels(session));
+                view.show_room(chat_id);
+            }
+        }
+        Action::PickInvitee(chat_id) => {
+            let members = ui::tab_users(session, view::Tab::Room(chat_id));
+            let users = session
+                .users
+                .iter()
+                .filter(|u| !members.iter().any(|m| m.user_id == u.user_id))
+                .map(|u| (u.user_id, u.name.clone()))
+                .collect();
+            view.modal = Some(Modal::PickUser {
+                chat_id,
+                users,
+                selected: 0,
+            });
+        }
+        Action::InviteToChat { chat_id, user_id } => {
+            session.invite_to_chat(client, chat_id, user_id).await;
+        }
+        Action::JoinChat(chat_id) => {
+            if let Some(chat_id) = session.join_chat(client, chat_id).await {
+                view.set_tabs(ui::tab_labels(session));
+                view.show_room(chat_id);
+            }
+        }
+        Action::RejectChatInvite(chat_id) => session.reject_chat_invite(client, chat_id).await,
+        Action::LeaveChat(chat_id) => session.leave_chat(client, chat_id).await,
+        Action::EditChatSubject(chat_id) => {
+            let input = session
+                .room(chat_id)
+                .map(|room| room.subject.to_string())
+                .unwrap_or_default();
+            view.modal = Some(Modal::Subject { chat_id, input });
+        }
+        Action::SetChatSubject { chat_id, subject } => {
+            session.set_chat_subject(client, chat_id, &subject).await;
+        }
         Action::SendInstantMsg { user_id, text } => {
             session.send_instant_msg(client, user_id, &text).await;
         }

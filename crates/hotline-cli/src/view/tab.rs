@@ -4,16 +4,15 @@ pub enum Tab {
     Chat,
     News,
     Files,
+    /// The private chat room with this ID.
+    Room(u32),
 }
 
 impl Tab {
-    pub const ALL: [Self; 3] = [Self::Chat, Self::News, Self::Files];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Chat => "Chat",
-            Self::News => "News",
-            Self::Files => "Files",
-        }
-    }
+    /// The tabs before the rooms, with their labels.
+    pub const FIXED: [(Self, &'static str); 3] = [
+        (Self::Chat, "Chat"),
+        (Self::News, "News"),
+        (Self::Files, "Files"),
+    ];
 }

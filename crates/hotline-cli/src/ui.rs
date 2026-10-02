@@ -1,13 +1,13 @@
 //! Rendering, and the screen areas that mouse clicks hit.
 
-use hotline_proto::types::{FileNameWithInfo, UserFlags};
+use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::line::LineKind;
+use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode};
 use crate::view::{contains, Focus, MenuItem, Modal, Tab, View};
 
@@ -67,22 +67,45 @@ pub fn inner(rect: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(rect)
 }
 
-/// Each tab and the columns its label covers, drawn as ` Chat │ News `.
-fn tab_columns(tabs: Rect) -> impl Iterator<Item = (Tab, std::ops::Range<u16>)> {
-    Tab::ALL.into_iter().scan(tabs.x, |x, tab| {
+/// Each tab and its label: the fixed tabs, then one for each room.
+pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
+    let fixed = Tab::FIXED
+        .iter()
+        .map(|&(tab, label)| (tab, label.to_string()));
+    let rooms = session
+        .rooms
+        .iter()
+        .map(|room| (Tab::Room(room.id), room.label()));
+    fixed.chain(rooms).collect()
+}
+
+/// Each tab in `labels` and the columns its label covers, drawn as ` Chat │ News `.
+fn tab_columns(
+    tabs: Rect,
+    labels: &[(Tab, String)],
+) -> impl Iterator<Item = (Tab, &str, std::ops::Range<u16>)> {
+    labels.iter().scan(tabs.x, |x, (tab, label)| {
         let start = *x;
-        let end = start + tab.label().len() as u16 + 2;
+        let end = start + label.chars().count() as u16 + 2;
         *x = end + 1;
-        Some((tab, start..end))
+        Some((*tab, label.as_str(), start..end))
     })
 }
 
-/// The tab whose label is at `x`, `y`.
-pub fn tab_at(tabs: Rect, x: u16, y: u16) -> Option<Tab> {
+/// The tab in `labels` whose label is at `x`, `y`.
+pub fn tab_at(tabs: Rect, x: u16, y: u16, labels: &[(Tab, String)]) -> Option<Tab> {
     if !contains(tabs, x, y) {
         return None;
     }
-    tab_columns(tabs).find_map(|(tab, columns)| columns.contains(&x).then_some(tab))
+    tab_columns(tabs, labels).find_map(|(tab, _, columns)| columns.contains(&x).then_some(tab))
+}
+
+/// The users shown beside `tab`: a room's members, or everyone.
+pub fn tab_users(session: &ClientSession, tab: Tab) -> &[UserNameWithInfo] {
+    match tab {
+        Tab::Room(id) => session.room(id).map_or(&[], |room| &room.users),
+        _ => &session.users,
+    }
 }
 
 /// The user menu opened at `at`, kept on screen.
@@ -135,11 +158,16 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     }
 
     let areas = areas(frame.size(), view.input());
-    draw_tabs(frame, areas.tabs, view.tab);
+    draw_tabs(frame, areas.tabs, view);
     match view.tab {
-        Tab::Chat => draw_messages(frame, areas.body, session),
+        Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
         Tab::News => draw_news(frame, areas.body, session, view.news_scroll),
         Tab::Files => draw_files(frame, areas.body, session, view),
+        Tab::Room(id) => {
+            if let Some(room) = session.room(id) {
+                draw_messages(frame, areas.body, &room.lines, &room.label());
+            }
+        }
     }
     draw_input(frame, areas.input, view);
     draw_users(frame, areas.users, session, view);
@@ -165,25 +193,24 @@ fn draw_agreement(frame: &mut Frame, text: &str) {
     frame.render_widget(hint, rows[1]);
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, current: Tab) {
+fn draw_tabs(frame: &mut Frame, area: Rect, view: &View) {
     let mut spans = Vec::new();
-    for (tab, _) in tab_columns(area) {
+    for (tab, label, _) in tab_columns(area, &view.tabs) {
         if !spans.is_empty() {
             spans.push(Span::raw("│"));
         }
-        let style = if tab == current {
+        let style = if tab == view.tab {
             Style::default().add_modifier(Modifier::REVERSED)
         } else {
             Style::default()
         };
-        spans.push(Span::styled(format!(" {} ", tab.label()), style));
+        spans.push(Span::styled(format!(" {label} "), style));
     }
     frame.render_widget(Paragraph::new(UiLine::from(spans)), area);
 }
 
-fn draw_messages(frame: &mut Frame, area: Rect, session: &ClientSession) {
-    let lines: Vec<UiLine> = session
-        .lines
+fn draw_messages(frame: &mut Frame, area: Rect, lines: &[Line], title: &str) {
+    let lines: Vec<UiLine> = lines
         .iter()
         .map(|line| {
             let style = match line.kind {
@@ -200,7 +227,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, session: &ClientSession) {
     let start = lines.len().saturating_sub(visible);
 
     let paragraph = Paragraph::new(lines[start..].to_vec())
-        .block(Block::default().borders(Borders::ALL).title("Hotline"))
+        .block(Block::default().borders(Borders::ALL).title(title))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
@@ -267,7 +294,7 @@ fn size_text(bytes: u32) -> String {
 
 fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
     let title = match view.tab {
-        Tab::Chat => "message",
+        Tab::Chat | Tab::Room(_) => "message",
         Tab::News => "post",
         Tab::Files => return,
     };
@@ -300,8 +327,8 @@ fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor
 }
 
 fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let items: Vec<ListItem> = session
-        .users
+    let users = tab_users(session, view.tab);
+    let items: Vec<ListItem> = users
         .iter()
         .map(|u| {
             let label = if u.name.is_empty() {
@@ -328,12 +355,12 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border(view.focus == Focus::Users))
-                .title(format!("users ({})", session.users.len())),
+                .title(format!("users ({})", users.len())),
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let selected = view
-        .selected_user(&session.users)
-        .and_then(|id| session.users.iter().position(|u| u.user_id == id));
+        .selected_user(users)
+        .and_then(|id| users.iter().position(|u| u.user_id == id));
     let mut state = ListState::default()
         .with_offset(view.users_offset)
         .with_selected(selected);
@@ -390,6 +417,45 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
                 .title("resume?");
             frame.render_widget(Clear, area);
             frame.render_widget(Paragraph::new(conflict.question()).block(block), area);
+        }
+        Modal::Invite { from, .. } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("private chat");
+            frame.render_widget(Clear, area);
+            let text = format!("{from} invites you to a private chat.");
+            frame.render_widget(Paragraph::new(text).block(block), area);
+        }
+        Modal::Subject { input, .. } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("chat subject");
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, area, block, input, true);
+        }
+        Modal::PickUser {
+            users, selected, ..
+        } => {
+            let area = centered(screen, 40, users.len().max(1) as u16 + 2);
+            let items: Vec<ListItem> = users
+                .iter()
+                .map(|(_, name)| ListItem::new(&**name))
+                .collect();
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border(true))
+                        .title("invite to chat"),
+                )
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            let mut state = ListState::default().with_selected(Some(*selected));
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, &mut state);
         }
         Modal::UserMenu { at, selected, .. } => {
             let area = menu_rect(*at, screen);

@@ -5,6 +5,7 @@ mod action;
 mod modal;
 mod tab;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -45,7 +46,7 @@ impl Focus {
     /// The focus that leaves the user list on `tab`.
     const fn main(tab: Tab) -> Self {
         match tab {
-            Tab::Chat | Tab::News => Self::Input,
+            Tab::Chat | Tab::News | Tab::Room(_) => Self::Input,
             Tab::Files => Self::Files,
         }
     }
@@ -62,8 +63,12 @@ pub struct View {
     pub tab: Tab,
     pub focus: Focus,
     pub modal: Option<Modal>,
+    /// Each tab and its label, in tab bar order.
+    pub tabs: Vec<(Tab, String)>,
     pub chat_input: String,
     pub post_input: String,
+    /// The input line of each room tab.
+    pub room_inputs: HashMap<u32, String>,
     /// Lines of news scrolled past the top.
     pub news_scroll: u16,
     /// The first user list row on screen, as the last draw left it.
@@ -82,8 +87,13 @@ impl Default for View {
             tab: Tab::Chat,
             focus: Focus::Input,
             modal: None,
+            tabs: Tab::FIXED
+                .iter()
+                .map(|&(tab, label)| (tab, label.to_string()))
+                .collect(),
             chat_input: String::new(),
             post_input: String::new(),
+            room_inputs: HashMap::new(),
             news_scroll: 0,
             users_offset: 0,
             files_offset: 0,
@@ -107,15 +117,47 @@ impl View {
             Tab::Chat => Some(&self.chat_input),
             Tab::News => Some(&self.post_input),
             Tab::Files => None,
+            Tab::Room(id) => Some(self.room_inputs.get(&id).map_or("", String::as_str)),
         }
     }
 
-    const fn input_mut(&mut self) -> Option<&mut String> {
+    fn input_mut(&mut self) -> Option<&mut String> {
         match self.tab {
             Tab::Chat => Some(&mut self.chat_input),
             Tab::News => Some(&mut self.post_input),
             Tab::Files => None,
+            Tab::Room(id) => Some(self.room_inputs.entry(id).or_default()),
         }
+    }
+
+    /// Replace the tab list. A room tab that is gone goes back to chat.
+    pub fn set_tabs(&mut self, tabs: Vec<(Tab, String)>) {
+        self.room_inputs
+            .retain(|&id, _| tabs.iter().any(|&(tab, _)| tab == Tab::Room(id)));
+        self.tabs = tabs;
+        if !self.tabs.iter().any(|&(tab, _)| tab == self.tab) {
+            let _ = self.set_tab(Tab::Chat);
+        }
+    }
+
+    /// Show the room tab `chat_id`.
+    pub fn show_room(&mut self, chat_id: u32) {
+        let _ = self.set_tab(Tab::Room(chat_id));
+    }
+
+    /// The room tab after the current tab, or the first room tab.
+    fn next_room(&self) -> Option<Tab> {
+        let current = self.tabs.iter().position(|&(tab, _)| tab == self.tab);
+        let mut rooms = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, (tab, _))| matches!(tab, Tab::Room(_)));
+        let first = rooms.clone().next();
+        rooms
+            .find(|&(index, _)| current.is_some_and(|c| index > c))
+            .or(first)
+            .map(|(_, &(tab, _))| tab)
     }
 
     /// Select the first file and scroll to the top of the list.
@@ -143,6 +185,11 @@ impl View {
                 ..,
             ) => &[("r", "resume"), ("o", "replace"), ("Esc", "cancel")],
             (Some(Modal::Confirm(_)), ..) => &[("r", "resume"), ("Esc", "cancel")],
+            (Some(Modal::Invite { .. }), ..) => &[("Enter", "join"), ("Esc", "decline")],
+            (Some(Modal::Subject { .. }), ..) => &[("Enter", "set"), ("Esc", "cancel")],
+            (Some(Modal::PickUser { .. }), ..) => {
+                &[("↑↓", "choose"), ("Enter", "invite"), ("Esc", "cancel")]
+            }
             (None, Focus::Users, Tab::Chat) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
@@ -182,6 +229,22 @@ impl View {
                 ("Tab", "users"),
                 ("Esc", "chat"),
             ],
+            (None, Focus::Users, Tab::Room(_)) => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("Tab", "input"),
+                ("Esc", "input"),
+            ],
+            (None, Focus::Input, Tab::Room(_)) => &[
+                ("Enter", "send"),
+                ("Tab", "users"),
+                ("^A", "invite"),
+                ("^T", "subject"),
+                ("^W", "leave"),
+                ("^R", "next room"),
+                ("Esc", "chat"),
+            ],
             (None, Focus::Input, Tab::News) => &[
                 ("Enter", "post"),
                 ("⇧Enter", "new line"),
@@ -213,10 +276,19 @@ impl View {
                 }
                 (KeyCode::Char('n'), _) => Some(Tab::News),
                 (KeyCode::Char('f'), _) => Some(Tab::Files),
+                (KeyCode::Char('r'), _) => self.next_room(),
                 _ => None,
             };
             if let Some(tab) = tab {
                 return self.set_tab(tab);
+            }
+            if let Tab::Room(chat_id) = self.tab {
+                match key.code {
+                    KeyCode::Char('w') => return Action::LeaveChat(chat_id),
+                    KeyCode::Char('t') => return Action::EditChatSubject(chat_id),
+                    KeyCode::Char('a') => return Action::PickInvitee(chat_id),
+                    _ => {}
+                }
             }
         }
         match self.focus {
@@ -231,6 +303,10 @@ impl View {
             return self.confirm_key(conflict, key);
         }
         match (&mut modal, key.code) {
+            (Modal::Invite { chat_id, .. }, KeyCode::Enter) => return Action::JoinChat(*chat_id),
+            (Modal::Invite { chat_id, .. }, KeyCode::Esc) => {
+                return Action::RejectChatInvite(*chat_id);
+            }
             (Modal::InstantMsg { input, .. }, _) if is_new_line(key) => input.push('\n'),
             (_, KeyCode::Esc) | (Modal::Info { .. }, KeyCode::Enter) => return Action::None,
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
@@ -245,6 +321,38 @@ impl View {
                     start: Start::New,
                 };
             }
+            (Modal::Subject { chat_id, input }, KeyCode::Enter) => {
+                return Action::SetChatSubject {
+                    chat_id: *chat_id,
+                    subject: std::mem::take(input),
+                };
+            }
+            (
+                Modal::PickUser {
+                    chat_id,
+                    users,
+                    selected,
+                },
+                KeyCode::Enter,
+            ) => {
+                return users.get(*selected).map_or(Action::None, |&(user_id, _)| {
+                    Action::InviteToChat {
+                        chat_id: *chat_id,
+                        user_id,
+                    }
+                });
+            }
+            (Modal::PickUser { selected, .. }, KeyCode::Up) => {
+                *selected = selected.saturating_sub(1);
+            }
+            (
+                Modal::PickUser {
+                    selected, users, ..
+                },
+                KeyCode::Down,
+            ) => {
+                *selected = (*selected + 1).min(users.len().saturating_sub(1));
+            }
             (Modal::SaveAs { name, input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::DownloadFile {
                     name: std::mem::take(name),
@@ -255,7 +363,8 @@ impl View {
             (
                 Modal::InstantMsg { input, .. }
                 | Modal::Upload { input }
-                | Modal::SaveAs { input, .. },
+                | Modal::SaveAs { input, .. }
+                | Modal::Subject { input, .. },
                 KeyCode::Backspace,
             ) => {
                 input.pop();
@@ -263,7 +372,8 @@ impl View {
             (
                 Modal::InstantMsg { input, .. }
                 | Modal::Upload { input }
-                | Modal::SaveAs { input, .. },
+                | Modal::SaveAs { input, .. }
+                | Modal::Subject { input, .. },
                 KeyCode::Char(c),
             ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 input.push(c);
@@ -336,6 +446,12 @@ impl View {
             (KeyCode::Enter, Tab::News) if !input.is_empty() => {
                 return Action::OldPostNews(std::mem::take(input));
             }
+            (KeyCode::Enter, Tab::Room(chat_id)) if !input.is_empty() => {
+                return Action::SendRoomChat {
+                    chat_id,
+                    text: std::mem::take(input),
+                };
+            }
             (KeyCode::Backspace, _) => {
                 input.pop();
             }
@@ -401,14 +517,17 @@ impl View {
                 Modal::InstantMsg { .. }
                 | Modal::Upload { .. }
                 | Modal::SaveAs { .. }
-                | Modal::Confirm(_) => {}
+                | Modal::Confirm(_)
+                | Modal::Invite { .. }
+                | Modal::Subject { .. }
+                | Modal::PickUser { .. } => {}
             }
             return Action::None;
         }
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(tab) = ui::tab_at(areas.tabs, x, y) {
+                if let Some(tab) = ui::tab_at(areas.tabs, x, y, &self.tabs) {
                     return self.set_tab(tab);
                 }
                 if let Some(user_id) = self.user_at(areas.users, x, y, users) {
@@ -482,6 +601,7 @@ impl View {
                 Action::None
             }
             MenuItem::GetInfo => Action::GetClientInfoText(user_id),
+            MenuItem::PrivateChat => Action::InviteNewChat(user_id),
         }
     }
 
@@ -494,7 +614,7 @@ impl View {
             self.focus = Focus::main(tab);
         }
         match tab {
-            Tab::Chat => Action::None,
+            Tab::Chat | Tab::Room(_) => Action::None,
             Tab::News => {
                 self.news_scroll = 0;
                 Action::GetMsgs
@@ -792,7 +912,7 @@ mod tests {
         let mut view = View::default();
         let tabs = areas().tabs;
         let x = (tabs.x..tabs.right())
-            .find(|&x| ui::tab_at(tabs, x, tabs.y) == Some(Tab::News))
+            .find(|&x| ui::tab_at(tabs, x, tabs.y, &view.tabs) == Some(Tab::News))
             .unwrap();
         let left = click(MouseEventKind::Down(MouseButton::Left), x, tabs.y);
         assert_eq!(
@@ -944,6 +1064,134 @@ mod tests {
             conflict.action(Start::Resume)
         );
         assert_eq!(view.modal, None);
+    }
+
+    /// A view whose tab bar has rooms 7 and 9.
+    fn view_with_rooms() -> View {
+        let mut view = View::default();
+        let mut tabs = view.tabs.clone();
+        tabs.push((Tab::Room(7), "Chat 7".to_string()));
+        tabs.push((Tab::Room(9), "plans".to_string()));
+        view.set_tabs(tabs);
+        view
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn a_room_tab_sends_its_own_chat() {
+        let mut view = view_with_rooms();
+        view.show_room(7);
+        type_text(&mut view, "hi");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::SendRoomChat {
+                chat_id: 7,
+                text: "hi".into()
+            }
+        );
+        assert_eq!(view.chat_input, "");
+    }
+
+    #[test]
+    fn ctrl_r_steps_through_the_room_tabs() {
+        let mut view = view_with_rooms();
+        let _ = view.handle_key(ctrl('r'), &users(), &files());
+        assert_eq!(view.tab, Tab::Room(7));
+        let _ = view.handle_key(ctrl('r'), &users(), &files());
+        assert_eq!(view.tab, Tab::Room(9));
+        let _ = view.handle_key(ctrl('r'), &users(), &files());
+        assert_eq!(view.tab, Tab::Room(7));
+    }
+
+    #[test]
+    fn room_keys_leave_set_the_subject_and_invite() {
+        let mut view = view_with_rooms();
+        view.show_room(9);
+        assert_eq!(
+            view.handle_key(ctrl('w'), &users(), &files()),
+            Action::LeaveChat(9)
+        );
+        assert_eq!(
+            view.handle_key(ctrl('t'), &users(), &files()),
+            Action::EditChatSubject(9)
+        );
+        assert_eq!(
+            view.handle_key(ctrl('a'), &users(), &files()),
+            Action::PickInvitee(9)
+        );
+    }
+
+    #[test]
+    fn a_room_tab_that_is_gone_goes_back_to_chat() {
+        let mut view = view_with_rooms();
+        view.show_room(9);
+        view.set_tabs(View::default().tabs);
+        assert_eq!(view.tab, Tab::Chat);
+    }
+
+    #[test]
+    fn an_invite_joins_on_enter_and_declines_on_esc() {
+        let invite = || {
+            Some(Modal::Invite {
+                chat_id: 7,
+                from: "Alice".into(),
+            })
+        };
+        let mut view = View {
+            modal: invite(),
+            ..View::default()
+        };
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::JoinChat(7)
+        );
+        view.modal = invite();
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::RejectChatInvite(7)
+        );
+        assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn pick_user_invites_the_chosen_user() {
+        let mut view = View {
+            modal: Some(Modal::PickUser {
+                chat_id: 7,
+                users: vec![(1, "Alice".into()), (2, "Bob".into())],
+                selected: 0,
+            }),
+            ..View::default()
+        };
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::InviteToChat {
+                chat_id: 7,
+                user_id: 2
+            }
+        );
+    }
+
+    #[test]
+    fn the_user_menu_opens_a_private_chat() {
+        let mut view = View {
+            modal: Some(Modal::UserMenu {
+                user_id: 2,
+                at: (0, 0),
+                selected: 0,
+            }),
+            ..View::default()
+        };
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::InviteNewChat(2)
+        );
     }
 
     #[test]

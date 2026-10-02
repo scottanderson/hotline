@@ -38,7 +38,7 @@ use crate::field::FieldId;
 use crate::field::{Field, FieldList};
 use crate::opcode::{Opcode, TransactionType};
 use crate::text_encoding::Encoding;
-use crate::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
+use crate::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
 use crate::wire::VecWriter;
 use crate::Access;
 
@@ -175,6 +175,26 @@ impl Transaction {
         self.fields(FieldId::UserNameWithInfo)
             .map(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding))
             .collect()
+    }
+
+    /// One user from separate fields: [`myField_UserID`] (103),
+    /// [`myField_UserIconID`] (104), [`myField_UserFlags`] (112), and
+    /// [`myField_UserName`] (102). `None` without a user ID.
+    ///
+    /// [`myField_UserID`]: crate::FieldId::UserID
+    /// [`myField_UserIconID`]: crate::FieldId::UserIconID
+    /// [`myField_UserFlags`]: crate::FieldId::UserFlags
+    /// [`myField_UserName`]: crate::FieldId::UserName
+    pub fn user_entry(&self, encoding: &'static Encoding) -> Option<UserNameWithInfo> {
+        Some(UserNameWithInfo {
+            user_id: self.field(FieldId::UserID).and_then(Field::as_u16)?,
+            icon: self.icon().unwrap_or_default(),
+            flags: self
+                .field(FieldId::UserFlags)
+                .and_then(Field::as_u16)
+                .map_or_else(UserFlags::empty, UserFlags::from_bits_retain),
+            name: self.name(encoding).unwrap_or_default().into(),
+        })
     }
 
     /// Every [`myField_FileNameWithInfo`] (200) field, decoded; fails on the

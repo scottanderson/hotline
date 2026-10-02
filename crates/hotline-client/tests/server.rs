@@ -407,3 +407,41 @@ async fn download_file_of_a_missing_file_is_a_server_error() {
     let result = alice.download_file(&HlPath::default(), "nothing", 0).await;
     assert!(matches!(result, Err(ClientError::Server(_))), "{result:?}");
 }
+
+#[tokio::test]
+async fn a_private_chat_room_carries_chat_subject_and_leave() {
+    let addr = start_server().await;
+    let (alice, mut alice_events) = join_as(addr, "admin", "admin", "alice").await;
+    let (bob, mut bob_events) = join_as(addr, "admin", "admin", "bob").await;
+    let encoding = hotline_proto::text_encoding::DEFAULT;
+
+    let bob_id = user_id(&alice, "bob").await;
+    let room = alice.invite_new_chat(bob_id).await.unwrap();
+    assert_eq!(room.users.len(), 1);
+    let invite = next_push(&mut bob_events, Opcode::InviteToChat).await;
+    let chat_id = invite.field(FieldId::ChatID).unwrap().as_u32().unwrap();
+    assert_eq!(chat_id, room.id);
+
+    let joined = bob.join_chat(chat_id).await.unwrap();
+    let mut names: Vec<_> = joined.users.iter().map(|u| &*u.name).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["alice", "bob"]);
+    next_push(&mut alice_events, Opcode::NotifyChatChangeUser).await;
+
+    alice.send_room_chat(chat_id, "hi room").await.unwrap();
+    let msg = next_push(&mut bob_events, Opcode::ChatMsg).await;
+    assert_eq!(msg.field(FieldId::ChatID).unwrap().as_u32(), Some(chat_id));
+    let text = msg.string(FieldId::Data, encoding).unwrap();
+    assert!(text.contains("hi room"), "{text:?}");
+
+    alice.set_chat_subject(chat_id, "plans").await.unwrap();
+    let subject = next_push(&mut bob_events, Opcode::NotifyChatSubject).await;
+    assert_eq!(
+        subject.string(FieldId::ChatSubject, encoding).as_deref(),
+        Some("plans")
+    );
+
+    bob.leave_chat(chat_id).await.unwrap();
+    let left = next_push(&mut alice_events, Opcode::NotifyChatDeleteUser).await;
+    assert_eq!(left.field(FieldId::UserID).unwrap().as_u16(), Some(bob_id));
+}

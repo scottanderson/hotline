@@ -18,6 +18,7 @@ mod folder_download;
 mod folder_receiver;
 mod folder_sender;
 mod folder_upload;
+mod joined_chat;
 mod login_result;
 
 pub use client::HotlineClient;
@@ -29,4 +30,5 @@ pub use folder_download::FolderDownload;
 pub use folder_receiver::FolderReceiver;
 pub use folder_sender::FolderSender;
 pub use folder_upload::FolderUpload;
+pub use joined_chat::JoinedChat;
 pub use login_result::LoginResult;

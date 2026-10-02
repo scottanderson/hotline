@@ -21,6 +21,7 @@ use crate::file_download::FileDownload;
 use crate::file_upload::FileUpload;
 use crate::folder_download::FolderDownload;
 use crate::folder_upload::FolderUpload;
+use crate::joined_chat::JoinedChat;
 use crate::login_result::LoginResult;
 
 type Conn = Framed<TcpStream, TransactionCodec>;
@@ -196,12 +197,121 @@ impl HotlineClient {
     ///
     /// [`myTran_ChatSend`]: hotline_proto::Opcode::ChatSend
     pub async fn send_chat(&self, message: &str) -> Result<()> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let tx = Transaction::request(
+        self.post(
             Opcode::ChatSend,
-            id,
             vec![Field::string(FieldId::Data, message)],
-        );
+        )
+        .await
+    }
+
+    /// Send a message to the private chat room `chat_id`,
+    /// [`myTran_ChatSend`] (105).
+    ///
+    /// [`myTran_ChatSend`]: hotline_proto::Opcode::ChatSend
+    pub async fn send_room_chat(&self, chat_id: u32, message: &str) -> Result<()> {
+        self.post(
+            Opcode::ChatSend,
+            vec![
+                Field::string(FieldId::Data, message),
+                Field::u32(FieldId::ChatID, chat_id),
+            ],
+        )
+        .await
+    }
+
+    /// Create a private chat room and invite `user_id` to it,
+    /// [`myTran_InviteNewChat`] (112).
+    ///
+    /// [`myTran_InviteNewChat`]: hotline_proto::Opcode::InviteNewChat
+    pub async fn invite_new_chat(&self, user_id: u16) -> Result<JoinedChat> {
+        let reply = self
+            .request(
+                Opcode::InviteNewChat,
+                vec![Field::u16(FieldId::UserID, user_id)],
+            )
+            .await?;
+        Ok(JoinedChat {
+            id: chat_id(&reply)?,
+            subject: Box::default(),
+            users: reply.user_entry(self.encoding.get()).into_iter().collect(),
+        })
+    }
+
+    /// Invite `user_id` to the private chat room `chat_id`,
+    /// [`myTran_InviteToChat`] (113). The call does not wait for a reply.
+    ///
+    /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
+    pub async fn invite_to_chat(&self, chat_id: u32, user_id: u16) -> Result<()> {
+        self.post(
+            Opcode::InviteToChat,
+            vec![
+                Field::u32(FieldId::ChatID, chat_id),
+                Field::u16(FieldId::UserID, user_id),
+            ],
+        )
+        .await
+    }
+
+    /// Decline an invitation to the private chat room `chat_id`,
+    /// [`myTran_RejectChatInvite`] (114).
+    ///
+    /// [`myTran_RejectChatInvite`]: hotline_proto::Opcode::RejectChatInvite
+    pub async fn reject_chat_invite(&self, chat_id: u32) -> Result<()> {
+        self.post(
+            Opcode::RejectChatInvite,
+            vec![Field::u32(FieldId::ChatID, chat_id)],
+        )
+        .await
+    }
+
+    /// Join the private chat room `chat_id`, [`myTran_JoinChat`] (115).
+    ///
+    /// [`myTran_JoinChat`]: hotline_proto::Opcode::JoinChat
+    pub async fn join_chat(&self, chat_id: u32) -> Result<JoinedChat> {
+        let reply = self
+            .request(Opcode::JoinChat, vec![Field::u32(FieldId::ChatID, chat_id)])
+            .await?;
+        let encoding = self.encoding.get();
+        Ok(JoinedChat {
+            id: chat_id,
+            subject: reply
+                .string(FieldId::ChatSubject, encoding)
+                .unwrap_or_default()
+                .into(),
+            users: reply.user_list_entries(encoding)?,
+        })
+    }
+
+    /// Leave the private chat room `chat_id`, [`myTran_LeaveChat`] (116).
+    ///
+    /// [`myTran_LeaveChat`]: hotline_proto::Opcode::LeaveChat
+    pub async fn leave_chat(&self, chat_id: u32) -> Result<()> {
+        self.post(
+            Opcode::LeaveChat,
+            vec![Field::u32(FieldId::ChatID, chat_id)],
+        )
+        .await
+    }
+
+    /// Set the subject of the private chat room `chat_id`,
+    /// [`myTran_SetChatSubject`] (120). The call does not wait for a reply.
+    ///
+    /// [`myTran_SetChatSubject`]: hotline_proto::Opcode::SetChatSubject
+    pub async fn set_chat_subject(&self, chat_id: u32, subject: &str) -> Result<()> {
+        self.post(
+            Opcode::SetChatSubject,
+            vec![
+                Field::u32(FieldId::ChatID, chat_id),
+                Field::string(FieldId::ChatSubject, subject),
+            ],
+        )
+        .await
+    }
+
+    /// Send a request that gets no reply.
+    async fn post(&self, opcode: Opcode, fields: Vec<Field>) -> Result<()> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let tx = Transaction::request(opcode, id, fields);
         self.writer.lock().await.send(tx).await?;
         Ok(())
     }
@@ -437,6 +547,16 @@ impl HotlineClient {
             path.encode(encoding)?,
         )))
     }
+}
+
+/// A chat reply's [`myField_ChatID`] (114).
+///
+/// [`myField_ChatID`]: hotline_proto::FieldId::ChatID
+fn chat_id(reply: &Transaction) -> Result<u32> {
+    reply
+        .field(FieldId::ChatID)
+        .and_then(Field::as_u32)
+        .ok_or(ClientError::MissingField(FieldId::ChatID))
 }
 
 /// A transfer reply's [`myField_RefNum`] (107).

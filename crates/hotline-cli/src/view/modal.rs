@@ -23,6 +23,16 @@ pub enum Modal {
     Confirm(Conflict),
     /// A new local name for the download of `name`.
     SaveAs { name: Box<str>, input: String },
+    /// An invitation to a private chat room.
+    Invite { chat_id: u32, from: Box<str> },
+    /// A new subject for the room `chat_id`.
+    Subject { chat_id: u32, input: String },
+    /// The users to invite to the room `chat_id`, as `(user ID, name)`.
+    PickUser {
+        chat_id: u32,
+        users: Vec<(u16, Box<str>)>,
+        selected: usize,
+    },
 }
 
 impl Modal {
@@ -43,15 +53,17 @@ impl Modal {
 pub enum MenuItem {
     SendMessage,
     GetInfo,
+    PrivateChat,
 }
 
 impl MenuItem {
-    pub const ALL: [Self; 2] = [Self::SendMessage, Self::GetInfo];
+    pub const ALL: [Self; 3] = [Self::SendMessage, Self::GetInfo, Self::PrivateChat];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::SendMessage => "Send message",
             Self::GetInfo => "Get info",
+            Self::PrivateChat => "Private chat",
         }
     }
 }

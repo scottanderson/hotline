@@ -7,6 +7,28 @@ pub enum Action {
     Quit,
     /// Send public chat, sent unchanged even when it starts with `/`.
     SendChat(String),
+    /// Send chat to the private chat room `chat_id`.
+    SendRoomChat {
+        chat_id: u32,
+        text: String,
+    },
+    /// Open a private chat room with the user.
+    InviteNewChat(u16),
+    /// Ask which user to invite to the room.
+    PickInvitee(u32),
+    InviteToChat {
+        chat_id: u32,
+        user_id: u16,
+    },
+    JoinChat(u32),
+    RejectChatInvite(u32),
+    LeaveChat(u32),
+    /// Ask for the room's new subject.
+    EditChatSubject(u32),
+    SetChatSubject {
+        chat_id: u32,
+        subject: String,
+    },
     SendInstantMsg {
         user_id: u16,
         text: String,

@@ -1,11 +1,14 @@
 //! [`ClientSession`] state: what the client knows about the connection,
 //! decoupled from the terminal. Data plus pure update logic.
 
+mod chat;
+mod chat_room;
 mod event_outcome;
 mod mode;
 #[cfg(test)]
 mod test_support;
 
+use std::collections::VecDeque;
 use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -13,7 +16,7 @@ use hotline_client::{ClientInfoText, FolderDownload, FolderUpload, HotlineClient
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
-use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
+use hotline_proto::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
 use tokio::fs::{File, OpenOptions};
@@ -23,6 +26,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::line::{Line, LineKind};
 use crate::transfer::{Conflict, Start};
 
+pub use chat_room::{ChatInvite, ChatRoom};
 pub use event_outcome::EventOutcome;
 pub use mode::Mode;
 
@@ -40,6 +44,10 @@ pub struct ClientSession {
     /// The folder that downloads are saved in.
     pub download_dir: PathBuf,
     pub access: Access,
+    /// The private chat rooms this client is in, oldest first.
+    pub rooms: Vec<ChatRoom>,
+    /// Invitations that wait for an answer, oldest first.
+    pub invites: VecDeque<ChatInvite>,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
 }
@@ -60,6 +68,8 @@ impl ClientSession {
             file_path: HlPath::default(),
             download_dir: PathBuf::from("."),
             access: Access::empty(),
+            rooms: Vec::new(),
+            invites: VecDeque::new(),
             encoding,
         }
     }
@@ -90,6 +100,16 @@ impl ClientSession {
         });
     }
 
+    /// Show the error text of a reply that no request waits for.
+    fn show_unmatched_error(&mut self, tx: &Transaction) {
+        if tx.is_error() {
+            let text = tx
+                .string(FieldId::ErrorText, self.encoding.get())
+                .unwrap_or_else(|| "unknown error".to_string());
+            self.push(text, LineKind::Error);
+        }
+    }
+
     /// Push one line for each `\r` in `text`.
     fn push_lines(&mut self, text: &str, kind: LineKind) {
         for line in text.split('\r') {
@@ -101,6 +121,7 @@ impl ClientSession {
     /// change, permission denial, ...) to the session state.
     pub fn apply_server_event(&mut self, tx: &Transaction) -> EventOutcome {
         let TransactionType::Push(opcode) = tx.r#type() else {
+            self.show_unmatched_error(tx);
             return EventOutcome::Applied;
         };
         match opcode {
@@ -110,6 +131,9 @@ impl ClientSession {
             /* 109 */ Opcode::ShowAgreement => return self.apply_show_agreement(tx),
             /* 111 */ Opcode::DisconnectMsg => return self.apply_disconnect_msg(tx),
             /* 113 */ Opcode::InviteToChat => self.apply_invite_to_chat(tx),
+            /* 117 */ Opcode::NotifyChatChangeUser => self.apply_notify_chat_change_user(tx),
+            /* 118 */ Opcode::NotifyChatDeleteUser => self.apply_notify_chat_delete_user(tx),
+            /* 119 */ Opcode::NotifyChatSubject => self.apply_notify_chat_subject(tx),
             /* 122 */ Opcode::ServerBanner => self.apply_server_banner(tx),
             /* 211 */ Opcode::DownloadInfo => self.apply_download_info(tx),
             /* 301 */ Opcode::NotifyChangeUser => self.apply_notify_change_user(tx),
@@ -180,6 +204,9 @@ impl ClientSession {
     ///
     /// [`myTran_ChatMsg`]: hotline_proto::Opcode::ChatMsg
     fn apply_chat_msg(&mut self, tx: &Transaction) {
+        if self.room_chat_msg(tx) {
+            return;
+        }
         let encoding = self.encoding.get();
         if let Some(text) = tx.string(FieldId::Data, encoding) {
             self.push_lines(&display_text(&text), LineKind::Chat);
@@ -196,24 +223,6 @@ impl ClientSession {
             .unwrap_or_else(|| "disconnected by the server".to_string());
         self.push(display_text(&reason), LineKind::Error);
         EventOutcome::Quit
-    }
-
-    /// [`myTran_InviteToChat`] (113).
-    ///
-    /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
-    fn apply_invite_to_chat(&mut self, tx: &Transaction) {
-        let encoding = self.encoding.get();
-        let from = tx
-            .string(FieldId::UserName, encoding)
-            .unwrap_or_else(|| "someone".to_string());
-        let chat_id = tx.field(FieldId::ChatID).and_then(Field::as_u32);
-        self.push(
-            format!(
-                "{from} invited you to a private chat (id {})",
-                chat_id.map(|id| id.to_string()).unwrap_or_default()
-            ),
-            LineKind::System,
-        );
     }
 
     /// [`myTran_ServerBanner`] (122): show the banner's link, if it has one.
@@ -245,45 +254,23 @@ impl ClientSession {
     ///
     /// [`myTran_NotifyChangeUser`]: hotline_proto::Opcode::NotifyChangeUser
     fn apply_notify_change_user(&mut self, tx: &Transaction) {
-        let Some(user_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
+        let Some(user) = tx.user_entry(self.encoding.get()) else {
             return;
         };
-        let encoding = self.encoding.get();
-        let name = tx.string(FieldId::UserName, encoding).unwrap_or_default();
-        let icon = tx
-            .field(FieldId::UserIconID)
-            .and_then(Field::as_u16)
-            .unwrap_or_default();
-        let flags = tx
-            .field(FieldId::UserFlags)
-            .and_then(Field::as_u16)
-            .map(UserFlags::from_bits_retain)
-            .unwrap_or_else(UserFlags::empty);
-
-        match self.users.iter().position(|u| u.user_id == user_id) {
+        match self.users.iter().position(|u| u.user_id == user.user_id) {
             Some(pos) => {
-                let old_name = self.users[pos].name.clone();
-                if !old_name.is_empty() && !name.is_empty() && *old_name != *name {
+                let (old_name, name) = (self.users[pos].name.clone(), &user.name);
+                if !old_name.is_empty() && !name.is_empty() && old_name != *name {
                     self.push(
                         format!(" <<< {old_name} is now known as {name} >>>"),
                         LineKind::System,
                     );
                 }
-                self.users[pos] = UserNameWithInfo {
-                    user_id,
-                    icon,
-                    flags,
-                    name: name.into(),
-                };
+                self.users[pos] = user;
             }
             None => {
-                self.push(format!("{name} joined"), LineKind::System);
-                self.users.push(UserNameWithInfo {
-                    user_id,
-                    icon,
-                    flags,
-                    name: name.into(),
-                });
+                self.push(format!("{} joined", user.name), LineKind::System);
+                self.users.push(user);
             }
         }
     }
@@ -298,6 +285,9 @@ impl ClientSession {
         if let Some(pos) = self.users.iter().position(|u| u.user_id == user_id) {
             let user = self.users.remove(pos);
             self.push(format!("{} left", user.name), LineKind::System);
+        }
+        for room in &mut self.rooms {
+            room.users.retain(|u| u.user_id != user_id);
         }
     }
 
@@ -885,6 +875,7 @@ fn display_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hotline_proto::types::UserFlags;
 
     #[test]
     fn new_msg_adds_the_post_to_the_top_of_the_news() {
@@ -928,6 +919,15 @@ mod tests {
             &*session.lines.last().unwrap().text,
             "server banner: http://example.com"
         );
+    }
+
+    #[test]
+    fn show_unmatched_error_shows_the_error_text() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let invite = Transaction::request(Opcode::InviteToChat, 7, vec![]);
+        let _ = session.apply_server_event(&invite.reply_error("no such user"));
+        assert_eq!(&*session.lines.last().unwrap().text, "no such user");
+        assert_eq!(session.lines.last().unwrap().kind, LineKind::Error);
     }
 
     #[test]
@@ -1194,9 +1194,17 @@ mod tests {
             ],
         );
         let _ = session.apply_server_event(&invite);
-        assert!(session.lines.iter().any(|line| line
-            .text
-            .contains("Alice invited you to a private chat (id 7)")));
+        assert!(session
+            .lines
+            .iter()
+            .any(|line| line.text.contains("Alice invited you to a private chat")));
+        assert_eq!(
+            session.invites.front(),
+            Some(&ChatInvite {
+                chat_id: 7,
+                from: "Alice".into()
+            })
+        );
     }
 
     #[test]
