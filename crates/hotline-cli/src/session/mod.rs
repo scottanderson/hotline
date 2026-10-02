@@ -4,12 +4,17 @@
 mod event_outcome;
 mod mode;
 
+use std::path::PathBuf;
+
 use hotline_client::{ClientInfoText, HotlineClient};
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
+use tokio::fs::OpenOptions;
+use tokio::io::BufWriter;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::line::{Line, LineKind};
 
@@ -27,6 +32,8 @@ pub struct ClientSession {
     /// The listing of the folder at `file_path`, `None` until it is fetched.
     pub files: Option<Vec<FileNameWithInfo>>,
     pub file_path: HlPath,
+    /// The folder that downloads are saved in.
+    pub download_dir: PathBuf,
     pub access: Access,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
@@ -46,6 +53,7 @@ impl ClientSession {
             news: None,
             files: None,
             file_path: HlPath::default(),
+            download_dir: PathBuf::from("."),
             access: Access::empty(),
             encoding,
         }
@@ -97,6 +105,7 @@ impl ClientSession {
             /* 109 */ Opcode::ShowAgreement => return self.apply_show_agreement(tx),
             /* 111 */ Opcode::DisconnectMsg => return self.apply_disconnect_msg(tx),
             /* 113 */ Opcode::InviteToChat => self.apply_invite_to_chat(tx),
+            /* 211 */ Opcode::DownloadInfo => self.apply_download_info(tx),
             /* 301 */ Opcode::NotifyChangeUser => self.apply_notify_change_user(tx),
             /* 302 */ Opcode::NotifyDeleteUser => self.apply_notify_delete_user(tx),
             /* 354 */ Opcode::UserAccess => self.apply_user_access(tx),
@@ -197,6 +206,20 @@ impl ClientSession {
                 "{from} invited you to a private chat (id {})",
                 chat_id.map(|id| id.to_string()).unwrap_or_default()
             ),
+            LineKind::System,
+        );
+    }
+
+    /// [`myTran_DownloadInfo`] (211): a queued download's place in the queue.
+    ///
+    /// [`myTran_DownloadInfo`]: hotline_proto::Opcode::DownloadInfo
+    fn apply_download_info(&mut self, tx: &Transaction) {
+        let waiting = tx
+            .field(FieldId::WaitingCount)
+            .and_then(Field::as_u32)
+            .unwrap_or_default();
+        self.push(
+            format!("a download waits, {waiting} ahead in the queue"),
             LineKind::System,
         );
     }
@@ -331,6 +354,63 @@ impl ClientSession {
         }
     }
 
+    /// Start to download the file `name` in the current folder into
+    /// `download_dir`, [`myTran_DownloadFile`] (202). The transfer runs on its
+    /// own task and sends its result line to `done`. An existing local file
+    /// stops the download.
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+    pub async fn download_file(
+        &mut self,
+        client: &HotlineClient,
+        name: &str,
+        done: &UnboundedSender<Line>,
+    ) {
+        let local = self.download_dir.join(local_name(name));
+        let file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&local)
+            .await
+        {
+            Ok(file) => file,
+            Err(e) => {
+                let text = format!("cannot save {}: {e}", local.display());
+                return self.push(text, LineKind::Error);
+            }
+        };
+        let download = match client.download_file(&self.file_path, name).await {
+            Ok(download) => download,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&local).await;
+                return self.push(format!("failed to download {name}: {e}"), LineKind::Error);
+            }
+        };
+        let queue = match download.waiting_count {
+            0 => String::new(),
+            n => format!(", {n} ahead in the queue"),
+        };
+        self.push(format!("downloading {name}{queue}"), LineKind::System);
+
+        let name = name.to_string();
+        let done = done.clone();
+        tokio::spawn(async move {
+            let mut out = BufWriter::new(file);
+            let line = match download.receive(&mut out).await {
+                Ok(bytes) => Line {
+                    text: format!("downloaded {name} ({bytes} bytes) to {}", local.display())
+                        .into(),
+                    kind: LineKind::System,
+                },
+                Err(e) => Line {
+                    text: format!("failed to download {name}: {e}").into(),
+                    kind: LineKind::Error,
+                },
+            };
+            let _ = done.send(line);
+        });
+    }
+
     /// The path of the folder `name` in the current folder.
     pub fn child_folder(&self, name: &str) -> HlPath {
         let mut path = self.file_path.clone();
@@ -363,6 +443,15 @@ impl ClientSession {
             }
             Err(e) => self.push(format!("failed to send: {e}"), LineKind::Error),
         }
+    }
+}
+
+/// The server file name `name` as one local path component.
+fn local_name(name: &str) -> String {
+    let name = name.replace(['/', '\\', ':'], "_");
+    match name.as_str() {
+        "" | "." | ".." => format!("_{name}"),
+        _ => name,
     }
 }
 
@@ -406,6 +495,33 @@ mod tests {
         session.file_path = session.child_folder("Games");
         assert_eq!(session.child_folder("Doom"), HlPath::new(["Games", "Doom"]));
         assert_eq!(session.parent_folder(), Some(HlPath::default()));
+    }
+
+    #[test]
+    fn download_info_shows_the_place_in_the_queue() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let info = Transaction::push(
+            Opcode::DownloadInfo,
+            vec![
+                Field::u32(FieldId::RefNum, 9),
+                Field::u32(FieldId::WaitingCount, 2),
+            ],
+        );
+        let _ = session.apply_server_event(&info);
+        assert_eq!(
+            &*session.lines.last().unwrap().text,
+            "a download waits, 2 ahead in the queue"
+        );
+    }
+
+    #[test]
+    fn local_name_stays_inside_the_download_folder() {
+        assert_eq!(local_name("doom.wad"), "doom.wad");
+        assert_eq!(local_name("../etc/passwd"), ".._etc_passwd");
+        assert_eq!(local_name("a\\b"), "a_b");
+        assert_eq!(local_name("C:x"), "C_x");
+        assert_eq!(local_name(".."), "_..");
+        assert_eq!(local_name(""), "_");
     }
 
     #[test]

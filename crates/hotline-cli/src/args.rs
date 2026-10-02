@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 
 /// Terminal UI Hotline client.
@@ -27,6 +29,10 @@ pub struct Args {
     /// Icon ID.
     #[arg(long, default_value_t = 0)]
     pub icon: u16,
+
+    /// Folder that downloads are saved in.
+    #[arg(long, default_value = ".")]
+    pub download_dir: PathBuf,
 
     /// List the servers a tracker knows about, then exit without
     /// connecting. Takes `host[:port]`; the port defaults to 5498.

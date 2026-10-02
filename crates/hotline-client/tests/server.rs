@@ -4,7 +4,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use hotline_client::HotlineClient;
+use hotline_client::{ClientError, HotlineClient};
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
 use hotline_proto::{FieldId, Opcode, Transaction};
@@ -161,4 +161,39 @@ async fn get_file_name_list_lists_the_root_and_a_folder() {
     assert_eq!(games.len(), 1);
     assert_eq!(&*games[0].name, "doom.wad");
     assert_eq!(games[0].size, 3);
+}
+
+#[tokio::test]
+async fn download_file_receives_the_data_fork() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::new(["Games"]), "doom.wad", *b"IWAD data");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+
+    let download = alice
+        .download_file(&HlPath::new(["Games"]), "doom.wad")
+        .await
+        .unwrap();
+    assert_eq!(download.file_size, 9);
+    let mut data = Vec::new();
+    let written = timeout(WAIT, download.receive(&mut data))
+        .await
+        .expect("download finishes")
+        .unwrap();
+
+    assert_eq!(written, 9);
+    assert_eq!(data, b"IWAD data");
+}
+
+#[tokio::test]
+async fn download_file_of_a_missing_file_is_a_server_error() {
+    let addr = start_server().await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+
+    let result = alice.download_file(&HlPath::default(), "nothing").await;
+    assert!(matches!(result, Err(ClientError::Server(_))), "{result:?}");
 }

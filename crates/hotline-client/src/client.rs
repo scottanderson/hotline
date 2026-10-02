@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Tr
 
 use crate::client_info_text::ClientInfoText;
 use crate::error::{ClientError, Result};
+use crate::file_download::FileDownload;
 use crate::login_result::LoginResult;
 
 type Conn = Framed<TcpStream, TransactionCodec>;
@@ -47,6 +49,8 @@ pub struct HotlineClient {
     pending: PendingMap,
     next_id: Arc<AtomicU32>,
     encoding: EncodingHandle,
+    /// The server's transaction address.
+    peer: SocketAddr,
 }
 
 impl HotlineClient {
@@ -58,6 +62,7 @@ impl HotlineClient {
         addr: A,
     ) -> Result<(Self, mpsc::UnboundedReceiver<Transaction>)> {
         let mut stream = TcpStream::connect(addr).await?;
+        let peer = stream.peer_addr()?;
 
         // The TRTP handshake isn't shaped like a Transaction, so it's
         // done on the raw stream before handing it to the codec.
@@ -83,6 +88,7 @@ impl HotlineClient {
                 pending,
                 next_id: Arc::new(AtomicU32::new(1)),
                 encoding,
+                peer,
             },
             event_rx,
         ))
@@ -265,14 +271,48 @@ impl HotlineClient {
     ///
     /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
     pub async fn get_file_name_list(&self, path: &HlPath) -> Result<Vec<FileNameWithInfo>> {
-        let encoding = self.encoding.get();
-        let fields = if path.components.is_empty() {
-            vec![]
-        } else {
-            vec![Field::bytes(FieldId::FilePath, path.encode(encoding)?)]
-        };
+        let fields = self.file_path_field(path)?.into_iter().collect();
         let reply = self.request(Opcode::GetFileNameList, fields).await?;
+        let encoding = self.encoding.get();
         Ok(reply.file_list_entries(encoding)?)
+    }
+
+    /// Ask to download the file `name` in the folder at `path`,
+    /// [`myTran_DownloadFile`] (202). [`FileDownload::receive`] then reads it.
+    ///
+    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+    pub async fn download_file(&self, path: &HlPath, name: &str) -> Result<FileDownload> {
+        let mut fields = vec![Field::string(FieldId::FileName, name)];
+        fields.extend(self.file_path_field(path)?);
+        let reply = self.request(Opcode::DownloadFile, fields).await?;
+        let u32_field = |id| reply.field(id).and_then(Field::as_u32);
+        let port = self.peer.port().checked_add(1).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "no transfer port above 65535",
+            )
+        })?;
+        Ok(FileDownload {
+            file_size: u32_field(FieldId::FileSize).unwrap_or_default(),
+            waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
+            reference: u32_field(FieldId::RefNum)
+                .ok_or(ClientError::MissingField(FieldId::RefNum))?,
+            transfer_addr: SocketAddr::new(self.peer.ip(), port),
+        })
+    }
+
+    /// A [`myField_FilePath`] (202) field for `path`, `None` at the root.
+    ///
+    /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
+    fn file_path_field(&self, path: &HlPath) -> Result<Option<Field>> {
+        if path.components.is_empty() {
+            return Ok(None);
+        }
+        let encoding = self.encoding.get();
+        Ok(Some(Field::bytes(
+            FieldId::FilePath,
+            path.encode(encoding)?,
+        )))
     }
 }
 

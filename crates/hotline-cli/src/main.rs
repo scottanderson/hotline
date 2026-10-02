@@ -26,7 +26,9 @@ use ratatui::Terminal;
 use args::Args;
 use hotline_client::HotlineClient;
 use hotline_proto::types::HlPath;
+use line::Line;
 use session::{ClientSession, EventOutcome, Mode};
+use tokio::sync::mpsc;
 use view::{Action, Modal, View};
 
 #[tokio::main]
@@ -44,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
     client.login(&args.login, &args.password).await?;
 
     let mut session = ClientSession::new(args.nick, args.icon, client.encoding());
+    session.download_dir = args.download_dir;
 
     let (mut terminal, enhanced) = setup_terminal()?;
     let result = run(&mut terminal, &mut session, &client, &mut events).await;
@@ -82,15 +85,18 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     session: &mut ClientSession,
     client: &HotlineClient,
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<hotline_proto::Transaction>,
+    events: &mut mpsc::UnboundedReceiver<hotline_proto::Transaction>,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
     let mut view = View::default();
     let mut should_quit = false;
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel();
 
     terminal.draw(|f| ui::draw(f, session, &mut view))?;
     while !should_quit {
         tokio::select! {
+            // A finished file transfer.
+            Some(line) = done_rx.recv() => session.lines.push(line),
             // Server-initiated traffic: chat, user list changes, ...
             tx = events.recv() => {
                 let Some(tx) = tx else { break }; // connection closed
@@ -123,7 +129,7 @@ async fn run(
                     }
                     _ => Action::None,
                 };
-                should_quit = perform(action, session, &mut view, client).await;
+                should_quit = perform(action, session, &mut view, client, &done_tx).await;
             }
         }
         terminal.draw(|f| ui::draw(f, session, &mut view))?;
@@ -131,12 +137,13 @@ async fn run(
     Ok(())
 }
 
-/// Run `action`. `true` means quit.
+/// Run `action`. A finished transfer sends its line to `done`. `true` means quit.
 async fn perform(
     action: Action,
     session: &mut ClientSession,
     view: &mut View,
     client: &HotlineClient,
+    done: &mpsc::UnboundedSender<Line>,
 ) -> bool {
     match action {
         Action::None => {}
@@ -168,6 +175,7 @@ async fn perform(
                 list_files(session, view, client, path).await;
             }
         }
+        Action::DownloadFile(name) => session.download_file(client, &name, done).await,
     }
     false
 }

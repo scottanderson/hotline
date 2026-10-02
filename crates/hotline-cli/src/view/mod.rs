@@ -165,7 +165,7 @@ impl View {
             ],
             (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => &[
                 ("↑↓", "select"),
-                ("Enter", "open"),
+                ("Enter", "open or download"),
                 ("⌫", "up"),
                 ("Tab", "users"),
                 ("Esc", "chat"),
@@ -487,11 +487,12 @@ impl View {
     }
 }
 
-/// Open the file at `index` if it is a folder.
+/// Open the folder at `index`, or download the file there.
 fn open_file(index: usize, files: &[FileNameWithInfo]) -> Action {
     match files.get(index) {
         Some(file) if file.is_folder() => Action::OpenFolder(file.name.clone()),
-        _ => Action::None,
+        Some(file) => Action::DownloadFile(file.name.clone()),
+        None => Action::None,
     }
 }
 
@@ -747,7 +748,7 @@ mod tests {
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::None
+            Action::DownloadFile("readme.txt".into())
         );
         assert_eq!(
             view.handle_key(key(KeyCode::Backspace), &users(), &files()),

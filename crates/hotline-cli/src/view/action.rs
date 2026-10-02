@@ -18,4 +18,6 @@ pub enum Action {
     OpenFolder(Box<str>),
     /// List the current folder's parent.
     ParentFolder,
+    /// Download the named file in the current folder.
+    DownloadFile(Box<str>),
 }

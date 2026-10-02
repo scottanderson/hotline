@@ -154,10 +154,11 @@ one-shared-room model.
 
 6. **`hlc` does not cover every area.** It logs in, shows the
    agreement, chats in public, sends private messages, shows a user's
-   info text, reads and posts classic news, and lists users, files, and
-   tracker servers. It cannot transfer files or folders, read or post
-   threaded news, use private chat rooms, administer accounts, or show
-   the banner. Each area can be its own task.
+   info text, reads and posts classic news, lists users, files, and
+   tracker servers, and downloads files. It cannot upload files,
+   transfer folders, resume a download, read or post threaded news, use
+   private chat rooms, administer accounts, or show the banner. Each
+   area can be its own task.
 
 ## Resolved
 
@@ -699,6 +700,14 @@ one-shared-room model.
     with `myTran_GetFileNameList` (200). Enter or a double click opens
     a folder, and Backspace goes up one folder. A folder shows a
     trailing `/`, and a file shows its size.
+
+93. `hlc` downloads a file on Enter or a double click in the Files tab,
+    with `myTran_DownloadFile` (202) and an `HTXF` connection on the
+    next port. The file goes in `--download-dir`, the current folder by
+    default, and never replaces a local file. Each path separator in
+    the server's name becomes `_`. The transfer runs on its own task
+    and writes a line in chat when it ends. A `myTran_DownloadInfo`
+    (211) push shows a queued download's place in the queue.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

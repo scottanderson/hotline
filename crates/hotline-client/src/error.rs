@@ -23,6 +23,10 @@ pub enum ClientError {
     #[error("server error: {0}")]
     Server(String),
 
+    /// The server's reply lacks a field that the request needs.
+    #[error("the server's reply has no {0:?} field")]
+    MissingField(hotline_proto::FieldId),
+
     /// The background read loop exited (connection closed) before a
     /// pending request could be answered.
     #[error("connection closed while waiting for a reply")]

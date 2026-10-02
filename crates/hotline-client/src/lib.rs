@@ -11,9 +11,11 @@
 mod client;
 mod client_info_text;
 mod error;
+mod file_download;
 mod login_result;
 
 pub use client::HotlineClient;
 pub use client_info_text::ClientInfoText;
 pub use error::{ClientError, Result};
+pub use file_download::FileDownload;
 pub use login_result::LoginResult;
