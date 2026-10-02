@@ -13,6 +13,7 @@
 //! [`myField_NewsArtNextArt`]: hotline_proto::FieldId::NewsArtNextArt
 
 mod article;
+mod body;
 mod bundle;
 mod category;
 mod detail;
@@ -27,6 +28,7 @@ mod summary;
 mod view;
 
 pub use article::NewsArticle;
+pub use body::{body_from_wire, body_to_wire};
 pub use bundle::NewsBundle;
 pub use category::NewsCategory;
 pub use detail::NewsArticleDetail;

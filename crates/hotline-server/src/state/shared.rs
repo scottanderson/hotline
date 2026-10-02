@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
+use hotline_proto::text_encoding::Encoding;
 use hotline_proto::types::{
     FileNameWithInfo, HlPath, NewsArticleListData, NewsArticleSummary, NewsCategoryListEntry,
     NewsFlavor,
@@ -28,7 +29,8 @@ use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::file::{BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem};
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
-    FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind, ThreadedNewsProvider,
+    body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
+    ThreadedNewsProvider,
 };
 use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
@@ -1074,6 +1076,7 @@ impl SharedState {
     pub async fn news_list_articles(
         &self,
         path: &HlPath,
+        encoding: &'static Encoding,
     ) -> Result<NewsArticleListData, &'static str> {
         let articles = self
             .threaded_news
@@ -1095,7 +1098,8 @@ impl SharedState {
                         .iter()
                         .map(|(mime_type, data)| NewsFlavor {
                             mime_type: mime_type.as_str().into(),
-                            size: data.len() as u16,
+                            size: u16::try_from(body_to_wire(mime_type, data, encoding).len())
+                                .unwrap_or(u16::MAX),
                         })
                         .collect(),
                 })
@@ -1586,7 +1590,10 @@ mod tests {
 
         assert!(other.news().await.contains("hello"));
         let articles = other
-            .news_list_articles(&HlPath::new(["General"]))
+            .news_list_articles(
+                &HlPath::new(["General"]),
+                hotline_proto::text_encoding::DEFAULT,
+            )
             .await
             .unwrap();
         assert_eq!(articles.articles.len(), 1);

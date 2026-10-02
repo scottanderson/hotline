@@ -75,6 +75,29 @@ pub fn encode(encoding: &'static Encoding, s: &str) -> Vec<u8> {
     out
 }
 
+/// Encode `s` as [`encode`] does, cut at a whole character to at most `max` bytes.
+pub fn encode_truncated(encoding: &'static Encoding, s: &str, max: usize) -> Vec<u8> {
+    let mut encoder = encoding.new_encoder();
+    let mut out = vec![0; max];
+    let mut written = 0;
+    let mut remaining = s;
+    loop {
+        let (result, read, wrote) =
+            encoder.encode_from_utf8_without_replacement(remaining, &mut out[written..], true);
+        remaining = &remaining[read..];
+        written += wrote;
+        match result {
+            encoding_rs::EncoderResult::Unmappable(_) if written < max => {
+                out[written] = FALLBACK_BYTE;
+                written += 1;
+            }
+            _ => break,
+        }
+    }
+    out.truncate(written);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +189,29 @@ mod tests {
         let s = "hi \u{1f389}";
         assert_eq!(encode(utf8, s), s.as_bytes());
         assert_eq!(decode(utf8, s.as_bytes()), s);
+    }
+
+    #[test]
+    fn encode_truncated_keeps_text_that_fits() {
+        assert_eq!(encode_truncated(DEFAULT, "caf\u{e9}", 10), b"caf\x8e");
+    }
+
+    #[test]
+    fn encode_truncated_cuts_at_a_whole_utf8_character() {
+        let utf8 = Encoding::for_label(b"utf-8").unwrap();
+        assert_eq!(encode_truncated(utf8, "a\u{e9}", 2), b"a");
+        assert_eq!(encode_truncated(utf8, "a\u{e9}", 3), "a\u{e9}".as_bytes());
+    }
+
+    #[test]
+    fn encode_truncated_cuts_at_a_whole_shift_jis_character() {
+        let sjis = Encoding::for_label(b"shift-jis").unwrap();
+        let bytes = encode_truncated(sjis, "\u{3042}\u{3044}", 3);
+        assert_eq!(decode(sjis, &bytes), "\u{3042}");
+    }
+
+    #[test]
+    fn encode_truncated_falls_back_for_an_unmappable_codepoint() {
+        assert_eq!(encode_truncated(DEFAULT, "a\u{1f389}b", 2), b"a?");
     }
 }

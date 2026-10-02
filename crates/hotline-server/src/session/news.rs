@@ -8,6 +8,7 @@ use hotline_proto::FieldId;
 use hotline_proto::{Field, Transaction};
 
 use crate::flood::FloodEvent;
+use crate::news::{body_from_wire, body_to_wire};
 use crate::state::SharedState;
 
 use super::connection::{Session, MAX_FLAT_NEWS_LEN};
@@ -24,8 +25,11 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let mut news = text_encoding::encode(self.encoding(), &state.news().await);
-        news.truncate(MAX_FLAT_NEWS_LEN);
+        let news = text_encoding::encode_truncated(
+            self.encoding(),
+            &state.news().await,
+            MAX_FLAT_NEWS_LEN,
+        );
         vec![tx.reply(vec![Field::bytes(FieldId::Data, news)])]
     }
 
@@ -115,7 +119,7 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let listing = match state.news_list_articles(&path).await {
+        let listing = match state.news_list_articles(&path, self.encoding()).await {
             Ok(listing) => listing,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -235,7 +239,8 @@ impl Session {
             requested_flavor.clone(),
         ));
         if let Some(data) = detail.data.get(&requested_flavor) {
-            fields.push(Field::bytes(FieldId::NewsArtData, data.clone()));
+            let data = body_to_wire(&requested_flavor, data, encoding);
+            fields.push(Field::bytes(FieldId::NewsArtData, data));
         }
         vec![tx.reply(fields)]
     }
@@ -270,6 +275,7 @@ impl Session {
         let mime_type = tx
             .news_article_flavor(encoding)
             .unwrap_or_else(|| "text/plain".to_string());
+        let data = body_from_wire(&mime_type, data, encoding);
 
         if let Err(reason) = state
             .news_post_article(
@@ -625,6 +631,85 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn post_news_art_stores_text_as_utf8_and_sends_it_in_each_encoding() {
+        let encoding = text_encoding::DEFAULT;
+        let utf8 = text_encoding::Encoding::for_label(b"utf-8").unwrap();
+        let state = SharedState::default();
+        let roman = test_session("Alice", Access::all());
+        let unicode = test_session("Bob", Access::all());
+        unicode.encoding.set(utf8);
+        state
+            .news_mkcategory(&HlPath::default(), "General")
+            .await
+            .unwrap();
+        let path = HlPath::new(["General"]);
+        let path_field = || Field::bytes(FieldId::NewsPath, path.encode(encoding).unwrap());
+
+        let post = Transaction::request(
+            Opcode::PostNewsArt,
+            1,
+            vec![
+                path_field(),
+                Field::string(FieldId::NewsArtTitle, "Hello"),
+                Field::string(FieldId::NewsArtDataFlav, "text/plain"),
+                Field::bytes(FieldId::NewsArtData, b"caf\x8e".to_vec()),
+            ],
+        );
+        let [reply] = roman
+            .on_post_news_art(&post, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let stored = state.news_article(&path, 1).await.unwrap();
+        assert_eq!(stored.data["text/plain"], "caf\u{e9}".as_bytes());
+
+        let listing = state.news_list_articles(&path, utf8).await.unwrap();
+        assert_eq!(listing.articles[0].flavors[0].size, 5);
+
+        let get = Transaction::request(
+            Opcode::GetNewsArtData,
+            2,
+            vec![
+                Field::bytes(FieldId::NewsPath, path.encode(utf8).unwrap()),
+                Field::u32(FieldId::NewsArtID, 1),
+                Field::string(FieldId::NewsArtDataFlav, "text/plain"),
+            ],
+        );
+        let [reply] = unicode
+            .on_get_news_art_data(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let data = reply.field(FieldId::NewsArtData).unwrap().as_bytes(utf8);
+        assert_eq!(&*data, "caf\u{e9}".as_bytes());
+    }
+
+    #[tokio::test]
+    async fn get_msgs_cuts_a_utf8_board_at_a_whole_character() {
+        let utf8 = text_encoding::Encoding::for_label(b"utf-8").unwrap();
+        let session = test_session("Alice", Access::all());
+        session.encoding.set(utf8);
+        let state = SharedState::default();
+
+        for _ in 0..20 {
+            let post = Transaction::request(
+                Opcode::OldPostNews,
+                1,
+                vec![Field::string(FieldId::Data, "\u{e9}".repeat(4000))],
+            );
+            session.on_old_post_news(&post, &state).await;
+        }
+
+        let get = Transaction::request(Opcode::GetMsgs, 2, vec![]);
+        let [reply] = session.on_get_msgs(&get, &state).await.try_into().unwrap();
+
+        let data = reply.field(FieldId::Data).unwrap().as_bytes(utf8);
+        assert!(data.len() <= MAX_FLAT_NEWS_LEN);
+        assert!(std::str::from_utf8(&data).is_ok());
     }
 
     #[tokio::test]

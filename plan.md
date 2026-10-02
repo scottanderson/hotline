@@ -86,6 +86,11 @@ below, in priority order.
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
   this only affects a hand-crafted request; not changed.
+- **Stored text is UTF-8.** openline stores text in the wire encoding.
+  `hls` stores threaded news text bodies, like its other text, as
+  UTF-8, and converts each one to the connection's encoding on the
+  wire. A `myTran_GetMsgs` (101) reply that is too long is cut at a
+  whole character; openline cuts at a byte.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -123,15 +128,7 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-2. **`on_get_msgs`'s clamp can split a multi-byte character.**
-   The reply is truncated to 65535 encoded bytes. Under the Mac OS
-   Roman default every character is one byte, so this is invisible;
-   under `utf-8` or `shift-jis` the last character can arrive as a
-   partial sequence. Openline truncates bytes too, so this matches
-   openline. Worth deciding only if a multi-byte encoding is
-   ever made selectable per connection.
-
-3. **No HTTP tunnel listeners.** openline also listens on the base port
+2. **No HTTP tunnel listeners.** openline also listens on the base port
    plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
    The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
    `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
@@ -139,7 +136,7 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-4. **`hlc` does not cover every area.** It logs in, shows the
+3. **`hlc` does not cover every area.** It logs in, shows the
    agreement, chats in public, sends private messages, shows a user's
    info text, reads and posts classic news, lists users, files, and
    tracker servers, and downloads and uploads files and folders. It
@@ -725,6 +722,14 @@ one-shared-room model.
     stored flavor with its MIME type and size. This matches openline's
     `CNZArticleList::AddArticleFlavor`. A post stores the one flavor that
     the client sends.
+
+99. Text on disk is UTF-8, and text on the wire uses the connection's
+    encoding, Mac OS Roman by default. A threaded news article body with a
+    `text/` flavor is decoded on post and encoded again for
+    `myTran_GetNewsArtData` (400). Its listed size is the size in that
+    encoding. `myTran_GetMsgs` (101) cuts a long board at a whole character
+    with `text_encoding::encode_truncated`. No transaction sets a
+    connection's encoding yet, so every connection uses Mac OS Roman.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

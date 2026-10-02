@@ -160,6 +160,8 @@ cargo run -p hotline-cli -- --host 127.0.0.1 --port 5500 --login guest --nick Ru
 | `bans.json`     | address bans                     | `--ban-file`        |
 | `tracker-id`    | the ID that trackers list you by | `--tracker-id-file` |
 
+Text in these files is UTF-8. On the wire, text uses Mac OS Roman.
+
 Clients connect on `--port` (5500 by default). File transfers use the
 next port, so open both in your firewall.
 
