@@ -6,6 +6,8 @@ pub enum Tab {
     Files,
     /// Threaded news bundles, categories, and articles.
     Threaded,
+    /// User accounts, for a user who may administer them.
+    Admin,
     /// The private chat room with this ID.
     Room(u32),
 }
@@ -18,4 +20,7 @@ impl Tab {
         (Self::Files, "Files"),
         (Self::Threaded, "Threaded News"),
     ];
+
+    /// The label of [`Tab::Admin`].
+    pub const ADMIN_LABEL: &'static str = "Admin";
 }

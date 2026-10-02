@@ -8,6 +8,7 @@
 //! `mpsc::UnboundedReceiver<Transaction>` [`HotlineClient::connect`] returns
 //! alongside the client.
 
+mod accounts;
 mod client;
 mod client_info_text;
 mod error;
@@ -22,6 +23,7 @@ mod joined_chat;
 mod login_result;
 mod news;
 
+pub use accounts::{AccountChange, Password, UserAccount};
 pub use client::HotlineClient;
 pub use client_info_text::ClientInfoText;
 pub use error::{ClientError, Result};

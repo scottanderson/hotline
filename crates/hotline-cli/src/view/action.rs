@@ -1,3 +1,5 @@
+use hotline_client::UserAccount;
+
 use crate::transfer::Start;
 
 /// What the caller must do after one key press or mouse click.
@@ -80,4 +82,19 @@ pub enum Action {
         name: String,
         category: bool,
     },
+    /// List the accounts again.
+    ListAccounts,
+    /// Edit the account at this index.
+    EditAccount(usize),
+    /// Read the account with this login.
+    OpenAccount(String),
+    /// Create `account`, or replace the account `old_login`.
+    SaveAccount {
+        old_login: Option<Box<str>>,
+        account: UserAccount,
+    },
+    /// Ask before the account at this index is deleted.
+    AskDeleteAccount(usize),
+    /// Delete the account with this login.
+    DeleteAccount(Box<str>),
 }

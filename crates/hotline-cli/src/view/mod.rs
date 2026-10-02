@@ -1,6 +1,7 @@
 //! [`View`]: the tab, focus, selection, and modals. Pure: turns key presses
 //! and mouse clicks into an [`Action`] for the caller to run.
 
+mod account_form;
 mod action;
 mod modal;
 mod tab;
@@ -15,6 +16,7 @@ use ratatui::layout::Rect;
 use crate::transfer::{Conflict, Start};
 use crate::ui::{self, Areas};
 
+pub use account_form::{privileges, AccountForm};
 pub use action::Action;
 pub use modal::{MenuItem, Modal};
 pub use tab::Tab;
@@ -42,6 +44,8 @@ pub enum Focus {
     Files,
     /// The item list on the Threaded News tab.
     NewsList,
+    /// The account list on the Admin tab.
+    Accounts,
 }
 
 impl Focus {
@@ -51,6 +55,7 @@ impl Focus {
             Tab::Chat | Tab::News | Tab::Room(_) => Self::Input,
             Tab::Files => Self::Files,
             Tab::Threaded => Self::NewsList,
+            Tab::Admin => Self::Accounts,
         }
     }
 }
@@ -61,6 +66,7 @@ enum Clicked {
     User(u16),
     File(usize),
     News(usize),
+    Account(usize),
 }
 
 pub struct View {
@@ -87,6 +93,12 @@ pub struct View {
     pub selected_news: usize,
     /// The number of threaded news items listed.
     pub news_count: usize,
+    /// The first account row on screen, as the last draw left it.
+    pub accounts_offset: usize,
+    /// The index of the selected account.
+    pub selected_account: usize,
+    /// The number of accounts listed.
+    pub account_count: usize,
     selected_user: Option<u16>,
     last_click: Option<(Clicked, Instant)>,
 }
@@ -111,6 +123,9 @@ impl Default for View {
             news_offset: 0,
             selected_news: 0,
             news_count: 0,
+            accounts_offset: 0,
+            selected_account: 0,
+            account_count: 0,
             selected_user: None,
             last_click: None,
         }
@@ -129,7 +144,7 @@ impl View {
         match self.tab {
             Tab::Chat => Some(&self.chat_input),
             Tab::News => Some(&self.post_input),
-            Tab::Files | Tab::Threaded => None,
+            Tab::Files | Tab::Threaded | Tab::Admin => None,
             Tab::Room(id) => Some(self.room_inputs.get(&id).map_or("", String::as_str)),
         }
     }
@@ -138,7 +153,7 @@ impl View {
         match self.tab {
             Tab::Chat => Some(&mut self.chat_input),
             Tab::News => Some(&mut self.post_input),
-            Tab::Files | Tab::Threaded => None,
+            Tab::Files | Tab::Threaded | Tab::Admin => None,
             Tab::Room(id) => Some(self.room_inputs.entry(id).or_default()),
         }
     }
@@ -179,6 +194,12 @@ impl View {
         self.files_offset = 0;
     }
 
+    /// Select the first account and scroll to the top of the list.
+    pub const fn reset_account_selection(&mut self) {
+        self.selected_account = 0;
+        self.accounts_offset = 0;
+    }
+
     /// Select the first threaded news item and scroll to the top of the list.
     pub const fn reset_news_selection(&mut self) {
         self.selected_news = 0;
@@ -217,7 +238,32 @@ impl View {
                 ("Esc", "cancel"),
             ],
             (Some(Modal::NewsName { .. }), ..) => &[("Enter", "create"), ("Esc", "cancel")],
-            (Some(Modal::DeleteNews { .. }), ..) => &[("y", "delete"), ("Esc", "cancel")],
+            (Some(Modal::DeleteNews { .. } | Modal::DeleteAccount { .. }), ..) => {
+                &[("y", "delete"), ("Esc", "cancel")]
+            }
+            (Some(Modal::Account(_)), ..) => &[
+                ("↑↓", "row"),
+                ("Space", "toggle"),
+                ("Enter", "save"),
+                ("Esc", "cancel"),
+            ],
+            (Some(Modal::OpenAccount { .. }), ..) => &[("Enter", "open"), ("Esc", "cancel")],
+            (None, Focus::Accounts, _) | (None, Focus::Input, Tab::Admin) => &[
+                ("↑↓", "select"),
+                ("Enter", "edit"),
+                ("n", "new"),
+                ("o", "open"),
+                ("x", "delete"),
+                ("Tab", "users"),
+                ("Esc", "chat"),
+            ],
+            (None, Focus::Users, Tab::Admin) => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("Tab", "accounts"),
+                ("^U", "chat"),
+            ],
             (None, Focus::NewsList, _) | (None, Focus::Input, Tab::Threaded) => &[
                 ("↑↓", "select"),
                 ("Enter", "open"),
@@ -319,7 +365,11 @@ impl View {
             let tab = match (key.code, self.tab) {
                 (KeyCode::Char('n'), Tab::News)
                 | (KeyCode::Char('f'), Tab::Files)
-                | (KeyCode::Char('b'), Tab::Threaded) => Some(Tab::Chat),
+                | (KeyCode::Char('b'), Tab::Threaded)
+                | (KeyCode::Char('u'), Tab::Admin) => Some(Tab::Chat),
+                (KeyCode::Char('u'), _) if self.tabs.iter().any(|&(t, _)| t == Tab::Admin) => {
+                    Some(Tab::Admin)
+                }
                 (KeyCode::Char('n'), _) => Some(Tab::News),
                 (KeyCode::Char('f'), _) => Some(Tab::Files),
                 (KeyCode::Char('b'), _) => Some(Tab::Threaded),
@@ -343,12 +393,16 @@ impl View {
             Focus::Input => self.input_key(key),
             Focus::Files => self.files_key(key, files),
             Focus::NewsList => self.news_key(key),
+            Focus::Accounts => self.accounts_key(key),
         }
     }
 
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         if let Modal::Confirm(conflict) = modal {
             return self.confirm_key(conflict, key);
+        }
+        if let Modal::Account(form) = modal {
+            return self.account_form_key(form, key);
         }
         match (&mut modal, key.code) {
             (Modal::Article { id, title, .. }, KeyCode::Char('r')) => {
@@ -366,6 +420,12 @@ impl View {
             }
             (Modal::DeleteNews { index, .. }, KeyCode::Char('y')) => {
                 return Action::DeleteNewsItem(*index);
+            }
+            (Modal::DeleteAccount { login }, KeyCode::Char('y')) => {
+                return Action::DeleteAccount(std::mem::take(login));
+            }
+            (Modal::OpenAccount { input }, KeyCode::Enter) if !input.is_empty() => {
+                return Action::OpenAccount(std::mem::take(input));
             }
             (Modal::Post { body, on_body, .. }, _) if is_new_line(key) => {
                 if *on_body {
@@ -480,7 +540,8 @@ impl View {
                 | Modal::Upload { input }
                 | Modal::SaveAs { input, .. }
                 | Modal::Subject { input, .. }
-                | Modal::NewsName { input, .. },
+                | Modal::NewsName { input, .. }
+                | Modal::OpenAccount { input },
                 KeyCode::Backspace,
             ) => {
                 input.pop();
@@ -490,7 +551,8 @@ impl View {
                 | Modal::Upload { input }
                 | Modal::SaveAs { input, .. }
                 | Modal::Subject { input, .. }
-                | Modal::NewsName { input, .. },
+                | Modal::NewsName { input, .. }
+                | Modal::OpenAccount { input },
                 KeyCode::Char(c),
             ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 input.push(c);
@@ -608,6 +670,63 @@ impl View {
         Action::None
     }
 
+    fn account_form_key(&mut self, mut form: AccountForm, key: KeyEvent) -> Action {
+        let last = AccountForm::rows() - 1;
+        match key.code {
+            KeyCode::Esc => return Action::None,
+            KeyCode::Enter if !form.login.is_empty() => {
+                return Action::SaveAccount {
+                    old_login: form.old_login.clone(),
+                    account: form.account(),
+                };
+            }
+            KeyCode::Up => form.row = form.row.saturating_sub(1),
+            KeyCode::Down => form.row = (form.row + 1).min(last),
+            KeyCode::PageUp => form.row = form.row.saturating_sub(10),
+            KeyCode::PageDown => form.row = (form.row + 10).min(last),
+            KeyCode::Char(' ') if form.row >= account_form::TEXT_ROWS => form.toggle(),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(text) = form.text_mut() {
+                    text.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(text) = form.text_mut() {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
+        self.modal = Some(Modal::Account(form));
+        Action::None
+    }
+
+    fn accounts_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Tab => self.focus = Focus::Users,
+            KeyCode::Esc => return self.set_tab(Tab::Chat),
+            KeyCode::Up => self.selected_account = self.selected_account.saturating_sub(1),
+            KeyCode::Down => {
+                self.selected_account =
+                    (self.selected_account + 1).min(self.account_count.saturating_sub(1));
+            }
+            KeyCode::Enter if self.account_count > 0 => {
+                return Action::EditAccount(self.selected_account);
+            }
+            KeyCode::Char('n') => self.modal = Some(Modal::Account(AccountForm::blank())),
+            KeyCode::Char('o') => {
+                self.modal = Some(Modal::OpenAccount {
+                    input: String::new(),
+                });
+            }
+            KeyCode::Char('x') if self.account_count > 0 => {
+                return Action::AskDeleteAccount(self.selected_account);
+            }
+            _ => {}
+        }
+        Action::None
+    }
+
     fn news_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Tab => self.focus = Focus::Users,
@@ -668,7 +787,10 @@ impl View {
                 | Modal::PickUser { .. }
                 | Modal::Post { .. }
                 | Modal::NewsName { .. }
-                | Modal::DeleteNews { .. } => {}
+                | Modal::DeleteNews { .. }
+                | Modal::Account(_)
+                | Modal::OpenAccount { .. }
+                | Modal::DeleteAccount { .. } => {}
                 Modal::Article { .. } => self.modal = None,
             }
             return Action::None;
@@ -687,6 +809,9 @@ impl View {
                 }
                 if let Some(index) = self.news_at(areas.body, x, y) {
                     return self.click_news(index, now);
+                }
+                if let Some(index) = self.account_at(areas.body, x, y) {
+                    return self.click_account(index, now);
                 }
                 if contains(areas.input, x, y) {
                     self.focus = Focus::Input;
@@ -741,6 +866,17 @@ impl View {
         Action::None
     }
 
+    /// Select the account at `index`, or edit it on the second click of a
+    /// double click.
+    fn click_account(&mut self, index: usize, now: Instant) -> Action {
+        self.selected_account = index;
+        self.focus = Focus::Accounts;
+        if self.double_click(Clicked::Account(index), now) {
+            return Action::EditAccount(index);
+        }
+        Action::None
+    }
+
     /// `true` if `clicked` is the second click of a double click.
     fn double_click(&mut self, clicked: Clicked, now: Instant) -> bool {
         let double = matches!(
@@ -784,6 +920,7 @@ impl View {
             }
             Tab::Files => Action::ListFiles,
             Tab::Threaded => Action::ListThreadedNews,
+            Tab::Admin => Action::ListAccounts,
         }
     }
 
@@ -825,6 +962,16 @@ impl View {
         }
         let index = self.files_offset + usize::from(y - inner.y);
         (index < files.len()).then_some(index)
+    }
+
+    /// The index of the account on the list row at `x`, `y` of the Admin tab.
+    fn account_at(&self, body: Rect, x: u16, y: u16) -> Option<usize> {
+        let inner = ui::inner(body);
+        if self.tab != Tab::Admin || !contains(inner, x, y) {
+            return None;
+        }
+        let index = self.accounts_offset + usize::from(y - inner.y);
+        (index < self.account_count).then_some(index)
     }
 
     /// The index of the item on the list row at `x`, `y` of the Threaded News tab.
@@ -875,7 +1022,9 @@ pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hotline_client::{Password, UserAccount};
     use hotline_proto::types::UserFlags;
+    use hotline_proto::Access;
 
     fn users() -> Vec<UserNameWithInfo> {
         ["Alice", "Bob"]
@@ -1496,6 +1645,69 @@ mod tests {
         assert_eq!(
             view.handle_key(key(KeyCode::Char('y')), &users(), &files()),
             Action::DeleteNewsItem(3)
+        );
+    }
+
+    #[test]
+    fn ctrl_u_opens_the_admin_tab_only_when_it_is_shown() {
+        let mut view = View::default();
+        assert_eq!(view.handle_key(ctrl('u'), &users(), &files()), Action::None);
+        assert_eq!(view.tab, Tab::Chat);
+
+        let mut tabs = view.tabs.clone();
+        tabs.push((Tab::Admin, Tab::ADMIN_LABEL.to_string()));
+        view.set_tabs(tabs);
+        assert_eq!(
+            view.handle_key(ctrl('u'), &users(), &files()),
+            Action::ListAccounts
+        );
+        assert_eq!((view.tab, view.focus), (Tab::Admin, Focus::Accounts));
+        view.account_count = 2;
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::EditAccount(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('x')), &users(), &files()),
+            Action::AskDeleteAccount(1)
+        );
+        let _ = view.handle_key(key(KeyCode::Char('o')), &users(), &files());
+        type_text(&mut view, "bo");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::OpenAccount("bo".into())
+        );
+    }
+
+    #[test]
+    fn a_new_account_saves_its_text_and_toggled_privileges() {
+        let mut view = View {
+            modal: Some(Modal::Account(AccountForm::blank())),
+            ..View::default()
+        };
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::None
+        );
+        type_text(&mut view, "Bo B");
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        type_text(&mut view, "bo");
+        for _ in 0..3 {
+            let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        }
+        type_text(&mut view, " ");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::SaveAccount {
+                old_login: None,
+                account: UserAccount {
+                    name: "Bo B".into(),
+                    login: "bo".into(),
+                    password: Password::Empty,
+                    access: Access::UPLOAD_FILE,
+                },
+            }
         );
     }
 }

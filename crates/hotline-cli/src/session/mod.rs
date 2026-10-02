@@ -1,6 +1,7 @@
 //! [`ClientSession`] state: what the client knows about the connection,
 //! decoupled from the terminal. Data plus pure update logic.
 
+mod accounts;
 mod chat;
 mod chat_room;
 mod event_outcome;
@@ -13,7 +14,7 @@ use std::collections::VecDeque;
 use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use hotline_client::{ClientInfoText, FolderDownload, FolderUpload, HotlineClient};
+use hotline_client::{ClientInfoText, FolderDownload, FolderUpload, HotlineClient, UserAccount};
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
@@ -46,6 +47,10 @@ pub struct ClientSession {
     /// The folder that downloads are saved in.
     pub download_dir: PathBuf,
     pub access: Access,
+    /// The server's version from the login reply.
+    pub server_version: Option<u16>,
+    /// The accounts on the Admin tab, `None` until they are fetched.
+    pub accounts: Option<Vec<UserAccount>>,
     /// The threaded news bundle or category on the Threaded News tab.
     pub threaded_path: HlPath,
     /// `true` if `threaded_path` is a category, which holds articles.
@@ -76,6 +81,8 @@ impl ClientSession {
             file_path: HlPath::default(),
             download_dir: PathBuf::from("."),
             access: Access::empty(),
+            server_version: None,
+            accounts: None,
             threaded_path: HlPath::default(),
             threaded_in_category: false,
             threaded: None,

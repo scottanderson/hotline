@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode};
-use crate::view::{contains, Focus, MenuItem, Modal, Tab, View};
+use crate::view::{contains, privileges, AccountForm, Focus, MenuItem, Modal, Tab, View};
 
 /// Where each part of the main screen is drawn.
 pub struct Areas {
@@ -72,11 +72,14 @@ pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
     let fixed = Tab::FIXED
         .iter()
         .map(|&(tab, label)| (tab, label.to_string()));
+    let admin = session
+        .can_administer()
+        .then(|| (Tab::Admin, Tab::ADMIN_LABEL.to_string()));
     let rooms = session
         .rooms
         .iter()
         .map(|room| (Tab::Room(room.id), room.label()));
-    fixed.chain(rooms).collect()
+    fixed.chain(admin).chain(rooms).collect()
 }
 
 /// Each tab in `labels` and the columns its label covers, drawn as ` Chat │ News `.
@@ -164,6 +167,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         Tab::News => draw_news(frame, areas.body, session, view.news_scroll),
         Tab::Files => draw_files(frame, areas.body, session, view),
         Tab::Threaded => draw_threaded_news(frame, areas.body, session, view),
+        Tab::Admin => draw_accounts(frame, areas.body, session, view),
         Tab::Room(id) => {
             if let Some(room) = session.room(id) {
                 draw_messages(frame, areas.body, &room.lines, &room.label());
@@ -296,6 +300,47 @@ fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, vi
     view.news_offset = state.offset();
 }
 
+fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border(view.focus == Focus::Accounts))
+        .title("accounts");
+    let Some(accounts) = &session.accounts else {
+        frame.render_widget(Paragraph::new("loading accounts").block(block), area);
+        return;
+    };
+    let rows: Vec<ListItem> = accounts
+        .iter()
+        .map(|a| ListItem::new(format!("{}  ({})", a.login, a.name)))
+        .collect();
+    let list = List::new(rows)
+        .block(block)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let selected = accounts
+        .len()
+        .checked_sub(1)
+        .map(|last| view.selected_account.min(last));
+    let mut state = ListState::default()
+        .with_offset(view.accounts_offset)
+        .with_selected(selected);
+    frame.render_stateful_widget(list, area, &mut state);
+    view.accounts_offset = state.offset();
+}
+
+/// The rows of `form`: name, login, password, then a check box for each privilege.
+fn account_form_rows(form: &AccountForm) -> Vec<String> {
+    let text = [
+        format!("name:     {}", form.name),
+        format!("login:    {}", form.login),
+        format!("password: {}", form.password_text()),
+    ];
+    let checks = privileges().map(|(label, flag)| {
+        let mark = if form.access.contains(flag) { 'x' } else { ' ' };
+        format!("[{mark}] {label}")
+    });
+    text.into_iter().chain(checks).collect()
+}
+
 /// A folder's name with a trailing `/`, or a file's name and size.
 fn file_label(file: &FileNameWithInfo) -> String {
     if file.is_folder() {
@@ -324,7 +369,7 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
     let title = match view.tab {
         Tab::Chat | Tab::Room(_) => "message",
         Tab::News => "post",
-        Tab::Files | Tab::Threaded => return,
+        Tab::Files | Tab::Threaded | Tab::Admin => return,
     };
     let focused = view.focus == Focus::Input;
     let block = Block::default()
@@ -547,6 +592,44 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             draw_text_box(frame, title_area, title_block, title, !on_body);
             draw_text_box(frame, body_area, body_block, body, *on_body);
+        }
+        Modal::Account(form) => {
+            let rows = account_form_rows(form);
+            let area = centered(screen, 50, (rows.len() as u16 + 2).min(screen.height));
+            let title = match &form.old_login {
+                Some(login) => format!("account {login}"),
+                None => "new account".to_string(),
+            };
+            let list = List::new(rows)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border(true))
+                        .title(title),
+                )
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            let mut state = ListState::default().with_selected(Some(form.row));
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, &mut state);
+        }
+        Modal::OpenAccount { input } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("open the account with login");
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, area, block, input, true);
+        }
+        Modal::DeleteAccount { login } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("delete?");
+            frame.render_widget(Clear, area);
+            let text = format!("Delete the account {login}?");
+            frame.render_widget(Paragraph::new(text).block(block), area);
         }
         Modal::NewsName { category, input } => {
             let area = centered(screen, 60, 3);

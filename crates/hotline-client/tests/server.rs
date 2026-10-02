@@ -4,11 +4,11 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use hotline_client::{ClientError, HotlineClient};
+use hotline_client::{AccountChange, ClientError, HotlineClient, Password, UserAccount};
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
-use hotline_proto::{FieldId, Opcode, Transaction};
+use hotline_proto::{Access, FieldId, Opcode, Transaction};
 use hotline_server::{InMemoryFileProvider, Providers, Server, ServerConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -406,6 +406,65 @@ async fn download_file_of_a_missing_file_is_a_server_error() {
 
     let result = alice.download_file(&HlPath::default(), "nothing", 0).await;
     assert!(matches!(result, Err(ClientError::Server(_))), "{result:?}");
+}
+
+#[tokio::test]
+async fn accounts_are_created_read_changed_and_deleted_with_each_opcode_set() {
+    let addr = start_server().await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+    let guest = UserAccount {
+        name: "Guest".into(),
+        login: "guest".into(),
+        password: Password::New("pw".into()),
+        access: Access::READ_CHAT,
+    };
+
+    admin.new_user(&guest).await.unwrap();
+    let read = admin.get_user("guest").await.unwrap();
+    assert_eq!(
+        read,
+        UserAccount {
+            password: Password::Unchanged,
+            ..guest.clone()
+        }
+    );
+    let changed = UserAccount {
+        access: Access::READ_CHAT | Access::SEND_CHAT,
+        ..read
+    };
+    admin.set_user(&changed).await.unwrap();
+    assert_eq!(admin.get_user("guest").await.unwrap(), changed);
+
+    let renamed = UserAccount {
+        login: "visitor".into(),
+        password: Password::Empty,
+        ..changed
+    };
+    admin
+        .set_user_list(&[AccountChange::Save {
+            old_login: Some("guest".into()),
+            account: renamed.clone(),
+        }])
+        .await
+        .unwrap();
+    let accounts = admin.get_user_list().await.unwrap();
+    assert!(accounts.contains(&renamed));
+    assert!(!accounts.iter().any(|a| &*a.login == "guest"));
+
+    admin
+        .set_user_list(&[AccountChange::Delete("visitor".into())])
+        .await
+        .unwrap();
+    admin.new_user(&guest).await.unwrap();
+    admin.delete_user("guest").await.unwrap();
+    let logins: Vec<_> = admin
+        .get_user_list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.login)
+        .collect();
+    assert_eq!(logins, ["admin".into()]);
 }
 
 #[tokio::test]

@@ -1,3 +1,4 @@
+use super::AccountForm;
 use crate::transfer::Conflict;
 
 /// A box drawn over the main screen that takes every key until it closes.
@@ -46,6 +47,12 @@ pub enum Modal {
     NewsName { category: bool, input: String },
     /// A check before the threaded news item at `index` is deleted.
     DeleteNews { index: usize, name: Box<str> },
+    /// An account to create or change.
+    Account(AccountForm),
+    /// The login of an account to read.
+    OpenAccount { input: String },
+    /// A check before the account `login` is deleted.
+    DeleteAccount { login: Box<str> },
     /// The users to invite to the room `chat_id`, as `(user ID, name)`.
     PickUser {
         chat_id: u32,

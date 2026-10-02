@@ -145,9 +145,13 @@ one-shared-room model.
    agreement, chats in public, sends private messages, shows a user's
    info text, reads and posts classic news, lists users, files, and
    tracker servers, downloads and uploads files and folders, and shows
-   a banner's link, resumes transfers, uses private chat rooms, and
-   reads and writes threaded news. It cannot administer accounts. Each
-   area can be its own task.
+   a banner's link, resumes transfers, uses private chat rooms, reads
+   and writes threaded news, and administers accounts. It does not send
+   `myTran_DisconnectUser` (110), the file operations
+   `myTran_DeleteFile` (204) to `myTran_MakeFileAlias` (209),
+   `myTran_DownloadBanner` (212), `myTran_KillDownload` (214),
+   `myTran_SetClientUserInfo` (304) after login, or
+   `myTran_UserBroadcast` (355). Each area can be its own task.
 
 ## Resolved
 
@@ -777,6 +781,23 @@ one-shared-room model.
      category with `myTran_NewNewsCat` (382). `hotline-client` has a
      method for each of these opcodes. The new `wire::SliceReader`
      cursor decodes the category and article listings.
+
+104. `hlc` administers accounts. Ctrl-U opens the "Admin" tab, which
+     shows only when the user has the open-user or create-user
+     privilege, like openline's client. The admin opcodes changed over
+     time. Old servers have only `myTran_NewUser` (350),
+     `myTran_DeleteUser` (351), `myTran_GetUser` (352), and
+     `myTran_SetUser` (353). Servers from 1.8.4 add `myTran_GetUserList`
+     (348) and `myTran_SetUserList` (349), and mhxd does not have
+     them. mhxd sends no reply to an opcode it does not know, so `hlc`
+     does not probe. Like openline's client (`DoOpenUserList`), it uses
+     348 and 349 when the login reply's `myField_Vers` (160) is 184 or
+     more. An mhxd server set to report 184 or more gets no reply to
+     348, and the Admin tab waits. Otherwise
+     it uses 350 to 353: `o` opens an account by login, and an account
+     cannot be renamed. The account form edits the name, login, and
+     password, and Space turns each privilege on or off. A password
+     that is not typed stays unchanged.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

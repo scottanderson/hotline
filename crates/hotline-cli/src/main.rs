@@ -30,7 +30,7 @@ use hotline_proto::types::HlPath;
 use line::Line;
 use session::{ClientSession, EventOutcome, Mode};
 use tokio::sync::mpsc;
-use view::{Action, Modal, View};
+use view::{AccountForm, Action, Modal, View};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,9 +44,10 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = format!("{}:{}", args.host, args.port);
     let (client, mut events) = HotlineClient::connect(&addr).await?;
-    client.login(&args.login, &args.password).await?;
+    let login = client.login(&args.login, &args.password).await?;
 
     let mut session = ClientSession::new(args.nick, args.icon, client.encoding());
+    session.server_version = login.version;
     session.download_dir = args.download_dir;
 
     let (mut terminal, enhanced) = setup_terminal()?;
@@ -137,6 +138,7 @@ async fn run(
         }
         view.set_tabs(ui::tab_labels(session));
         view.news_count = session.threaded.as_ref().map_or(0, Vec::len);
+        view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(|invite| Modal::Invite {
                 chat_id: invite.chat_id,
@@ -296,6 +298,28 @@ async fn perform(
         Action::NewNewsItem { name, category } => {
             session.new_news_item(client, &name, category).await;
         }
+        Action::ListAccounts => {
+            session.list_accounts(client).await;
+            view.reset_account_selection();
+        }
+        Action::EditAccount(index) => {
+            let account = session.accounts.as_ref().and_then(|a| a.get(index));
+            view.modal = account.map(|a| Modal::Account(AccountForm::edit(a)));
+        }
+        Action::OpenAccount(login) => {
+            let account = session.open_account(client, &login).await;
+            view.modal = account.map(|a| Modal::Account(AccountForm::edit(&a)));
+        }
+        Action::SaveAccount { old_login, account } => {
+            session.save_account(client, old_login, account).await;
+        }
+        Action::AskDeleteAccount(index) => {
+            let account = session.accounts.as_ref().and_then(|a| a.get(index));
+            view.modal = account.map(|a| Modal::DeleteAccount {
+                login: a.login.clone(),
+            });
+        }
+        Action::DeleteAccount(login) => session.delete_account(client, &login).await,
     }
     false
 }
