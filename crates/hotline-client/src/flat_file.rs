@@ -1,8 +1,8 @@
-//! Reading a flattened file object from an `HTXF` connection.
+//! Reading and writing a flattened file object on an `HTXF` connection.
 
 use std::io;
 
-use hotline_proto::htxf::{decode_flat_file_prefix, FLAT_FILE_PREFIX_LEN};
+use hotline_proto::htxf::{decode_flat_file_prefix, flat_file_header, FLAT_FILE_PREFIX_LEN};
 use hotline_proto::ForkHeader;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -37,4 +37,21 @@ where
     }
     out.flush().await?;
     Ok(written)
+}
+
+/// Write a flattened file object to `stream` whose `DATA` fork is the next
+/// `size` bytes of `data`. Returns the number of bytes sent.
+pub(crate) async fn write_flat_file<R, W>(stream: &mut W, data: &mut R, size: u32) -> Result<u64>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    stream.write_all(&flat_file_header(size)).await?;
+    let size = u64::from(size);
+    let sent = tokio::io::copy(&mut data.take(size), stream).await?;
+    if sent < size {
+        return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
+    }
+    stream.flush().await?;
+    Ok(sent)
 }

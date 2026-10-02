@@ -228,7 +228,7 @@ impl View {
                 };
             }
             (Modal::Upload { input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::UploadFile(std::mem::take(input));
+                return Action::Upload(std::mem::take(input));
             }
             (Modal::InstantMsg { input, .. } | Modal::Upload { input }, KeyCode::Backspace) => {
                 input.pop();
@@ -847,7 +847,7 @@ mod tests {
         type_text(&mut view, "t");
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::UploadFile("/tmp/a.txt".into())
+            Action::Upload("/tmp/a.txt".into())
         );
         assert_eq!(view.modal, None);
     }

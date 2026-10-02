@@ -22,6 +22,6 @@ pub enum Action {
     DownloadFile(Box<str>),
     /// Download the named folder in the current folder.
     DownloadFolder(Box<str>),
-    /// Upload the local file at this path to the current folder.
-    UploadFile(String),
+    /// Upload the local file or folder at this path to the current folder.
+    Upload(String),
 }

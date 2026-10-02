@@ -1,14 +1,14 @@
 //! [`FileUpload`]: a file upload the server has accepted.
 
-use std::io;
 use std::net::SocketAddr;
 
-use hotline_proto::htxf::{flat_file_header, FLAT_FILE_HEADER_LEN};
+use hotline_proto::htxf::FLAT_FILE_HEADER_LEN;
 use hotline_proto::{HtxfHeader, HtxfType};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::error::Result;
+use crate::flat_file::write_flat_file;
 
 /// An upload the server accepted with [`myTran_UploadFile`] (203).
 ///
@@ -42,12 +42,7 @@ impl FileUpload {
             transfer_type: HtxfType::File,
         };
         stream.write_all(&header.encode()).await?;
-        stream.write_all(&flat_file_header(self.file_size)).await?;
-        let size = u64::from(self.file_size);
-        let sent = tokio::io::copy(&mut data.take(size), &mut stream).await?;
-        if sent < size {
-            return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
-        }
+        let sent = write_flat_file(&mut stream, data, self.file_size).await?;
         stream.shutdown().await?;
         tokio::io::copy(&mut stream, &mut tokio::io::sink()).await?;
         Ok(sent)

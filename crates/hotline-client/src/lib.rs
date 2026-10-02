@@ -16,6 +16,8 @@ mod file_upload;
 mod flat_file;
 mod folder_download;
 mod folder_receiver;
+mod folder_sender;
+mod folder_upload;
 mod login_result;
 
 pub use client::HotlineClient;
@@ -25,4 +27,6 @@ pub use file_download::FileDownload;
 pub use file_upload::FileUpload;
 pub use folder_download::FolderDownload;
 pub use folder_receiver::FolderReceiver;
+pub use folder_sender::FolderSender;
+pub use folder_upload::FolderUpload;
 pub use login_result::LoginResult;

@@ -369,7 +369,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(border(true))
-                .title("upload a local file");
+                .title("upload a local file or folder");
             frame.render_widget(Clear, area);
             draw_text_box(frame, area, block, input, true);
         }

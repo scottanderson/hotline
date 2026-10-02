@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hotline_client::{ClientError, HotlineClient};
+use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
 use hotline_proto::{FieldId, Opcode, Transaction};
@@ -249,6 +250,65 @@ async fn download_folder_steps_through_every_item() {
             ("Maps".to_string(), true, vec![]),
             ("Maps/e1m1.map".to_string(), false, vec![]),
             ("doom.wad".to_string(), false, b"IWAD".to_vec()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn upload_folder_stores_every_item() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::new(["Uploads"]), "keep.txt", *b"");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+    let uploads = HlPath::new(["Uploads"]);
+    let items: [(&[&str], Option<&[u8]>); 3] = [
+        (&["a.txt"], Some(b"alpha")),
+        (&["Sub"], None),
+        (&["Sub", "b.txt"], Some(b"beta")),
+    ];
+
+    let upload = admin.upload_folder(&uploads, "Pack", 3, 9).await.unwrap();
+    let mut sender = upload.open().await.unwrap().expect("a transfer");
+    for (path, data) in items {
+        let header = FolderItemHeader {
+            is_folder: data.is_none(),
+            path: HlPath::new(path.iter().copied()),
+        };
+        let wanted = timeout(WAIT, sender.send_item(&header))
+            .await
+            .unwrap()
+            .unwrap();
+        if let (Some(offset), Some(data)) = (wanted, data) {
+            assert_eq!(offset, 0);
+            sender
+                .send_file(&mut &data[..], data.len() as u64)
+                .await
+                .unwrap();
+        }
+    }
+    timeout(WAIT, sender.finish()).await.unwrap().unwrap();
+
+    let download = admin.download_folder(&uploads, "Pack").await.unwrap();
+    let mut receiver = download.open().await.unwrap();
+    let mut received = Vec::new();
+    while let Some(item) = receiver.next_item().await.unwrap() {
+        let mut data = Vec::new();
+        if !item.is_folder {
+            receiver.receive_file(&mut data).await.unwrap();
+        }
+        received.push((item.path.components.join("/"), data));
+    }
+    received.sort_unstable();
+    assert_eq!(
+        received,
+        [
+            ("Sub".to_string(), vec![]),
+            ("Sub/b.txt".to_string(), b"beta".to_vec()),
+            ("a.txt".to_string(), b"alpha".to_vec()),
         ]
     );
 }

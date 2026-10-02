@@ -20,6 +20,7 @@ use crate::error::{ClientError, Result};
 use crate::file_download::FileDownload;
 use crate::file_upload::FileUpload;
 use crate::folder_download::FolderDownload;
+use crate::folder_upload::FolderUpload;
 use crate::login_result::LoginResult;
 
 type Conn = Framed<TcpStream, TransactionCodec>;
@@ -343,6 +344,35 @@ impl HotlineClient {
             file_size,
             transfer_size,
             transfer_addr: self.transfer_addr()?,
+        })
+    }
+
+    /// Ask to upload a folder of `item_count` files and folders, with
+    /// `total_size` bytes of file data, as the folder `name` in the folder at
+    /// `path`, [`myTran_UploadFldr`] (213). [`FolderUpload::open`] then starts
+    /// it. It sends the low 32 bits of `total_size`.
+    ///
+    /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
+    pub async fn upload_folder(
+        &self,
+        path: &HlPath,
+        name: &str,
+        item_count: u32,
+        total_size: u64,
+    ) -> Result<FolderUpload> {
+        let total_size = total_size as u32;
+        let mut fields = vec![
+            Field::string(FieldId::FileName, name),
+            Field::u32(FieldId::TransferSize, total_size),
+            Field::u32(FieldId::FldrItemCount, item_count),
+        ];
+        fields.extend(self.file_path_field(path)?);
+        let reply = self.request(Opcode::UploadFldr, fields).await?;
+        Ok(FolderUpload {
+            reference: (item_count > 0).then(|| reference(&reply)).transpose()?,
+            item_count,
+            transfer_addr: self.transfer_addr()?,
+            encoding: self.encoding.get(),
         })
     }
 

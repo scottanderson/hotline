@@ -4,16 +4,18 @@
 mod event_outcome;
 mod mode;
 
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 
-use hotline_client::{ClientInfoText, FolderDownload, HotlineClient};
+use hotline_client::{ClientInfoText, FolderDownload, FolderUpload, HotlineClient};
+use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
 use tokio::fs::{File, OpenOptions};
-use tokio::io::{BufReader, BufWriter};
+use tokio::io::{AsyncSeekExt, BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::line::{Line, LineKind};
@@ -466,12 +468,10 @@ impl ClientSession {
         });
     }
 
-    /// Start to upload the local file at `local` to the current folder under
-    /// its own name, [`myTran_UploadFile`] (203). The transfer runs on its own
-    /// task and sends its result line to `done`.
-    ///
-    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
-    pub async fn upload_file(
+    /// Start to upload the local file or folder at `local` to the current
+    /// folder under its own name. The transfer runs on its own task and sends
+    /// its result line to `done`.
+    pub async fn upload(
         &mut self,
         client: &HotlineClient,
         local: &Path,
@@ -483,6 +483,28 @@ impl ClientSession {
                 LineKind::Error,
             );
         };
+        match tokio::fs::metadata(local).await {
+            Ok(metadata) if metadata.is_dir() => {
+                self.upload_folder(client, local, name, done).await
+            }
+            Ok(_) => self.upload_file(client, local, name, done).await,
+            Err(e) => self.push(
+                format!("cannot read {}: {e}", local.display()),
+                LineKind::Error,
+            ),
+        }
+    }
+
+    /// [`myTran_UploadFile`] (203) for the local file at `local`.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
+    async fn upload_file(
+        &mut self,
+        client: &HotlineClient,
+        local: &Path,
+        name: String,
+        done: &UnboundedSender<Line>,
+    ) {
         let opened = async {
             let file = File::open(local).await?;
             let size = file.metadata().await?.len();
@@ -506,6 +528,65 @@ impl ClientSession {
             let line = match upload.send(&mut BufReader::new(file)).await {
                 Ok(bytes) => Line {
                     text: format!("uploaded {name} ({bytes} bytes)").into(),
+                    kind: LineKind::System,
+                },
+                Err(e) => Line {
+                    text: format!("failed to upload {name}: {e}").into(),
+                    kind: LineKind::Error,
+                },
+            };
+            let _ = done.send(line);
+        });
+    }
+
+    /// [`myTran_UploadFldr`] (213) for the local folder at `local`, with
+    /// everything inside it.
+    ///
+    /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
+    async fn upload_folder(
+        &mut self,
+        client: &HotlineClient,
+        local: &Path,
+        name: String,
+        done: &UnboundedSender<Line>,
+    ) {
+        let root = local.to_path_buf();
+        let items = match tokio::task::spawn_blocking(move || walk_local(&root)).await {
+            Ok(Ok(items)) => items,
+            Ok(Err(e)) => {
+                let text = format!("cannot read {}: {e}", local.display());
+                return self.push(text, LineKind::Error);
+            }
+            Err(e) => {
+                return self.push(
+                    format!("cannot read {}: {e}", local.display()),
+                    LineKind::Error,
+                )
+            }
+        };
+        let item_count = u32::try_from(items.len()).unwrap_or(u32::MAX);
+        let total_size = items
+            .iter()
+            .filter_map(|item| item.file.as_ref())
+            .map(|(_, size)| size)
+            .sum();
+        let upload = match client
+            .upload_folder(&self.file_path, &name, item_count, total_size)
+            .await
+        {
+            Ok(upload) => upload,
+            Err(e) => return self.push(format!("failed to upload {name}: {e}"), LineKind::Error),
+        };
+        self.push(
+            format!("uploading {name} ({item_count} items)"),
+            LineKind::System,
+        );
+
+        let done = done.clone();
+        tokio::spawn(async move {
+            let line = match send_folder(upload, items).await {
+                Ok((files, bytes)) => Line {
+                    text: format!("uploaded {name} ({files} files, {bytes} bytes)").into(),
                     kind: LineKind::System,
                 },
                 Err(e) => Line {
@@ -581,6 +662,65 @@ async fn receive_folder(download: FolderDownload, root: &Path) -> anyhow::Result
     Ok((files, bytes))
 }
 
+/// One item inside a local folder to upload.
+#[derive(Debug, PartialEq, Eq)]
+struct LocalItem {
+    /// The names from inside the folder to the item.
+    path: Vec<String>,
+    /// A file's local path and size, `None` for a folder.
+    file: Option<(PathBuf, u64)>,
+}
+
+/// Every item inside the local folder `root`, each folder before the items
+/// inside it. Symbolic links are skipped.
+fn walk_local(root: &Path) -> std::io::Result<Vec<LocalItem>> {
+    let mut items = Vec::new();
+    let mut folders = vec![(root.to_path_buf(), Vec::new())];
+    while let Some((folder, prefix)) = folders.pop() {
+        let mut entries = std::fs::read_dir(&folder)?.collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let kind = entry.file_type()?;
+            let mut path = prefix.clone();
+            path.push(entry.file_name().to_string_lossy().into_owned());
+            if kind.is_dir() {
+                folders.push((entry.path(), path.clone()));
+                items.push(LocalItem { path, file: None });
+            } else if kind.is_file() {
+                let file = Some((entry.path(), entry.metadata()?.len()));
+                items.push(LocalItem { path, file });
+            }
+        }
+    }
+    Ok(items)
+}
+
+/// Send `items` on `upload`. Returns the number of files and bytes sent.
+async fn send_folder(upload: FolderUpload, items: Vec<LocalItem>) -> anyhow::Result<(u32, u64)> {
+    let Some(mut sender) = upload.open().await? else {
+        return Ok((0, 0));
+    };
+    let (mut files, mut bytes) = (0, 0);
+    for item in items {
+        let header = FolderItemHeader {
+            is_folder: item.file.is_none(),
+            path: HlPath::new(item.path),
+        };
+        let offset = sender.send_item(&header).await?;
+        if let (Some(offset), Some((local, size))) = (offset, item.file) {
+            let mut file = File::open(&local).await?;
+            file.seek(SeekFrom::Start(offset)).await?;
+            let mut data = BufReader::new(file);
+            bytes += sender
+                .send_file(&mut data, size.saturating_sub(offset))
+                .await?;
+            files += 1;
+        }
+    }
+    sender.finish().await?;
+    Ok((files, bytes))
+}
+
 /// The server file name `name` as one local path component.
 fn local_name(name: &str) -> String {
     let name = name.replace(['/', '\\', ':'], "_");
@@ -646,6 +786,31 @@ mod tests {
         assert_eq!(
             &*session.lines.last().unwrap().text,
             "a download waits, 2 ahead in the queue"
+        );
+    }
+
+    #[test]
+    fn walk_local_lists_each_folder_before_its_items() {
+        let root = std::env::temp_dir().join(format!("hlc-walk-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Sub")).unwrap();
+        std::fs::write(root.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(root.join("Sub").join("b.txt"), b"be").unwrap();
+
+        let items = walk_local(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let items: Vec<_> = items
+            .unwrap()
+            .into_iter()
+            .map(|item| (item.path.join("/"), item.file.map(|(_, size)| size)))
+            .collect();
+        assert_eq!(
+            items,
+            [
+                ("Sub".to_string(), None),
+                ("a.txt".to_string(), Some(5)),
+                ("Sub/b.txt".to_string(), Some(2)),
+            ]
         );
     }
 

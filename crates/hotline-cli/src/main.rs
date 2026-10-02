@@ -177,9 +177,9 @@ async fn perform(
         }
         Action::DownloadFile(name) => session.download_file(client, &name, done).await,
         Action::DownloadFolder(name) => session.download_folder(client, &name, done).await,
-        Action::UploadFile(path) => {
+        Action::Upload(path) => {
             session
-                .upload_file(client, std::path::Path::new(&path), done)
+                .upload(client, std::path::Path::new(&path), done)
                 .await;
         }
     }
