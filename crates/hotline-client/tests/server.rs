@@ -190,6 +190,31 @@ async fn download_file_receives_the_data_fork() {
 }
 
 #[tokio::test]
+async fn upload_file_stores_the_data_in_the_upload_folder() {
+    let files = Arc::new(InMemoryFileProvider::default());
+    files.seed(&HlPath::new(["Uploads"]), "keep.txt", *b"");
+    let providers = Providers {
+        files: files.clone(),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+    let uploads = HlPath::new(["Uploads"]);
+
+    let upload = alice.upload_file(&uploads, "new.txt", 5).await.unwrap();
+    let sent = timeout(WAIT, upload.send(&mut &b"hello"[..]))
+        .await
+        .expect("upload finishes")
+        .unwrap();
+    assert_eq!(sent, 5);
+
+    let download = alice.download_file(&uploads, "new.txt").await.unwrap();
+    let mut data = Vec::new();
+    download.receive(&mut data).await.unwrap();
+    assert_eq!(data, b"hello");
+}
+
+#[tokio::test]
 async fn download_file_of_a_missing_file_is_a_server_error() {
     let addr = start_server().await;
     let (alice, _alice_events) = join(addr, "alice").await;

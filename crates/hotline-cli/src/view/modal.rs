@@ -15,6 +15,8 @@ pub enum Modal {
     },
     /// A user's info text.
     Info { name: Box<str>, text: Box<str> },
+    /// The local path of a file to upload to the current folder.
+    Upload { input: String },
 }
 
 /// One entry in [`Modal::UserMenu`].

@@ -4,7 +4,7 @@
 mod event_outcome;
 mod mode;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hotline_client::{ClientInfoText, HotlineClient};
 use hotline_proto::opcode::{Opcode, TransactionType};
@@ -12,8 +12,8 @@ use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
-use tokio::fs::OpenOptions;
-use tokio::io::BufWriter;
+use tokio::fs::{File, OpenOptions};
+use tokio::io::{BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::line::{Line, LineKind};
@@ -404,6 +404,57 @@ impl ClientSession {
                 },
                 Err(e) => Line {
                     text: format!("failed to download {name}: {e}").into(),
+                    kind: LineKind::Error,
+                },
+            };
+            let _ = done.send(line);
+        });
+    }
+
+    /// Start to upload the local file at `local` to the current folder under
+    /// its own name, [`myTran_UploadFile`] (203). The transfer runs on its own
+    /// task and sends its result line to `done`.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
+    pub async fn upload_file(
+        &mut self,
+        client: &HotlineClient,
+        local: &Path,
+        done: &UnboundedSender<Line>,
+    ) {
+        let Some(name) = local.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return self.push(
+                format!("{} names no file", local.display()),
+                LineKind::Error,
+            );
+        };
+        let opened = async {
+            let file = File::open(local).await?;
+            let size = file.metadata().await?.len();
+            Ok::<_, std::io::Error>((file, size))
+        };
+        let (file, size) = match opened.await {
+            Ok(opened) => opened,
+            Err(e) => {
+                let text = format!("cannot read {}: {e}", local.display());
+                return self.push(text, LineKind::Error);
+            }
+        };
+        let upload = match client.upload_file(&self.file_path, &name, size).await {
+            Ok(upload) => upload,
+            Err(e) => return self.push(format!("failed to upload {name}: {e}"), LineKind::Error),
+        };
+        self.push(format!("uploading {name}"), LineKind::System);
+
+        let done = done.clone();
+        tokio::spawn(async move {
+            let line = match upload.send(&mut BufReader::new(file)).await {
+                Ok(bytes) => Line {
+                    text: format!("uploaded {name} ({bytes} bytes)").into(),
+                    kind: LineKind::System,
+                },
+                Err(e) => Line {
+                    text: format!("failed to upload {name}: {e}").into(),
                     kind: LineKind::Error,
                 },
             };

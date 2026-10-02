@@ -133,6 +133,7 @@ impl View {
                 &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
             }
             (Some(Modal::Info { .. }), ..) => &[("Esc", "close")],
+            (Some(Modal::Upload { .. }), ..) => &[("Enter", "upload"), ("Esc", "cancel")],
             (None, Focus::Users, Tab::Chat) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
@@ -167,6 +168,7 @@ impl View {
                 ("↑↓", "select"),
                 ("Enter", "open or download"),
                 ("⌫", "up"),
+                ("u", "upload"),
                 ("Tab", "users"),
                 ("Esc", "chat"),
             ],
@@ -224,10 +226,13 @@ impl View {
                     text: std::mem::take(input),
                 };
             }
-            (Modal::InstantMsg { input, .. }, KeyCode::Backspace) => {
+            (Modal::Upload { input }, KeyCode::Enter) if !input.is_empty() => {
+                return Action::UploadFile(std::mem::take(input));
+            }
+            (Modal::InstantMsg { input, .. } | Modal::Upload { input }, KeyCode::Backspace) => {
                 input.pop();
             }
-            (Modal::InstantMsg { input, .. }, KeyCode::Char(c))
+            (Modal::InstantMsg { input, .. } | Modal::Upload { input }, KeyCode::Char(c))
                 if !key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 input.push(c);
@@ -316,6 +321,11 @@ impl View {
             }
             KeyCode::Enter => return open_file(self.selected_file, files),
             KeyCode::Backspace | KeyCode::Left => return Action::ParentFolder,
+            KeyCode::Char('u') => {
+                self.modal = Some(Modal::Upload {
+                    input: String::new(),
+                });
+            }
             _ => {}
         }
         Action::None
@@ -344,7 +354,7 @@ impl View {
                     }
                 }
                 Modal::Info { .. } => self.modal = None,
-                Modal::InstantMsg { .. } => {}
+                Modal::InstantMsg { .. } | Modal::Upload { .. } => {}
             }
             return Action::None;
         }
@@ -790,5 +800,28 @@ mod tests {
             now + Duration::from_millis(200),
         );
         assert_eq!(second, Action::OpenFolder("Games".into()));
+    }
+
+    #[test]
+    fn u_on_the_file_list_asks_for_a_file_to_upload() {
+        let mut view = View::default();
+        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        let _ = view.handle_key(ctrl_f, &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Char('u')), &users(), &files());
+        assert_eq!(
+            view.modal,
+            Some(Modal::Upload {
+                input: String::new()
+            })
+        );
+
+        type_text(&mut view, "/tmp/a.txx");
+        let _ = view.handle_key(key(KeyCode::Backspace), &users(), &files());
+        type_text(&mut view, "t");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::UploadFile("/tmp/a.txt".into())
+        );
+        assert_eq!(view.modal, None);
     }
 }

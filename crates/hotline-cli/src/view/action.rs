@@ -20,4 +20,6 @@ pub enum Action {
     ParentFolder,
     /// Download the named file in the current folder.
     DownloadFile(Box<str>),
+    /// Upload the local file at this path to the current folder.
+    UploadFile(String),
 }

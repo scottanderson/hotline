@@ -18,6 +18,7 @@ use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Tr
 use crate::client_info_text::ClientInfoText;
 use crate::error::{ClientError, Result};
 use crate::file_download::FileDownload;
+use crate::file_upload::FileUpload;
 use crate::login_result::LoginResult;
 
 type Conn = Framed<TcpStream, TransactionCodec>;
@@ -286,19 +287,53 @@ impl HotlineClient {
         fields.extend(self.file_path_field(path)?);
         let reply = self.request(Opcode::DownloadFile, fields).await?;
         let u32_field = |id| reply.field(id).and_then(Field::as_u32);
+        Ok(FileDownload {
+            file_size: u32_field(FieldId::FileSize).unwrap_or_default(),
+            waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
+            reference: reference(&reply)?,
+            transfer_addr: self.transfer_addr()?,
+        })
+    }
+
+    /// Ask to upload `file_size` bytes as the file `name` in the folder at
+    /// `path`, [`myTran_UploadFile`] (203). [`FileUpload::send`] then sends it.
+    ///
+    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
+    pub async fn upload_file(
+        &self,
+        path: &HlPath,
+        name: &str,
+        file_size: u64,
+    ) -> Result<FileUpload> {
+        let (file_size, transfer_size) = u32::try_from(file_size)
+            .ok()
+            .and_then(|size| Some((size, FileUpload::transfer_size(size)?)))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "the file is too large")
+            })?;
+        let mut fields = vec![
+            Field::string(FieldId::FileName, name),
+            Field::u32(FieldId::TransferSize, transfer_size),
+        ];
+        fields.extend(self.file_path_field(path)?);
+        let reply = self.request(Opcode::UploadFile, fields).await?;
+        Ok(FileUpload {
+            reference: reference(&reply)?,
+            file_size,
+            transfer_size,
+            transfer_addr: self.transfer_addr()?,
+        })
+    }
+
+    /// The server's `HTXF` address, one port above the transaction port.
+    fn transfer_addr(&self) -> Result<SocketAddr> {
         let port = self.peer.port().checked_add(1).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::AddrNotAvailable,
                 "no transfer port above 65535",
             )
         })?;
-        Ok(FileDownload {
-            file_size: u32_field(FieldId::FileSize).unwrap_or_default(),
-            waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
-            reference: u32_field(FieldId::RefNum)
-                .ok_or(ClientError::MissingField(FieldId::RefNum))?,
-            transfer_addr: SocketAddr::new(self.peer.ip(), port),
-        })
+        Ok(SocketAddr::new(self.peer.ip(), port))
     }
 
     /// A [`myField_FilePath`] (202) field for `path`, `None` at the root.
@@ -314,6 +349,16 @@ impl HotlineClient {
             path.encode(encoding)?,
         )))
     }
+}
+
+/// A transfer reply's [`myField_RefNum`] (107).
+///
+/// [`myField_RefNum`]: hotline_proto::FieldId::RefNum
+fn reference(reply: &Transaction) -> Result<u32> {
+    reply
+        .field(FieldId::RefNum)
+        .and_then(Field::as_u32)
+        .ok_or(ClientError::MissingField(FieldId::RefNum))
 }
 
 /// Forwards every transaction the server sends until the connection ends.

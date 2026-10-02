@@ -364,6 +364,15 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             draw_text_box(frame, area, block, input, true);
         }
+        Modal::Upload { input } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("upload a local file");
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, area, block, input, true);
+        }
         Modal::UserMenu { at, selected, .. } => {
             let area = menu_rect(*at, screen);
             let items: Vec<ListItem> = MenuItem::ALL
