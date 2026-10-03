@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Also `true` if the terminal now reports Shift+Enter apart from Enter.
+/// A panic on any thread restores the terminal, prints, and ends `hlc`.
 fn setup_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout>>, bool)> {
     enable_raw_mode()?;
     std::io::stdout()
@@ -70,6 +71,12 @@ fn setup_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout
             KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
         ))?;
     }
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = restore_terminal(enhanced);
+        default_hook(info);
+        std::process::exit(101);
+    }));
     let terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     Ok((terminal, enhanced))
 }
