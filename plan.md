@@ -144,10 +144,19 @@ one-shared-room model.
 3. **`hls` lists a folder alias as a file.** `DiskFileProvider::list`
    reads `DirEntry::metadata`, which does not follow a symlink. So a
    folder made by `myTran_MakeFileAlias` (209) shows as a small file,
-   and a client does not open it as a folder. openline resolves an alias for the
-   list. The fix makes `list` follow a symlink. Then the folder walk
-   must skip a folder that loops back to an ancestor, as openline does,
-   or a folder download never ends.
+   and a client does not open it as a folder. openline resolves an
+   alias for the list. The fix makes `list` follow a symlink. Then the
+   folder walk must skip a folder that loops back to an ancestor, as
+   openline does, or a folder download never ends.
+
+4. **Decide whether move, alias, and delete check drop boxes.**
+   `myTran_MoveFile` (208), `myTran_MakeFileAlias` (209), and
+   `myTran_DeleteFile` (204) do not check `VIEW_DROP_BOXES`, like
+   openline's `ProcessTran_MoveFile`, `ProcessTran_MakeFileAlias`, and
+   `ProcessTran_DeleteFile`. A user who guesses a name in a drop box
+   can move it out, or alias it, and then download it. A check through
+   `dropbox_access` on the source path would close this, as a
+   deliberate divergence.
 
 ## Resolved
 
