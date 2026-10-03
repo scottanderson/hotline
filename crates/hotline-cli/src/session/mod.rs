@@ -138,6 +138,11 @@ impl ClientSession {
         crate::line::push_line(&mut self.lines, line);
     }
 
+    /// `true` if the server's version is `version` or later.
+    fn server_at_least(&self, version: u16) -> bool {
+        self.server_version.is_some_and(|v| v >= version)
+    }
+
     /// Show the error text of a reply that no request waits for.
     fn show_unmatched_error(&mut self, tx: &Transaction) {
         if tx.is_error() {

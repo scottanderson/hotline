@@ -36,7 +36,7 @@ impl ClientSession {
     /// A flag that is `true` while a download waits in the server's queue
     /// behind `waiting_count` others.
     pub(super) fn queued_flag(&self, waiting_count: u32) -> Arc<AtomicBool> {
-        let queued = waiting_count > 0 && self.server_version.is_some_and(|v| v >= QUEUE_VERSION);
+        let queued = waiting_count > 0 && self.server_at_least(QUEUE_VERSION);
         Arc::new(AtomicBool::new(queued))
     }
 
@@ -100,10 +100,7 @@ impl ClientSession {
         let download = self.downloads.remove(pos);
         download.task.abort();
         let in_queue = download.queued.load(Ordering::Relaxed);
-        let kill = in_queue
-            && self
-                .server_version
-                .is_some_and(|v| v >= KILL_DOWNLOAD_VERSION);
+        let kill = in_queue && self.server_at_least(KILL_DOWNLOAD_VERSION);
         if let Some(reference) = download.reference.filter(|_| kill) {
             if let Err(e) = client.kill_download(reference).await {
                 let text = format!("failed to cancel {}: {e}", download.name);

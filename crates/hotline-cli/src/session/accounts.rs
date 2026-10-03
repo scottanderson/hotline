@@ -29,8 +29,7 @@ impl ClientSession {
 
     /// `true` if the server lists and saves accounts in bulk.
     fn bulk_accounts(&self) -> bool {
-        self.server_version
-            .is_some_and(|v| v >= BULK_ACCOUNTS_VERSION)
+        self.server_at_least(BULK_ACCOUNTS_VERSION)
     }
 
     /// List every account, or keep the accounts opened so far on an older server.

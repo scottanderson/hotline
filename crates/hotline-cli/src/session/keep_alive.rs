@@ -22,7 +22,7 @@ impl ClientSession {
     /// [`myTran_KeepConnectionAlive`]: hotline_proto::Opcode::KeepConnectionAlive
     /// [`myTran_GetUserNameList`]: hotline_proto::Opcode::GetUserNameList
     pub async fn keep_alive(&mut self, client: &HotlineClient) {
-        if self.server_version.is_some_and(|v| v >= KEEP_ALIVE_VERSION) {
+        if self.server_at_least(KEEP_ALIVE_VERSION) {
             if let Err(e) = client.keep_connection_alive().await {
                 self.push(
                     format!("failed to keep the connection: {e}"),
