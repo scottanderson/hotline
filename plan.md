@@ -165,6 +165,12 @@ one-shared-room model.
    a `:` on Windows, but it does not map names. On Windows, a reserved
    name such as `CON` or `NUL` still passes.
 
+6. **No transaction negotiates a connection's text encoding.** The
+   user's decision is Mac OS Roman on the wire unless the client
+   negotiates another encoding. `EncodingHandle` can change a
+   connection's encoding, but no request does it yet. openline has no
+   such request, so the design needs a decision first.
+
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
