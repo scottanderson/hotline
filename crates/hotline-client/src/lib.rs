@@ -7,6 +7,21 @@
 //! join/leave, news posts, ...) are delivered through the
 //! `mpsc::UnboundedReceiver<Transaction>` [`HotlineClient::connect`] returns
 //! alongside the client.
+//!
+//! ```no_run
+//! use hotline_client::HotlineClient;
+//!
+//! # async fn run() -> hotline_client::Result<()> {
+//! let (client, mut events) = HotlineClient::connect("127.0.0.1:5500").await?;
+//! client.login("guest", "").await?;
+//! client.agree("RustHL", 0).await?;
+//! client.send_chat("Hello").await?;
+//! while let Some(push) = events.recv().await {
+//!     println!("{push:?}");
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 mod accounts;
 mod ban;

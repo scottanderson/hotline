@@ -1,9 +1,22 @@
 //! Async Hotline server framework.
 //!
-//! [`Server`] owns a `TcpListener` and shared state (connected users);
-//! each accepted connection becomes a [`Session`] that performs the
-//! `TRTP` handshake and then loops on incoming transactions, dispatching
-//! by transaction type to the handlers registered on [`Server`].
+//! [`Server`] owns a `TcpListener` and the [`SharedState`] of all
+//! connections. Each accepted connection becomes a [`Session`]. The
+//! session does the `TRTP` handshake and then handles each transaction
+//! by its opcode. [`Providers`] holds the storage for accounts, files,
+//! news, and bans.
+//!
+//! ```no_run
+//! use hotline_server::{Providers, Server, ServerConfig};
+//!
+//! # async fn run() -> hotline_server::Result<()> {
+//! let config = ServerConfig {
+//!     bind_addr: "0.0.0.0:5500".into(),
+//!     ..ServerConfig::default()
+//! };
+//! Server::new(config, Providers::default()).run().await
+//! # }
+//! ```
 
 mod account;
 mod activity;
