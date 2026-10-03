@@ -18,8 +18,8 @@ pub struct Args {
     #[arg(long, default_value = "")]
     pub login: String,
 
-    /// Account password.
-    #[arg(long, default_value = "")]
+    /// Account password. HLC_PASSWORD keeps it out of the process list.
+    #[arg(long, env = "HLC_PASSWORD", hide_env_values = true, default_value = "")]
     pub password: String,
 
     /// Display nickname.
