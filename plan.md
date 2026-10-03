@@ -146,12 +146,12 @@ one-shared-room model.
    info text, reads and posts classic news, lists users, files, and
    tracker servers, downloads and uploads files and folders, and shows
    a banner's link, resumes transfers, uses private chat rooms, reads
-   and writes threaded news, and administers accounts. It does not send
-   `myTran_DisconnectUser` (110), the file operations
-   `myTran_DeleteFile` (204) to `myTran_MakeFileAlias` (209),
-   `myTran_DownloadBanner` (212), `myTran_KillDownload` (214),
-   `myTran_SetClientUserInfo` (304) after login, or
-   `myTran_UserBroadcast` (355). Each area can be its own task.
+   and writes threaded news, administers accounts, and sends and shows
+   broadcasts. It does not send `myTran_DisconnectUser` (110), the file
+   operations `myTran_DeleteFile` (204) to `myTran_MakeFileAlias`
+   (209), `myTran_DownloadBanner` (212), `myTran_KillDownload` (214),
+   or `myTran_SetClientUserInfo` (304) after login. Each area can be
+   its own task.
 
 ## Resolved
 
@@ -798,6 +798,12 @@ one-shared-room model.
      cannot be renamed. The account form edits the name, login, and
      password, and Space turns each privilege on or off. A password
      that is not typed stays unchanged.
+
+105. `hlc` sends and shows broadcasts. Ctrl-G opens a message to every
+     user with `myTran_UserBroadcast` (355). The key works only when the
+     user has the broadcast privilege. A broadcast push shows as an
+     "Administrator Message" line, like openline's client
+     (`ProcessTran_UserBroadcast`).
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

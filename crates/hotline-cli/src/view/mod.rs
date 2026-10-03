@@ -99,6 +99,8 @@ pub struct View {
     pub selected_account: usize,
     /// The number of accounts listed.
     pub account_count: usize,
+    /// `true` if the user may send a broadcast.
+    pub can_broadcast: bool,
     selected_user: Option<u16>,
     last_click: Option<(Clicked, Instant)>,
 }
@@ -126,6 +128,7 @@ impl Default for View {
             accounts_offset: 0,
             selected_account: 0,
             account_count: 0,
+            can_broadcast: false,
             selected_user: None,
             last_click: None,
         }
@@ -209,7 +212,7 @@ impl View {
     /// The keys that work now, as `(key, what it does)`.
     pub const fn hints(&self) -> &'static [(&'static str, &'static str)] {
         match (&self.modal, self.focus, self.tab) {
-            (Some(Modal::InstantMsg { .. }), ..) => {
+            (Some(Modal::InstantMsg { .. } | Modal::Broadcast { .. }), ..) => {
                 &[("Enter", "send"), ("⇧Enter", "new line"), ("Esc", "cancel")]
             }
             (Some(Modal::UserMenu { .. }), ..) => {
@@ -303,6 +306,16 @@ impl View {
                 ("Tab", "files"),
                 ("^F", "chat"),
             ],
+            (None, Focus::Input, Tab::Chat) if self.can_broadcast => &[
+                ("Enter", "send"),
+                ("⇧Enter", "new line"),
+                ("Tab", "users"),
+                ("^N", "news"),
+                ("^F", "files"),
+                ("^B", "threaded news"),
+                ("^G", "broadcast"),
+                ("Esc", "quit"),
+            ],
             (None, Focus::Input, Tab::Chat) => &[
                 ("Enter", "send"),
                 ("⇧Enter", "new line"),
@@ -378,6 +391,12 @@ impl View {
             };
             if let Some(tab) = tab {
                 return self.set_tab(tab);
+            }
+            if key.code == KeyCode::Char('g') && self.can_broadcast {
+                self.modal = Some(Modal::Broadcast {
+                    input: String::new(),
+                });
+                return Action::None;
             }
             if let Tab::Room(chat_id) = self.tab {
                 match key.code {
@@ -480,7 +499,11 @@ impl View {
             (Modal::Invite { chat_id, .. }, KeyCode::Esc) => {
                 return Action::RejectChatInvite(*chat_id);
             }
-            (Modal::InstantMsg { input, .. }, _) if is_new_line(key) => input.push('\n'),
+            (Modal::InstantMsg { input, .. } | Modal::Broadcast { input }, _)
+                if is_new_line(key) =>
+            {
+                input.push('\n');
+            }
             (_, KeyCode::Esc) | (Modal::Info { .. } | Modal::Article { .. }, KeyCode::Enter) => {
                 return Action::None;
             }
@@ -489,6 +512,9 @@ impl View {
                     user_id: *user_id,
                     text: std::mem::take(input),
                 };
+            }
+            (Modal::Broadcast { input }, KeyCode::Enter) if !input.is_empty() => {
+                return Action::UserBroadcast(std::mem::take(input));
             }
             (Modal::Upload { input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::Upload {
@@ -537,6 +563,7 @@ impl View {
             }
             (
                 Modal::InstantMsg { input, .. }
+                | Modal::Broadcast { input }
                 | Modal::Upload { input }
                 | Modal::SaveAs { input, .. }
                 | Modal::Subject { input, .. }
@@ -548,6 +575,7 @@ impl View {
             }
             (
                 Modal::InstantMsg { input, .. }
+                | Modal::Broadcast { input }
                 | Modal::Upload { input }
                 | Modal::SaveAs { input, .. }
                 | Modal::Subject { input, .. }
@@ -779,6 +807,7 @@ impl View {
                 }
                 Modal::Info { .. } => self.modal = None,
                 Modal::InstantMsg { .. }
+                | Modal::Broadcast { .. }
                 | Modal::Upload { .. }
                 | Modal::SaveAs { .. }
                 | Modal::Confirm(_)
@@ -1212,6 +1241,22 @@ mod tests {
             view.handle_mouse(left, &areas(), &users(), &files(), Instant::now()),
             Action::GetClientInfoText(1)
         );
+    }
+
+    #[test]
+    fn ctrl_g_broadcasts_only_with_the_privilege() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('g'), &users(), &files());
+        assert_eq!(view.modal, None);
+
+        view.can_broadcast = true;
+        let _ = view.handle_key(ctrl('g'), &users(), &files());
+        type_text(&mut view, "bye");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::UserBroadcast("bye".into())
+        );
+        assert_eq!(view.modal, None);
     }
 
     #[test]

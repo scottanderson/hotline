@@ -36,6 +36,8 @@ pub enum Action {
         text: String,
     },
     GetClientInfoText(u16),
+    /// Send a message to every connected user.
+    UserBroadcast(String),
     GetMsgs,
     OldPostNews(String),
     /// List the current folder again.

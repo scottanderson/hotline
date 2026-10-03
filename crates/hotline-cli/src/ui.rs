@@ -464,6 +464,15 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             draw_text_box(frame, area, block, input, true);
         }
+        Modal::Broadcast { input } => {
+            let area = centered(screen, 60, input_rows(input) + 2);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("broadcast to every user");
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, area, block, input, true);
+        }
         Modal::Upload { input } => {
             let area = centered(screen, 60, 3);
             let block = Block::default()

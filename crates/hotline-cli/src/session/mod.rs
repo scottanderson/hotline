@@ -157,6 +157,7 @@ impl ClientSession {
             /* 301 */ Opcode::NotifyChangeUser => self.apply_notify_change_user(tx),
             /* 302 */ Opcode::NotifyDeleteUser => self.apply_notify_delete_user(tx),
             /* 354 */ Opcode::UserAccess => self.apply_user_access(tx),
+            /* 355 */ Opcode::UserBroadcast => self.apply_user_broadcast(tx),
             _ => {
                 for line in format!("Unrecognized opcode for transaction: {tx:#?}").lines() {
                     self.push(line, LineKind::Error);
@@ -328,6 +329,38 @@ impl ClientSession {
                     LineKind::Error,
                 ),
             }
+        }
+    }
+
+    /// [`myTran_UserBroadcast`] (355): a message from an administrator to every user.
+    ///
+    /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
+    fn apply_user_broadcast(&mut self, tx: &Transaction) {
+        let encoding = self.encoding.get();
+        let Some(text) = tx.string(FieldId::Data, encoding) else {
+            return;
+        };
+        let from = match tx.string(FieldId::UserName, encoding) {
+            Some(name) => format!(" from {name}"),
+            None => String::new(),
+        };
+        self.push_lines(
+            &format!("[Administrator Message{from}] {}", display_text(&text)),
+            LineKind::Chat,
+        );
+    }
+
+    /// `true` if the user may send a broadcast.
+    pub const fn can_broadcast(&self) -> bool {
+        self.access.contains(Access::BROADCAST)
+    }
+
+    /// [`myTran_UserBroadcast`] (355), showing an error line if it fails.
+    ///
+    /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
+    pub async fn user_broadcast(&mut self, client: &HotlineClient, text: &str) {
+        if let Err(e) = client.user_broadcast(&wire_text(text)).await {
+            self.push(format!("failed to broadcast: {e}"), LineKind::Error);
         }
     }
 
@@ -958,6 +991,24 @@ mod tests {
         );
         let _ = session.apply_server_event(&banner);
         assert_eq!(session.lines.len(), before);
+    }
+
+    #[test]
+    fn user_broadcast_names_the_sender() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let broadcast = Transaction::push(
+            Opcode::UserBroadcast,
+            vec![
+                Field::u16(FieldId::UserID, 1),
+                Field::string(FieldId::Data, "going down"),
+                Field::string(FieldId::UserName, "root"),
+            ],
+        );
+        let _ = session.apply_server_event(&broadcast);
+        assert_eq!(
+            &*session.lines.last().unwrap().text,
+            "[Administrator Message from root] going down"
+        );
     }
 
     #[test]

@@ -108,6 +108,22 @@ async fn send_instant_msg_reaches_its_target() {
 }
 
 #[tokio::test]
+async fn user_broadcast_reaches_every_user() {
+    let addr = start_server().await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+    let (_bob, mut bob_events) = join(addr, "bob").await;
+
+    admin.user_broadcast("server going down").await.unwrap();
+
+    let msg = next_push(&mut bob_events, Opcode::UserBroadcast).await;
+    let encoding = hotline_proto::text_encoding::DEFAULT;
+    assert_eq!(
+        msg.string(FieldId::Data, encoding).as_deref(),
+        Some("server going down")
+    );
+}
+
+#[tokio::test]
 async fn get_client_info_text_names_the_user() {
     let addr = start_server().await;
     let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;

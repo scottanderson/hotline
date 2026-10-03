@@ -332,6 +332,18 @@ impl HotlineClient {
         Ok(())
     }
 
+    /// Send `message` to every connected user, [`myTran_UserBroadcast`] (355).
+    ///
+    /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
+    pub async fn user_broadcast(&self, message: &str) -> Result<()> {
+        self.request(
+            Opcode::UserBroadcast,
+            vec![Field::string(FieldId::Data, message)],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Fetch the connected-user list, [`myTran_GetUserNameList`] (300).
     ///
     /// [`myTran_GetUserNameList`]: hotline_proto::Opcode::GetUserNameList

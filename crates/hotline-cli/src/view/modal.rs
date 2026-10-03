@@ -16,6 +16,8 @@ pub enum Modal {
         at: (u16, u16),
         selected: usize,
     },
+    /// A message to every connected user.
+    Broadcast { input: String },
     /// A user's info text.
     Info { name: Box<str>, text: Box<str> },
     /// The local path of a file or folder to upload to the current folder.

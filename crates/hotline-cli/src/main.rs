@@ -139,6 +139,7 @@ async fn run(
         view.set_tabs(ui::tab_labels(session));
         view.news_count = session.threaded.as_ref().map_or(0, Vec::len);
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
+        view.can_broadcast = session.can_broadcast();
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(|invite| Modal::Invite {
                 chat_id: invite.chat_id,
@@ -217,6 +218,7 @@ async fn perform(
                 });
             }
         }
+        Action::UserBroadcast(text) => session.user_broadcast(client, &text).await,
         Action::GetMsgs => session.get_msgs(client).await,
         Action::OldPostNews(text) => session.old_post_news(client, &text).await,
         Action::ListFiles => {
