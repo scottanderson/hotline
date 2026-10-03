@@ -363,9 +363,6 @@ impl Session {
             self.access.require(Access::MODIFY_USER)?;
             let existing = state.account(&old_login).await;
             let renamed = !old_login.eq_ignore_ascii_case(&login);
-            if renamed && state.account(&login).await.is_some() {
-                return Ok(false);
-            }
             let access_extra = existing
                 .map(|a| a.access_extra)
                 .unwrap_or_else(AccessExtra::default);
@@ -375,7 +372,10 @@ impl Session {
                 access,
                 access_extra,
             };
-            return match state.put_account(login.clone(), account).await {
+            return match state
+                .replace_account(&old_login, login.clone(), account)
+                .await
+            {
                 Ok(()) => {
                     let name = (!name.is_empty()).then_some(name);
                     let renamed_to = renamed.then(|| login.clone());
@@ -383,8 +383,6 @@ impl Session {
                         .push_access_update(old_login.clone(), renamed_to, access, name)
                         .await;
                     if renamed {
-                        // The old login goes only after the new one is saved.
-                        let _ = state.delete_account(&old_login).await;
                         let action = AccountAction::Rename {
                             from: old_login.into(),
                         };
@@ -428,7 +426,7 @@ impl Session {
             access,
             access_extra: AccessExtra::default(),
         };
-        match state.put_account(login.clone(), account).await {
+        match state.create_account(login.clone(), account).await {
             Ok(()) => {
                 self.record_account_change(AccountAction::Create, login, state)
                     .await;

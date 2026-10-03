@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use hotline_proto::consts::{Access, RequireFlags};
@@ -69,6 +69,8 @@ pub struct SharedState {
     next_chat_id: Arc<AtomicU32>,
     /// Account storage; see [`crate::AccountProvider`].
     accounts: Arc<dyn AccountProvider>,
+    /// Held across each check and write of `accounts`.
+    account_writes: Arc<Mutex<()>>,
     /// Ban storage; see [`crate::BanProvider`].
     bans: Arc<dyn BanProvider>,
     /// Flood/spam policy; see [`crate::FloodPolicy`].
@@ -109,6 +111,7 @@ impl SharedState {
             chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
             next_chat_id: Arc::new(AtomicU32::new(1)),
             accounts: providers.accounts,
+            account_writes: Arc::default(),
             bans: providers.bans,
             flood: providers.flood,
             banner: providers.banner,
@@ -1406,7 +1409,47 @@ impl SharedState {
         login: String,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
+        let _writes = self.account_writes.lock().await;
         self.accounts.put(login, account).await
+    }
+
+    /// Create the account `login`. `Err` if the login is taken.
+    pub async fn create_account(
+        &self,
+        login: String,
+        account: Account,
+    ) -> Result<(), Cow<'static, str>> {
+        let _writes = self.account_writes.lock().await;
+        if self.accounts.get(&login).await.is_some() {
+            Err("that login is taken")?;
+        }
+        self.accounts.put(login, account).await
+    }
+
+    /// Save `account` over `old_login`, under `login`. `Err` if `old_login`
+    /// is gone, or if a rename's `login` is taken. A rename deletes
+    /// `old_login` after it saves `login`.
+    pub async fn replace_account(
+        &self,
+        old_login: &str,
+        login: String,
+        account: Account,
+    ) -> Result<(), Cow<'static, str>> {
+        let _writes = self.account_writes.lock().await;
+        if self.accounts.get(old_login).await.is_none() {
+            Err("no such account")?;
+        }
+        let renamed = !old_login.eq_ignore_ascii_case(&login);
+        if renamed && self.accounts.get(&login).await.is_some() {
+            Err("that login is taken")?;
+        }
+        self.accounts.put(login, account).await?;
+        if renamed {
+            if let Err(error) = self.accounts.delete(old_login).await {
+                tracing::warn!(%error, old_login, "could not delete a renamed account's old login");
+            }
+        }
+        Ok(())
     }
 
     /// The active ban on `ip`, if any; see [`crate::BanProvider::is_banned`].
@@ -1455,6 +1498,7 @@ impl SharedState {
 
     /// Delete an account. `Err("no such account")` if it didn't exist.
     pub async fn delete_account(&self, login: &str) -> Result<(), Cow<'static, str>> {
+        let _writes = self.account_writes.lock().await;
         if !self.accounts.delete(login).await? {
             Err("no such account")?;
         }
@@ -1728,6 +1772,50 @@ mod tests {
             files: Arc::new(files),
             ..Providers::default()
         })
+    }
+
+    #[tokio::test]
+    async fn create_account_refuses_a_taken_login() {
+        let state = SharedState::default();
+        state
+            .create_account("bob".to_string(), Account::guest())
+            .await
+            .unwrap();
+        assert!(state
+            .create_account("bob".to_string(), Account::guest())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn replace_account_refuses_a_deleted_login_and_a_taken_rename() {
+        let state = SharedState::default();
+        assert!(state
+            .replace_account("bob", "bob".to_string(), Account::guest())
+            .await
+            .is_err());
+        assert!(state.account("bob").await.is_none());
+
+        state
+            .put_account("bob".to_string(), Account::guest())
+            .await
+            .unwrap();
+        state
+            .put_account("amy".to_string(), Account::guest())
+            .await
+            .unwrap();
+        assert!(state
+            .replace_account("bob", "amy".to_string(), Account::guest())
+            .await
+            .is_err());
+        assert!(state.account("bob").await.is_some());
+
+        state
+            .replace_account("bob", "bobby".to_string(), Account::guest())
+            .await
+            .unwrap();
+        assert!(state.account("bob").await.is_none());
+        assert!(state.account("bobby").await.is_some());
     }
 
     #[tokio::test]
