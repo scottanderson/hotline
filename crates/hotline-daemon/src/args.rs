@@ -10,7 +10,7 @@ use hotline_server::{
 #[derive(Parser, Debug)]
 #[command(name = "hls", version, about)]
 pub struct Args {
-    /// Port to listen on.
+    /// Port to listen on. File transfers use the next port.
     #[arg(long, default_value_t = 5500)]
     pub port: u16,
 
@@ -30,14 +30,12 @@ pub struct Args {
     #[arg(long, default_value = "accounts")]
     pub accounts_dir: String,
 
-    /// Directory served by file listing/download/upload (created if
-    /// missing). The transfer data connection listens on `port + 1`.
+    /// Directory that clients see (created if missing).
     #[arg(long, default_value = "files")]
     pub files_dir: String,
 
     /// File to persist file/folder comments to, as JSON (created if
-    /// missing). Kept outside `files_dir` so it never shows up in a
-    /// client's own file listing.
+    /// missing). Put it outside `--files-dir`, or clients see it.
     #[arg(long, default_value = "comments.json")]
     pub comments_file: String,
 
@@ -107,7 +105,7 @@ pub struct Args {
     pub tracker_id_file: String,
 
     /// Description sent to trackers alongside `--name`.
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", hide_default_value = true)]
     pub tracker_description: String,
 
     /// Banner shown to clients on login (unset disables the banner). An
