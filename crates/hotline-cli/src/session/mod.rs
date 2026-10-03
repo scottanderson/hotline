@@ -89,10 +89,9 @@ impl ClientSession {
             automatic_response: Box::default(),
             mode: Mode::Joining,
             users: Vec::new(),
-            lines: vec![Line {
-                text: "connected - type a message and press Enter, Esc to quit".into(),
-                kind: LineKind::System,
-            }],
+            lines: vec![Line::system(
+                "connected - type a message and press Enter, Esc to quit",
+            )],
             news: None,
             files: None,
             file_path: HlPath::default(),
@@ -131,11 +130,7 @@ impl ClientSession {
     }
 
     fn push(&mut self, text: impl Into<Box<str>>, kind: LineKind) {
-        let line = Line {
-            text: text.into(),
-            kind,
-        };
-        crate::line::push_line(&mut self.lines, line);
+        crate::line::push_line(&mut self.lines, Line::new(text, kind));
     }
 
     /// `true` if the server's version is `version` or later.
@@ -510,15 +505,11 @@ impl ClientSession {
                 Ok::<_, anyhow::Error>(bytes)
             };
             let line = match received.await {
-                Ok(bytes) => Line {
-                    text: format!("downloaded {name} ({bytes} bytes) to {}", local.display())
-                        .into(),
-                    kind: LineKind::System,
-                },
-                Err(e) => Line {
-                    text: format!("failed to download {name}: {e}").into(),
-                    kind: LineKind::Error,
-                },
+                Ok(bytes) => Line::system(format!(
+                    "downloaded {name} ({bytes} bytes) to {}",
+                    local.display()
+                )),
+                Err(e) => Line::error(format!("failed to download {name}: {e}")),
             };
             let _ = done.send(line);
         });
@@ -585,18 +576,11 @@ impl ClientSession {
         let task = tokio::spawn(async move {
             let name = task_name;
             let line = match receive_folder(download, &root, start, &task_queued).await {
-                Ok((files, bytes)) => Line {
-                    text: format!(
-                        "downloaded {name} ({files} files, {bytes} bytes) to {}",
-                        root.display()
-                    )
-                    .into(),
-                    kind: LineKind::System,
-                },
-                Err(e) => Line {
-                    text: format!("failed to download {name}: {e}").into(),
-                    kind: LineKind::Error,
-                },
+                Ok((files, bytes)) => Line::system(format!(
+                    "downloaded {name} ({files} files, {bytes} bytes) to {}",
+                    root.display()
+                )),
+                Err(e) => Line::error(format!("failed to download {name}: {e}")),
             };
             let _ = done.send(line);
         });
@@ -703,14 +687,8 @@ impl ClientSession {
         let done = done.clone();
         tokio::spawn(async move {
             let line = match upload.send(&mut BufReader::new(file)).await {
-                Ok(bytes) => Line {
-                    text: format!("uploaded {name} ({bytes} bytes)").into(),
-                    kind: LineKind::System,
-                },
-                Err(e) => Line {
-                    text: format!("failed to upload {name}: {e}").into(),
-                    kind: LineKind::Error,
-                },
+                Ok(bytes) => Line::system(format!("uploaded {name} ({bytes} bytes)")),
+                Err(e) => Line::error(format!("failed to upload {name}: {e}")),
             };
             let _ = done.send(line);
         });
@@ -729,17 +707,15 @@ impl ClientSession {
         done: &UnboundedSender<Line>,
     ) {
         let root = local.to_path_buf();
-        let items = match tokio::task::spawn_blocking(move || walk_local(&root)).await {
-            Ok(Ok(items)) => items,
-            Ok(Err(e)) => {
+        let walked = tokio::task::spawn_blocking(move || walk_local(&root))
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|items| items);
+        let items = match walked {
+            Ok(items) => items,
+            Err(e) => {
                 let text = format!("cannot read {}: {e}", local.display());
                 return self.push(text, LineKind::Error);
-            }
-            Err(e) => {
-                return self.push(
-                    format!("cannot read {}: {e}", local.display()),
-                    LineKind::Error,
-                )
             }
         };
         let item_count = u32::try_from(items.len()).unwrap_or(u32::MAX);
@@ -764,14 +740,10 @@ impl ClientSession {
         let done = done.clone();
         tokio::spawn(async move {
             let line = match send_folder(upload, items).await {
-                Ok((files, bytes)) => Line {
-                    text: format!("uploaded {name} ({files} files, {bytes} bytes)").into(),
-                    kind: LineKind::System,
-                },
-                Err(e) => Line {
-                    text: format!("failed to upload {name}: {e}").into(),
-                    kind: LineKind::Error,
-                },
+                Ok((files, bytes)) => {
+                    Line::system(format!("uploaded {name} ({files} files, {bytes} bytes)"))
+                }
+                Err(e) => Line::error(format!("failed to upload {name}: {e}")),
             };
             let _ = done.send(line);
         });

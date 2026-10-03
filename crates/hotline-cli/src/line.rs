@@ -5,6 +5,23 @@ pub struct Line {
     pub kind: LineKind,
 }
 
+impl Line {
+    pub fn new(text: impl Into<Box<str>>, kind: LineKind) -> Self {
+        Self {
+            text: text.into(),
+            kind,
+        }
+    }
+
+    pub fn system(text: impl Into<Box<str>>) -> Self {
+        Self::new(text, LineKind::System)
+    }
+
+    pub fn error(text: impl Into<Box<str>>) -> Self {
+        Self::new(text, LineKind::Error)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
     Chat,
