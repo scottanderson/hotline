@@ -158,6 +158,13 @@ one-shared-room model.
    `dropbox_access` on the source path would close this, as a
    deliberate divergence.
 
+5. **`hls` does not map file names like openline.** openline's Windows
+   `UFileSys::ValidateFileName` (`UFileSys(W).cp`) turns `\ / : * ? "
+   < > |`, control bytes, and a leading `.` into `-`, and strips
+   trailing dots and spaces. `hls` rejects a separator, `.`, `..`, and
+   a `:` on Windows, but it does not map names. On Windows, a reserved
+   name such as `CON` or `NUL` still passes.
+
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
