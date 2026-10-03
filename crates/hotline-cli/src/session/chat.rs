@@ -6,6 +6,9 @@ use hotline_proto::{Field, FieldId, Transaction};
 use super::{display_text, wire_text, ChatInvite, ChatRoom, ClientSession};
 use crate::line::LineKind;
 
+/// The most invitations that wait for an answer.
+const MAX_INVITES: usize = 16;
+
 impl ClientSession {
     /// The room `chat_id`, if this client is in it.
     pub fn room(&self, chat_id: u32) -> Option<&ChatRoom> {
@@ -41,7 +44,8 @@ impl ClientSession {
         true
     }
 
-    /// [`myTran_InviteToChat`] (113): an invitation to a room.
+    /// [`myTran_InviteToChat`] (113): an invitation to a room. Ignores a
+    /// second invitation to a waiting room, and any past [`MAX_INVITES`].
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     pub(super) fn apply_invite_to_chat(&mut self, tx: &Transaction) {
@@ -49,6 +53,11 @@ impl ClientSession {
         let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
             return;
         };
+        if self.invites.len() >= MAX_INVITES
+            || self.invites.iter().any(|invite| invite.chat_id == chat_id)
+        {
+            return;
+        }
         let from = tx
             .string(FieldId::UserName, encoding)
             .unwrap_or_else(|| "someone".to_string());
@@ -234,6 +243,28 @@ mod tests {
     fn room_push(opcode: Opcode, chat_id: u32, mut fields: Vec<Field>) -> Transaction {
         fields.push(Field::u32(FieldId::ChatID, chat_id));
         Transaction::push(opcode, fields)
+    }
+
+    #[test]
+    fn invite_to_chat_queues_one_invitation_per_room() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let invite = |chat_id| {
+            Transaction::push(
+                Opcode::InviteToChat,
+                vec![
+                    Field::u32(FieldId::ChatID, chat_id),
+                    Field::string(FieldId::UserName, "Alice"),
+                ],
+            )
+        };
+        let _ = session.apply_server_event(&invite(7));
+        let _ = session.apply_server_event(&invite(7));
+        assert_eq!(session.invites.len(), 1);
+
+        for chat_id in 0..100 {
+            let _ = session.apply_server_event(&invite(chat_id));
+        }
+        assert_eq!(session.invites.len(), MAX_INVITES);
     }
 
     #[test]

@@ -131,10 +131,11 @@ impl ClientSession {
     }
 
     fn push(&mut self, text: impl Into<Box<str>>, kind: LineKind) {
-        self.lines.push(Line {
+        let line = Line {
             text: text.into(),
             kind,
-        });
+        };
+        crate::line::push_line(&mut self.lines, line);
     }
 
     /// Show the error text of a reply that no request waits for.
