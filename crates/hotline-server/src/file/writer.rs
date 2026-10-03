@@ -17,18 +17,8 @@ pub(crate) struct MemWriter {
 }
 
 impl MemWriter {
-    pub(crate) fn new(root: Arc<Mutex<Dir>>, dir: Vec<String>, name: String) -> Self {
-        {
-            let mut guard = root.lock().unwrap();
-            let d = guard.get_dir_mut(&dir);
-            d.entries.insert(name.clone(), Node::File(Vec::new()));
-        }
-        Self { root, dir, name }
-    }
-
-    /// Like [`Self::new`], but appends to the file's existing bytes
-    /// instead of truncating them.
-    pub(crate) const fn append(root: Arc<Mutex<Dir>>, dir: Vec<String>, name: String) -> Self {
+    /// Appends to the file `name` in `dir`, which must already exist.
+    pub(crate) const fn appending(root: Arc<Mutex<Dir>>, dir: Vec<String>, name: String) -> Self {
         Self { root, dir, name }
     }
 }
@@ -40,8 +30,10 @@ impl AsyncWrite for MemWriter {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let mut guard = self.root.lock().unwrap();
-        let d = guard.get_dir_mut(&self.dir);
-        if let Some(Node::File(data)) = d.entries.get_mut(&self.name) {
+        if let Some(Node::File(data)) = guard
+            .get_dir_mut(&self.dir)
+            .and_then(|d| d.entries.get_mut(&self.name))
+        {
             data.extend_from_slice(buf);
         }
         Poll::Ready(Ok(buf.len()))

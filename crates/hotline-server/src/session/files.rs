@@ -2520,6 +2520,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
+        files.seed(&HlPath::new(["Sub"]), "b.txt", *b"");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
