@@ -11,7 +11,8 @@ use ratatui::Frame;
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode};
 use crate::view::{
-    contains, privileges, AccountForm, Focus, MenuItem, Modal, OptionsForm, Tab, View, OPTIONS,
+    contains, privileges, AccountForm, Focus, ListCursor, MenuItem, Modal, OptionsForm, Tab, View,
+    OPTIONS,
 };
 
 /// Where each part of the main screen is drawn.
@@ -282,18 +283,29 @@ fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
         return;
     };
     let items: Vec<ListItem> = files.iter().map(|f| ListItem::new(file_label(f))).collect();
+    draw_list(frame, area, block, items, &mut view.files);
+}
+
+/// Draw `items` in `block` with the selection and scroll position of `cursor`.
+fn draw_list(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block,
+    items: Vec<ListItem>,
+    cursor: &mut ListCursor,
+) {
+    let selected = items
+        .len()
+        .checked_sub(1)
+        .map(|last| cursor.selected.min(last));
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-    let selected = files
-        .len()
-        .checked_sub(1)
-        .map(|last| view.selected_file.min(last));
     let mut state = ListState::default()
-        .with_offset(view.files_offset)
+        .with_offset(cursor.offset)
         .with_selected(selected);
     frame.render_stateful_widget(list, area, &mut state);
-    view.files_offset = state.offset();
+    cursor.offset = state.offset();
 }
 
 fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
@@ -309,18 +321,7 @@ fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, vi
         return;
     };
     let rows: Vec<ListItem> = items.iter().map(|i| ListItem::new(i.label())).collect();
-    let list = List::new(rows)
-        .block(block)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-    let selected = items
-        .len()
-        .checked_sub(1)
-        .map(|last| view.selected_news.min(last));
-    let mut state = ListState::default()
-        .with_offset(view.news_offset)
-        .with_selected(selected);
-    frame.render_stateful_widget(list, area, &mut state);
-    view.news_offset = state.offset();
+    draw_list(frame, area, block, rows, &mut view.news);
 }
 
 fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
@@ -336,18 +337,7 @@ fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &
         .iter()
         .map(|a| ListItem::new(format!("{}  ({})", a.login, a.name)))
         .collect();
-    let list = List::new(rows)
-        .block(block)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-    let selected = accounts
-        .len()
-        .checked_sub(1)
-        .map(|last| view.selected_account.min(last));
-    let mut state = ListState::default()
-        .with_offset(view.accounts_offset)
-        .with_selected(selected);
-    frame.render_stateful_widget(list, area, &mut state);
-    view.accounts_offset = state.offset();
+    draw_list(frame, area, block, rows, &mut view.accounts);
 }
 
 /// The rows of `form`: name, login, password, then a check box for each privilege.

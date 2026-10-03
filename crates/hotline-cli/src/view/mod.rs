@@ -3,6 +3,7 @@
 
 mod account_form;
 mod action;
+mod list_cursor;
 mod modal;
 mod options_form;
 mod tab;
@@ -21,6 +22,7 @@ use crate::ui::{self, Areas};
 
 pub use account_form::{privileges, AccountForm};
 pub use action::Action;
+pub use list_cursor::ListCursor;
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OptionsForm, OPTIONS};
 pub use tab::Tab;
@@ -87,20 +89,14 @@ pub struct View {
     pub news_scroll: u16,
     /// The first user list row on screen, as the last draw left it.
     pub users_offset: usize,
-    /// The first file list row on screen, as the last draw left it.
-    pub files_offset: usize,
-    /// The index of the selected file in the listing.
-    pub selected_file: usize,
-    /// The first threaded news row on screen, as the last draw left it.
-    pub news_offset: usize,
-    /// The index of the selected threaded news item.
-    pub selected_news: usize,
+    /// The cursor of the file list.
+    pub files: ListCursor,
+    /// The cursor of the threaded news list.
+    pub news: ListCursor,
     /// The number of threaded news items listed.
     pub news_count: usize,
-    /// The first account row on screen, as the last draw left it.
-    pub accounts_offset: usize,
-    /// The index of the selected account.
-    pub selected_account: usize,
+    /// The cursor of the account list.
+    pub accounts: ListCursor,
     /// The number of accounts listed.
     pub account_count: usize,
     /// `true` if the user may send a broadcast.
@@ -126,13 +122,10 @@ impl Default for View {
             room_inputs: HashMap::new(),
             news_scroll: 0,
             users_offset: 0,
-            files_offset: 0,
-            selected_file: 0,
-            news_offset: 0,
-            selected_news: 0,
+            files: ListCursor::default(),
+            news: ListCursor::default(),
             news_count: 0,
-            accounts_offset: 0,
-            selected_account: 0,
+            accounts: ListCursor::default(),
             account_count: 0,
             can_broadcast: false,
             can_disconnect: false,
@@ -196,24 +189,6 @@ impl View {
             .find(|&(index, _)| current.is_some_and(|c| index > c))
             .or(first)
             .map(|(_, &(tab, _))| tab)
-    }
-
-    /// Select the first file and scroll to the top of the list.
-    pub const fn reset_file_selection(&mut self) {
-        self.selected_file = 0;
-        self.files_offset = 0;
-    }
-
-    /// Select the first account and scroll to the top of the list.
-    pub const fn reset_account_selection(&mut self) {
-        self.selected_account = 0;
-        self.accounts_offset = 0;
-    }
-
-    /// Select the first threaded news item and scroll to the top of the list.
-    pub const fn reset_news_selection(&mut self) {
-        self.selected_news = 0;
-        self.news_offset = 0;
     }
 
     /// The keys that work now, as `(key, what it does)`.
@@ -794,13 +769,11 @@ impl View {
         match key.code {
             KeyCode::Tab => self.focus = Focus::Users,
             KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.selected_file = self.selected_file.saturating_sub(1),
-            KeyCode::Down => {
-                self.selected_file = (self.selected_file + 1).min(files.len().saturating_sub(1));
-            }
-            KeyCode::Enter => return open_file(self.selected_file, files),
+            KeyCode::Up => self.files.up(),
+            KeyCode::Down => self.files.down(files.len()),
+            KeyCode::Enter => return open_file(self.files.selected, files),
             KeyCode::Backspace | KeyCode::Left => return Action::ParentFolder,
-            KeyCode::Char('d') => return download(self.selected_file, files),
+            KeyCode::Char('d') => return download(self.files.selected, files),
             KeyCode::Char('u') => {
                 self.modal = Some(Modal::Upload {
                     input: String::new(),
@@ -813,7 +786,7 @@ impl View {
                 };
             }
             KeyCode::Char(c @ ('x' | 'i' | 'r' | 'c' | 'm' | 'a')) => {
-                let Some(file) = files.get(self.selected_file) else {
+                let Some(file) = files.get(self.files.selected) else {
                     return Action::None;
                 };
                 let name = file.name.clone();
@@ -898,13 +871,10 @@ impl View {
         match key.code {
             KeyCode::Tab => self.focus = Focus::Users,
             KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.selected_account = self.selected_account.saturating_sub(1),
-            KeyCode::Down => {
-                self.selected_account =
-                    (self.selected_account + 1).min(self.account_count.saturating_sub(1));
-            }
+            KeyCode::Up => self.accounts.up(),
+            KeyCode::Down => self.accounts.down(self.account_count),
             KeyCode::Enter if self.account_count > 0 => {
-                return Action::EditAccount(self.selected_account);
+                return Action::EditAccount(self.accounts.selected);
             }
             KeyCode::Char('n') => self.modal = Some(Modal::Account(AccountForm::blank())),
             KeyCode::Char('o') => {
@@ -913,7 +883,7 @@ impl View {
                 });
             }
             KeyCode::Char('x') if self.account_count > 0 => {
-                return Action::AskDeleteAccount(self.selected_account);
+                return Action::AskDeleteAccount(self.accounts.selected);
             }
             _ => {}
         }
@@ -924,18 +894,15 @@ impl View {
         match key.code {
             KeyCode::Tab => self.focus = Focus::Users,
             KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.selected_news = self.selected_news.saturating_sub(1),
-            KeyCode::Down => {
-                self.selected_news =
-                    (self.selected_news + 1).min(self.news_count.saturating_sub(1));
-            }
+            KeyCode::Up => self.news.up(),
+            KeyCode::Down => self.news.down(self.news_count),
             KeyCode::Enter if self.news_count > 0 => {
-                return Action::OpenNewsItem(self.selected_news);
+                return Action::OpenNewsItem(self.news.selected);
             }
             KeyCode::Backspace | KeyCode::Left => return Action::ParentNews,
             KeyCode::Char('p') => return Action::NewPost,
             KeyCode::Char('x') if self.news_count > 0 => {
-                return Action::AskDeleteNews(self.selected_news);
+                return Action::AskDeleteNews(self.news.selected);
             }
             KeyCode::Char(c @ ('b' | 'c')) => {
                 self.modal = Some(Modal::NewsName {
@@ -1050,7 +1017,7 @@ impl View {
 
     /// Select the file at `index`, or open it on the second click of a double click.
     fn click_file(&mut self, index: usize, files: &[FileNameWithInfo], now: Instant) -> Action {
-        self.selected_file = index;
+        self.files.selected = index;
         self.focus = Focus::Files;
         if self.double_click(Clicked::File(index), now) {
             return open_file(index, files);
@@ -1061,7 +1028,7 @@ impl View {
     /// Select the threaded news item at `index`, or open it on the second
     /// click of a double click.
     fn click_news(&mut self, index: usize, now: Instant) -> Action {
-        self.selected_news = index;
+        self.news.selected = index;
         self.focus = Focus::NewsList;
         if self.double_click(Clicked::News(index), now) {
             return Action::OpenNewsItem(index);
@@ -1072,7 +1039,7 @@ impl View {
     /// Select the account at `index`, or edit it on the second click of a
     /// double click.
     fn click_account(&mut self, index: usize, now: Instant) -> Action {
-        self.selected_account = index;
+        self.accounts.selected = index;
         self.focus = Focus::Accounts;
         if self.double_click(Clicked::Account(index), now) {
             return Action::EditAccount(index);
@@ -1172,8 +1139,7 @@ impl View {
         if self.tab != Tab::Files || !contains(inner, x, y) {
             return None;
         }
-        let index = self.files_offset + usize::from(y - inner.y);
-        (index < files.len()).then_some(index)
+        self.files.row_at(y - inner.y, files.len())
     }
 
     /// The index of the account on the list row at `x`, `y` of the Admin tab.
@@ -1182,8 +1148,7 @@ impl View {
         if self.tab != Tab::Admin || !contains(inner, x, y) {
             return None;
         }
-        let index = self.accounts_offset + usize::from(y - inner.y);
-        (index < self.account_count).then_some(index)
+        self.accounts.row_at(y - inner.y, self.account_count)
     }
 
     /// The index of the item on the list row at `x`, `y` of the Threaded News tab.
@@ -1192,8 +1157,7 @@ impl View {
         if self.tab != Tab::Threaded || !contains(inner, x, y) {
             return None;
         }
-        let index = self.news_offset + usize::from(y - inner.y);
-        (index < self.news_count).then_some(index)
+        self.news.row_at(y - inner.y, self.news_count)
     }
 }
 

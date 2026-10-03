@@ -32,7 +32,7 @@ use hotline_proto::types::HlPath;
 use line::Line;
 use session::{ClientSession, EventOutcome, Mode, KEEP_ALIVE};
 use tokio::sync::mpsc;
-use view::{AccountForm, Action, Modal, OptionsForm, View};
+use view::{AccountForm, Action, ListCursor, Modal, OptionsForm, View};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -313,7 +313,7 @@ async fn perform(
         }
         Action::ListThreadedNews => {
             session.list_threaded_news(client).await;
-            view.reset_news_selection();
+            view.news = ListCursor::default();
         }
         Action::OpenNewsItem(index) => {
             let path = session.threaded_path.clone();
@@ -325,12 +325,12 @@ async fn perform(
                     text: article.text.into(),
                 });
             } else if session.threaded_path != path {
-                view.reset_news_selection();
+                view.news = ListCursor::default();
             }
         }
         Action::ParentNews => {
             session.parent_news(client).await;
-            view.reset_news_selection();
+            view.news = ListCursor::default();
         }
         Action::NewPost => {
             if session.can_post() {
@@ -360,7 +360,7 @@ async fn perform(
         }
         Action::ListAccounts => {
             session.list_accounts(client).await;
-            view.reset_account_selection();
+            view.accounts = ListCursor::default();
         }
         Action::EditAccount(index) => {
             let account = session.accounts.as_ref().and_then(|a| a.get(index));
@@ -391,6 +391,6 @@ async fn list_files(
     path: HlPath,
 ) {
     if session.get_file_name_list(client, path).await {
-        view.reset_file_selection();
+        view.files = ListCursor::default();
     }
 }
