@@ -258,6 +258,16 @@ async fn perform(
             let conflict = session.download_folder(client, &name, start, done).await;
             view.modal = conflict.map(Modal::ask);
         }
+        Action::PickDownload => {
+            let downloads = session.running_downloads();
+            if !downloads.is_empty() {
+                view.modal = Some(Modal::PickDownload {
+                    downloads,
+                    selected: 0,
+                });
+            }
+        }
+        Action::KillDownload(id) => session.kill_download(client, id).await,
         Action::Upload { path, start } => {
             let path = std::path::Path::new(&path);
             let conflict = session.upload(client, path, start, done).await;

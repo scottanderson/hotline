@@ -35,10 +35,15 @@ async fn start_server() -> SocketAddr {
 
 /// Start a server with `providers` and return its address.
 async fn start_server_with(providers: Providers) -> SocketAddr {
+    start_server_config(ServerConfig::default(), providers).await
+}
+
+/// Start a server with `config` on a free port and `providers`, and return its address.
+async fn start_server_config(config: ServerConfig, providers: Providers) -> SocketAddr {
     let addr = SocketAddr::from(([127, 0, 0, 1], free_port()));
     let config = ServerConfig {
         bind_addr: addr.to_string().into(),
-        ..ServerConfig::default()
+        ..config
     };
     tokio::spawn(Server::new(config, providers).run());
     for _ in 0..50 {
@@ -281,6 +286,31 @@ async fn file_operations_create_describe_move_alias_and_delete() {
 
     admin.delete_file(&root, "Games").await.unwrap();
     assert_eq!(names(&admin, &root).await, ["read.me"]);
+}
+
+#[tokio::test]
+async fn kill_download_takes_a_download_out_of_the_queue() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::default(), "a.txt", *b"a");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let config = ServerConfig {
+        max_downloads_per_client: 1,
+        ..ServerConfig::default()
+    };
+    let addr = start_server_config(config, providers).await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+    let root = HlPath::default();
+
+    let first = alice.download_file(&root, "a.txt", 0).await.unwrap();
+    assert_eq!(first.waiting_count, 0);
+    let second = alice.download_file(&root, "a.txt", 0).await.unwrap();
+    assert_eq!(second.waiting_count, 1);
+    alice.kill_download(second.reference()).await.unwrap();
+    let third = alice.download_file(&root, "a.txt", 0).await.unwrap();
+    assert_eq!(third.waiting_count, 1);
 }
 
 #[tokio::test]

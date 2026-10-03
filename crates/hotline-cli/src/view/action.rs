@@ -65,6 +65,10 @@ pub enum Action {
         name: Box<str>,
         start: Start,
     },
+    /// Ask which download to cancel.
+    PickDownload,
+    /// Cancel the download with this ID.
+    KillDownload(u64),
     /// Upload the local file or folder at `path` to the current folder.
     Upload {
         path: String,

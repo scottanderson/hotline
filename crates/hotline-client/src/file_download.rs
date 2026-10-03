@@ -24,6 +24,11 @@ pub struct FileDownload {
 }
 
 impl FileDownload {
+    /// The server's reference for this download.
+    pub const fn reference(&self) -> u32 {
+        self.reference
+    }
+
     /// Open the `HTXF` connection and write the file's data fork to `out`.
     /// Returns the number of bytes written. A queued download waits on the
     /// open connection until the server starts it.

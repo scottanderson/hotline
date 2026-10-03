@@ -477,6 +477,19 @@ impl HotlineClient {
         })
     }
 
+    /// Cancel the download `reference` while it waits in the server's queue,
+    /// [`myTran_KillDownload`] (214).
+    ///
+    /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
+    pub async fn kill_download(&self, reference: u32) -> Result<()> {
+        self.request(
+            Opcode::KillDownload,
+            vec![Field::u32(FieldId::RefNum, reference)],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Ask to download the folder `name` in the folder at `path`, with
     /// everything inside it, [`myTran_DownloadFldr`] (210).
     /// [`FolderDownload::open`] then starts it.

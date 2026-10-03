@@ -73,6 +73,11 @@ pub enum Modal {
     OpenAccount { input: String },
     /// A check before the account `login` is deleted.
     DeleteAccount { login: Box<str> },
+    /// The downloads to cancel, as `(ID, label)`.
+    PickDownload {
+        downloads: Vec<(u64, Box<str>)>,
+        selected: usize,
+    },
     /// The users to invite to the room `chat_id`, as `(user ID, name)`.
     PickUser {
         chat_id: u32,

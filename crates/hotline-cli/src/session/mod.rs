@@ -4,6 +4,7 @@
 mod accounts;
 mod chat;
 mod chat_room;
+mod downloads;
 mod event_outcome;
 mod file_ops;
 mod mode;
@@ -14,6 +15,7 @@ mod threaded_news;
 use std::collections::VecDeque;
 use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use hotline_client::{
     Ban, ClientInfoText, ClientUserInfo, FolderDownload, FolderUpload, HotlineClient, UserAccount,
@@ -32,6 +34,7 @@ use crate::line::{Line, LineKind};
 use crate::transfer::{Conflict, Start};
 
 pub use chat_room::{ChatInvite, ChatRoom};
+use downloads::{FirstWrite, RunningDownload};
 pub use event_outcome::EventOutcome;
 pub use mode::Mode;
 pub use threaded_news::NewsItem;
@@ -67,6 +70,10 @@ pub struct ClientSession {
     pub rooms: Vec<ChatRoom>,
     /// Invitations that wait for an answer, oldest first.
     pub invites: VecDeque<ChatInvite>,
+    /// The downloads that run, oldest first.
+    downloads: Vec<RunningDownload>,
+    /// The ID of the last download kept in `downloads`.
+    next_download_id: u64,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
 }
@@ -96,6 +103,8 @@ impl ClientSession {
             threaded: None,
             rooms: Vec::new(),
             invites: VecDeque::new(),
+            downloads: Vec::new(),
+            next_download_id: 0,
             encoding,
         }
     }
@@ -271,8 +280,13 @@ impl ClientSession {
             .field(FieldId::WaitingCount)
             .and_then(Field::as_u32)
             .unwrap_or_default();
+        let name = tx
+            .field(FieldId::RefNum)
+            .and_then(Field::as_u32)
+            .and_then(|reference| self.set_queue_place(reference, waiting));
+        let name = name.as_deref().unwrap_or("a download");
         self.push(
-            format!("a download waits, {waiting} ahead in the queue"),
+            format!("{name} waits, {waiting} ahead in the queue"),
             LineKind::System,
         );
     }
@@ -475,11 +489,15 @@ impl ClientSession {
         };
         self.push(format!("downloading {name}{from}{queue}"), LineKind::System);
 
-        let name = name.to_string();
+        let queued = self.queued_flag(download.waiting_count);
+        let reference = Some(download.reference());
+        let mut out = FirstWrite::new(BufWriter::new(file), queued.clone());
+        let task_name = name.to_string();
         let done = done.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
+            let name = task_name;
             let received = async {
-                let bytes = download.receive(&mut BufWriter::new(file)).await?;
+                let bytes = download.receive(&mut out).await?;
                 tokio::fs::rename(&partial, &local).await?;
                 Ok::<_, anyhow::Error>(bytes)
             };
@@ -496,6 +514,7 @@ impl ClientSession {
             };
             let _ = done.send(line);
         });
+        self.track_download(name, reference, queued, task.abort_handle());
         None
     }
 
@@ -550,10 +569,14 @@ impl ClientSession {
             LineKind::System,
         );
 
-        let name = name.to_string();
+        let queued = self.queued_flag(download.waiting_count);
+        let reference = download.reference();
+        let task_queued = queued.clone();
+        let task_name = name.to_string();
         let done = done.clone();
-        tokio::spawn(async move {
-            let line = match receive_folder(download, &root, start).await {
+        let task = tokio::spawn(async move {
+            let name = task_name;
+            let line = match receive_folder(download, &root, start, &task_queued).await {
                 Ok((files, bytes)) => Line {
                     text: format!(
                         "downloaded {name} ({files} files, {bytes} bytes) to {}",
@@ -569,6 +592,7 @@ impl ClientSession {
             };
             let _ = done.send(line);
         });
+        self.track_download(name, reference, queued, task.abort_handle());
         None
     }
 
@@ -824,15 +848,18 @@ impl ClientSession {
 
 /// Save each item of `download` under the local folder `root`. With
 /// [`Start::Resume`], a file that is there is skipped and a `.hpf` file is
-/// continued. Returns the number of files and bytes saved.
+/// continued. The first item clears `queued`. Returns the number of files
+/// and bytes saved.
 async fn receive_folder(
     download: FolderDownload,
     root: &Path,
     start: Start,
+    queued: &AtomicBool,
 ) -> anyhow::Result<(u32, u64)> {
     let mut receiver = download.open().await?;
     let (mut files, mut bytes) = (0, 0);
     while let Some(item) = receiver.next_item().await? {
+        queued.store(false, Ordering::Relaxed);
         let local = item
             .path
             .components
@@ -1076,6 +1103,32 @@ mod tests {
             &*session.lines.last().unwrap().text,
             "a download waits, 2 ahead in the queue"
         );
+    }
+
+    #[tokio::test]
+    async fn download_info_marks_its_download_queued() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let task = tokio::spawn(std::future::pending::<()>());
+        session.track_download(
+            "doom.wad",
+            Some(9),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            task.abort_handle(),
+        );
+        let info = Transaction::push(
+            Opcode::DownloadInfo,
+            vec![
+                Field::u32(FieldId::RefNum, 9),
+                Field::u32(FieldId::WaitingCount, 2),
+            ],
+        );
+        let _ = session.apply_server_event(&info);
+        assert_eq!(
+            &*session.lines.last().unwrap().text,
+            "doom.wad waits, 2 ahead in the queue"
+        );
+        assert_eq!(&*session.running_downloads()[0].1, "doom.wad (queued)");
+        task.abort();
     }
 
     #[test]

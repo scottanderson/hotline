@@ -244,6 +244,9 @@ impl View {
             (Some(Modal::Confirm(_)), ..) => &[("r", "resume"), ("Esc", "cancel")],
             (Some(Modal::Invite { .. }), ..) => &[("Enter", "join"), ("Esc", "decline")],
             (Some(Modal::Subject { .. }), ..) => &[("Enter", "set"), ("Esc", "cancel")],
+            (Some(Modal::PickDownload { .. }), ..) => {
+                &[("↑↓", "choose"), ("Enter", "cancel it"), ("Esc", "close")]
+            }
             (Some(Modal::PickUser { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "invite"), ("Esc", "cancel")]
             }
@@ -374,6 +377,7 @@ impl View {
                 ("^F", "files"),
                 ("^B", "threaded news"),
                 ("^G", "broadcast"),
+                ("^K", "cancel download"),
                 ("^O", "options"),
                 ("Esc", "quit"),
             ],
@@ -384,6 +388,7 @@ impl View {
                 ("^N", "news"),
                 ("^F", "files"),
                 ("^B", "threaded news"),
+                ("^K", "cancel download"),
                 ("^O", "options"),
                 ("Esc", "quit"),
             ],
@@ -471,6 +476,9 @@ impl View {
             }
             if key.code == KeyCode::Char('o') {
                 return Action::EditOptions;
+            }
+            if key.code == KeyCode::Char('k') {
+                return Action::PickDownload;
             }
             if key.code == KeyCode::Char('g') && self.can_broadcast {
                 self.modal = Some(Modal::Broadcast {
@@ -648,8 +656,31 @@ impl View {
                     }
                 });
             }
-            (Modal::PickUser { selected, .. }, KeyCode::Up) => {
+            (
+                Modal::PickUser { selected, .. } | Modal::PickDownload { selected, .. },
+                KeyCode::Up,
+            ) => {
                 *selected = selected.saturating_sub(1);
+            }
+            (
+                Modal::PickDownload {
+                    selected,
+                    downloads,
+                },
+                KeyCode::Down,
+            ) => {
+                *selected = (*selected + 1).min(downloads.len().saturating_sub(1));
+            }
+            (
+                Modal::PickDownload {
+                    selected,
+                    downloads,
+                },
+                KeyCode::Enter,
+            ) => {
+                return downloads
+                    .get(*selected)
+                    .map_or(Action::None, |&(id, _)| Action::KillDownload(id));
             }
             (
                 Modal::PickUser {
@@ -992,6 +1023,7 @@ impl View {
                 | Modal::Invite { .. }
                 | Modal::Subject { .. }
                 | Modal::PickUser { .. }
+                | Modal::PickDownload { .. }
                 | Modal::Post { .. }
                 | Modal::NewsName { .. }
                 | Modal::DeleteNews { .. }
@@ -1556,6 +1588,25 @@ mod tests {
                 name: "readme.txt".into(),
                 text: "readme.md".into(),
             }
+        );
+    }
+
+    #[test]
+    fn ctrl_k_asks_for_a_download_and_cancels_the_chosen_one() {
+        let mut view = View::default();
+        assert_eq!(
+            view.handle_key(ctrl('k'), &users(), &files()),
+            Action::PickDownload
+        );
+        view.modal = Some(Modal::PickDownload {
+            downloads: vec![(3, "a.txt".into()), (5, "b.txt (queued)".into())],
+            selected: 0,
+        });
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::KillDownload(5)
         );
     }
 

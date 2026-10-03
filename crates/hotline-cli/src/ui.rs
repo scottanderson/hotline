@@ -614,6 +614,27 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             frame.render_stateful_widget(list, area, &mut state);
         }
+        Modal::PickDownload {
+            downloads,
+            selected,
+        } => {
+            let area = centered(screen, 50, downloads.len().max(1) as u16 + 2);
+            let items: Vec<ListItem> = downloads
+                .iter()
+                .map(|(_, label)| ListItem::new(&**label))
+                .collect();
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border(true))
+                        .title("cancel a download"),
+                )
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            let mut state = ListState::default().with_selected(Some(*selected));
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, &mut state);
+        }
         Modal::UserMenu {
             at,
             items,

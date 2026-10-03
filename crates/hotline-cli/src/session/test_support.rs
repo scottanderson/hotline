@@ -25,10 +25,15 @@ fn free_port() -> u16 {
 
 /// Start a server with `providers` and return its address.
 pub async fn start_server(providers: Providers) -> SocketAddr {
+    start_server_config(ServerConfig::default(), providers).await
+}
+
+/// Start a server with `config` on a free port and `providers`, and return its address.
+pub async fn start_server_config(config: ServerConfig, providers: Providers) -> SocketAddr {
     let addr = SocketAddr::from(([127, 0, 0, 1], free_port()));
     let config = ServerConfig {
         bind_addr: addr.to_string().into(),
-        ..ServerConfig::default()
+        ..config
     };
     tokio::spawn(Server::new(config, providers).run());
     for _ in 0..50 {

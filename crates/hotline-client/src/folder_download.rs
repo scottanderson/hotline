@@ -26,6 +26,11 @@ pub struct FolderDownload {
 }
 
 impl FolderDownload {
+    /// The server's reference for this download, `None` for an empty folder.
+    pub const fn reference(&self) -> Option<u32> {
+        self.reference
+    }
+
     /// Open the `HTXF` connection. The [`FolderReceiver`] then steps
     /// through the items. A queued download waits on the open connection
     /// until the server starts it.

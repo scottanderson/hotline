@@ -141,17 +141,6 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-3. **`hlc` does not cover every area.** It logs in, shows the
-   agreement, chats in public, sends private messages, shows a user's
-   info text, reads and posts classic news, lists users, files, and
-   tracker servers, downloads and uploads files and folders, and shows
-   a banner's link, resumes transfers, uses private chat rooms, reads
-   and writes threaded news, administers accounts, sends and shows
-   broadcasts, changes the user's name, icon, and options, disconnects
-   users, and deletes, creates, describes, renames, moves, and makes
-   aliases of files. It does not send `myTran_DownloadBanner` (212) or
-   `myTran_KillDownload` (214). Each area can be its own task.
-
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
@@ -834,6 +823,20 @@ one-shared-room model.
      `myField_FileNewPath` (212) empty at the root, except in
      `myTran_SetFileInfo` (207). `hlc` leaves them out, as it already
      does for listings and transfers.
+
+109. `hlc` cancels downloads. Ctrl-K lists the downloads that run, and
+     Enter stops the chosen one. The `.hpf` file stays for a resume.
+     Like openline's client (`~CMyDownloadTask`), `hlc` sends
+     `myTran_KillDownload` (214) only for a download that still waits
+     in the server's queue, and only when the server version is 182 or
+     more. openline's client holds a download in that queue stage only
+     when the server version is 185 or more. It opens the transfer
+     connection after the wait. `hlc` opens it at once, so a download
+     counts as queued until its first data arrives. A running download
+     stops when its transfer connection closes. `hlc` does not send
+     `myTran_DownloadBanner` (212). A terminal cannot show a banner
+     image, so `hlc` shows only the banner's link from
+     `myTran_ServerBanner` (122).
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
