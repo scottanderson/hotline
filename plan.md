@@ -147,11 +147,10 @@ one-shared-room model.
    tracker servers, downloads and uploads files and folders, and shows
    a banner's link, resumes transfers, uses private chat rooms, reads
    and writes threaded news, administers accounts, sends and shows
-   broadcasts, changes the user's name, icon, and options, and
-   disconnects users. It does not send the file operations
-   `myTran_DeleteFile` (204) to `myTran_MakeFileAlias` (209),
-   `myTran_DownloadBanner` (212), or `myTran_KillDownload` (214). Each
-   area can be its own task.
+   broadcasts, changes the user's name, icon, and options, disconnects
+   users, and deletes, creates, describes, renames, moves, and makes
+   aliases of files. It does not send `myTran_DownloadBanner` (212) or
+   `myTran_KillDownload` (214). Each area can be its own task.
 
 ## Resolved
 
@@ -823,6 +822,18 @@ one-shared-room model.
      a ban, and a permanent ban also sends the user's name in
      `myField_Data` (101). openline asks only before a ban. `hlc`
      always asks, because the modal is where the user picks the ban.
+
+108. `hlc` runs the file operations `myTran_DeleteFile` (204) to
+     `myTran_MakeFileAlias` (209) on the Files tab: `x` deletes after a
+     `y` check, `n` creates a folder, `i` shows the info, `r` renames,
+     `c` sets the comment, `m` moves, and `a` makes an alias. A move or
+     an alias asks for a `/`-separated folder from the root. Like
+     openline's client (`CMySetFileInfoTask`), `myTran_SetFileInfo`
+     (207) leaves out an empty new name or comment, so `hlc` cannot
+     clear a comment. openline sends `myField_FilePath` (202) and
+     `myField_FileNewPath` (212) empty at the root, except in
+     `myTran_SetFileInfo` (207). `hlc` leaves them out, as it already
+     does for listings and transfers.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

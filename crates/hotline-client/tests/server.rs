@@ -240,6 +240,49 @@ async fn get_file_name_list_lists_the_root_and_a_folder() {
     assert_eq!(games[0].size, 3);
 }
 
+/// The names in the folder at `path`, sorted.
+async fn names(client: &HotlineClient, path: &HlPath) -> Vec<String> {
+    let list = client.get_file_name_list(path).await.unwrap();
+    let mut names: Vec<_> = list.iter().map(|f| f.name.to_string()).collect();
+    names.sort_unstable();
+    names
+}
+
+#[tokio::test]
+async fn file_operations_create_describe_move_alias_and_delete() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::default(), "readme.txt", *b"hi");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+    let (root, games) = (HlPath::default(), HlPath::new(["Games"]));
+
+    admin.new_folder(&root, "Games").await.unwrap();
+    admin
+        .set_file_info(&root, "readme.txt", "read.me", "a note")
+        .await
+        .unwrap();
+    let info = admin.get_file_info(&root, "read.me").await.unwrap();
+    assert_eq!(
+        (&*info.name, info.size, &*info.comment),
+        ("read.me", 2, "a note")
+    );
+
+    admin.move_file(&root, "read.me", &games).await.unwrap();
+    assert_eq!(names(&admin, &games).await, ["read.me"]);
+    admin
+        .make_file_alias(&games, "read.me", &root)
+        .await
+        .unwrap();
+    assert_eq!(names(&admin, &root).await, ["Games", "read.me"]);
+
+    admin.delete_file(&root, "Games").await.unwrap();
+    assert_eq!(names(&admin, &root).await, ["read.me"]);
+}
+
 #[tokio::test]
 async fn download_file_receives_the_data_fork() {
     let files = InMemoryFileProvider::default();

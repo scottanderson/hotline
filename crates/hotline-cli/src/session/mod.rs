@@ -5,6 +5,7 @@ mod accounts;
 mod chat;
 mod chat_room;
 mod event_outcome;
+mod file_ops;
 mod mode;
 #[cfg(test)]
 mod test_support;

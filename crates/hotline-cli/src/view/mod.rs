@@ -15,6 +15,7 @@ use hotline_client::Ban;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use ratatui::layout::Rect;
 
+use crate::file_edit::FileEdit;
 use crate::transfer::{Conflict, Start};
 use crate::ui::{self, Areas};
 
@@ -224,7 +225,8 @@ impl View {
             (Some(Modal::UserMenu { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
             }
-            (Some(Modal::Info { .. }), ..) => &[("Esc", "close")],
+            (Some(Modal::Info { .. } | Modal::FileInfo(_)), ..) => &[("Esc", "close")],
+            (Some(Modal::FileEdit { .. }), ..) => &[("Enter", "save"), ("Esc", "cancel")],
             (Some(Modal::Disconnect { .. }), ..) => &[
                 ("d", "disconnect"),
                 ("t", "ban for a while"),
@@ -253,9 +255,14 @@ impl View {
                 ("Esc", "cancel"),
             ],
             (Some(Modal::NewsName { .. }), ..) => &[("Enter", "create"), ("Esc", "cancel")],
-            (Some(Modal::DeleteNews { .. } | Modal::DeleteAccount { .. }), ..) => {
-                &[("y", "delete"), ("Esc", "cancel")]
-            }
+            (
+                Some(
+                    Modal::DeleteNews { .. }
+                    | Modal::DeleteAccount { .. }
+                    | Modal::DeleteFile { .. },
+                ),
+                ..,
+            ) => &[("y", "delete"), ("Esc", "cancel")],
             (Some(Modal::Account(_) | Modal::Options(_)), ..) => &[
                 ("↑↓", "row"),
                 ("Space", "toggle"),
@@ -386,6 +393,13 @@ impl View {
                 ("⌫", "up"),
                 ("d", "download"),
                 ("u", "upload"),
+                ("n", "new folder"),
+                ("x", "delete"),
+                ("i", "info"),
+                ("r", "rename"),
+                ("c", "comment"),
+                ("m", "move"),
+                ("a", "alias"),
                 ("Tab", "users"),
                 ("Esc", "chat"),
             ],
@@ -517,6 +531,16 @@ impl View {
                     ban,
                 };
             }
+            (Modal::DeleteFile { name }, KeyCode::Char('y')) => {
+                return Action::DeleteFile(std::mem::take(name));
+            }
+            (Modal::FileEdit { edit, name, input }, KeyCode::Enter) if !input.is_empty() => {
+                return Action::EditFile {
+                    edit: *edit,
+                    name: std::mem::take(name),
+                    text: std::mem::take(input),
+                };
+            }
             (Modal::DeleteNews { index, .. }, KeyCode::Char('y')) => {
                 return Action::DeleteNewsItem(*index);
             }
@@ -584,7 +608,8 @@ impl View {
             {
                 input.push('\n');
             }
-            (_, KeyCode::Esc) | (Modal::Info { .. } | Modal::Article { .. }, KeyCode::Enter) => {
+            (_, KeyCode::Esc)
+            | (Modal::Info { .. } | Modal::FileInfo(_) | Modal::Article { .. }, KeyCode::Enter) => {
                 return Action::None;
             }
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
@@ -648,6 +673,7 @@ impl View {
                 | Modal::SaveAs { input, .. }
                 | Modal::Subject { input, .. }
                 | Modal::NewsName { input, .. }
+                | Modal::FileEdit { input, .. }
                 | Modal::OpenAccount { input },
                 KeyCode::Backspace,
             ) => {
@@ -660,6 +686,7 @@ impl View {
                 | Modal::SaveAs { input, .. }
                 | Modal::Subject { input, .. }
                 | Modal::NewsName { input, .. }
+                | Modal::FileEdit { input, .. }
                 | Modal::OpenAccount { input },
                 KeyCode::Char(c),
             ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -785,6 +812,30 @@ impl View {
                 self.modal = Some(Modal::Upload {
                     input: String::new(),
                 });
+            }
+            KeyCode::Char('n') => {
+                return Action::AskFileEdit {
+                    edit: FileEdit::NewFolder,
+                    name: Box::default(),
+                };
+            }
+            KeyCode::Char(c @ ('x' | 'i' | 'r' | 'c' | 'm' | 'a')) => {
+                let Some(file) = files.get(self.selected_file) else {
+                    return Action::None;
+                };
+                let name = file.name.clone();
+                let edit = match c {
+                    'x' => {
+                        self.modal = Some(Modal::DeleteFile { name });
+                        return Action::None;
+                    }
+                    'i' => return Action::GetFileInfo(name),
+                    'r' => FileEdit::Rename,
+                    'c' => FileEdit::Comment,
+                    'm' => FileEdit::Move,
+                    _ => FileEdit::Alias,
+                };
+                return Action::AskFileEdit { edit, name };
             }
             _ => {}
         }
@@ -929,9 +980,11 @@ impl View {
                         return self.choose(user_id, item, users);
                     }
                 }
-                Modal::Info { .. } => self.modal = None,
+                Modal::Info { .. } | Modal::FileInfo(_) => self.modal = None,
                 Modal::InstantMsg { .. }
                 | Modal::Disconnect { .. }
+                | Modal::FileEdit { .. }
+                | Modal::DeleteFile { .. }
                 | Modal::Broadcast { .. }
                 | Modal::Upload { .. }
                 | Modal::SaveAs { .. }
@@ -1466,6 +1519,44 @@ mod tests {
             Some(Modal::Disconnect { user_id: 2, .. })
         ));
         assert_eq!(MenuItem::items(false).len(), 3);
+    }
+
+    #[test]
+    fn file_keys_ask_for_text_info_or_a_delete_check() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('f'), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('m')), &users(), &files()),
+            Action::AskFileEdit {
+                edit: FileEdit::Move,
+                name: "readme.txt".into()
+            }
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('i')), &users(), &files()),
+            Action::GetFileInfo("readme.txt".into())
+        );
+        let _ = view.handle_key(key(KeyCode::Char('x')), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('y')), &users(), &files()),
+            Action::DeleteFile("readme.txt".into())
+        );
+
+        view.modal = Some(Modal::FileEdit {
+            edit: FileEdit::Rename,
+            name: "readme.txt".into(),
+            input: "readme".into(),
+        });
+        type_text(&mut view, ".md");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::EditFile {
+                edit: FileEdit::Rename,
+                name: "readme.txt".into(),
+                text: "readme.md".into(),
+            }
+        );
     }
 
     #[test]

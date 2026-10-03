@@ -178,13 +178,6 @@ impl HotlineClient {
     ///
     /// [`myField_NewsPath`]: hotline_proto::FieldId::NewsPath
     fn news_path_field(&self, path: &HlPath) -> Result<Option<Field>> {
-        if path.components.is_empty() {
-            return Ok(None);
-        }
-        let encoding = self.encoding().get();
-        Ok(Some(Field::bytes(
-            FieldId::NewsPath,
-            path.encode(encoding)?,
-        )))
+        self.path_field(FieldId::NewsPath, path)
     }
 }

@@ -588,15 +588,17 @@ impl HotlineClient {
     /// A [`myField_FilePath`] (202) field for `path`, `None` at the root.
     ///
     /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
-    fn file_path_field(&self, path: &HlPath) -> Result<Option<Field>> {
+    pub(crate) fn file_path_field(&self, path: &HlPath) -> Result<Option<Field>> {
+        self.path_field(FieldId::FilePath, path)
+    }
+
+    /// An `id` field for `path`, `None` at the root.
+    pub(crate) fn path_field(&self, id: FieldId, path: &HlPath) -> Result<Option<Field>> {
         if path.components.is_empty() {
             return Ok(None);
         }
         let encoding = self.encoding.get();
-        Ok(Some(Field::bytes(
-            FieldId::FilePath,
-            path.encode(encoding)?,
-        )))
+        Ok(Some(Field::bytes(id, path.encode(encoding)?)))
     }
 }
 

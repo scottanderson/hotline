@@ -1,4 +1,7 @@
+use hotline_client::FileInfo;
+
 use super::{AccountForm, OptionsForm};
+use crate::file_edit::FileEdit;
 use crate::transfer::Conflict;
 
 /// A box drawn over the main screen that takes every key until it closes.
@@ -29,6 +32,16 @@ pub enum Modal {
     Upload { input: String },
     /// A transfer that waits for resume, replace, or cancel.
     Confirm(Conflict),
+    /// The text of `edit` on the file `name`.
+    FileEdit {
+        edit: FileEdit,
+        name: Box<str>,
+        input: String,
+    },
+    /// A check before the file or folder `name` is deleted.
+    DeleteFile { name: Box<str> },
+    /// The info of a file or folder.
+    FileInfo(FileInfo),
     /// A new local name for the download of `name`.
     SaveAs { name: Box<str>, input: String },
     /// An invitation to a private chat room.

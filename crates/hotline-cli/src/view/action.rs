@@ -1,5 +1,6 @@
 use hotline_client::{Ban, ClientUserInfo, UserAccount};
 
+use crate::file_edit::FileEdit;
 use crate::transfer::Start;
 
 /// What the caller must do after one key press or mouse click.
@@ -69,6 +70,21 @@ pub enum Action {
         path: String,
         start: Start,
     },
+    /// Ask for the text of `edit` on the file `name` in the current folder.
+    AskFileEdit {
+        edit: FileEdit,
+        name: Box<str>,
+    },
+    /// Apply `edit` with `text` to the file `name` in the current folder.
+    EditFile {
+        edit: FileEdit,
+        name: Box<str>,
+        text: String,
+    },
+    /// Delete the file or folder with this name in the current folder.
+    DeleteFile(Box<str>),
+    /// Show the info of the file or folder with this name in the current folder.
+    GetFileInfo(Box<str>),
     /// List the current threaded news bundle or category again.
     ListThreadedNews,
     /// Open the threaded news item at this index, or read the article there.

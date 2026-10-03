@@ -1,5 +1,6 @@
 //! Rendering, and the screen areas that mouse clicks hit.
 
+use hotline_client::FileInfo;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -359,6 +360,19 @@ fn check_row(on: bool, label: &str) -> String {
     format!("[{mark}] {label}")
 }
 
+/// The lines of `info`: size, type and creator if sent, and comment.
+fn file_info_lines(info: &FileInfo) -> Vec<String> {
+    let size = format!("size:    {} ({} bytes)", size_text(info.size), info.size);
+    let kind = info.type_text.iter().map(|t| format!("type:    {t}"));
+    let creator = info.creator_text.iter().map(|c| format!("creator: {c}"));
+    let comment = format!("comment: {}", info.comment.replace('\r', "\n"));
+    std::iter::once(size)
+        .chain(kind)
+        .chain(creator)
+        .chain(std::iter::once(comment))
+        .collect()
+}
+
 /// A folder's name with a trailing `/`, or a file's name and size.
 fn file_label(file: &FileNameWithInfo) -> String {
     if file.is_folder() {
@@ -527,6 +541,39 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             let text = format!("Disconnect {name}?");
             frame.render_widget(Paragraph::new(text).block(block), area);
+        }
+        Modal::FileEdit { edit, name, input } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title(edit.title(name));
+            frame.render_widget(Clear, area);
+            draw_text_box(frame, area, block, input, true);
+        }
+        Modal::DeleteFile { name } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("delete?");
+            frame.render_widget(Clear, area);
+            let text = format!("Delete {name} and everything in it?");
+            frame.render_widget(Paragraph::new(text).block(block), area);
+        }
+        Modal::FileInfo(info) => {
+            let text = file_info_lines(info).join("\n");
+            let height = text.lines().count() as u16 + 2;
+            let area = centered(screen, 70, height);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title(format!("info for {}", info.name));
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
+                area,
+            );
         }
         Modal::Invite { from, .. } => {
             let area = centered(screen, 60, 3);
@@ -735,6 +782,25 @@ mod tests {
         assert_eq!(size_text(1536), "1.5 KB");
         assert_eq!(size_text(3 * 1024 * 1024), "3.0 MB");
         assert_eq!(size_text(u32::MAX), "4.0 GB");
+    }
+
+    #[test]
+    fn file_info_lines_leave_out_what_the_server_does_not_send() {
+        let info = FileInfo {
+            name: "a.txt".into(),
+            size: 2048,
+            type_text: None,
+            creator_text: Some("ttxt".into()),
+            comment: "hi".into(),
+        };
+        assert_eq!(
+            file_info_lines(&info),
+            [
+                "size:    2.0 KB (2048 bytes)",
+                "creator: ttxt",
+                "comment: hi"
+            ]
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! `hlc`, a terminal Hotline client built on `hotline-client`.
 
 mod args;
+mod file_edit;
 mod line;
 mod session;
 mod tracker;
@@ -25,6 +26,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use args::Args;
+use file_edit::FileEdit;
 use hotline_client::HotlineClient;
 use hotline_proto::types::HlPath;
 use line::Line;
@@ -260,6 +262,28 @@ async fn perform(
             let path = std::path::Path::new(&path);
             let conflict = session.upload(client, path, start, done).await;
             view.modal = conflict.map(Modal::ask);
+        }
+        Action::AskFileEdit { edit, name } => {
+            let input = match edit {
+                FileEdit::NewFolder => Some(String::new()),
+                FileEdit::Rename => Some(name.to_string()),
+                FileEdit::Comment => session
+                    .get_file_info(client, &name)
+                    .await
+                    .map(|info| info.comment.into()),
+                FileEdit::Move | FileEdit::Alias => Some(session.folder_text()),
+            };
+            view.modal = input.map(|input| Modal::FileEdit { edit, name, input });
+        }
+        Action::EditFile { edit, name, text } => {
+            session.edit_file(client, edit, &name, &text).await;
+        }
+        Action::DeleteFile(name) => session.delete_file(client, &name).await,
+        Action::GetFileInfo(name) => {
+            view.modal = session
+                .get_file_info(client, &name)
+                .await
+                .map(Modal::FileInfo);
         }
         Action::ListThreadedNews => {
             session.list_threaded_news(client).await;
