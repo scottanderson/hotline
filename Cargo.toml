@@ -21,6 +21,7 @@ keywords = ["hotline", "trtp", "chat", "bbs", "protocol"]
 
 [workspace.lints.rust]
 missing_docs = "warn"
+unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 missing_const_for_fn = "warn"
