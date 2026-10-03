@@ -1,4 +1,4 @@
-use hotline_client::UserAccount;
+use hotline_client::{ClientUserInfo, UserAccount};
 
 use crate::transfer::Start;
 
@@ -36,6 +36,9 @@ pub enum Action {
         text: String,
     },
     GetClientInfoText(u16),
+    /// Ask for this user's new name, icon, and options.
+    EditOptions,
+    SetClientUserInfo(ClientUserInfo),
     /// Send a message to every connected user.
     UserBroadcast(String),
     GetMsgs,

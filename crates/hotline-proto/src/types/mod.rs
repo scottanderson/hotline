@@ -7,6 +7,7 @@ mod news_article_list_data;
 mod news_article_summary;
 mod news_category_list_entry;
 mod path;
+mod user_change_options;
 mod user_flags;
 mod user_name;
 
@@ -16,6 +17,7 @@ pub use news_article_list_data::NewsArticleListData;
 pub use news_article_summary::{NewsArticleSummary, NewsFlavor};
 pub use news_category_list_entry::NewsCategoryListEntry;
 pub use path::HlPath;
+pub use user_change_options::UserChangeOptions;
 pub use user_flags::UserFlags;
 pub use user_name::UserNameWithInfo;
 

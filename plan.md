@@ -146,12 +146,12 @@ one-shared-room model.
    info text, reads and posts classic news, lists users, files, and
    tracker servers, downloads and uploads files and folders, and shows
    a banner's link, resumes transfers, uses private chat rooms, reads
-   and writes threaded news, administers accounts, and sends and shows
-   broadcasts. It does not send `myTran_DisconnectUser` (110), the file
-   operations `myTran_DeleteFile` (204) to `myTran_MakeFileAlias`
-   (209), `myTran_DownloadBanner` (212), `myTran_KillDownload` (214),
-   or `myTran_SetClientUserInfo` (304) after login. Each area can be
-   its own task.
+   and writes threaded news, administers accounts, sends and shows
+   broadcasts, and changes the user's name, icon, and options. It does
+   not send `myTran_DisconnectUser` (110), the file operations
+   `myTran_DeleteFile` (204) to `myTran_MakeFileAlias` (209),
+   `myTran_DownloadBanner` (212), or `myTran_KillDownload` (214). Each
+   area can be its own task.
 
 ## Resolved
 
@@ -804,6 +804,15 @@ one-shared-room model.
      user has the broadcast privilege. A broadcast push shows as an
      "Administrator Message" line, like openline's client
      (`ProcessTran_UserBroadcast`).
+
+106. `hlc` changes the user's name, icon, and options after login with
+     `myTran_SetClientUserInfo` (304). Ctrl-O opens the form. Like
+     openline's client (`GetClientUserInfo`), each request sends the
+     name, the icon, and every `myField_Options` (113) bit: refuse
+     private messages, refuse private chat, and automatic response. It
+     adds `myField_AutomaticResponse` (215) only when that bit is on.
+     `UserChangeOptions` moved from the server to `hotline-proto`, so
+     the server and `hotline-client` share it.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

@@ -4,10 +4,12 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use hotline_client::{AccountChange, ClientError, HotlineClient, Password, UserAccount};
+use hotline_client::{
+    AccountChange, ClientError, ClientUserInfo, HotlineClient, Password, UserAccount,
+};
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::TransactionType;
-use hotline_proto::types::HlPath;
+use hotline_proto::types::{HlPath, UserChangeOptions};
 use hotline_proto::{Access, FieldId, Opcode, Transaction};
 use hotline_server::{InMemoryFileProvider, Providers, Server, ServerConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -120,6 +122,33 @@ async fn user_broadcast_reaches_every_user() {
     assert_eq!(
         msg.string(FieldId::Data, encoding).as_deref(),
         Some("server going down")
+    );
+}
+
+#[tokio::test]
+async fn set_client_user_info_renames_and_sets_the_automatic_response() {
+    let addr = start_server().await;
+    let (alice, mut alice_events) = join(addr, "alice").await;
+    let (bob, _bob_events) = join(addr, "bob").await;
+    next_push(&mut alice_events, Opcode::NotifyChangeUser).await;
+
+    let info = ClientUserInfo {
+        name: "robert".into(),
+        icon: 7,
+        options: UserChangeOptions::AUTO_RESPONSE,
+        automatic_response: "away".into(),
+    };
+    bob.set_client_user_info(&info).await.unwrap();
+    let change = next_push(&mut alice_events, Opcode::NotifyChangeUser).await;
+    let encoding = hotline_proto::text_encoding::DEFAULT;
+    let user = change.user_entry(encoding).unwrap();
+    assert_eq!((&*user.name, user.icon), ("robert", 7));
+
+    alice.send_instant_msg(user.user_id, "hi").await.unwrap();
+    let reply = next_push(&mut alice_events, Opcode::ServerMsg).await;
+    assert_eq!(
+        reply.string(FieldId::Data, encoding).as_deref(),
+        Some("away")
     );
 }
 

@@ -1,4 +1,4 @@
-use super::AccountForm;
+use super::{AccountForm, OptionsForm};
 use crate::transfer::Conflict;
 
 /// A box drawn over the main screen that takes every key until it closes.
@@ -18,6 +18,8 @@ pub enum Modal {
     },
     /// A message to every connected user.
     Broadcast { input: String },
+    /// This user's name, icon, and options.
+    Options(OptionsForm),
     /// A user's info text.
     Info { name: Box<str>, text: Box<str> },
     /// The local path of a file or folder to upload to the current folder.

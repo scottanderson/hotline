@@ -11,6 +11,7 @@
 mod accounts;
 mod client;
 mod client_info_text;
+mod client_user_info;
 mod error;
 mod file_download;
 mod file_upload;
@@ -26,6 +27,7 @@ mod news;
 pub use accounts::{AccountChange, Password, UserAccount};
 pub use client::HotlineClient;
 pub use client_info_text::ClientInfoText;
+pub use client_user_info::ClientUserInfo;
 pub use error::{ClientError, Result};
 pub use file_download::FileDownload;
 pub use file_upload::FileUpload;

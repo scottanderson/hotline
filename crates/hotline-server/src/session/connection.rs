@@ -16,7 +16,7 @@ use hotline_codec::TransactionCodec;
 use hotline_proto::consts::Access;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
-use hotline_proto::types::{UserFlags, UserNameWithInfo};
+use hotline_proto::types::{UserChangeOptions, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
 
@@ -29,8 +29,6 @@ use crate::server::ServerConfig;
 use crate::state::{
     AccessUpdate, ConsoleUpdate, RecipientMessage, SharedState, UserEntry, IDLE_THRESHOLD,
 };
-
-use super::options::UserChangeOptions;
 
 /// [`myField_Options`] (113) values on
 /// [`myTran_SendInstantMsg`] (108)/[`myTran_ServerMsg`] (104): which kind of

@@ -14,11 +14,13 @@ use std::collections::VecDeque;
 use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use hotline_client::{ClientInfoText, FolderDownload, FolderUpload, HotlineClient, UserAccount};
+use hotline_client::{
+    ClientInfoText, ClientUserInfo, FolderDownload, FolderUpload, HotlineClient, UserAccount,
+};
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
-use hotline_proto::types::{FileNameWithInfo, HlPath, UserNameWithInfo};
+use hotline_proto::types::{FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Transaction};
 use tokio::fs::{File, OpenOptions};
@@ -36,6 +38,9 @@ pub use threaded_news::NewsItem;
 pub struct ClientSession {
     pub nick: Box<str>,
     pub icon: u16,
+    pub options: UserChangeOptions,
+    /// The reply to a private message while [`UserChangeOptions::AUTO_RESPONSE`] is on.
+    pub automatic_response: Box<str>,
     pub mode: Mode,
     pub users: Vec<UserNameWithInfo>,
     pub lines: Vec<Line>,
@@ -70,6 +75,8 @@ impl ClientSession {
         Self {
             nick: nick.into(),
             icon,
+            options: UserChangeOptions::empty(),
+            automatic_response: Box::default(),
             mode: Mode::Joining,
             users: Vec::new(),
             lines: vec![Line {
@@ -757,6 +764,30 @@ impl ClientSession {
         }
     }
 
+    /// This user's name, icon, and options.
+    pub fn user_info(&self) -> ClientUserInfo {
+        ClientUserInfo {
+            name: self.nick.clone(),
+            icon: self.icon,
+            options: self.options,
+            automatic_response: self.automatic_response.clone(),
+        }
+    }
+
+    /// Change this user's name, icon, and options,
+    /// [`myTran_SetClientUserInfo`] (304).
+    ///
+    /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
+    pub async fn set_client_user_info(&mut self, client: &HotlineClient, info: ClientUserInfo) {
+        if let Err(e) = client.set_client_user_info(&info).await {
+            return self.push(format!("failed to change options: {e}"), LineKind::Error);
+        }
+        self.nick = info.name;
+        self.icon = info.icon;
+        self.options = info.options;
+        self.automatic_response = info.automatic_response;
+    }
+
     pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {
         let text = wire_text(text);
         match client.send_instant_msg(user_id, &text).await {
@@ -1195,6 +1226,25 @@ mod tests {
         let mut data = Vec::new();
         download.receive(&mut data).await.unwrap();
         assert_eq!(data, b"hello");
+    }
+
+    #[tokio::test]
+    async fn set_client_user_info_keeps_the_new_name_and_options() {
+        let addr = test_support::start_server(hotline_server::Providers::default()).await;
+        let (client, mut events) = test_support::join_admin(addr, "me").await;
+        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let info = ClientUserInfo {
+            name: "you".into(),
+            icon: 3,
+            options: UserChangeOptions::REFUSE_CHAT,
+            automatic_response: Box::default(),
+        };
+
+        session.set_client_user_info(&client, info.clone()).await;
+        assert_eq!(session.user_info(), info);
+        let change = test_support::next_push(&mut events, Opcode::NotifyChangeUser).await;
+        let user = change.user_entry(client.encoding().get()).unwrap();
+        assert_eq!((&*user.name, user.icon), ("you", 3));
     }
 
     #[test]

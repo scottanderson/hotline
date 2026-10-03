@@ -30,7 +30,7 @@ use hotline_proto::types::HlPath;
 use line::Line;
 use session::{ClientSession, EventOutcome, Mode};
 use tokio::sync::mpsc;
-use view::{AccountForm, Action, Modal, View};
+use view::{AccountForm, Action, Modal, OptionsForm, View};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -219,6 +219,10 @@ async fn perform(
             }
         }
         Action::UserBroadcast(text) => session.user_broadcast(client, &text).await,
+        Action::EditOptions => {
+            view.modal = Some(Modal::Options(OptionsForm::edit(&session.user_info())));
+        }
+        Action::SetClientUserInfo(info) => session.set_client_user_info(client, info).await,
         Action::GetMsgs => session.get_msgs(client).await,
         Action::OldPostNews(text) => session.old_post_news(client, &text).await,
         Action::ListFiles => {

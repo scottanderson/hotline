@@ -4,6 +4,7 @@
 mod account_form;
 mod action;
 mod modal;
+mod options_form;
 mod tab;
 
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use crate::ui::{self, Areas};
 pub use account_form::{privileges, AccountForm};
 pub use action::Action;
 pub use modal::{MenuItem, Modal};
+pub use options_form::{OptionsForm, OPTIONS};
 pub use tab::Tab;
 
 /// The longest gap between the two clicks of a double click.
@@ -244,7 +246,7 @@ impl View {
             (Some(Modal::DeleteNews { .. } | Modal::DeleteAccount { .. }), ..) => {
                 &[("y", "delete"), ("Esc", "cancel")]
             }
-            (Some(Modal::Account(_)), ..) => &[
+            (Some(Modal::Account(_) | Modal::Options(_)), ..) => &[
                 ("↑↓", "row"),
                 ("Space", "toggle"),
                 ("Enter", "save"),
@@ -314,6 +316,7 @@ impl View {
                 ("^F", "files"),
                 ("^B", "threaded news"),
                 ("^G", "broadcast"),
+                ("^O", "options"),
                 ("Esc", "quit"),
             ],
             (None, Focus::Input, Tab::Chat) => &[
@@ -323,6 +326,7 @@ impl View {
                 ("^N", "news"),
                 ("^F", "files"),
                 ("^B", "threaded news"),
+                ("^O", "options"),
                 ("Esc", "quit"),
             ],
             (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => &[
@@ -392,6 +396,9 @@ impl View {
             if let Some(tab) = tab {
                 return self.set_tab(tab);
             }
+            if key.code == KeyCode::Char('o') {
+                return Action::EditOptions;
+            }
             if key.code == KeyCode::Char('g') && self.can_broadcast {
                 self.modal = Some(Modal::Broadcast {
                     input: String::new(),
@@ -422,6 +429,9 @@ impl View {
         }
         if let Modal::Account(form) = modal {
             return self.account_form_key(form, key);
+        }
+        if let Modal::Options(form) = modal {
+            return self.options_form_key(form, key);
         }
         match (&mut modal, key.code) {
             (Modal::Article { id, title, .. }, KeyCode::Char('r')) => {
@@ -729,6 +739,34 @@ impl View {
         Action::None
     }
 
+    fn options_form_key(&mut self, mut form: OptionsForm, key: KeyEvent) -> Action {
+        let last = OptionsForm::rows() - 1;
+        match key.code {
+            KeyCode::Esc => return Action::None,
+            KeyCode::Enter => {
+                if let Some(info) = form.info() {
+                    return Action::SetClientUserInfo(info);
+                }
+            }
+            KeyCode::Up => form.row = form.row.saturating_sub(1),
+            KeyCode::Down => form.row = (form.row + 1).min(last),
+            KeyCode::Char(' ') if form.row >= options_form::TEXT_ROWS => form.toggle(),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(text) = form.text_mut() {
+                    text.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(text) = form.text_mut() {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
+        self.modal = Some(Modal::Options(form));
+        Action::None
+    }
+
     fn accounts_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Tab => self.focus = Focus::Users,
@@ -818,6 +856,7 @@ impl View {
                 | Modal::NewsName { .. }
                 | Modal::DeleteNews { .. }
                 | Modal::Account(_)
+                | Modal::Options(_)
                 | Modal::OpenAccount { .. }
                 | Modal::DeleteAccount { .. } => {}
                 Modal::Article { .. } => self.modal = None,
@@ -1051,8 +1090,8 @@ pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hotline_client::{Password, UserAccount};
-    use hotline_proto::types::UserFlags;
+    use hotline_client::{ClientUserInfo, Password, UserAccount};
+    use hotline_proto::types::{UserChangeOptions, UserFlags};
     use hotline_proto::Access;
 
     fn users() -> Vec<UserNameWithInfo> {
@@ -1257,6 +1296,33 @@ mod tests {
             Action::UserBroadcast("bye".into())
         );
         assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn the_options_form_sends_the_new_name_and_options() {
+        let mut view = View::default();
+        assert_eq!(
+            view.handle_key(ctrl('o'), &users(), &files()),
+            Action::EditOptions
+        );
+        let info = ClientUserInfo {
+            name: "me".into(),
+            ..ClientUserInfo::default()
+        };
+        view.modal = Some(Modal::Options(OptionsForm::edit(&info)));
+        type_text(&mut view, "w");
+        for _ in 0..3 {
+            let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        }
+        type_text(&mut view, " ");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::SetClientUserInfo(ClientUserInfo {
+                name: "mew".into(),
+                options: UserChangeOptions::REFUSE_PM,
+                ..ClientUserInfo::default()
+            })
+        );
     }
 
     #[test]

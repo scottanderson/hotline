@@ -9,7 +9,9 @@ use ratatui::Frame;
 
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode};
-use crate::view::{contains, privileges, AccountForm, Focus, MenuItem, Modal, Tab, View};
+use crate::view::{
+    contains, privileges, AccountForm, Focus, MenuItem, Modal, OptionsForm, Tab, View, OPTIONS,
+};
 
 /// Where each part of the main screen is drawn.
 pub struct Areas {
@@ -334,11 +336,27 @@ fn account_form_rows(form: &AccountForm) -> Vec<String> {
         format!("login:    {}", form.login),
         format!("password: {}", form.password_text()),
     ];
-    let checks = privileges().map(|(label, flag)| {
-        let mark = if form.access.contains(flag) { 'x' } else { ' ' };
-        format!("[{mark}] {label}")
-    });
+    let checks = privileges().map(|(label, flag)| check_row(form.access.contains(flag), &label));
     text.into_iter().chain(checks).collect()
+}
+
+/// The rows of `form`: name, icon, automatic response, then a check box for each option.
+fn options_form_rows(form: &OptionsForm) -> Vec<String> {
+    let text = [
+        format!("name:     {}", form.name),
+        format!("icon:     {}", form.icon),
+        format!("response: {}", form.automatic_response),
+    ];
+    let checks = OPTIONS
+        .iter()
+        .map(|(label, flag)| check_row(form.options.contains(*flag), label));
+    text.into_iter().chain(checks).collect()
+}
+
+/// A form row with a check box, marked if `on`.
+fn check_row(on: bool, label: &str) -> String {
+    let mark = if on { 'x' } else { ' ' };
+    format!("[{mark}] {label}")
 }
 
 /// A folder's name with a trailing `/`, or a file's name and size.
@@ -615,6 +633,21 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
                         .borders(Borders::ALL)
                         .border_style(border(true))
                         .title(title),
+                )
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            let mut state = ListState::default().with_selected(Some(form.row));
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, &mut state);
+        }
+        Modal::Options(form) => {
+            let rows = options_form_rows(form);
+            let area = centered(screen, 60, rows.len() as u16 + 2);
+            let list = List::new(rows)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border(true))
+                        .title("options"),
                 )
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
             let mut state = ListState::default().with_selected(Some(form.row));

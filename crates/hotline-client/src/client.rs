@@ -12,10 +12,11 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
-use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserNameWithInfo};
+use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
 
 use crate::client_info_text::ClientInfoText;
+use crate::client_user_info::ClientUserInfo;
 use crate::error::{ClientError, Result};
 use crate::file_download::FileDownload;
 use crate::file_upload::FileUpload;
@@ -351,6 +352,25 @@ impl HotlineClient {
         let reply = self.request(Opcode::GetUserNameList, vec![]).await?;
         let encoding = self.encoding.get();
         Ok(reply.user_list_entries(encoding)?)
+    }
+
+    /// Change this user's name, icon, and options after login,
+    /// [`myTran_SetClientUserInfo`] (304). The server sends no reply.
+    ///
+    /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
+    pub async fn set_client_user_info(&self, info: &ClientUserInfo) -> Result<()> {
+        let mut fields = vec![
+            Field::string(FieldId::UserName, &*info.name),
+            Field::u16(FieldId::UserIconID, info.icon),
+            Field::u16(FieldId::Options, info.options.bits()),
+        ];
+        if info.options.contains(UserChangeOptions::AUTO_RESPONSE) {
+            fields.push(Field::string(
+                FieldId::AutomaticResponse,
+                &*info.automatic_response,
+            ));
+        }
+        self.post(Opcode::SetClientUserInfo, fields).await
     }
 
     /// Fetch `user_id`'s info text, [`myTran_GetClientInfoText`] (303).
