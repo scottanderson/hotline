@@ -25,7 +25,7 @@ pub struct FileInfo {
 
 impl HotlineClient {
     /// The file or folder `name` in the folder at `path` and its path field.
-    fn name_fields(&self, path: &HlPath, name: &str) -> Result<Vec<Field>> {
+    pub(crate) fn name_fields(&self, path: &HlPath, name: &str) -> Result<Vec<Field>> {
         let mut fields = vec![Field::string(FieldId::FileName, name)];
         fields.extend(self.file_path_field(path)?);
         Ok(fields)

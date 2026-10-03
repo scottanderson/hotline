@@ -507,8 +507,7 @@ impl HotlineClient {
         name: &str,
         offset: u32,
     ) -> Result<FileDownload> {
-        let mut fields = vec![Field::string(FieldId::FileName, name)];
-        fields.extend(self.file_path_field(path)?);
+        let mut fields = self.name_fields(path, name)?;
         if offset > 0 {
             fields.push(Field::bytes(
                 FieldId::FileResumeData,
@@ -544,8 +543,7 @@ impl HotlineClient {
     ///
     /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
     pub async fn download_folder(&self, path: &HlPath, name: &str) -> Result<FolderDownload> {
-        let mut fields = vec![Field::string(FieldId::FileName, name)];
-        fields.extend(self.file_path_field(path)?);
+        let fields = self.name_fields(path, name)?;
         let reply = self.request(Opcode::DownloadFldr, fields).await?;
         let u32_field = |id| reply.field(id).and_then(Field::as_u32);
         let item_count = u32_field(FieldId::FldrItemCount).unwrap_or_default();
@@ -577,8 +575,7 @@ impl HotlineClient {
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "the file is too large")
             })?;
-        let mut fields = vec![Field::string(FieldId::FileName, name)];
-        fields.extend(self.file_path_field(path)?);
+        let mut fields = self.name_fields(path, name)?;
         fields.push(if resume {
             Field::u16(FieldId::FileXferOptions, RESUME)
         } else {
@@ -617,12 +614,9 @@ impl HotlineClient {
         resume: bool,
     ) -> Result<FolderUpload> {
         let total_size = total_size as u32;
-        let mut fields = vec![
-            Field::string(FieldId::FileName, name),
-            Field::u32(FieldId::TransferSize, total_size),
-            Field::u32(FieldId::FldrItemCount, item_count),
-        ];
-        fields.extend(self.file_path_field(path)?);
+        let mut fields = self.name_fields(path, name)?;
+        fields.push(Field::u32(FieldId::TransferSize, total_size));
+        fields.push(Field::u32(FieldId::FldrItemCount, item_count));
         if resume {
             fields.push(Field::u16(FieldId::FileXferOptions, RESUME));
         }
