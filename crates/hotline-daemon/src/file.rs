@@ -219,9 +219,6 @@ impl FileProvider for DiskFileProvider {
         let path = self
             .resolve_file(dir, &partial_upload_name(name))
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
         Ok(Box::new(tokio::fs::File::create(path).await?))
     }
 

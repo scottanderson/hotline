@@ -1638,7 +1638,9 @@ mod tests {
     #[tokio::test]
     async fn upload_file_into_a_dropbox_is_allowed_without_upload_anywhere() {
         let encoding = text_encoding::DEFAULT;
-        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Uploads"]), "b.txt", *b"");
+        let state = state_with_files(files);
         let mut access = Access::all();
         access.remove(Access::UPLOAD_ANYWHERE);
         let session = test_session("Alice", access);
@@ -1847,6 +1849,32 @@ mod tests {
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
                 Field::u16(FieldId::FileXferOptions, 1),
+            ],
+        );
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn upload_file_to_a_missing_folder_is_an_error() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = Transaction::request(
+            Opcode::UploadFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::bytes(
+                    FieldId::FilePath,
+                    HlPath::new(["Nope"]).encode(encoding).unwrap(),
+                ),
             ],
         );
         let [reply] = session

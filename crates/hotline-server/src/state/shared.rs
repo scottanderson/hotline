@@ -480,12 +480,11 @@ impl SharedState {
     }
 
     /// Whether `requester` may start (or resume) a [`myTran_UploadFile`] (203)
-    /// upload of `name` under `dir`: the destination must be under an
-    /// "Upload"/"Drop Box" folder unless `upload_anywhere`, and a finished file
-    /// already at `name` always rejects the request. With `resume` false that's
-    /// the only check; with `resume` true, an in-progress upload is also
-    /// required, and its current size is returned as the resume offset (`0`
-    /// otherwise).
+    /// upload of `name` under `dir`. `dir` must exist, and must be under an
+    /// "Upload"/"Drop Box" folder unless `upload_anywhere`. A finished file
+    /// already at `name` rejects the request. With `resume` true, an
+    /// in-progress upload is also required, and its current size is returned
+    /// as the resume offset (`0` otherwise).
     ///
     /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     pub async fn authorize_upload(
@@ -496,6 +495,10 @@ impl SharedState {
         access: Access,
         resume: bool,
     ) -> Result<u64, Cow<'static, str>> {
+        self.files
+            .list(requester, dir)
+            .await
+            .ok_or("file or folder not found.")?;
         upload_destination_access(dir, access)?;
         if self.files.exists(requester, dir, name).await {
             Err("file already exists.")?;
