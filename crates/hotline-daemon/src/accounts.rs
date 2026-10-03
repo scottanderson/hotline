@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use hotline_server::{Account, AccountProvider};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
 /// The seeded account with full access.
@@ -31,10 +32,15 @@ pub struct FileAccountProvider {
 }
 
 impl FileAccountProvider {
-    /// Loads every account under `dir`.
+    /// Loads every account under `dir`. A new `dir` is private to this
+    /// user on Unix.
     pub async fn open(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
-        tokio::fs::create_dir_all(&dir).await?;
+        let mut builder = tokio::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(&dir).await?;
 
         let mut cache = HashMap::new();
         let mut entries = tokio::fs::read_dir(&dir).await?;
@@ -75,7 +81,13 @@ impl FileAccountProvider {
         })?;
         let bytes = serde_json::to_vec_pretty(account)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        tokio::fs::write(path, bytes).await
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(path).await?;
+        file.write_all(&bytes).await?;
+        file.flush().await
     }
 }
 
@@ -138,6 +150,21 @@ mod tests {
         provider.put("alice".to_string(), alice()).await.unwrap();
 
         assert_eq!(provider.get("alice").await, Some(alice()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_new_directory_and_account_file_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let accounts = dir.path().join("accounts");
+        let provider = FileAccountProvider::open(&accounts).await.unwrap();
+        provider.put("alice".to_string(), alice()).await.unwrap();
+
+        let mode = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(accounts.clone()), 0o700);
+        assert_eq!(mode(accounts.join("alice.json")), 0o600);
     }
 
     #[tokio::test]

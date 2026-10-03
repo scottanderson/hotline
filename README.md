@@ -183,7 +183,8 @@ created account "admin" with password "3f9c0a7b12e45d68" in accounts
 
 Record it, because `hls` does not print it again. Log in as `admin` to
 change it, or to add accounts. Account files keep passwords as plain
-text, so keep the accounts directory private.
+text. On Unix, `hls` makes a new accounts directory and each account
+file readable only by the user that runs it.
 
 ### Limits
 
