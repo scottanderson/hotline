@@ -579,28 +579,6 @@ impl View {
                     text: std::mem::take(body),
                 };
             }
-            (
-                Modal::Post {
-                    title,
-                    body,
-                    on_body,
-                    ..
-                },
-                KeyCode::Backspace,
-            ) => {
-                if *on_body { body } else { title }.pop();
-            }
-            (
-                Modal::Post {
-                    title,
-                    body,
-                    on_body,
-                    ..
-                },
-                KeyCode::Char(c),
-            ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if *on_body { body } else { title }.push(c);
-            }
             (Modal::NewsName { category, input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::NewNewsItem {
                     name: std::mem::take(input),
@@ -697,31 +675,15 @@ impl View {
                     start: Start::New,
                 };
             }
-            (
-                Modal::InstantMsg { input, .. }
-                | Modal::Broadcast { input }
-                | Modal::Upload { input }
-                | Modal::SaveAs { input, .. }
-                | Modal::Subject { input, .. }
-                | Modal::NewsName { input, .. }
-                | Modal::FileEdit { input, .. }
-                | Modal::OpenAccount { input },
-                KeyCode::Backspace,
-            ) => {
-                input.pop();
+            (modal, KeyCode::Backspace) => {
+                if let Some(input) = modal.input_mut() {
+                    input.pop();
+                }
             }
-            (
-                Modal::InstantMsg { input, .. }
-                | Modal::Broadcast { input }
-                | Modal::Upload { input }
-                | Modal::SaveAs { input, .. }
-                | Modal::Subject { input, .. }
-                | Modal::NewsName { input, .. }
-                | Modal::FileEdit { input, .. }
-                | Modal::OpenAccount { input },
-                KeyCode::Char(c),
-            ) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                input.push(c);
+            (modal, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(input) = modal.input_mut() {
+                    input.push(c);
+                }
             }
             (Modal::UserMenu { selected, .. }, KeyCode::Up) => {
                 *selected = selected.saturating_sub(1);

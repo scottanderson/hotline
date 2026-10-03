@@ -87,6 +87,27 @@ pub enum Modal {
 }
 
 impl Modal {
+    /// The text box with the focus, in a modal that has one.
+    pub const fn input_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Self::Post {
+                title,
+                body,
+                on_body,
+                ..
+            } => Some(if *on_body { body } else { title }),
+            Self::InstantMsg { input, .. }
+            | Self::Broadcast { input }
+            | Self::Upload { input }
+            | Self::SaveAs { input, .. }
+            | Self::Subject { input, .. }
+            | Self::NewsName { input, .. }
+            | Self::FileEdit { input, .. }
+            | Self::OpenAccount { input } => Some(input),
+            _ => None,
+        }
+    }
+
     /// The modal that asks how to start a transfer with `conflict`.
     pub fn ask(conflict: Conflict) -> Self {
         match conflict {
