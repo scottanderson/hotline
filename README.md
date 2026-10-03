@@ -21,7 +21,8 @@ crates/
 │   ├── field/                           # Field { id, data } + FieldList, FieldId (one type, both directions)
 │   ├── opcode.rs                        # Opcode (one type, both directions) + TransactionType
 │   ├── transaction/                     # Transaction + TransactionHeader
-│   ├── types/                           # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo
+│   ├── types/                           # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo,
+│   │                                    # UserFlags, UserChangeOptions, and the news list types
 │   ├── consts/                          # Access (64-bit myField_UserAccess bitmap) + RequireFlags
 │   ├── handshake/                       # ClientHandshake / ServerHandshake (the TRTP handshake)
 │   ├── htxf/                            # HtxfHeader (file transfer handshake) + flat file object framing
@@ -31,8 +32,8 @@ crates/
 ├── hotline-codec/                       # tokio_util Decoder/Encoder for Transaction
 │
 ├── hotline-client/                      # async client session (Tokio): connect, handshake,
-│                                        # login, request/reply matching, broadcast stream
-│                                        # for server-initiated transactions
+│                                        # login, request/reply matching, a broadcast stream
+│                                        # for server pushes, and file and folder transfers
 │
 ├── hotline-server/                      # async server framework (Tokio)
 │   ├── server/                          # listener, spawns one Session per connection,
