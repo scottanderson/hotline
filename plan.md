@@ -141,6 +141,14 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
+3. **`hls` lists a folder alias as a file.** `DiskFileProvider::list`
+   reads `DirEntry::metadata`, which does not follow a symlink. So a
+   folder made by `myTran_MakeFileAlias` (209) shows as a small file,
+   and a client does not open it as a folder. openline resolves an alias for the
+   list. The fix makes `list` follow a symlink. Then the folder walk
+   must skip a folder that loops back to an ancestor, as openline does,
+   or a folder download never ends.
+
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
