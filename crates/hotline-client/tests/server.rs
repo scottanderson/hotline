@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hotline_client::{
-    AccountChange, ClientError, ClientUserInfo, HotlineClient, Password, UserAccount,
+    AccountChange, Ban, ClientError, ClientUserInfo, HotlineClient, Password, UserAccount,
 };
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::TransactionType;
@@ -107,6 +107,37 @@ async fn send_instant_msg_reaches_its_target() {
         msg.string(FieldId::UserName, encoding).as_deref(),
         Some("alice")
     );
+}
+
+#[tokio::test]
+async fn disconnect_user_with_a_ban_tells_the_user_why() {
+    let addr = start_server().await;
+    let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
+    let (_bob, mut bob_events) = join(addr, "bob").await;
+
+    let bob_id = user_id(&admin, "bob").await;
+    admin
+        .disconnect_user(bob_id, "bob", Ban::Temporary)
+        .await
+        .unwrap();
+
+    let msg = next_push(&mut bob_events, Opcode::DisconnectMsg).await;
+    let encoding = hotline_proto::text_encoding::DEFAULT;
+    assert_eq!(
+        msg.string(FieldId::Data, encoding).as_deref(),
+        Some("You are temporarily banned on this server.")
+    );
+}
+
+#[tokio::test]
+async fn disconnect_user_without_the_privilege_is_a_server_error() {
+    let addr = start_server().await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+    let (_bob, _bob_events) = join(addr, "bob").await;
+
+    let bob_id = user_id(&alice, "bob").await;
+    let result = alice.disconnect_user(bob_id, "bob", Ban::None).await;
+    assert!(matches!(result, Err(ClientError::Server(_))), "{result:?}");
 }
 
 #[tokio::test]

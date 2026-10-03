@@ -140,6 +140,7 @@ async fn run(
         view.news_count = session.threaded.as_ref().map_or(0, Vec::len);
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
         view.can_broadcast = session.can_broadcast();
+        view.can_disconnect = session.can_disconnect();
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(|invite| Modal::Invite {
                 chat_id: invite.chat_id,
@@ -217,6 +218,9 @@ async fn perform(
                     text: info.text,
                 });
             }
+        }
+        Action::DisconnectUser { user_id, ban } => {
+            session.disconnect_user(client, user_id, ban).await;
         }
         Action::UserBroadcast(text) => session.user_broadcast(client, &text).await,
         Action::EditOptions => {

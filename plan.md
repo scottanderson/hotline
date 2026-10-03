@@ -147,8 +147,8 @@ one-shared-room model.
    tracker servers, downloads and uploads files and folders, and shows
    a banner's link, resumes transfers, uses private chat rooms, reads
    and writes threaded news, administers accounts, sends and shows
-   broadcasts, and changes the user's name, icon, and options. It does
-   not send `myTran_DisconnectUser` (110), the file operations
+   broadcasts, changes the user's name, icon, and options, and
+   disconnects users. It does not send the file operations
    `myTran_DeleteFile` (204) to `myTran_MakeFileAlias` (209),
    `myTran_DownloadBanner` (212), or `myTran_KillDownload` (214). Each
    area can be its own task.
@@ -813,6 +813,16 @@ one-shared-room model.
      adds `myField_AutomaticResponse` (215) only when that bit is on.
      `UserChangeOptions` moved from the server to `hotline-proto`, so
      the server and `hotline-client` share it.
+
+107. `hlc` disconnects users with `myTran_DisconnectUser` (110). The
+     user menu shows "Disconnect", and `k` on the user list does the
+     same, only when the user has the disconnect privilege, like
+     openline's client (`DoDisconnectUser`). A modal then asks: `d`
+     disconnects, `t` also bans for a while, and `p` bans for good.
+     Like openline's client, `myField_Options` (113) is 1 or 2 only for
+     a ban, and a permanent ban also sends the user's name in
+     `myField_Data` (101). openline asks only before a ban. `hlc`
+     always asks, because the modal is where the user picks the ban.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

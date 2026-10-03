@@ -15,7 +15,7 @@ use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use hotline_client::{
-    ClientInfoText, ClientUserInfo, FolderDownload, FolderUpload, HotlineClient, UserAccount,
+    Ban, ClientInfoText, ClientUserInfo, FolderDownload, FolderUpload, HotlineClient, UserAccount,
 };
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::{Opcode, TransactionType};
@@ -786,6 +786,24 @@ impl ClientSession {
         self.icon = info.icon;
         self.options = info.options;
         self.automatic_response = info.automatic_response;
+    }
+
+    /// [`myTran_DisconnectUser`] (110), showing an error line if it fails.
+    ///
+    /// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
+    pub async fn disconnect_user(&mut self, client: &HotlineClient, user_id: u16, ban: Ban) {
+        let name = match self.users.iter().find(|u| u.user_id == user_id) {
+            Some(user) => user.name.clone(),
+            None => format!("#{user_id}").into(),
+        };
+        if let Err(e) = client.disconnect_user(user_id, &name, ban).await {
+            self.push(format!("failed to disconnect {name}: {e}"), LineKind::Error);
+        }
+    }
+
+    /// `true` if the user may disconnect users.
+    pub const fn can_disconnect(&self) -> bool {
+        self.access.contains(Access::DISCON_USER)
     }
 
     pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {

@@ -9,6 +9,7 @@
 //! alongside the client.
 
 mod accounts;
+mod ban;
 mod client;
 mod client_info_text;
 mod client_user_info;
@@ -25,6 +26,7 @@ mod login_result;
 mod news;
 
 pub use accounts::{AccountChange, Password, UserAccount};
+pub use ban::Ban;
 pub use client::HotlineClient;
 pub use client_info_text::ClientInfoText;
 pub use client_user_info::ClientUserInfo;

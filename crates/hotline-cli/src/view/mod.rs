@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use hotline_client::Ban;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use ratatui::layout::Rect;
 
@@ -103,6 +104,8 @@ pub struct View {
     pub account_count: usize,
     /// `true` if the user may send a broadcast.
     pub can_broadcast: bool,
+    /// `true` if the user may disconnect users.
+    pub can_disconnect: bool,
     selected_user: Option<u16>,
     last_click: Option<(Clicked, Instant)>,
 }
@@ -131,6 +134,7 @@ impl Default for View {
             selected_account: 0,
             account_count: 0,
             can_broadcast: false,
+            can_disconnect: false,
             selected_user: None,
             last_click: None,
         }
@@ -221,6 +225,12 @@ impl View {
                 &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
             }
             (Some(Modal::Info { .. }), ..) => &[("Esc", "close")],
+            (Some(Modal::Disconnect { .. }), ..) => &[
+                ("d", "disconnect"),
+                ("t", "ban for a while"),
+                ("p", "ban for good"),
+                ("Esc", "cancel"),
+            ],
             (Some(Modal::Upload { .. }), ..) => &[("Enter", "upload"), ("Esc", "cancel")],
             (Some(Modal::SaveAs { .. }), ..) => &[("Enter", "save"), ("Esc", "cancel")],
             (
@@ -262,6 +272,14 @@ impl View {
                 ("Tab", "users"),
                 ("Esc", "chat"),
             ],
+            (None, Focus::Users, Tab::Admin) if self.can_disconnect => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("k", "disconnect"),
+                ("Tab", "accounts"),
+                ("^U", "chat"),
+            ],
             (None, Focus::Users, Tab::Admin) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
@@ -279,12 +297,29 @@ impl View {
                 ("c", "new category"),
                 ("Esc", "chat"),
             ],
+            (None, Focus::Users, Tab::Threaded) if self.can_disconnect => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("k", "disconnect"),
+                ("Tab", "news"),
+                ("^B", "chat"),
+            ],
             (None, Focus::Users, Tab::Threaded) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
                 ("i", "info"),
                 ("Tab", "news"),
                 ("^B", "chat"),
+            ],
+            (None, Focus::Users, Tab::Chat) if self.can_disconnect => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("k", "disconnect"),
+                ("Tab", "input"),
+                ("^N", "news"),
+                ("^F", "files"),
             ],
             (None, Focus::Users, Tab::Chat) => &[
                 ("↑↓", "select"),
@@ -294,12 +329,28 @@ impl View {
                 ("^N", "news"),
                 ("^F", "files"),
             ],
+            (None, Focus::Users, Tab::News) if self.can_disconnect => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("k", "disconnect"),
+                ("Tab", "input"),
+                ("^N", "chat"),
+            ],
             (None, Focus::Users, Tab::News) => &[
                 ("↑↓", "select"),
                 ("Enter", "message"),
                 ("i", "info"),
                 ("Tab", "input"),
                 ("^N", "chat"),
+            ],
+            (None, Focus::Users, Tab::Files) if self.can_disconnect => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("k", "disconnect"),
+                ("Tab", "files"),
+                ("^F", "chat"),
             ],
             (None, Focus::Users, Tab::Files) => &[
                 ("↑↓", "select"),
@@ -337,6 +388,14 @@ impl View {
                 ("u", "upload"),
                 ("Tab", "users"),
                 ("Esc", "chat"),
+            ],
+            (None, Focus::Users, Tab::Room(_)) if self.can_disconnect => &[
+                ("↑↓", "select"),
+                ("Enter", "message"),
+                ("i", "info"),
+                ("k", "disconnect"),
+                ("Tab", "input"),
+                ("Esc", "input"),
             ],
             (None, Focus::Users, Tab::Room(_)) => &[
                 ("↑↓", "select"),
@@ -446,6 +505,17 @@ impl View {
                     on_body: true,
                 });
                 return Action::None;
+            }
+            (Modal::Disconnect { user_id, .. }, KeyCode::Char(c @ ('d' | 't' | 'p'))) => {
+                let ban = match c {
+                    't' => Ban::Temporary,
+                    'p' => Ban::Permanent,
+                    _ => Ban::None,
+                };
+                return Action::DisconnectUser {
+                    user_id: *user_id,
+                    ban,
+                };
             }
             (Modal::DeleteNews { index, .. }, KeyCode::Char('y')) => {
                 return Action::DeleteNewsItem(*index);
@@ -598,16 +668,24 @@ impl View {
             (Modal::UserMenu { selected, .. }, KeyCode::Up) => {
                 *selected = selected.saturating_sub(1);
             }
-            (Modal::UserMenu { selected, .. }, KeyCode::Down) => {
-                *selected = (*selected + 1).min(MenuItem::ALL.len() - 1);
+            (
+                Modal::UserMenu {
+                    selected, items, ..
+                },
+                KeyCode::Down,
+            ) => {
+                *selected = (*selected + 1).min(items.len() - 1);
             }
             (
                 Modal::UserMenu {
-                    user_id, selected, ..
+                    user_id,
+                    selected,
+                    items,
+                    ..
                 },
                 KeyCode::Enter,
             ) => {
-                return self.choose(*user_id, MenuItem::ALL[*selected], users);
+                return self.choose(*user_id, items[*selected], users);
             }
             _ => {}
         }
@@ -640,6 +718,11 @@ impl View {
             KeyCode::Char('i') => {
                 if let Some(user_id) = self.selected_user(users) {
                     return self.choose(user_id, MenuItem::GetInfo, users);
+                }
+            }
+            KeyCode::Char('k') if self.can_disconnect => {
+                if let Some(user_id) = self.selected_user(users) {
+                    return self.choose(user_id, MenuItem::Disconnect, users);
                 }
             }
             _ => {}
@@ -835,9 +918,12 @@ impl View {
                 return Action::None;
             };
             match modal {
-                Modal::UserMenu { user_id, at, .. } => {
+                Modal::UserMenu {
+                    user_id, at, items, ..
+                } => {
                     let user_id = *user_id;
-                    let item = ui::menu_item_at(ui::menu_rect(*at, areas.screen), x, y);
+                    let menu = ui::menu_rect(*at, items, areas.screen);
+                    let item = ui::menu_item_at(menu, items, x, y);
                     self.modal = None;
                     if let (MouseButton::Left, Some(item)) = (button, item) {
                         return self.choose(user_id, item, users);
@@ -845,6 +931,7 @@ impl View {
                 }
                 Modal::Info { .. } => self.modal = None,
                 Modal::InstantMsg { .. }
+                | Modal::Disconnect { .. }
                 | Modal::Broadcast { .. }
                 | Modal::Upload { .. }
                 | Modal::SaveAs { .. }
@@ -892,6 +979,7 @@ impl View {
                     self.modal = Some(Modal::UserMenu {
                         user_id,
                         at: (x, y),
+                        items: MenuItem::items(self.can_disconnect),
                         selected: 0,
                     });
                 }
@@ -969,6 +1057,15 @@ impl View {
             }
             MenuItem::GetInfo => Action::GetClientInfoText(user_id),
             MenuItem::PrivateChat => Action::InviteNewChat(user_id),
+            MenuItem::Disconnect => {
+                if let Some(user) = users.iter().find(|u| u.user_id == user_id) {
+                    self.modal = Some(Modal::Disconnect {
+                        user_id,
+                        name: user.name.clone(),
+                    });
+                }
+                Action::None
+            }
         }
     }
 
@@ -1269,7 +1366,7 @@ mod tests {
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
         let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
 
-        let menu = ui::menu_rect((x, y), areas().screen);
+        let menu = ui::menu_rect((x, y), MenuItem::items(false), areas().screen);
         let inner = ui::inner(menu);
         let left = click(
             MouseEventKind::Down(MouseButton::Left),
@@ -1326,6 +1423,52 @@ mod tests {
     }
 
     #[test]
+    fn k_disconnects_a_user_only_with_the_privilege() {
+        let mut view = View::default();
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Char('k')), &users(), &files());
+        assert_eq!(view.modal, None);
+
+        view.can_disconnect = true;
+        let _ = view.handle_key(key(KeyCode::Char('k')), &users(), &files());
+        assert_eq!(
+            view.modal,
+            Some(Modal::Disconnect {
+                user_id: 1,
+                name: "Alice".into()
+            })
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('t')), &users(), &files()),
+            Action::DisconnectUser {
+                user_id: 1,
+                ban: Ban::Temporary
+            }
+        );
+    }
+
+    #[test]
+    fn the_user_menu_offers_disconnect_only_with_the_privilege() {
+        let mut view = View {
+            can_disconnect: true,
+            ..View::default()
+        };
+        let (x, y) = user_row(1);
+        let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
+        let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
+        for _ in 0..3 {
+            let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        }
+        let _ = view.handle_key(key(KeyCode::Enter), &users(), &files());
+        assert!(matches!(
+            view.modal,
+            Some(Modal::Disconnect { user_id: 2, .. })
+        ));
+        assert_eq!(MenuItem::items(false).len(), 3);
+    }
+
+    #[test]
     fn ctrl_n_opens_the_news_tab_and_fetches_the_news() {
         let mut view = View::default();
         let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
@@ -1361,6 +1504,15 @@ mod tests {
         assert!(view.hints().contains(&("Enter", "send")));
         let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
         assert!(view.hints().contains(&("Enter", "message")));
+    }
+
+    #[test]
+    fn hints_show_disconnect_only_with_the_privilege() {
+        let mut view = View::default();
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert!(!view.hints().contains(&("k", "disconnect")));
+        view.can_disconnect = true;
+        assert!(view.hints().contains(&("k", "disconnect")));
     }
 
     #[test]
@@ -1616,6 +1768,7 @@ mod tests {
             modal: Some(Modal::UserMenu {
                 user_id: 2,
                 at: (0, 0),
+                items: MenuItem::items(false),
                 selected: 0,
             }),
             ..View::default()

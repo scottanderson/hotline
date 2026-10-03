@@ -113,27 +113,27 @@ pub fn tab_users(session: &ClientSession, tab: Tab) -> &[UserNameWithInfo] {
     }
 }
 
-/// The user menu opened at `at`, kept on screen.
-pub fn menu_rect(at: (u16, u16), screen: Rect) -> Rect {
-    let width = MenuItem::ALL
+/// The user menu of `items` opened at `at`, kept on screen.
+pub fn menu_rect(at: (u16, u16), items: &[MenuItem], screen: Rect) -> Rect {
+    let width = items
         .iter()
         .map(|item| item.label().len() as u16)
         .max()
         .unwrap_or(0)
         + 4;
-    let height = MenuItem::ALL.len() as u16 + 2;
+    let height = items.len() as u16 + 2;
     let x = at.0.min(screen.right().saturating_sub(width));
     let y = at.1.min(screen.bottom().saturating_sub(height));
     Rect::new(x, y, width, height).intersection(screen)
 }
 
-/// The menu item at `x`, `y` in the menu drawn at `menu`.
-pub fn menu_item_at(menu: Rect, x: u16, y: u16) -> Option<MenuItem> {
+/// The item of `items` at `x`, `y` in the menu drawn at `menu`.
+pub fn menu_item_at(menu: Rect, items: &[MenuItem], x: u16, y: u16) -> Option<MenuItem> {
     let inner = inner(menu);
     if !contains(inner, x, y) {
         return None;
     }
-    MenuItem::ALL.get(usize::from(y - inner.y)).copied()
+    items.get(usize::from(y - inner.y)).copied()
 }
 
 /// A `width` by `height` box in the middle of `screen`.
@@ -518,6 +518,16 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             frame.render_widget(Paragraph::new(conflict.question()).block(block), area);
         }
+        Modal::Disconnect { name, .. } => {
+            let area = centered(screen, 60, 3);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true))
+                .title("disconnect?");
+            frame.render_widget(Clear, area);
+            let text = format!("Disconnect {name}?");
+            frame.render_widget(Paragraph::new(text).block(block), area);
+        }
         Modal::Invite { from, .. } => {
             let area = centered(screen, 60, 3);
             let block = Block::default()
@@ -557,9 +567,14 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             frame.render_widget(Clear, area);
             frame.render_stateful_widget(list, area, &mut state);
         }
-        Modal::UserMenu { at, selected, .. } => {
-            let area = menu_rect(*at, screen);
-            let items: Vec<ListItem> = MenuItem::ALL
+        Modal::UserMenu {
+            at,
+            items,
+            selected,
+            ..
+        } => {
+            let area = menu_rect(*at, items, screen);
+            let items: Vec<ListItem> = items
                 .iter()
                 .map(|item| ListItem::new(item.label()))
                 .collect();

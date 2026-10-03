@@ -14,8 +14,11 @@ pub enum Modal {
     UserMenu {
         user_id: u16,
         at: (u16, u16),
+        items: &'static [MenuItem],
         selected: usize,
     },
+    /// A choice to disconnect a user, with or without a ban.
+    Disconnect { user_id: u16, name: Box<str> },
     /// A message to every connected user.
     Broadcast { input: String },
     /// This user's name, icon, and options.
@@ -84,16 +87,32 @@ pub enum MenuItem {
     SendMessage,
     GetInfo,
     PrivateChat,
+    Disconnect,
 }
 
 impl MenuItem {
-    pub const ALL: [Self; 3] = [Self::SendMessage, Self::GetInfo, Self::PrivateChat];
+    pub const ALL: [Self; 4] = [
+        Self::SendMessage,
+        Self::GetInfo,
+        Self::PrivateChat,
+        Self::Disconnect,
+    ];
+
+    /// The menu items, with [`Self::Disconnect`] only if `can_disconnect`.
+    pub const fn items(can_disconnect: bool) -> &'static [Self] {
+        if can_disconnect {
+            &Self::ALL
+        } else {
+            &[Self::SendMessage, Self::GetInfo, Self::PrivateChat]
+        }
+    }
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::SendMessage => "Send message",
             Self::GetInfo => "Get info",
             Self::PrivateChat => "Private chat",
+            Self::Disconnect => "Disconnect",
         }
     }
 }

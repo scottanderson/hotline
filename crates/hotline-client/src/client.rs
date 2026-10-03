@@ -15,6 +15,7 @@ use hotline_codec::TransactionCodec;
 use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
 
+use crate::ban::Ban;
 use crate::client_info_text::ClientInfoText;
 use crate::client_user_info::ClientUserInfo;
 use crate::error::{ClientError, Result};
@@ -330,6 +331,24 @@ impl HotlineClient {
             ],
         )
         .await?;
+        Ok(())
+    }
+
+    /// Disconnect `user_id`, with `ban` on the user's address,
+    /// [`myTran_DisconnectUser`] (110). A permanent ban also sends `name`
+    /// in [`myField_Data`] (101).
+    ///
+    /// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
+    pub async fn disconnect_user(&self, user_id: u16, name: &str, ban: Ban) -> Result<()> {
+        let mut fields = vec![Field::u16(FieldId::UserID, user_id)];
+        if let Some(options) = ban.options() {
+            fields.push(Field::u16(FieldId::Options, options));
+        }
+        if ban == Ban::Permanent && !name.is_empty() {
+            fields.push(Field::string(FieldId::Data, name));
+        }
+        self.request(Opcode::DisconnectUser, fields).await?;
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use hotline_client::{ClientUserInfo, UserAccount};
+use hotline_client::{Ban, ClientUserInfo, UserAccount};
 
 use crate::transfer::Start;
 
@@ -36,6 +36,10 @@ pub enum Action {
         text: String,
     },
     GetClientInfoText(u16),
+    DisconnectUser {
+        user_id: u16,
+        ban: Ban,
+    },
     /// Ask for this user's new name, icon, and options.
     EditOptions,
     SetClientUserInfo(ClientUserInfo),
