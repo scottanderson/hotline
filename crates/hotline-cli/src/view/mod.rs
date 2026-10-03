@@ -585,7 +585,7 @@ impl View {
             (Modal::Upload { input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::Upload {
                     path: std::mem::take(input),
-                    start: Start::New,
+                    start: Start::Ask,
                 };
             }
             (Modal::Subject { chat_id, input }, KeyCode::Enter) => {
@@ -647,7 +647,7 @@ impl View {
                 return Action::DownloadFile {
                     name: std::mem::take(name),
                     save_as: std::mem::take(input).into(),
-                    start: Start::New,
+                    start: Start::Ask,
                 };
             }
             (modal, KeyCode::Backspace) => {
@@ -1175,7 +1175,7 @@ fn download(index: usize, files: &[FileNameWithInfo]) -> Action {
     match files.get(index) {
         Some(file) if file.is_folder() => Action::DownloadFolder {
             name: file.name.clone(),
-            start: Start::New,
+            start: Start::Ask,
         },
         Some(file) => download_file(file),
         None => Action::None,
@@ -1187,7 +1187,7 @@ fn download_file(file: &FileNameWithInfo) -> Action {
     Action::DownloadFile {
         name: file.name.clone(),
         save_as: file.name.clone(),
-        start: Start::New,
+        start: Start::Ask,
     }
 }
 
@@ -1603,7 +1603,7 @@ mod tests {
             Action::DownloadFile {
                 name: "readme.txt".into(),
                 save_as: "readme.txt".into(),
-                start: Start::New,
+                start: Start::Ask,
             }
         );
         assert_eq!(
@@ -1657,7 +1657,7 @@ mod tests {
             view.handle_key(key(KeyCode::Char('d')), &users(), &files()),
             Action::DownloadFolder {
                 name: "Games".into(),
-                start: Start::New,
+                start: Start::Ask,
             }
         );
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
@@ -1666,7 +1666,7 @@ mod tests {
             Action::DownloadFile {
                 name: "readme.txt".into(),
                 save_as: "readme.txt".into(),
-                start: Start::New,
+                start: Start::Ask,
             }
         );
     }
@@ -1691,7 +1691,7 @@ mod tests {
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::Upload {
                 path: "/tmp/a.txt".into(),
-                start: Start::New,
+                start: Start::Ask,
             }
         );
         assert_eq!(view.modal, None);
@@ -1887,7 +1887,7 @@ mod tests {
             Action::DownloadFile {
                 name: "a.txt".into(),
                 save_as: "a.txmd".into(),
-                start: Start::New,
+                start: Start::Ask,
             }
         );
     }

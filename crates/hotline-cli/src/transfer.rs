@@ -6,7 +6,7 @@ use crate::view::Action;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
     /// Ask first if a copy is there.
-    New,
+    Ask,
     /// Continue the copy that is there.
     Resume,
     /// Start again over the copy that is there.

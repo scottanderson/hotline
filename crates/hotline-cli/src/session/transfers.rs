@@ -21,7 +21,7 @@ impl ClientSession {
     /// `download_dir` as `save_as`, [`myTran_DownloadFile`] (202). The data
     /// goes into `save_as.hpf`, which becomes `save_as` when the download
     /// ends. The transfer runs on its own task and sends its result line to
-    /// `done`. With [`Start::New`], a local `save_as` or `save_as.hpf` stops
+    /// `done`. With [`Start::Ask`], a local `save_as` or `save_as.hpf` stops
     /// the download and comes back as a [`Conflict`].
     ///
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
@@ -35,7 +35,7 @@ impl ClientSession {
     ) -> Option<Conflict> {
         let local = self.download_dir.join(local_name(save_as));
         let partial = partial_path(&local);
-        if start == Start::New {
+        if start == Start::Ask {
             let (name, save_as) = (name.into(), save_as.into());
             if exists(&local).await {
                 return Some(Conflict::LocalFileExists { name, save_as });
@@ -100,7 +100,7 @@ impl ClientSession {
     /// Start to download the folder `name` in the current folder, with
     /// everything inside it, into `download_dir`, [`myTran_DownloadFldr`] (210).
     /// The transfer runs on its own task and sends its result line to `done`.
-    /// With [`Start::New`], an existing local folder stops the download and
+    /// With [`Start::Ask`], an existing local folder stops the download and
     /// comes back as a [`Conflict`]. [`Start::Resume`] skips each file that
     /// is there and continues each `.hpf` file.
     ///
@@ -114,7 +114,7 @@ impl ClientSession {
     ) -> Option<Conflict> {
         let root = self.download_dir.join(local_name(name));
         let created = match start {
-            Start::New => tokio::fs::create_dir(&root).await,
+            Start::Ask => tokio::fs::create_dir(&root).await,
             Start::Resume | Start::Replace => tokio::fs::create_dir_all(&root).await,
         };
         match created {
@@ -131,7 +131,7 @@ impl ClientSession {
         let download = match client.download_folder(&self.file_path, name).await {
             Ok(download) => download,
             Err(e) => {
-                if start == Start::New {
+                if start == Start::Ask {
                     let _ = tokio::fs::remove_dir(&root).await;
                 }
                 self.push(format!("failed to download {name}: {e}"), LineKind::Error);
@@ -170,7 +170,7 @@ impl ClientSession {
 
     /// Start to upload the local file or folder at `local` to the current
     /// folder under its own name. The transfer runs on its own task and sends
-    /// its result line to `done`. With [`Start::New`], a partial upload or a
+    /// its result line to `done`. With [`Start::Ask`], a partial upload or a
     /// folder of that name in the listing stops the upload and comes back as
     /// a [`Conflict`].
     pub async fn upload(
@@ -190,7 +190,7 @@ impl ClientSession {
         let conflict_local = || local.to_string_lossy().into();
         match tokio::fs::metadata(local).await {
             Ok(metadata) if metadata.is_dir() => {
-                if start == Start::New && self.lists(&name, true) {
+                if start == Start::Ask && self.lists(&name, true) {
                     return Some(Conflict::RemoteFolderExists {
                         local: conflict_local(),
                     });
@@ -198,7 +198,7 @@ impl ClientSession {
                 self.upload_folder(client, local, name, start, done).await;
             }
             Ok(_) => {
-                if start == Start::New && self.lists(&format!("{name}.hpf"), false) {
+                if start == Start::Ask && self.lists(&format!("{name}.hpf"), false) {
                     return Some(Conflict::PartialUpload {
                         local: conflict_local(),
                     });
@@ -384,19 +384,19 @@ fn partial_path(local: &Path) -> PathBuf {
 }
 
 /// Open the working copy `partial` for a download. [`Start::Resume`] adds to
-/// it and also returns its size; [`Start::New`] creates it.
+/// it and also returns its size; [`Start::Ask`] creates it.
 async fn open_partial(partial: &Path, start: Start) -> std::io::Result<(File, u32)> {
     let mut options = OpenOptions::new();
     match start {
         Start::Resume => options.append(true),
-        Start::New => options.write(true).create_new(true),
+        Start::Ask => options.write(true).create_new(true),
         Start::Replace => options.write(true).create(true).truncate(true),
     };
     let file = options.open(partial).await?;
     let offset = match start {
         Start::Resume => u32::try_from(file.metadata().await?.len())
             .map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "the file is too large"))?,
-        Start::New | Start::Replace => 0,
+        Start::Ask | Start::Replace => 0,
     };
     Ok((file, offset))
 }
@@ -538,7 +538,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let conflict = session
-            .download_file(&client, "a.txt", "a.txt", Start::New, &tx)
+            .download_file(&client, "a.txt", "a.txt", Start::Ask, &tx)
             .await;
         assert_eq!(
             conflict,
@@ -571,12 +571,12 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let conflict = session
-            .download_file(&client, "a.txt", "a.txt", Start::New, &tx)
+            .download_file(&client, "a.txt", "a.txt", Start::Ask, &tx)
             .await;
         assert!(matches!(conflict, Some(Conflict::LocalFileExists { .. })));
 
         let conflict = session
-            .download_file(&client, "a.txt", "b.txt", Start::New, &tx)
+            .download_file(&client, "a.txt", "b.txt", Start::Ask, &tx)
             .await;
         assert_eq!(conflict, None);
         transfer_done(&mut rx).await;
@@ -600,7 +600,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let conflict = session
-            .download_folder(&client, "Games", Start::New, &tx)
+            .download_folder(&client, "Games", Start::Ask, &tx)
             .await;
         assert_eq!(
             conflict,
@@ -633,7 +633,7 @@ mod tests {
         session.get_file_name_list(&client, uploads.clone()).await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let conflict = session.upload(&client, &local, Start::New, &tx).await;
+        let conflict = session.upload(&client, &local, Start::Ask, &tx).await;
         assert!(matches!(conflict, Some(Conflict::PartialUpload { .. })));
 
         let conflict = session.upload(&client, &local, Start::Resume, &tx).await;

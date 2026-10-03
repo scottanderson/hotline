@@ -223,7 +223,7 @@ impl HotlineClient {
     ///
     /// [`myTran_ChatSend`]: hotline_proto::Opcode::ChatSend
     pub async fn send_chat(&self, message: &str) -> Result<()> {
-        self.post(
+        self.send_without_reply(
             Opcode::ChatSend,
             vec![Field::string(FieldId::Data, message)],
         )
@@ -235,7 +235,7 @@ impl HotlineClient {
     ///
     /// [`myTran_ChatSend`]: hotline_proto::Opcode::ChatSend
     pub async fn send_room_chat(&self, chat_id: u32, message: &str) -> Result<()> {
-        self.post(
+        self.send_without_reply(
             Opcode::ChatSend,
             vec![
                 Field::string(FieldId::Data, message),
@@ -268,7 +268,7 @@ impl HotlineClient {
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     pub async fn invite_to_chat(&self, chat_id: u32, user_id: u16) -> Result<()> {
-        self.post(
+        self.send_without_reply(
             Opcode::InviteToChat,
             vec![
                 Field::u32(FieldId::ChatID, chat_id),
@@ -283,7 +283,7 @@ impl HotlineClient {
     ///
     /// [`myTran_RejectChatInvite`]: hotline_proto::Opcode::RejectChatInvite
     pub async fn reject_chat_invite(&self, chat_id: u32) -> Result<()> {
-        self.post(
+        self.send_without_reply(
             Opcode::RejectChatInvite,
             vec![Field::u32(FieldId::ChatID, chat_id)],
         )
@@ -312,7 +312,7 @@ impl HotlineClient {
     ///
     /// [`myTran_LeaveChat`]: hotline_proto::Opcode::LeaveChat
     pub async fn leave_chat(&self, chat_id: u32) -> Result<()> {
-        self.post(
+        self.send_without_reply(
             Opcode::LeaveChat,
             vec![Field::u32(FieldId::ChatID, chat_id)],
         )
@@ -324,7 +324,7 @@ impl HotlineClient {
     ///
     /// [`myTran_SetChatSubject`]: hotline_proto::Opcode::SetChatSubject
     pub async fn set_chat_subject(&self, chat_id: u32, subject: &str) -> Result<()> {
-        self.post(
+        self.send_without_reply(
             Opcode::SetChatSubject,
             vec![
                 Field::u32(FieldId::ChatID, chat_id),
@@ -335,7 +335,7 @@ impl HotlineClient {
     }
 
     /// Send a request that gets no reply.
-    async fn post(&self, opcode: Opcode, fields: Vec<Field>) -> Result<()> {
+    async fn send_without_reply(&self, opcode: Opcode, fields: Vec<Field>) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(opcode, id, fields);
         self.send(tx).await
@@ -437,7 +437,8 @@ impl HotlineClient {
                 &*info.automatic_response,
             ));
         }
-        self.post(Opcode::SetClientUserInfo, fields).await
+        self.send_without_reply(Opcode::SetClientUserInfo, fields)
+            .await
     }
 
     /// Fetch `user_id`'s info text, [`myTran_GetClientInfoText`] (303).

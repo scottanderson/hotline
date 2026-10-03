@@ -177,7 +177,7 @@ mod tests {
 
         let _first = client.download_file(&root, "a.txt", 0).await.unwrap();
         let _ = session
-            .download_file(&client, "a.txt", "b.txt", Start::New, &tx)
+            .download_file(&client, "a.txt", "b.txt", Start::Ask, &tx)
             .await;
         let running = session.running_downloads();
         assert_eq!(running, [(1, "a.txt (queued)".into())]);
