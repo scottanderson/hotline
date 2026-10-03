@@ -497,8 +497,7 @@ impl Session {
                 self.access_extra = account.access_extra;
                 account.access
             }
-            Some(_) => return self.reject_login(tx, state, "incorrect password").await,
-            None => return self.reject_login(tx, state, "no such account").await,
+            _ => return self.reject_login(tx, state, "Incorrect login.").await,
         };
 
         let fields = vec![
@@ -1143,7 +1142,10 @@ mod tests {
         );
         let replies = session.on_login(&login, &state, &config).await;
 
-        assert!(replies[0].is_error());
+        assert_eq!(
+            replies[0].string(FieldId::ErrorText, text_encoding::DEFAULT),
+            Some("Incorrect login.".to_string())
+        );
         let kick = rx
             .try_recv()
             .ok()
@@ -1197,7 +1199,10 @@ mod tests {
         );
         let replies = session.on_login(&login, &state, &config).await;
 
-        assert!(replies[0].is_error());
+        assert_eq!(
+            replies[0].string(FieldId::ErrorText, text_encoding::DEFAULT),
+            Some("Incorrect login.".to_string())
+        );
         assert!(rx.try_recv().is_ok());
     }
 
