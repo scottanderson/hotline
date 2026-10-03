@@ -9,7 +9,7 @@ use hotline_proto::{Field, FieldList, Transaction};
 
 use crate::account::{AccessExtra, Account};
 use crate::activity::{AccountAction, Activity};
-use crate::state::SharedState;
+use crate::state::{AccessUpdate, SharedState};
 
 use super::connection::Session;
 
@@ -184,9 +184,13 @@ impl Session {
         let result = state.put_account(login.clone(), account).await;
         let reply = match result {
             Ok(()) => {
-                let name = (!name.is_empty()).then_some(name);
                 state
-                    .push_access_update(login.clone(), None, access, name)
+                    .push_access_update(AccessUpdate {
+                        login: login.as_str().into(),
+                        renamed_to: None,
+                        access,
+                        name: (!name.is_empty()).then(|| name.into()),
+                    })
                     .await;
                 self.record_account_change(action, login, state).await;
                 tx.reply(vec![])
@@ -377,10 +381,13 @@ impl Session {
                 .await
             {
                 Ok(()) => {
-                    let name = (!name.is_empty()).then_some(name);
-                    let renamed_to = renamed.then(|| login.clone());
                     state
-                        .push_access_update(old_login.clone(), renamed_to, access, name)
+                        .push_access_update(AccessUpdate {
+                            login: old_login.as_str().into(),
+                            renamed_to: renamed.then(|| login.as_str().into()),
+                            access,
+                            name: (!name.is_empty()).then(|| name.into()),
+                        })
                         .await;
                     if renamed {
                         let action = AccountAction::Rename {
