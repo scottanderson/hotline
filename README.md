@@ -65,12 +65,11 @@ fuzzer, ...).
 (`myField_*`, `myTran_*`), with no client/server split. A tag-by-tag
 audit against it found no case where the same numeric value means
 something structurally different depending on direction. So `FieldId`
-and `Opcode` each cover both directions as one type, instead of the
-separate `ClientFieldId`/`ServerFieldId` and `ClientOpcode`/`ServerOpcode`
-types an earlier version of this crate used. `TransactionType::Request`/
-`Push` still carry direction, since a raw wire value alone doesn't say
-whether it came from a client or a server. Both types' `Debug` impls
-print the original constant name.
+and `Opcode` each cover both directions as one type.
+`TransactionType::Request` and `TransactionType::Push` carry the
+direction, because a raw wire value alone does not say whether it came
+from a client or a server. Both types' `Debug` impls print the original
+constant name.
 
 ### `Transaction` / `TransactionHeader`
 
@@ -86,9 +85,10 @@ are in hand.
 
 `TransactionCodec` implements `tokio_util::codec::{Decoder, Encoder}` for
 `Transaction`, used via `tokio_util::codec::Framed` in both the client
-and server. A connection is a `Stream<Item = Result<Transaction, _>>` +
-`Sink<Transaction>` - `reader.next().await` / `writer.send(tx).await` -
-handling TCP fragmentation without a hand-rolled read loop.
+and server. A connection is a `Stream<Item = Result<Transaction, _>>`
+and a `Sink<Transaction>`. So `reader.next().await` and
+`writer.send(tx).await` handle TCP fragmentation without a hand-rolled
+read loop.
 
 ### Server session/state split
 
@@ -123,6 +123,8 @@ These parts work end to end:
 * Activity logs for downloads, uploads, logins, and account changes.
 * The `HTRK` tracker. `hls --tracker` registers over UDP, and
   `hlc --tracker` gets a server list over TCP.
+* `hlc`, a terminal client that sends every client transaction except
+  the banner download.
 
 `plan.md` lists open work and known differences from openline.
 
@@ -228,3 +230,62 @@ matching server-only account flag.
 `--tracker host[:port]` registers the server with a tracker. Repeat it
 for more than one tracker. `--banner` takes an image file, or an
 `http://` or `https://` URL.
+
+## Using `hlc`
+
+```sh
+HLC_PASSWORD=secret hlc --host example.com --login alice --nick Alice
+```
+
+| Flag             | Default     | Effect                                         |
+|------------------|-------------|------------------------------------------------|
+| `--host`         | `127.0.0.1` | the server                                     |
+| `--port`         | 5500        | the server's port                              |
+| `--login`        | (guest)     | the account login                              |
+| `--password`     | (none)      | the password, also read from `HLC_PASSWORD`    |
+| `--nick`         | `RustHL`    | the name in the user list                      |
+| `--icon`         | 0           | the icon ID                                    |
+| `--download-dir` | `.`         | the folder that downloads go to                |
+| `--tracker`      |             | list a tracker's servers and exit, no login    |
+
+Use `HLC_PASSWORD` in place of `--password` when other users share the
+host, because they can read a command line.
+
+The line at the bottom of the screen shows the keys that work now.
+Each tab has a main pane and the user list. Tab moves between them,
+and Esc goes back to Chat. On Chat, Esc quits. Ctrl-C quits from
+anywhere.
+
+| Key    | Where                | Effect                                          |
+|--------|----------------------|-------------------------------------------------|
+| Ctrl-N | anywhere             | classic news; type a line and Enter to post     |
+| Ctrl-F | anywhere             | the Files tab                                   |
+| Ctrl-B | anywhere             | the Threaded News tab                           |
+| Ctrl-U | anywhere             | the Admin tab, with the account privileges      |
+| Ctrl-R | anywhere             | the next private chat room                      |
+| Ctrl-G | anywhere             | a broadcast, with the broadcast privilege       |
+| Ctrl-O | anywhere             | your name, icon, and options                    |
+| Ctrl-K | anywhere             | cancel a download                               |
+| ⇧Enter | a text box           | a new line (also Alt-Enter or Ctrl-J)           |
+| Enter  | user list            | send a private message                          |
+| `i`    | user list            | the user's info                                 |
+| `k`    | user list            | disconnect the user, with the privilege         |
+| Ctrl-A | a room               | invite a user                                   |
+| Ctrl-T | a room               | set the subject                                 |
+| Ctrl-W | a room               | leave the room                                  |
+
+A right click on a user opens a menu that also starts a private chat.
+
+On the Files tab, Enter opens a folder or downloads a file, and
+Backspace goes up. `d` downloads, `u` uploads a local file or folder,
+`n` creates a folder, `x` deletes, `i` shows info, `r` renames, `c`
+sets the comment, `m` moves, and `a` makes an alias. A download goes
+to `name.hpf` first. If one is there, `hlc` asks whether to resume it.
+
+On the Threaded News tab, Enter opens a bundle, a category, or an
+article, and Backspace goes up. `p` posts, `r` replies to the open
+article, `x` deletes, and `b` and `c` create a bundle or a category.
+
+On the Admin tab, Enter edits an account, `n` creates one, `o` opens
+one by login, and `x` deletes one. In the account form, Space turns
+the selected privilege on or off.
