@@ -146,6 +146,16 @@ async fn disconnect_user_without_the_privilege_is_a_server_error() {
 }
 
 #[tokio::test]
+async fn keep_connection_alive_is_traffic() {
+    let addr = start_server().await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+
+    let before = alice.last_traffic();
+    alice.keep_connection_alive().await.unwrap();
+    assert!(alice.last_traffic() > before);
+}
+
+#[tokio::test]
 async fn user_broadcast_reaches_every_user() {
     let addr = start_server().await;
     let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;

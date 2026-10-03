@@ -30,7 +30,7 @@ use file_edit::FileEdit;
 use hotline_client::HotlineClient;
 use hotline_proto::types::HlPath;
 use line::Line;
-use session::{ClientSession, EventOutcome, Mode};
+use session::{ClientSession, EventOutcome, Mode, KEEP_ALIVE};
 use tokio::sync::mpsc;
 use view::{AccountForm, Action, Modal, OptionsForm, View};
 
@@ -95,12 +95,21 @@ async fn run(
     let mut view = View::default();
     let mut should_quit = false;
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
+    let mut last_keep_alive = Instant::now();
+    let idle_since = |last_keep_alive| client.last_traffic().max(last_keep_alive);
 
     terminal.draw(|f| ui::draw(f, session, &mut view))?;
     while !should_quit {
         tokio::select! {
             // A finished file transfer.
             Some(line) = done_rx.recv() => session.lines.push(line),
+            // No traffic or keep-alive attempt for a while.
+            () = tokio::time::sleep_until((idle_since(last_keep_alive) + KEEP_ALIVE).into()) => {
+                if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {
+                    session.keep_alive(client).await;
+                    last_keep_alive = Instant::now();
+                }
+            }
             // Server-initiated traffic: chat, user list changes, ...
             tx = events.recv() => {
                 let Some(tx) = tx else { break }; // connection closed

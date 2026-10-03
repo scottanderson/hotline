@@ -838,6 +838,14 @@ one-shared-room model.
      image, so `hlc` shows only the banner's link from
      `myTran_ServerBanner` (122).
 
+110. `hlc` keeps an idle connection alive. `HotlineClient` notes when
+     a transaction last went either way. Like openline's client
+     (`KeepConnectionAlive`), after 3 minutes with no traffic `hlc`
+     sends `myTran_KeepConnectionAlive` (500) to a server at version
+     185 or more, and `myTran_GetUserNameList` (300) to an older one.
+     `hlc` now sends every client opcode except
+     `myTran_DownloadBanner` (212).
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

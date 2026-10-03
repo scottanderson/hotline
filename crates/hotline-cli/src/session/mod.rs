@@ -7,6 +7,7 @@ mod chat_room;
 mod downloads;
 mod event_outcome;
 mod file_ops;
+mod keep_alive;
 mod mode;
 #[cfg(test)]
 mod test_support;
@@ -36,6 +37,7 @@ use crate::transfer::{Conflict, Start};
 pub use chat_room::{ChatInvite, ChatRoom};
 use downloads::{FirstWrite, RunningDownload};
 pub use event_outcome::EventOutcome;
+pub use keep_alive::KEEP_ALIVE;
 pub use mode::Mode;
 pub use threaded_news::NewsItem;
 

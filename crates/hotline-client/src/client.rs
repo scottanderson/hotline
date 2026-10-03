@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -50,6 +51,9 @@ enum PendingState {
 
 type PendingMap = Arc<Mutex<PendingState>>;
 
+/// When a transaction last went either way on the connection.
+type LastTraffic = Arc<std::sync::Mutex<Instant>>;
+
 /// A connected, logged-in-or-not Hotline client session. Cloning is
 /// cheap: it shares the same connection and pending-request table. The
 /// read half runs on its own spawned task (`read_loop`); this struct
@@ -62,6 +66,7 @@ pub struct HotlineClient {
     encoding: EncodingHandle,
     /// The server's transaction address.
     peer: SocketAddr,
+    last_traffic: LastTraffic,
 }
 
 impl HotlineClient {
@@ -91,7 +96,13 @@ impl HotlineClient {
         let pending: PendingMap = Arc::new(Mutex::new(PendingState::Open(HashMap::new())));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        tokio::spawn(read_loop(reader, pending.clone(), event_tx));
+        let last_traffic = Arc::new(std::sync::Mutex::new(Instant::now()));
+        tokio::spawn(read_loop(
+            reader,
+            pending.clone(),
+            event_tx,
+            last_traffic.clone(),
+        ));
 
         Ok((
             Self {
@@ -100,6 +111,7 @@ impl HotlineClient {
                 next_id: Arc::new(AtomicU32::new(1)),
                 encoding,
                 peer,
+                last_traffic,
             },
             event_rx,
         ))
@@ -129,11 +141,11 @@ impl HotlineClient {
             }
         }
 
-        if let Err(e) = self.writer.lock().await.send(tx).await {
+        if let Err(e) = self.send(tx).await {
             if let PendingState::Open(map) = &mut *self.pending.lock().await {
                 map.remove(&id);
             }
-            return Err(e.into());
+            return Err(e);
         }
 
         let reply = reply_rx.await.map_err(|_| ClientError::ConnectionClosed)?;
@@ -314,7 +326,31 @@ impl HotlineClient {
     async fn post(&self, opcode: Opcode, fields: Vec<Field>) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(opcode, id, fields);
+        self.send(tx).await
+    }
+
+    /// Write `tx` and note the traffic.
+    async fn send(&self, tx: Transaction) -> Result<()> {
         self.writer.lock().await.send(tx).await?;
+        touch(&self.last_traffic);
+        Ok(())
+    }
+
+    /// When a transaction last went either way on the connection.
+    pub fn last_traffic(&self) -> Instant {
+        *self
+            .last_traffic
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Tell the server that the connection is in use,
+    /// [`myTran_KeepConnectionAlive`] (500).
+    ///
+    /// [`myTran_KeepConnectionAlive`]: hotline_proto::Opcode::KeepConnectionAlive
+    pub async fn keep_connection_alive(&self) -> Result<()> {
+        self.request(Opcode::KeepConnectionAlive, Vec::new())
+            .await?;
         Ok(())
     }
 
@@ -635,13 +671,22 @@ fn reference(reply: &Transaction) -> Result<u32> {
         .ok_or(ClientError::MissingField(FieldId::RefNum))
 }
 
+/// Set `last_traffic` to now.
+fn touch(last_traffic: &LastTraffic) {
+    *last_traffic
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+}
+
 /// Forwards every transaction the server sends until the connection ends.
 async fn read_loop(
     mut reader: SplitStream<Conn>,
     pending: PendingMap,
     events: mpsc::UnboundedSender<Transaction>,
+    last_traffic: LastTraffic,
 ) {
     while let Some(Ok(tx)) = reader.next().await {
+        touch(&last_traffic);
         if tx.is_reply() {
             let sender = match &mut *pending.lock().await {
                 PendingState::Open(map) => map.remove(&tx.trans()),
