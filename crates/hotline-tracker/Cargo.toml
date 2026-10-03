@@ -1,11 +1,14 @@
 [package]
 name = "hotline-tracker"
-description = "HTRK tracker sub-protocol: server list query/reply and server->tracker beacon encoding."
+description = "The Hotline tracker (HTRK) protocol: server list queries and server beacons"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories = ["network-programming", "encoding"]
 
 [dependencies]
 hotline-proto = { workspace = true }

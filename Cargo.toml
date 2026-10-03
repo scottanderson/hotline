@@ -16,6 +16,8 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/scottanderson/hotline"
 rust-version = "1.96"
+readme = "README.md"
+keywords = ["hotline", "trtp", "chat", "bbs", "protocol"]
 
 [workspace.lints.rust]
 missing_docs = "warn"
@@ -24,11 +26,11 @@ missing_docs = "warn"
 missing_const_for_fn = "warn"
 
 [workspace.dependencies]
-hotline-proto = { path = "crates/hotline-proto" }
-hotline-codec = { path = "crates/hotline-codec" }
-hotline-client = { path = "crates/hotline-client" }
-hotline-server = { path = "crates/hotline-server" }
-hotline-tracker = { path = "crates/hotline-tracker" }
+hotline-proto = { path = "crates/hotline-proto", version = "0.1.0" }
+hotline-codec = { path = "crates/hotline-codec", version = "0.1.0" }
+hotline-client = { path = "crates/hotline-client", version = "0.1.0" }
+hotline-server = { path = "crates/hotline-server", version = "0.1.0" }
+hotline-tracker = { path = "crates/hotline-tracker", version = "0.1.0" }
 
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }

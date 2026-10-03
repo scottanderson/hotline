@@ -1,11 +1,14 @@
 [package]
 name = "hotline-codec"
-description = "Tokio codec for Hotline transaction framing."
+description = "A Tokio codec that frames Hotline transactions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 hotline-proto = { workspace = true }

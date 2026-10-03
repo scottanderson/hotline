@@ -1,11 +1,14 @@
 [package]
 name = "hotline-proto"
-description = "Hotline (TRTP) wire protocol: framing, fields, transactions, handshake, tracker sub-protocol. No I/O."
+description = "The Hotline (TRTP) wire format: transactions, fields, handshakes, and HTXF framing, with no I/O"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories = ["network-programming", "encoding"]
 
 [dependencies]
 bitflags = { workspace = true }

@@ -1,11 +1,14 @@
 [package]
 name = "hotline-cli"
-description = "Terminal Hotline client, built on hotline-client."
+description = "hlc, a terminal Hotline client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories = ["command-line-utilities", "network-programming"]
 
 [[bin]]
 name = "hlc"
