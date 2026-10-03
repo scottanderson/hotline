@@ -80,7 +80,35 @@ impl DiskFileProvider {
             };
             comments.insert(rekeyed, comment);
         }
-        let bytes = serde_json::to_vec_pretty(&*comments)
+        self.write_comments(&comments).await
+    }
+
+    /// Drop the comment on `key` and on every key under it whose entry is
+    /// gone from disk, then persist the updated map.
+    async fn drop_comments(&self, key: &str) -> io::Result<()> {
+        let mut comments = self.comments.write().await;
+        let prefix = format!("{key}/");
+        let mut gone = Vec::new();
+        for k in comments
+            .keys()
+            .filter(|k| *k == key || k.starts_with(&prefix))
+        {
+            let path = k.split('/').fold(self.root.clone(), |path, c| path.join(c));
+            if tokio::fs::symlink_metadata(&path).await.is_err() {
+                gone.push(k.clone());
+            }
+        }
+        if gone.is_empty() {
+            return Ok(());
+        }
+        for k in &gone {
+            comments.remove(k);
+        }
+        self.write_comments(&comments).await
+    }
+
+    async fn write_comments(&self, comments: &HashMap<String, String>) -> io::Result<()> {
+        let bytes = serde_json::to_vec_pretty(comments)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         tokio::fs::write(&self.comments_path, bytes).await
     }
@@ -259,11 +287,15 @@ impl FileProvider for DiskFileProvider {
         let path = self
             .resolve_file(dir, name)
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        if is_dir {
+        let removed = if is_dir {
             tokio::fs::remove_dir_all(&path).await
         } else {
             tokio::fs::remove_file(&path).await
+        };
+        if let Err(error) = self.drop_comments(&Self::comment_key(dir, name)).await {
+            tracing::warn!(%error, name, "could not drop the comments of a deleted entry");
         }
+        removed
     }
 
     async fn mkdir(
@@ -378,9 +410,7 @@ impl FileProvider for DiskFileProvider {
         } else {
             comments.insert(key, comment.to_string());
         }
-        let bytes = serde_json::to_vec_pretty(&*comments)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        tokio::fs::write(&self.comments_path, bytes).await
+        self.write_comments(&comments).await
     }
 }
 
@@ -792,6 +822,89 @@ mod tests {
                 .comment(requester(), &HlPath::new(["Trip"]), "photo.png")
                 .await,
             Some("a photo note".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_folder_drops_its_own_and_its_contents_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments_dir = tempfile::tempdir().unwrap();
+        let comments_path = comments_dir.path().join("comments.json");
+        let provider = DiskFileProvider::open(dir.path(), &comments_path)
+            .await
+            .unwrap();
+        tokio::fs::create_dir(dir.path().join("Vacation"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("Vacation/photo.png"), b"img")
+            .await
+            .unwrap();
+        provider
+            .set_comment(requester(), &HlPath::default(), "Vacation", "a folder note")
+            .await
+            .unwrap();
+        provider
+            .set_comment(
+                requester(),
+                &HlPath::new(["Vacation"]),
+                "photo.png",
+                "a photo note",
+            )
+            .await
+            .unwrap();
+
+        provider
+            .delete(requester(), &HlPath::default(), "Vacation", true)
+            .await
+            .unwrap();
+        provider
+            .mkdir(requester(), &HlPath::default(), "Vacation")
+            .await
+            .unwrap();
+
+        let reopened = DiskFileProvider::open(dir.path(), &comments_path)
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .comment(requester(), &HlPath::default(), "Vacation")
+                .await,
+            None
+        );
+        assert_eq!(
+            reopened
+                .comment(requester(), &HlPath::new(["Vacation"]), "photo.png")
+                .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_delete_keeps_the_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments_dir = tempfile::tempdir().unwrap();
+        let provider =
+            DiskFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
+                .await
+                .unwrap();
+        tokio::fs::create_dir(dir.path().join("Vacation"))
+            .await
+            .unwrap();
+        provider
+            .set_comment(requester(), &HlPath::default(), "Vacation", "a folder note")
+            .await
+            .unwrap();
+
+        assert!(provider
+            .delete(requester(), &HlPath::default(), "Vacation", false)
+            .await
+            .is_err());
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "Vacation")
+                .await,
+            Some("a folder note".to_string())
         );
     }
 

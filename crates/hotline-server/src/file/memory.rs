@@ -42,6 +42,18 @@ fn rekey_comments(
     }
 }
 
+/// Drop the comment on `dir`/`name` and on everything under it.
+fn drop_comments(
+    comments: &mut HashMap<(Vec<String>, String), String>,
+    dir: &[String],
+    name: &str,
+) {
+    comments.remove(&(dir.to_vec(), name.to_string()));
+    let mut prefix = dir.to_vec();
+    prefix.push(name.to_string());
+    comments.retain(|(d, _), _| !d.starts_with(&prefix));
+}
+
 /// A [`FileProvider`] that keeps files in memory only, the same tree for
 /// every login; nothing survives a restart. Used as
 /// [`crate::state::SharedState`]'s default and by this crate's own
@@ -220,7 +232,9 @@ impl FileProvider for InMemoryFileProvider {
     ) -> io::Result<()> {
         let mut root = self.root.lock().unwrap();
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
-        d.entries.remove(name).map(|_| ()).ok_or_else(not_found)
+        d.entries.remove(name).ok_or_else(not_found)?;
+        drop_comments(&mut self.comments.lock().unwrap(), &dir.components, name);
+        Ok(())
     }
 
     async fn mkdir(
@@ -771,6 +785,44 @@ mod tests {
             .list(requester(), &HlPath::new(["Nope"]))
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_folder_drops_its_own_and_its_contents_comments() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::new(["Vacation"]), "photo.png", *b"img");
+        provider
+            .set_comment(requester(), &HlPath::default(), "Vacation", "a folder note")
+            .await
+            .unwrap();
+        provider
+            .set_comment(
+                requester(),
+                &HlPath::new(["Vacation"]),
+                "photo.png",
+                "a photo note",
+            )
+            .await
+            .unwrap();
+
+        provider
+            .delete(requester(), &HlPath::default(), "Vacation", true)
+            .await
+            .unwrap();
+        provider.seed(&HlPath::new(["Vacation"]), "photo.png", *b"img");
+
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::default(), "Vacation")
+                .await,
+            None
+        );
+        assert_eq!(
+            provider
+                .comment(requester(), &HlPath::new(["Vacation"]), "photo.png")
+                .await,
+            None
+        );
     }
 
     #[tokio::test]
