@@ -137,7 +137,7 @@ async fn run(
                         view.handle_key(key, users, files)
                     }
                     Event::Mouse(mouse) if !matches!(session.mode, Mode::Agreement(_)) => {
-                        let areas = ui::areas(terminal.size()?, view.input());
+                        let areas = ui::areas(terminal.size()?, view.input(), view.hints());
                         let users = ui::tab_users(session, view.tab);
                         let files = session.files.as_deref().unwrap_or_default();
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())

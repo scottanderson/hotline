@@ -33,15 +33,35 @@ fn input_rows(text: &str) -> u16 {
     text.split('\n').count().min(MAX_INPUT_ROWS) as u16
 }
 
+/// A key hint: the key, and what it does.
+pub type Hint = (&'static str, &'static str);
+
+/// `hints` laid out in rows no wider than `width`, keeping each hint whole.
+fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
+    let mut rows = Vec::new();
+    let (mut start, mut used) = (0, 0);
+    for (i, (key, action)) in hints.iter().enumerate() {
+        let len = key.chars().count() + action.chars().count() + 3;
+        if used > 0 && used + len > usize::from(width) {
+            rows.push(&hints[start..i]);
+            (start, used) = (i, 0);
+        }
+        used += len;
+    }
+    rows.push(&hints[start..]);
+    rows
+}
+
 /// `input` is the text in the input line, which grows to fit it. With `None`,
-/// the input line has no rows.
-pub fn areas(screen: Rect, input: Option<&str>) -> Areas {
+/// the input line has no rows. The hint line grows to fit `hints`.
+pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint]) -> Areas {
+    let hint_rows = hint_rows(hints, screen.width).len() as u16;
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(6),
-            Constraint::Length(1),
+            Constraint::Length(hint_rows),
         ])
         .split(screen);
     let columns = Layout::default()
@@ -163,7 +183,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         return;
     }
 
-    let areas = areas(frame.size(), view.input());
+    let areas = areas(frame.size(), view.input(), view.hints());
     draw_tabs(frame, areas.tabs, view);
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
@@ -474,15 +494,19 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
 }
 
 fn draw_hints(frame: &mut Frame, area: Rect, view: &View) {
-    let mut spans = Vec::new();
-    for (key, action) in view.hints() {
-        spans.push(Span::styled(
-            *key,
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(format!(" {action}  ")));
-    }
-    frame.render_widget(Paragraph::new(UiLine::from(spans)), area);
+    let lines: Vec<UiLine> = hint_rows(view.hints(), area.width)
+        .into_iter()
+        .map(|row| {
+            let spans = row.iter().flat_map(|(key, action)| {
+                [
+                    Span::styled(*key, Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(format!(" {action}  ")),
+                ]
+            });
+            UiLine::from(spans.collect::<Vec<_>>())
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
@@ -796,6 +820,14 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hint_rows_keep_each_hint_whole() {
+        let hints = [("Enter", "send"), ("Tab", "users"), ("Esc", "quit")];
+        assert_eq!(hint_rows(&hints, 80), [&hints[..]]);
+        assert_eq!(hint_rows(&hints, 23), [&hints[..2], &hints[2..]]);
+        assert_eq!(hint_rows(&hints, 1).len(), 3);
+    }
 
     #[test]
     fn size_text_picks_the_largest_unit_under_1024() {

@@ -1302,7 +1302,7 @@ mod tests {
     }
 
     fn areas() -> Areas {
-        ui::areas(Rect::new(0, 0, 80, 24), Some(""))
+        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[])
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1705,7 +1705,7 @@ mod tests {
         let mut view = View::default();
         let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
         let _ = view.handle_key(ctrl_f, &users(), &files());
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), None);
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[]);
         let inner = ui::inner(areas.body);
         let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
         let now = Instant::now();
