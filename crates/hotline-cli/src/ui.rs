@@ -4,7 +4,7 @@ use hotline_client::FileInfo;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line as UiLine, Span};
+use ratatui::text::{Line as UiLine, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
@@ -502,152 +502,61 @@ fn draw_hints(frame: &mut Frame, area: Rect, view: &View) {
 fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
     match modal {
         Modal::InstantMsg { name, input, .. } => {
-            let area = centered(screen, 60, input_rows(input) + 2);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title(format!("message to {name}"));
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(frame, screen, format!("message to {name}"), input);
         }
         Modal::Broadcast { input } => {
-            let area = centered(screen, 60, input_rows(input) + 2);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("broadcast to every user");
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(frame, screen, "broadcast to every user".into(), input);
         }
         Modal::Upload { input } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("upload a local file or folder");
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(frame, screen, "upload a local file or folder".into(), input);
         }
         Modal::SaveAs { name, input } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title(format!("{name} is downloaded, save as"));
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(
+                frame,
+                screen,
+                format!("{name} is downloaded, save as"),
+                input,
+            );
         }
         Modal::Confirm(conflict) => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("resume?");
-            frame.render_widget(Clear, area);
-            frame.render_widget(Paragraph::new(conflict.question()).block(block), area);
+            draw_question(frame, screen, "resume?", conflict.question());
         }
         Modal::Disconnect { name, .. } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("disconnect?");
-            frame.render_widget(Clear, area);
-            let text = format!("Disconnect {name}?");
-            frame.render_widget(Paragraph::new(text).block(block), area);
+            draw_question(frame, screen, "disconnect?", format!("Disconnect {name}?"));
         }
         Modal::FileEdit { edit, name, input } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title(edit.title(name));
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(frame, screen, edit.title(name), input);
         }
         Modal::DeleteFile { name } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("delete?");
-            frame.render_widget(Clear, area);
             let text = format!("Delete {name} and everything in it?");
-            frame.render_widget(Paragraph::new(text).block(block), area);
+            draw_question(frame, screen, "delete?", text);
         }
         Modal::FileInfo(info) => {
             let text = file_info_lines(info).join("\n");
-            let height = text.lines().count() as u16 + 2;
-            let area = centered(screen, 70, height);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title(format!("info for {}", info.name));
-            frame.render_widget(Clear, area);
-            frame.render_widget(
-                Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
-                area,
-            );
+            draw_text_modal(frame, screen, 70, format!("info for {}", info.name), text);
         }
         Modal::Invite { from, .. } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("private chat");
-            frame.render_widget(Clear, area);
             let text = format!("{from} invites you to a private chat.");
-            frame.render_widget(Paragraph::new(text).block(block), area);
+            draw_question(frame, screen, "private chat", text);
         }
         Modal::Subject { input, .. } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("chat subject");
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(frame, screen, "chat subject".into(), input);
         }
         Modal::PickUser {
             users, selected, ..
         } => {
-            let area = centered(screen, 40, users.len().max(1) as u16 + 2);
-            let items: Vec<ListItem> = users
-                .iter()
-                .map(|(_, name)| ListItem::new(&**name))
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border(true))
-                        .title("invite to chat"),
-                )
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-            let mut state = ListState::default().with_selected(Some(*selected));
-            frame.render_widget(Clear, area);
-            frame.render_stateful_widget(list, area, &mut state);
+            let area = centered(screen, 40, list_height(users.len()));
+            let items = users.iter().map(|(_, name)| ListItem::new(&**name));
+            draw_list_modal(frame, area, modal_block("invite to chat"), items, *selected);
         }
         Modal::PickDownload {
             downloads,
             selected,
         } => {
-            let area = centered(screen, 50, downloads.len().max(1) as u16 + 2);
-            let items: Vec<ListItem> = downloads
-                .iter()
-                .map(|(_, label)| ListItem::new(&**label))
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border(true))
-                        .title("cancel a download"),
-                )
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-            let mut state = ListState::default().with_selected(Some(*selected));
-            frame.render_widget(Clear, area);
-            frame.render_stateful_widget(list, area, &mut state);
+            let area = centered(screen, 50, list_height(downloads.len()));
+            let items = downloads.iter().map(|(_, label)| ListItem::new(&**label));
+            let block = modal_block("cancel a download");
+            draw_list_modal(frame, area, block, items, *selected);
         }
         Modal::UserMenu {
             at,
@@ -656,20 +565,11 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             ..
         } => {
             let area = menu_rect(*at, items, screen);
-            let items: Vec<ListItem> = items
-                .iter()
-                .map(|item| ListItem::new(item.label()))
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border(true)),
-                )
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-            let mut state = ListState::default().with_selected(Some(*selected));
-            frame.render_widget(Clear, area);
-            frame.render_stateful_widget(list, area, &mut state);
+            let items = items.iter().map(|item| ListItem::new(item.label()));
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border(true));
+            draw_list_modal(frame, area, block, items, *selected);
         }
         Modal::Article {
             title,
@@ -678,17 +578,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             ..
         } => {
             let text = text.replace('\r', "\n");
-            let height = text.lines().count() as u16 + 2;
-            let area = centered(screen, 76, height.min(screen.height.saturating_sub(2)));
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title(format!("{title} ({poster})"));
-            frame.render_widget(Clear, area);
-            frame.render_widget(
-                Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
-                area,
-            );
+            draw_text_modal(frame, screen, 76, format!("{title} ({poster})"), text);
         }
         Modal::Post {
             parent_id,
@@ -719,97 +609,125 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         }
         Modal::Account(form) => {
             let rows = account_form_rows(form);
-            let area = centered(screen, 50, (rows.len() as u16 + 2).min(screen.height));
+            let area = centered(screen, 50, list_height(rows.len()));
             let title = match &form.old_login {
                 Some(login) => format!("account {login}"),
                 None => "new account".to_string(),
             };
-            let list = List::new(rows)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border(true))
-                        .title(title),
-                )
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-            let mut state = ListState::default().with_selected(Some(form.row));
-            frame.render_widget(Clear, area);
-            frame.render_stateful_widget(list, area, &mut state);
+            draw_list_modal(frame, area, modal_block(title), rows, form.row);
         }
         Modal::Options(form) => {
             let rows = options_form_rows(form);
-            let area = centered(screen, 60, rows.len() as u16 + 2);
-            let list = List::new(rows)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border(true))
-                        .title("options"),
-                )
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-            let mut state = ListState::default().with_selected(Some(form.row));
-            frame.render_widget(Clear, area);
-            frame.render_stateful_widget(list, area, &mut state);
+            let area = centered(screen, 60, list_height(rows.len()));
+            draw_list_modal(frame, area, modal_block("options"), rows, form.row);
         }
         Modal::OpenAccount { input } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("open the account with login");
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(frame, screen, "open the account with login".into(), input);
         }
         Modal::DeleteAccount { login } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("delete?");
-            frame.render_widget(Clear, area);
             let text = format!("Delete the account {login}?");
-            frame.render_widget(Paragraph::new(text).block(block), area);
+            draw_question(frame, screen, "delete?", text);
         }
         Modal::NewsName { category, input } => {
-            let area = centered(screen, 60, 3);
             let what = if *category { "category" } else { "bundle" };
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title(format!("new {what}"));
-            frame.render_widget(Clear, area);
-            draw_text_box(frame, area, block, input, true);
+            draw_input_modal(frame, screen, format!("new {what}"), input);
         }
         Modal::DeleteNews { name, .. } => {
-            let area = centered(screen, 60, 3);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title("delete?");
-            frame.render_widget(Clear, area);
-            let text = format!("Delete {name}?");
-            frame.render_widget(Paragraph::new(text).block(block), area);
+            draw_question(frame, screen, "delete?", format!("Delete {name}?"));
         }
         Modal::Info { name, text } => {
             let text = text.replace('\r', "\n");
-            let height = text.lines().count() as u16 + 2;
-            let area = centered(screen, 70, height);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true))
-                .title(format!("info for {name}"));
-            frame.render_widget(Clear, area);
-            frame.render_widget(
-                Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
-                area,
-            );
+            draw_text_modal(frame, screen, 70, format!("info for {name}"), text);
         }
     }
+}
+
+/// The bordered, focused block of a modal.
+fn modal_block<'a>(title: impl Into<UiLine<'a>>) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(border(true))
+        .title(title)
+}
+
+/// The height of a modal list of `len` rows, with at least one row.
+fn list_height(len: usize) -> u16 {
+    u16::try_from(len.max(1))
+        .unwrap_or(u16::MAX)
+        .saturating_add(2)
+}
+
+/// Draw a modal that edits `input` under `title`.
+fn draw_input_modal(frame: &mut Frame, screen: Rect, title: String, input: &str) {
+    let area = centered(screen, 60, input_rows(input) + 2);
+    frame.render_widget(Clear, area);
+    draw_text_box(frame, area, modal_block(title), input, true);
+}
+
+/// Draw a modal that asks the one-line question `text`.
+fn draw_question<'a>(frame: &mut Frame, screen: Rect, title: &'a str, text: impl Into<Text<'a>>) {
+    let area = centered(screen, 60, 3);
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(text).block(modal_block(title)), area);
+}
+
+/// Draw a modal that shows `text`, wrapped, under `title`.
+fn draw_text_modal(frame: &mut Frame, screen: Rect, width: u16, title: String, text: String) {
+    let height = list_height(text.lines().count()).min(screen.height.saturating_sub(2));
+    let area = centered(screen, width, height);
+    let paragraph = Paragraph::new(text)
+        .block(modal_block(title))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+/// Draw a modal list of `items` in `block` with row `selected` highlighted.
+fn draw_list_modal<'a>(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block<'a>,
+    items: impl IntoIterator<Item = impl Into<ListItem<'a>>>,
+    selected: usize,
+) {
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn draw_to_text(modal: &Modal) -> String {
+        let backend = ratatui::backend::TestBackend::new(70, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_modal(frame, frame.size(), modal))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        buffer.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn draw_modal_shows_the_title_and_the_text() {
+        let modal = Modal::DeleteNews {
+            index: 0,
+            name: "Old news".into(),
+        };
+        let text = draw_to_text(&modal);
+        assert!(text.contains("delete?"));
+        assert!(text.contains("Delete Old news?"));
+
+        let text = draw_to_text(&Modal::Broadcast {
+            input: "hello".into(),
+        });
+        assert!(text.contains("broadcast to every user"));
+        assert!(text.contains("hello"));
+    }
 
     #[test]
     fn hint_rows_keep_each_hint_whole() {
