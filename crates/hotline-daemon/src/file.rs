@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
@@ -85,12 +85,12 @@ impl DiskFileProvider {
         tokio::fs::write(&self.comments_path, bytes).await
     }
 
-    /// Resolve a directory path under `root`, rejecting any component
-    /// that would escape it (`..`, a bare path separator).
+    /// Resolve a directory path under `root`. `None` when a component is
+    /// not a plain name.
     fn resolve_dir(&self, dir: &HlPath) -> Option<PathBuf> {
         let mut path = self.root.clone();
         for component in &dir.components {
-            if component.is_empty() || component.contains(['/', '\\']) || component == ".." {
+            if !is_plain_name(component) {
                 return None;
             }
             path.push(component);
@@ -98,16 +98,25 @@ impl DiskFileProvider {
         Some(path)
     }
 
-    /// Resolve a file path (directory components plus a file name) under
-    /// `root`, with the same escape checks as [`Self::resolve_dir`].
+    /// Resolve the entry `name` in `dir` under `root`, with the checks of
+    /// [`Self::resolve_dir`].
     fn resolve_file(&self, dir: &HlPath, name: &str) -> Option<PathBuf> {
-        if name.is_empty() || name.contains(['/', '\\']) || name == ".." {
+        if !is_plain_name(name) {
             return None;
         }
         let mut path = self.resolve_dir(dir)?;
         path.push(name);
         Some(path)
     }
+}
+
+/// Whether `name` is one normal path component, with no `:` on Windows.
+fn is_plain_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    !name.contains(['/', '\\'])
+        && !(cfg!(windows) && name.contains(':'))
+        && matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none()
 }
 
 #[async_trait]
@@ -808,6 +817,27 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(&*entries[0].name, "a.txt");
+    }
+
+    #[tokio::test]
+    async fn a_dot_name_resolves_to_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("keep.txt"), b"hi")
+            .await
+            .unwrap();
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+
+        let result = provider
+            .delete(requester(), &HlPath::default(), ".", true)
+            .await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert!(dir.path().join("keep.txt").is_file());
+        assert!(provider
+            .list(requester(), &HlPath::new(["."]))
+            .await
+            .is_none());
     }
 
     #[tokio::test]
