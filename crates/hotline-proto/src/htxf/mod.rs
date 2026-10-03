@@ -97,12 +97,10 @@ pub fn decode_flat_file_prefix(buf: &[u8]) -> Result<u16> {
     let prefix: [u8; FLAT_FILE_PREFIX_LEN] = buf[..FLAT_FILE_PREFIX_LEN].try_into().unwrap();
     let mut r = PacketReader::new(prefix);
     let magic = r.take::<4>();
-    let version = r.u16();
-    let reserved = r.take::<16>();
+    let _version = r.u16();
+    let _reserved = r.take::<16>();
     let fork_count = r.u16();
     r.finish();
-    debug_assert_eq!(version, 1);
-    debug_assert_eq!(reserved, [0; 16]);
     if magic != *b"FILP" {
         return Err(ProtoError::BadMagic {
             expected: *b"FILP",

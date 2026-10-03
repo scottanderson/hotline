@@ -30,12 +30,10 @@ impl ForkHeader {
         let buf: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
         let mut r = PacketReader::new(buf);
         let fork_type = r.take::<4>();
-        let compression_type = r.u32();
-        let reserved = r.u32();
+        let _compression_type = r.u32();
+        let _reserved = r.u32();
         let data_size = r.u32();
         r.finish();
-        debug_assert_eq!(compression_type, 0);
-        debug_assert_eq!(reserved, 0);
         Ok(Self {
             fork_type,
             data_size,

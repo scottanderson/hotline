@@ -54,12 +54,10 @@ impl FileNameWithInfo {
         let file_type = r.take::<4>();
         let creator = r.take::<4>();
         let size = r.u32();
-        let reserved = r.u32();
-        let name_script = r.u16();
+        let _reserved = r.u32();
+        let _name_script = r.u16();
         let name_len = r.u16();
         r.finish();
-        debug_assert_eq!(reserved, 0);
-        debug_assert_eq!(name_script, 0);
         let name_len = name_len as usize;
         let name_end = Self::LEN + name_len;
         if buf.len() < name_end {
