@@ -805,7 +805,7 @@ one-shared-room model.
      does not probe. Like openline's client (`DoOpenUserList`), it uses
      348 and 349 when the login reply's `myField_Vers` (160) is 184 or
      more. An mhxd server set to report 184 or more gets no reply to
-     348, and the Admin tab waits. Otherwise
+     348, and `hlc` waits for `REQUEST_TIMEOUT`. Otherwise
      it uses 350 to 353: `o` opens an account by login, and an account
      cannot be renamed. The account form edits the name, login, and
      password, and Space turns each privilege on or off. A password

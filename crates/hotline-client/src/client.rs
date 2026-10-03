@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -35,6 +35,9 @@ type Conn = Framed<TcpStream, TransactionCodec>;
 /// [`myField_Options`]: hotline_proto::FieldId::Options
 /// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
 const USER_MESSAGE: u16 = 1;
+
+/// How long [`HotlineClient::request`] waits for a reply.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// [`myField_FileXferOptions`] (204) on an upload that resumes a partial one.
 ///
@@ -124,8 +127,9 @@ impl HotlineClient {
         self.encoding.clone()
     }
 
-    /// Send a request transaction and wait for its matching reply.
-    /// Returns `Err` if the server replied with the error bit set.
+    /// Send a request transaction and wait up to [`REQUEST_TIMEOUT`] for its
+    /// matching reply. Returns `Err` if the server replied with the error bit
+    /// set.
     pub async fn request(&self, opcode: Opcode, fields: Vec<Field>) -> Result<Transaction> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(opcode, id, fields);
@@ -148,7 +152,15 @@ impl HotlineClient {
             return Err(e);
         }
 
-        let reply = reply_rx.await.map_err(|_| ClientError::ConnectionClosed)?;
+        let reply = match tokio::time::timeout(REQUEST_TIMEOUT, reply_rx).await {
+            Ok(reply) => reply.map_err(|_| ClientError::ConnectionClosed)?,
+            Err(_) => {
+                if let PendingState::Open(map) = &mut *self.pending.lock().await {
+                    map.remove(&id);
+                }
+                return Err(ClientError::Timeout);
+            }
+        };
         if reply.is_error() {
             let encoding = self.encoding.get();
             let msg = reply

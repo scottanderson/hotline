@@ -27,6 +27,10 @@ pub enum ClientError {
     #[error("the server's reply has no {0:?} field")]
     MissingField(hotline_proto::FieldId),
 
+    /// The server sent no reply within [`crate::REQUEST_TIMEOUT`].
+    #[error("the server did not reply in time")]
+    Timeout,
+
     /// The background read loop exited (connection closed) before a
     /// pending request could be answered.
     #[error("connection closed while waiting for a reply")]

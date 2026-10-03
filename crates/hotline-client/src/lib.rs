@@ -43,7 +43,7 @@ mod news;
 
 pub use accounts::{AccountChange, Password, UserAccount};
 pub use ban::Ban;
-pub use client::HotlineClient;
+pub use client::{HotlineClient, REQUEST_TIMEOUT};
 pub use client_info_text::ClientInfoText;
 pub use client_user_info::ClientUserInfo;
 pub use error::{ClientError, Result};
