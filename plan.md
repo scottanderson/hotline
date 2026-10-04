@@ -135,10 +135,7 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **A permanent ban drops the kicker's note.** openline's
-   `ProcessTran_DisconnectUser` stores the `myField_Data` (101) text
-   with a permanent ban. `BanRecord` has no field for it, so the ban
-   file cannot show why an address is banned.
+No items are open.
 
 ## Resolved
 
@@ -984,6 +981,13 @@ one-shared-room model.
      disk provider reads `statvfs` on Unix and returns `None` on other
      platforms. The error text is openline's, with the file or folder
      name.
+
+130. A permanent ban from `myTran_DisconnectUser` (110) keeps the first
+     63 bytes of `myField_Data` (101) as `BanRecord::note`, as
+     openline's `ProcessTran_DisconnectUser` does, so `bans.json` shows
+     why an address is banned. `BanProvider::ban` takes the whole
+     `BanRecord`. An empty note is left out of the file, and an old file
+     without notes still loads.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

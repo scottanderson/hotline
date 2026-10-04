@@ -5,13 +5,17 @@ use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::FieldId;
-use hotline_proto::{Field, Received, Transaction};
+use hotline_proto::{text_encoding, Field, Received, Transaction};
 
 use crate::account::AccessExtra;
+use crate::ban::BanRecord;
 use crate::flood::FloodEvent;
 use crate::state::{SharedState, TransferProgress, TransferSection, UserEntry};
 
 use super::connection::{KickBan, MsgOption, Session};
+
+/// The most bytes of a permanent ban's note.
+const MAX_BAN_NOTE: usize = 63;
 
 /// `lines`, or `None.` when there are none.
 fn or_none(lines: String) -> String {
@@ -131,11 +135,13 @@ impl Session {
 
     /// [`myTran_DisconnectUser`] (110): disconnect another user, and if the
     /// [`myField_Options`] (113) kick-to-ban bit is set, ban their address and
-    /// notify them why before disconnecting them. A missing target id defaults
-    /// to 0, which no session holds, so the kick is just a no-op.
+    /// notify them why before disconnecting them. A permanent ban keeps the
+    /// first 63 bytes of [`myField_Data`] (101) as its note. A missing target
+    /// id defaults to 0, which no session holds, so the kick is just a no-op.
     ///
     /// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
     /// [`myField_Options`]: hotline_proto::FieldId::Options
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
     pub(super) async fn on_disconnect_user(
         &mut self,
         tx: &Transaction<Received>,
@@ -164,7 +170,12 @@ impl Session {
                 Some("You are temporarily banned on this server.")
             }
             (KickBan::Permanent, Some(ip)) => {
-                if let Err(error) = state.ban(ip, None).await {
+                let note = tx.string(FieldId::Data).unwrap_or_default();
+                let record = BanRecord {
+                    note: text_encoding::cut(self.encoding(), &note, MAX_BAN_NOTE).to_owned(),
+                    ..BanRecord::new(ip, None)
+                };
+                if let Err(error) = state.ban(record).await {
                     tracing::warn!(%ip, %error, "failed to persist ban");
                 }
                 Some("You are permanently banned on this server.")
@@ -337,7 +348,6 @@ mod tests {
     use crate::session::test_support::*;
     use crate::state::RecipientMessage;
     use hotline_proto::opcode::TransactionType;
-    use hotline_proto::text_encoding;
     use std::time::Instant;
 
     #[tokio::test]
@@ -634,15 +644,17 @@ mod tests {
             vec![
                 Field::u16(FieldId::UserID, 2),
                 Field::u16(FieldId::Options, 2),
+                Field::string(FieldId::Data, "x".repeat(70)),
             ],
         );
         let replies = session.on_disconnect_user(&request, &state).await;
         assert!(!replies[0].is_error());
 
-        assert!(state
+        let ban = state
             .is_banned("192.0.2.9".parse().unwrap())
             .await
-            .is_some());
+            .expect("expected a permanent ban");
+        assert_eq!(ban.note, "x".repeat(MAX_BAN_NOTE));
 
         let notice = target_rx
             .try_recv()

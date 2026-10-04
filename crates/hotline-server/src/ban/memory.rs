@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::RwLock;
-use std::time::SystemTime;
 
 use async_trait::async_trait;
 
@@ -22,11 +21,8 @@ impl BanProvider for InMemoryBanProvider {
         record.is_active().then_some(record)
     }
 
-    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), Cow<'static, str>> {
-        self.bans
-            .write()
-            .unwrap()
-            .insert(ip, BanRecord { ip, until });
+    async fn ban(&self, record: BanRecord) -> Result<(), Cow<'static, str>> {
+        self.bans.write().unwrap().insert(record.ip, record);
         Ok(())
     }
 
@@ -39,7 +35,7 @@ impl BanProvider for InMemoryBanProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     fn addr() -> IpAddr {
         "192.0.2.1".parse().unwrap()
@@ -50,13 +46,10 @@ mod tests {
         let provider = InMemoryBanProvider::default();
         assert_eq!(provider.is_banned(addr()).await, None);
 
-        provider.ban(addr(), None).await.unwrap();
+        provider.ban(BanRecord::new(addr(), None)).await.unwrap();
         assert_eq!(
             provider.is_banned(addr()).await,
-            Some(BanRecord {
-                ip: addr(),
-                until: None,
-            })
+            Some(BanRecord::new(addr(), None))
         );
 
         assert!(provider.unban(addr()).await.unwrap().is_some());
@@ -68,7 +61,10 @@ mod tests {
     async fn unban_of_an_expired_ban_returns_none() {
         let provider = InMemoryBanProvider::default();
         let past = SystemTime::now() - Duration::from_secs(1);
-        provider.ban(addr(), Some(past)).await.unwrap();
+        provider
+            .ban(BanRecord::new(addr(), Some(past)))
+            .await
+            .unwrap();
         assert_eq!(provider.unban(addr()).await.unwrap(), None);
     }
 
@@ -76,7 +72,10 @@ mod tests {
     async fn expired_temp_ban_is_not_reported() {
         let provider = InMemoryBanProvider::default();
         let past = SystemTime::now() - Duration::from_secs(1);
-        provider.ban(addr(), Some(past)).await.unwrap();
+        provider
+            .ban(BanRecord::new(addr(), Some(past)))
+            .await
+            .unwrap();
         assert_eq!(provider.is_banned(addr()).await, None);
     }
 
@@ -84,7 +83,10 @@ mod tests {
     async fn unexpired_temp_ban_is_reported() {
         let provider = InMemoryBanProvider::default();
         let future = SystemTime::now() + Duration::from_secs(3600);
-        provider.ban(addr(), Some(future)).await.unwrap();
+        provider
+            .ban(BanRecord::new(addr(), Some(future)))
+            .await
+            .unwrap();
         assert!(provider.is_banned(addr()).await.is_some());
     }
 }

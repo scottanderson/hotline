@@ -924,7 +924,7 @@ mod tests {
         let ip = session.remote_addr.ip();
         let login = request(Opcode::Login, 1, vec![]);
 
-        state.ban(ip, None).await.unwrap();
+        state.ban(crate::BanRecord::new(ip, None)).await.unwrap();
         let replies = session
             .on_login(&login, &state, &ServerConfig::default())
             .await;
@@ -937,7 +937,10 @@ mod tests {
         );
 
         let later = std::time::SystemTime::now() + Duration::from_secs(60);
-        state.ban(ip, Some(later)).await.unwrap();
+        state
+            .ban(crate::BanRecord::new(ip, Some(later)))
+            .await
+            .unwrap();
         let replies = session
             .on_login(&login, &state, &ServerConfig::default())
             .await;

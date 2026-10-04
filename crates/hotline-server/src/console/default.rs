@@ -417,7 +417,7 @@ mod tests {
     async fn unban_lifts_a_ban() {
         let state = SharedState::default();
         let ip: IpAddr = BANNED.parse().unwrap();
-        state.ban(ip, None).await.unwrap();
+        state.ban(crate::BanRecord::new(ip, None)).await.unwrap();
 
         let reply = cmd_unban(BANNED, &actor(AccessExtra::empty()), &state).await;
 

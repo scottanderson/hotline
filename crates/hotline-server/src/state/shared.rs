@@ -1515,19 +1515,15 @@ impl SharedState {
         }
     }
 
-    /// Ban `ip` until `until`, or permanently if `None`.
-    pub async fn ban(
-        &self,
-        ip: IpAddr,
-        until: Option<std::time::SystemTime>,
-    ) -> Result<(), Cow<'static, str>> {
-        self.bans.ban(ip, until).await
+    /// Store `record`, which replaces any ban on its address.
+    pub async fn ban(&self, record: BanRecord) -> Result<(), Cow<'static, str>> {
+        self.bans.ban(record).await
     }
 
     /// Ban `ip` for [`TEMP_BAN_DURATION`], logging a failure.
     pub(crate) async fn temp_ban(&self, ip: IpAddr) {
         let until = std::time::SystemTime::now() + TEMP_BAN_DURATION;
-        if let Err(error) = self.ban(ip, Some(until)).await {
+        if let Err(error) = self.ban(BanRecord::new(ip, Some(until))).await {
             tracing::warn!(%ip, %error, "failed to persist ban");
         }
     }

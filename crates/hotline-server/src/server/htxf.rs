@@ -540,7 +540,10 @@ mod tests {
         use tokio::io::AsyncReadExt;
 
         let state = SharedState::default();
-        state.ban("127.0.0.1".parse().unwrap(), None).await.unwrap();
+        state
+            .ban(crate::BanRecord::new("127.0.0.1".parse().unwrap(), None))
+            .await
+            .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(run_htxf_listener(listener, state));

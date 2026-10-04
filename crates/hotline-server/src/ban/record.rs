@@ -9,9 +9,21 @@ pub struct BanRecord {
     /// `None` means the ban never expires.
     #[serde(with = "until_rfc3339")]
     pub until: Option<SystemTime>,
+    /// Why the address is banned. Empty when no one gave a reason.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 impl BanRecord {
+    /// A ban on `ip` until `until`, or a permanent one if `None`, with no note.
+    pub const fn new(ip: IpAddr, until: Option<SystemTime>) -> Self {
+        Self {
+            ip,
+            until,
+            note: String::new(),
+        }
+    }
+
     /// Whether the ban still applies now.
     pub fn is_active(&self) -> bool {
         self.until.is_none_or(|until| until > SystemTime::now())
@@ -53,10 +65,10 @@ mod tests {
 
     #[test]
     fn until_serializes_as_an_rfc3339_timestamp_and_round_trips() {
-        let record = BanRecord {
-            ip: addr(),
-            until: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
-        };
+        let record = BanRecord::new(
+            addr(),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+        );
         let json = serde_json::to_string(&record).unwrap();
         assert_eq!(json, r#"{"ip":"192.0.2.1","until":"2023-11-14T22:13:20Z"}"#);
         assert_eq!(serde_json::from_str::<BanRecord>(&json).unwrap(), record);
@@ -64,12 +76,20 @@ mod tests {
 
     #[test]
     fn a_permanent_ban_serializes_until_as_null() {
-        let record = BanRecord {
-            ip: addr(),
-            until: None,
-        };
+        let record = BanRecord::new(addr(), None);
         let json = serde_json::to_string(&record).unwrap();
         assert_eq!(json, r#"{"ip":"192.0.2.1","until":null}"#);
+        assert_eq!(serde_json::from_str::<BanRecord>(&json).unwrap(), record);
+    }
+
+    #[test]
+    fn a_note_round_trips() {
+        let record = BanRecord {
+            note: "spam".into(),
+            ..BanRecord::new(addr(), None)
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(json, r#"{"ip":"192.0.2.1","until":null,"note":"spam"}"#);
         assert_eq!(serde_json::from_str::<BanRecord>(&json).unwrap(), record);
     }
 }

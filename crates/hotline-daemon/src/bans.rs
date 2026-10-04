@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use async_trait::async_trait;
 use hotline_server::{BanProvider, BanRecord};
@@ -54,10 +53,10 @@ impl BanProvider for FileBanProvider {
         record.is_active().then_some(record)
     }
 
-    async fn ban(&self, ip: IpAddr, until: Option<SystemTime>) -> Result<(), Cow<'static, str>> {
+    async fn ban(&self, record: BanRecord) -> Result<(), Cow<'static, str>> {
         let mut cache = self.cache.write().await;
         let mut updated = cache.clone();
-        updated.insert(ip, BanRecord { ip, until });
+        updated.insert(record.ip, record);
         self.write_cache(&updated)
             .await
             .map_err(|e| e.to_string())?;
@@ -94,7 +93,7 @@ mod tests {
         {
             let provider = FileBanProvider::open(&path).await.unwrap();
             assert_eq!(provider.is_banned(addr()).await, None);
-            provider.ban(addr(), None).await.unwrap();
+            provider.ban(BanRecord::new(addr(), None)).await.unwrap();
             assert!(provider.is_banned(addr()).await.is_some());
         }
 
@@ -125,7 +124,7 @@ mod tests {
         // Put a directory where the ban file should be, so every write fails.
         tokio::fs::create_dir(&path).await.unwrap();
 
-        assert!(provider.ban(addr(), None).await.is_err());
+        assert!(provider.ban(BanRecord::new(addr(), None)).await.is_err());
         assert_eq!(provider.is_banned(addr()).await, None);
     }
 }
