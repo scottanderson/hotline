@@ -1,24 +1,28 @@
 //! A real in-process server for session tests.
 
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::{text_encoding, Field, Opcode, Received, Transaction};
 use hotline_server::{Providers, Server, ServerConfig};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
 
 pub const WAIT: Duration = Duration::from_secs(5);
 
-/// A free port whose next port, for HTXF, is also free.
-fn free_port() -> u16 {
+/// A listener on a free port, and one on the next port for HTXF.
+async fn listeners() -> (TcpListener, TcpListener) {
     loop {
-        let base = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = base.local_addr().unwrap().port();
-        if port < u16::MAX && TcpListener::bind(("127.0.0.1", port + 1)).is_ok() {
-            return port;
+        if port == u16::MAX {
+            continue;
+        }
+        if let Ok(htxf) = TcpListener::bind(("127.0.0.1", port + 1)).await {
+            return (base, htxf);
         }
     }
 }
@@ -30,19 +34,10 @@ pub async fn start_server(providers: Providers) -> SocketAddr {
 
 /// Start a server with `config` on a free port and `providers`, and return its address.
 pub async fn start_server_config(config: ServerConfig, providers: Providers) -> SocketAddr {
-    let addr = SocketAddr::from(([127, 0, 0, 1], free_port()));
-    let config = ServerConfig {
-        bind_addr: addr.to_string().into(),
-        ..config
-    };
-    tokio::spawn(Server::new(config, providers).run());
-    for _ in 0..50 {
-        if tokio::net::TcpStream::connect(addr).await.is_ok() {
-            return addr;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("server did not start");
+    let (listener, htxf_listener) = listeners().await;
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(Server::new(config, providers).run_on(listener, htxf_listener));
+    addr
 }
 
 /// A push as the client reads it in the default encoding.
