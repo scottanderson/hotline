@@ -12,7 +12,7 @@ mod user_flags;
 mod user_name;
 
 pub use date::HlDate;
-pub use file_name::FileNameWithInfo;
+pub use file_name::{FileNameWithInfo, PARTIAL_CREATOR, PARTIAL_TYPE};
 pub use news_article_list_data::NewsArticleListData;
 pub use news_article_summary::{NewsArticleSummary, NewsFlavor};
 pub use news_category_list_entry::NewsCategoryListEntry;

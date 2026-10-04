@@ -4,6 +4,12 @@ use crate::error::{ProtoError, Result};
 use crate::text_encoding::{self, Encoding};
 use crate::wire::{PacketReader, VecWriter};
 
+/// The type code of a file whose upload has not finished.
+pub const PARTIAL_TYPE: [u8; 4] = *b"HTft";
+
+/// The creator code of a file whose upload has not finished.
+pub const PARTIAL_CREATOR: [u8; 4] = *b"HTLC";
+
 /// The packed [`myField_FileNameWithInfo`] (200) record from
 /// [`myTran_GetFileNameList`] (200) replies.
 ///
@@ -75,6 +81,11 @@ impl FileNameWithInfo {
         })
     }
 
+    /// `true` if the type and creator mark an upload that has not finished.
+    pub fn is_partial_upload(&self) -> bool {
+        self.file_type == PARTIAL_TYPE && self.creator == PARTIAL_CREATOR
+    }
+
     /// `true` if `file_type == "fldr"`.
     pub fn is_folder(&self) -> bool {
         &self.file_type == b"fldr"
@@ -84,6 +95,19 @@ impl FileNameWithInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_partial_upload_needs_both_codes() {
+        let mut file = FileNameWithInfo {
+            file_type: PARTIAL_TYPE,
+            creator: PARTIAL_CREATOR,
+            size: 0,
+            name: "a".into(),
+        };
+        assert!(file.is_partial_upload());
+        file.creator = *b"ttxt";
+        assert!(!file.is_partial_upload());
+    }
 
     #[test]
     fn file_name_with_info_round_trips() {

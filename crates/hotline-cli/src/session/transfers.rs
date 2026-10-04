@@ -484,13 +484,16 @@ fn from_text(offset: u32) -> String {
 /// or a file `name` with type `HTft` and creator `HTLC`.
 fn lists_partial_upload(files: &[FileNameWithInfo], name: &str) -> bool {
     let partial = format!("{name}.hpf");
-    files.iter().filter(|f| !f.is_folder()).any(|f| {
-        *f.name == partial || (&*f.name == name && &f.file_type == b"HTft" && &f.creator == b"HTLC")
-    })
+    files
+        .iter()
+        .filter(|f| !f.is_folder())
+        .any(|f| *f.name == partial || (&*f.name == name && f.is_partial_upload()))
 }
 
 #[cfg(test)]
 mod tests {
+    use hotline_proto::types::{PARTIAL_CREATOR, PARTIAL_TYPE};
+
     use super::*;
     use crate::session::test_support;
 
@@ -680,7 +683,7 @@ mod tests {
 
     #[test]
     fn lists_partial_upload_matches_a_partial_type_and_creator() {
-        let files = [listed("a.txt", b"HTft", b"HTLC")];
+        let files = [listed("a.txt", &PARTIAL_TYPE, &PARTIAL_CREATOR)];
         assert!(lists_partial_upload(&files, "a.txt"));
     }
 

@@ -46,13 +46,7 @@ pub type BoxedWriter = Box<dyn AsyncWrite + Send + Unpin>;
 /// via [`type_and_creator_for_name`].
 pub const PARTIAL_SUFFIX: &str = ".hpf";
 
-/// [`type_and_creator_for_name`]'s result for [`PARTIAL_SUFFIX`], the
-/// marker a real client's own directory listing checks to decide
-/// whether to offer resuming an upload.
-pub const PARTIAL_TYPE: [u8; 4] = *b"HTft";
-
-/// See [`PARTIAL_TYPE`].
-pub const PARTIAL_CREATOR: [u8; 4] = *b"HTLC";
+pub use hotline_proto::types::{PARTIAL_CREATOR, PARTIAL_TYPE};
 
 /// The on-disk name `name`'s upload is stored under until
 /// [`FileProvider::finish_upload`] renames it. See [`PARTIAL_SUFFIX`].
