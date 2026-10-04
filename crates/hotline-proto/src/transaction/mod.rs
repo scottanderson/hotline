@@ -48,8 +48,9 @@ use crate::Access;
 /// [module docs](self) for `len`/`len2` and [`TransactionHeader`].
 ///
 /// A [`Built`] transaction is one to send. A [`Received`] transaction was
-/// read off the wire. Carries no text encoding of its own; callers supply one
-/// per read/write call.
+/// read off the wire. A built transaction gets its encoding at
+/// [`Transaction::encode`]. A received one keeps the encoding it was read
+/// with.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Transaction<S = Built> {
     /// The wire `type` value, already resolved to which direction sent
@@ -189,32 +190,32 @@ impl Transaction<Received> {
     }
 
     /// `id`'s field as text, if present.
-    pub fn string(&self, id: FieldId, encoding: &'static Encoding) -> Option<String> {
-        self.fields.string(id, encoding)
+    pub fn string(&self, id: FieldId) -> Option<String> {
+        self.fields.string(id)
     }
 
-    /// `id`'s field as text plus its `encoding` byte length, if present.
+    /// `id`'s field as text plus its byte length, if present.
     /// See [`Field::as_string_len`].
-    pub fn string_len(&self, id: FieldId, encoding: &'static Encoding) -> Option<(String, usize)> {
-        self.fields.string_len(id, encoding)
+    pub fn string_len(&self, id: FieldId) -> Option<(String, usize)> {
+        self.fields.string_len(id)
     }
 
     /// The first [`myField_UserNameWithInfo`] (300) field, decoded (`None` if
     /// absent, `Some(Err(_))` if malformed).
     ///
     /// [`myField_UserNameWithInfo`]: crate::FieldId::UserNameWithInfo
-    pub fn user_list_entry(&self, encoding: &'static Encoding) -> Option<Result<UserNameWithInfo>> {
+    pub fn user_list_entry(&self) -> Option<Result<UserNameWithInfo>> {
         self.field(FieldId::UserNameWithInfo)
-            .map(|f| UserNameWithInfo::decode(f.as_bytes(), encoding))
+            .map(|f| UserNameWithInfo::decode(f.as_bytes(), f.encoding()))
     }
 
     /// Every [`myField_UserNameWithInfo`] (300) field, decoded; fails on the
     /// first that doesn't decode.
     ///
     /// [`myField_UserNameWithInfo`]: crate::FieldId::UserNameWithInfo
-    pub fn user_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<UserNameWithInfo>> {
+    pub fn user_list_entries(&self) -> Result<Vec<UserNameWithInfo>> {
         self.fields(FieldId::UserNameWithInfo)
-            .map(|f| UserNameWithInfo::decode(f.as_bytes(), encoding))
+            .map(|f| UserNameWithInfo::decode(f.as_bytes(), f.encoding()))
             .collect()
     }
 
@@ -226,7 +227,7 @@ impl Transaction<Received> {
     /// [`myField_UserIconID`]: crate::FieldId::UserIconID
     /// [`myField_UserFlags`]: crate::FieldId::UserFlags
     /// [`myField_UserName`]: crate::FieldId::UserName
-    pub fn user_entry(&self, encoding: &'static Encoding) -> Option<UserNameWithInfo> {
+    pub fn user_entry(&self) -> Option<UserNameWithInfo> {
         Some(UserNameWithInfo {
             user_id: self.field(FieldId::UserID).and_then(Field::as_u16)?,
             icon: self.icon().unwrap_or_default(),
@@ -234,7 +235,7 @@ impl Transaction<Received> {
                 .field(FieldId::UserFlags)
                 .and_then(Field::as_u16)
                 .map_or_else(UserFlags::empty, UserFlags::from_bits_retain),
-            name: self.name(encoding).unwrap_or_default().into(),
+            name: self.name().unwrap_or_default().into(),
         })
     }
 
@@ -242,9 +243,9 @@ impl Transaction<Received> {
     /// first that doesn't decode.
     ///
     /// [`myField_FileNameWithInfo`]: crate::FieldId::FileNameWithInfo
-    pub fn file_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<FileNameWithInfo>> {
+    pub fn file_list_entries(&self) -> Result<Vec<FileNameWithInfo>> {
         self.fields(FieldId::FileNameWithInfo)
-            .map(|f| FileNameWithInfo::decode(f.as_bytes(), encoding))
+            .map(|f| FileNameWithInfo::decode(f.as_bytes(), f.encoding()))
             .collect()
     }
 
@@ -253,32 +254,32 @@ impl Transaction<Received> {
     ///
     /// [`myField_FilePath`]: crate::FieldId::FilePath
     /// [`myField_FileNewPath`]: crate::FieldId::FileNewPath
-    pub fn file_path(&self, id: FieldId, encoding: &'static Encoding) -> Option<Result<HlPath>> {
+    pub fn file_path(&self, id: FieldId) -> Option<Result<HlPath>> {
         self.field(id)
-            .map(|f| HlPath::decode(f.as_bytes(), encoding))
+            .map(|f| HlPath::decode(f.as_bytes(), f.encoding()))
     }
 
     /// The [`myField_UserLogin`] (105) field, deobfuscated, if present.
     ///
     /// [`myField_UserLogin`]: crate::FieldId::UserLogin
-    pub fn login(&self, encoding: &'static Encoding) -> Option<String> {
+    pub fn login(&self) -> Option<String> {
         self.field(FieldId::UserLogin)
-            .map(|f| f.as_deobfuscated_string(encoding))
+            .map(Field::as_deobfuscated_string)
     }
 
     /// The [`myField_UserPassword`] (106) field, deobfuscated, if present.
     ///
     /// [`myField_UserPassword`]: crate::FieldId::UserPassword
-    pub fn password(&self, encoding: &'static Encoding) -> Option<String> {
+    pub fn password(&self) -> Option<String> {
         self.field(FieldId::UserPassword)
-            .map(|f| f.as_deobfuscated_string(encoding))
+            .map(Field::as_deobfuscated_string)
     }
 
     /// The [`myField_UserName`] (102) field, if present.
     ///
     /// [`myField_UserName`]: crate::FieldId::UserName
-    pub fn name(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(FieldId::UserName, encoding)
+    pub fn name(&self) -> Option<String> {
+        self.string(FieldId::UserName)
     }
 
     /// The [`myField_UserIconID`] (104) field, if present.
@@ -291,8 +292,8 @@ impl Transaction<Received> {
     /// The [`myField_NewsPath`] (325) field, decoded.
     ///
     /// [`myField_NewsPath`]: crate::FieldId::NewsPath
-    pub fn news_path(&self, encoding: &'static Encoding) -> Option<Result<HlPath>> {
-        self.file_path(FieldId::NewsPath, encoding)
+    pub fn news_path(&self) -> Option<Result<HlPath>> {
+        self.file_path(FieldId::NewsPath)
     }
 
     /// The [`myField_NewsArtID`] (326) field, if present.
@@ -305,22 +306,22 @@ impl Transaction<Received> {
     /// The [`myField_NewsCatName`] (322) field, if present.
     ///
     /// [`myField_NewsCatName`]: crate::FieldId::NewsCatName
-    pub fn news_category_name(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(FieldId::NewsCatName, encoding)
+    pub fn news_category_name(&self) -> Option<String> {
+        self.string(FieldId::NewsCatName)
     }
 
     /// The [`myField_NewsArtTitle`] (328) field, if present.
     ///
     /// [`myField_NewsArtTitle`]: crate::FieldId::NewsArtTitle
-    pub fn news_article_title(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(FieldId::NewsArtTitle, encoding)
+    pub fn news_article_title(&self) -> Option<String> {
+        self.string(FieldId::NewsArtTitle)
     }
 
     /// The [`myField_NewsArtDataFlav`] (327) field, if present.
     ///
     /// [`myField_NewsArtDataFlav`]: crate::FieldId::NewsArtDataFlav
-    pub fn news_article_flavor(&self, encoding: &'static Encoding) -> Option<String> {
-        self.string(FieldId::NewsArtDataFlav, encoding)
+    pub fn news_article_flavor(&self) -> Option<String> {
+        self.string(FieldId::NewsArtDataFlav)
     }
 
     /// The [`myField_NewsArtFlags`] (334) field, if present.
@@ -367,20 +368,21 @@ impl Transaction<Received> {
 
     /// Decode a complete, single-part transaction (prefix + body) from
     /// one contiguous buffer, assuming it was sent **by a client**.
-    pub fn decode_from_client(buf: &[u8]) -> Result<Self> {
-        Self::decode_with(buf, TransactionHeader::decode_from_client)
+    pub fn decode_from_client(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
+        Self::decode_with(buf, encoding, TransactionHeader::decode_from_client)
     }
 
     /// Like [`Transaction::decode_from_client`], but for bytes known to
     /// have been sent **by a server**.
-    pub fn decode_from_server(buf: &[u8]) -> Result<Self> {
-        Self::decode_with(buf, TransactionHeader::decode_from_server)
+    pub fn decode_from_server(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
+        Self::decode_with(buf, encoding, TransactionHeader::decode_from_server)
     }
 
     /// Shared one-shot decoder driving a caller-picked prefix decoder
     /// through [`TransactionHeader::finish_decode`].
     fn decode_with(
         buf: &[u8],
+        encoding: &'static Encoding,
         decode_prefix: impl FnOnce(&[u8; TransactionHeader::LEN]) -> TransactionHeader,
     ) -> Result<Self> {
         let prefix: &[u8; TransactionHeader::LEN] = buf
@@ -399,7 +401,7 @@ impl Transaction<Received> {
                 needed: body_end,
                 available: buf.len(),
             })?;
-        header.finish_decode(body)
+        header.finish_decode(body, encoding)
     }
 }
 
@@ -453,7 +455,8 @@ mod tests {
                 .map(|i| Field::string(FieldId::Data, format!("msg{i}")))
                 .collect::<Vec<_>>();
             let tx = Transaction::request(Opcode::ChatSend, 1, fields);
-            let decoded = Transaction::decode_from_client(&tx.encode(encoding).unwrap()).unwrap();
+            let decoded =
+                Transaction::decode_from_client(&tx.encode(encoding).unwrap(), encoding).unwrap();
             assert_eq!(decoded.fields.len(), n);
         }
     }
@@ -480,14 +483,14 @@ mod tests {
             "data_len() (== len2) must equal count(2) + all field bytes"
         );
 
-        let decoded = Transaction::decode_from_client(&bytes).unwrap();
+        let decoded = Transaction::decode_from_client(&bytes, encoding).unwrap();
         // decode produces FieldValue::Bytes, so compare interpreted values
         assert_eq!(decoded.trans, tx.trans);
         assert_eq!(decoded.fields.len(), tx.fields.len());
         assert_eq!(
             decoded
                 .field(FieldId::UserLogin)
-                .map(|f| f.as_deobfuscated_string(encoding))
+                .map(|f| f.as_deobfuscated_string())
                 .as_deref(),
             Some("guest")
         );
@@ -508,9 +511,12 @@ mod tests {
         let header = TransactionHeader::decode_from_client(&prefix);
         let body =
             &bytes[TransactionHeader::LEN..TransactionHeader::LEN + header.data_len() as usize];
-        let streamed = header.finish_decode(body).unwrap();
+        let streamed = header.finish_decode(body, encoding).unwrap();
 
-        assert_eq!(streamed, Transaction::decode_from_client(&bytes).unwrap());
+        assert_eq!(
+            streamed,
+            Transaction::decode_from_client(&bytes, encoding).unwrap()
+        );
     }
 
     #[test]
@@ -532,9 +538,7 @@ mod tests {
         assert!(tx.is_error());
         assert!(tx.is_reply());
         assert_eq!(
-            tx.received(encoding)
-                .string(FieldId::ErrorText, encoding)
-                .unwrap(),
+            tx.received(encoding).string(FieldId::ErrorText).unwrap(),
             "nope"
         );
     }

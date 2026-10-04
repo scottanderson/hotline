@@ -32,7 +32,7 @@ impl Session {
             return Vec::new();
         }
         let encoding = self.encoding();
-        let Some(message) = tx.string(FieldId::Data, encoding) else {
+        let Some(message) = tx.string(FieldId::Data) else {
             return Vec::new();
         };
 
@@ -266,9 +266,7 @@ impl Session {
             return tx.reply_error("missing chat id");
         };
         let encoding = self.encoding();
-        let password = tx
-            .string(FieldId::UserPassword, encoding)
-            .unwrap_or_default();
+        let password = tx.string(FieldId::UserPassword).unwrap_or_default();
         if let Err(reason) = state.join_chat_room(chat_id, self.user_id, &password).await {
             return tx.reply_error(reason);
         }
@@ -385,9 +383,8 @@ impl Session {
         let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
-        let encoding = self.encoding();
-        let subject = tx.string(FieldId::ChatSubject, encoding);
-        let password = tx.string(FieldId::UserPassword, encoding);
+        let subject = tx.string(FieldId::ChatSubject);
+        let password = tx.string(FieldId::UserPassword);
         if subject.is_none() && password.is_none() {
             return vec![tx.reply_error("missing subject or password")];
         }
@@ -510,7 +507,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
             .received(encoding)
-            .string(FieldId::Data, encoding)
+            .string(FieldId::Data)
             .unwrap();
         assert_eq!(text, "\r        Alice:  hi");
     }
@@ -541,7 +538,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
             .received(encoding)
-            .string(FieldId::Data, encoding)
+            .string(FieldId::Data)
             .unwrap();
         assert_eq!(text, "\r *** Alice waves");
     }
@@ -569,7 +566,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
             .received(encoding)
-            .string(FieldId::Data, encoding)
+            .string(FieldId::Data)
             .unwrap();
         assert_eq!(text, "\r        Alice:  line one\r        Alice:  line two");
     }
@@ -597,7 +594,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
             .received(encoding)
-            .string(FieldId::Data, encoding)
+            .string(FieldId::Data)
             .unwrap();
         assert_eq!(text, "\rANameThatIsWa:  hi");
     }
@@ -628,7 +625,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Chat push")
             .received(encoding)
-            .string(FieldId::Data, encoding)
+            .string(FieldId::Data)
             .unwrap();
         assert_eq!(text, "\r        Alice:  hi");
     }
@@ -656,7 +653,7 @@ mod tests {
         assert_eq!(
             reply[0]
                 .received(text_encoding::DEFAULT)
-                .string(FieldId::UserName, text_encoding::DEFAULT)
+                .string(FieldId::UserName)
                 .as_deref(),
             Some("hxd")
         );
@@ -723,7 +720,7 @@ mod tests {
             .received(text_encoding::DEFAULT)
             .field(FieldId::Data)
             .unwrap()
-            .as_string(text_encoding::DEFAULT);
+            .as_string();
         assert!(text.contains("/users"), "{text}");
     }
 
@@ -770,7 +767,7 @@ mod tests {
             .received(text_encoding::DEFAULT)
             .field(FieldId::Data)
             .unwrap()
-            .as_string(text_encoding::DEFAULT);
+            .as_string();
         assert!(text.contains("not allowed"));
     }
 
@@ -791,7 +788,7 @@ mod tests {
             .received(text_encoding::DEFAULT)
             .field(FieldId::Data)
             .unwrap()
-            .as_string(text_encoding::DEFAULT);
+            .as_string();
         assert_eq!(text, "\rcommand not found: nope");
     }
 
@@ -835,7 +832,7 @@ mod tests {
         );
         assert_eq!(
             push.received(text_encoding::DEFAULT)
-                .string(FieldId::UserName, text_encoding::DEFAULT),
+                .string(FieldId::UserName),
             Some("Bobby".to_string())
         );
     }
@@ -975,7 +972,7 @@ mod tests {
         assert_eq!(
             join_reply
                 .received(encoding)
-                .string(FieldId::ChatSubject, encoding)
+                .string(FieldId::ChatSubject)
                 .unwrap(),
             ""
         );
@@ -1003,10 +1000,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a room-chat push");
         assert_eq!(
-            delivered
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            delivered.received(encoding).string(FieldId::Data).unwrap(),
             "\r        Alice:  room only"
         );
         assert!(
@@ -1211,9 +1205,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a ChatSubject push");
         assert_eq!(
-            notify
-                .received(encoding)
-                .string(FieldId::UserPassword, encoding),
+            notify.received(encoding).string(FieldId::UserPassword),
             Some("hunter2".to_string())
         );
     }
@@ -1278,9 +1270,7 @@ mod tests {
             Some(0)
         );
         assert_eq!(
-            notify
-                .received(encoding)
-                .string(FieldId::ChatSubject, encoding),
+            notify.received(encoding).string(FieldId::ChatSubject),
             Some("Welcome".to_string())
         );
     }
@@ -1430,10 +1420,7 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0]
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            replies[0].received(encoding).string(FieldId::Data).unwrap(),
             "Bob does not accept private chats."
         );
         assert_eq!(
@@ -1520,10 +1507,7 @@ mod tests {
             .expect("expected a Chat push notifying the room");
         assert_eq!(notify.r#type(), TransactionType::Push(Opcode::ChatMsg));
         assert_eq!(
-            notify
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            notify.received(encoding).string(FieldId::Data).unwrap(),
             "\r<<< \"Bob\" declined invitation to chat >>>"
         );
         assert_eq!(

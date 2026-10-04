@@ -4,7 +4,6 @@ use std::borrow::Cow;
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
-use hotline_proto::text_encoding::Encoding;
 use hotline_proto::FieldId;
 use hotline_proto::{Field, FieldList, Received, Transaction};
 
@@ -26,8 +25,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let encoding = self.encoding();
-        let Some(login) = tx.login(encoding) else {
+        let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
@@ -36,8 +34,8 @@ impl Session {
             return vec![tx.reply_error("Cannot create account with more access than yourself.")];
         }
         let account = Account {
-            password: tx.password(encoding).unwrap_or_default().into(),
-            name: tx.name(encoding).unwrap_or_default().into(),
+            password: tx.password().unwrap_or_default().into(),
+            name: tx.name().unwrap_or_default().into(),
             access,
             access_extra: AccessExtra::default(),
         };
@@ -60,8 +58,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::DELETE_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let encoding = self.encoding();
-        let Some(login) = tx.login(encoding) else {
+        let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
@@ -122,8 +119,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let encoding = self.encoding();
-        let Some(login) = tx.string(FieldId::UserLogin, encoding) else {
+        let Some(login) = tx.string(FieldId::UserLogin) else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
@@ -149,13 +145,12 @@ impl Session {
         if let Err(reason) = self.access.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let encoding = self.encoding();
-        let Some(login) = tx.login(encoding) else {
+        let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
-        let password = Self::new_password(tx.field(FieldId::UserPassword), encoding);
-        let name = tx.name(encoding);
+        let password = Self::new_password(tx.field(FieldId::UserPassword));
+        let name = tx.name();
         let access = tx.access();
         let edit = |existing: Account| Account {
             password: password.unwrap_or(existing.password),
@@ -184,13 +179,10 @@ impl Session {
     /// for the single byte 0, which keeps the old one. No field clears it.
     ///
     /// [`myField_UserPassword`]: hotline_proto::FieldId::UserPassword
-    fn new_password(
-        field: Option<&Field<Received>>,
-        encoding: &'static Encoding,
-    ) -> Option<Box<str>> {
+    fn new_password(field: Option<&Field<Received>>) -> Option<Box<str>> {
         match field {
             Some(f) if f.as_bytes() == [0u8] => None,
-            Some(f) => Some(f.as_deobfuscated_string(encoding).into()),
+            Some(f) => Some(f.as_deobfuscated_string().into()),
             None => Some(Box::default()),
         }
     }
@@ -269,7 +261,7 @@ impl Session {
     ) -> Vec<Transaction> {
         let mut save_error = false;
         for field in tx.fields(FieldId::Data) {
-            let Ok(record) = FieldList::decode(field.as_bytes()) else {
+            let Ok(record) = field.as_field_list() else {
                 save_error = true;
                 continue;
             };
@@ -305,16 +297,13 @@ impl Session {
         record: &FieldList<Received>,
         state: &SharedState,
     ) -> std::result::Result<bool, Cow<'static, str>> {
-        let encoding = self.encoding();
-        let as_deobfuscated_string = |f: &Field<Received>| f.as_deobfuscated_string(encoding);
+        let as_deobfuscated_string = |f: &Field<Received>| f.as_deobfuscated_string();
         let old_login = record
             .field(FieldId::Data)
             .map(as_deobfuscated_string)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_lowercase());
-        let name = record
-            .string(FieldId::UserName, encoding)
-            .unwrap_or_default();
+        let name = record.string(FieldId::UserName).unwrap_or_default();
         let login = record
             .field(FieldId::UserLogin)
             .map(as_deobfuscated_string)
@@ -337,7 +326,7 @@ impl Session {
             };
         }
 
-        let password = Self::new_password(record.field(FieldId::UserPassword), encoding);
+        let password = Self::new_password(record.field(FieldId::UserPassword));
         let access = record
             .field(FieldId::UserAccess)
             .and_then(Field::as_u64)
@@ -462,7 +451,7 @@ mod tests {
         assert_eq!(
             replies[0]
                 .received(encoding)
-                .string(FieldId::UserName, encoding)
+                .string(FieldId::UserName)
                 .unwrap(),
             "Bob"
         );
@@ -518,7 +507,7 @@ mod tests {
         assert_eq!(
             replies[0]
                 .received(encoding)
-                .string(FieldId::ErrorText, encoding)
+                .string(FieldId::ErrorText)
                 .unwrap(),
             "Cannot create account \"bob\" because there is already an account with that login."
         );
@@ -560,7 +549,7 @@ mod tests {
         assert_eq!(
             replies[0]
                 .received(encoding)
-                .string(FieldId::ErrorText, encoding)
+                .string(FieldId::ErrorText)
                 .unwrap(),
             "No account with login \"bob\"."
         );
@@ -987,13 +976,13 @@ mod tests {
 
         let bob = records
             .iter()
-            .map(|f| FieldList::decode(f.as_bytes()).unwrap())
-            .find(|fields| fields.string(FieldId::UserName, encoding).as_deref() == Some("Bob"))
+            .map(|f| f.as_field_list().unwrap())
+            .find(|fields| fields.string(FieldId::UserName).as_deref() == Some("Bob"))
             .expect("bob's record");
         let login = bob
             .field(FieldId::UserLogin)
             .unwrap()
-            .as_deobfuscated_string(encoding);
+            .as_deobfuscated_string();
         assert_eq!(login, "bob");
         let password = bob.field(FieldId::UserPassword).unwrap();
         assert_eq!(password.as_bytes(), b"x");

@@ -168,9 +168,8 @@ impl HotlineClient {
             }
         };
         if reply.is_error() {
-            let encoding = self.encoding.get();
             let msg = reply
-                .string(FieldId::ErrorText, encoding)
+                .string(FieldId::ErrorText)
                 .unwrap_or_else(|| "unknown error".to_string());
             return Err(ClientError::Server(msg));
         }
@@ -200,13 +199,12 @@ impl HotlineClient {
             )
             .await?;
 
-        let encoding = self.encoding.get();
         Ok(LoginResult {
             version: reply.field(FieldId::Vers).and_then(Field::as_u16),
             banner_id: reply
                 .field(FieldId::CommunityBannerID)
                 .and_then(Field::as_u16),
-            server_name: reply.string(FieldId::ServerName, encoding).map(Into::into),
+            server_name: reply.string(FieldId::ServerName).map(Into::into),
         })
     }
 
@@ -265,7 +263,7 @@ impl HotlineClient {
         Ok(JoinedChat {
             id: chat_id(&reply)?,
             subject: Box::default(),
-            users: reply.user_entry(self.encoding.get()).into_iter().collect(),
+            users: reply.user_entry().into_iter().collect(),
         })
     }
 
@@ -303,14 +301,13 @@ impl HotlineClient {
         let reply = self
             .request(Opcode::JoinChat, vec![Field::u32(FieldId::ChatID, chat_id)])
             .await?;
-        let encoding = self.encoding.get();
         Ok(JoinedChat {
             id: chat_id,
             subject: reply
-                .string(FieldId::ChatSubject, encoding)
+                .string(FieldId::ChatSubject)
                 .unwrap_or_default()
                 .into(),
-            users: reply.user_list_entries(encoding)?,
+            users: reply.user_list_entries()?,
         })
     }
 
@@ -423,8 +420,7 @@ impl HotlineClient {
     /// [`myTran_GetUserNameList`]: hotline_proto::Opcode::GetUserNameList
     pub async fn get_user_name_list(&self) -> Result<Vec<UserNameWithInfo>> {
         let reply = self.request(Opcode::GetUserNameList, vec![]).await?;
-        let encoding = self.encoding.get();
-        Ok(reply.user_list_entries(encoding)?)
+        Ok(reply.user_list_entries()?)
     }
 
     /// Change this user's name, icon, and options after login,
@@ -457,16 +453,9 @@ impl HotlineClient {
                 vec![Field::u16(FieldId::UserID, user_id)],
             )
             .await?;
-        let encoding = self.encoding.get();
         Ok(ClientInfoText {
-            name: reply
-                .string(FieldId::UserName, encoding)
-                .unwrap_or_default()
-                .into(),
-            text: reply
-                .string(FieldId::Data, encoding)
-                .unwrap_or_default()
-                .into(),
+            name: reply.string(FieldId::UserName).unwrap_or_default().into(),
+            text: reply.string(FieldId::Data).unwrap_or_default().into(),
         })
     }
 
@@ -475,8 +464,7 @@ impl HotlineClient {
     /// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
     pub async fn get_msgs(&self) -> Result<String> {
         let reply = self.request(Opcode::GetMsgs, vec![]).await?;
-        let encoding = self.encoding.get();
-        Ok(reply.string(FieldId::Data, encoding).unwrap_or_default())
+        Ok(reply.string(FieldId::Data).unwrap_or_default())
     }
 
     /// Post to the classic news, [`myTran_OldPostNews`] (103).
@@ -497,8 +485,7 @@ impl HotlineClient {
     pub async fn get_file_name_list(&self, path: &HlPath) -> Result<Vec<FileNameWithInfo>> {
         let fields = self.file_path_field(path)?.into_iter().collect();
         let reply = self.request(Opcode::GetFileNameList, fields).await?;
-        let encoding = self.encoding.get();
-        Ok(reply.file_list_entries(encoding)?)
+        Ok(reply.file_list_entries()?)
     }
 
     /// Ask to download the file `name` in the folder at `path`,

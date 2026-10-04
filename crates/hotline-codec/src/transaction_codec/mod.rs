@@ -129,7 +129,7 @@ impl Decoder for TransactionCodec {
                     // Common case: whole in one part, with no part pending under this id.
                     if header.total_len() == header.data_len() && !self.partials.contains_key(&key)
                     {
-                        return Ok(Some(header.finish_decode(&part_body)?));
+                        return Ok(Some(header.finish_decode(&part_body, self.encoding())?));
                     }
 
                     // Split transaction: accumulate the parts under one id.
@@ -164,7 +164,7 @@ impl Decoder for TransactionCodec {
                     }
                     let Partial { header, body } =
                         self.partials.remove(&key).expect("present, just checked");
-                    return Ok(Some(header.finish_decode(&body)?));
+                    return Ok(Some(header.finish_decode(&body, self.encoding())?));
                 }
             }
         }
@@ -209,7 +209,6 @@ mod tests {
 
     #[test]
     fn changing_the_encoding_handle_affects_the_very_next_decode_and_encode() {
-        let encoding = hotline_proto::text_encoding::DEFAULT;
         let sjis = hotline_proto::Encoding::for_label(b"shift-jis").unwrap();
         let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}"; // "こんにちは"
 
@@ -226,7 +225,7 @@ mod tests {
         server.encode(tx, &mut buf).unwrap();
         let decoded = server.decode(&mut buf).unwrap().unwrap();
         assert_ne!(
-            decoded.field(FieldId::Data).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(),
             konnichiwa
         );
 
@@ -241,14 +240,13 @@ mod tests {
         server.encode(tx, &mut buf).unwrap();
         let decoded = server.decode(&mut buf).unwrap().unwrap();
         assert_eq!(
-            decoded.field(FieldId::Data).unwrap().as_string(sjis),
+            decoded.field(FieldId::Data).unwrap().as_string(),
             konnichiwa
         );
     }
 
     #[test]
     fn round_trips_a_whole_transaction_in_one_go() {
-        let encoding = hotline_proto::text_encoding::DEFAULT;
         let tx = Transaction::request(
             Opcode::ChatSend,
             1,
@@ -262,10 +260,7 @@ mod tests {
         let decoded = codec.decode(&mut buf).unwrap().unwrap();
         // decode produces FieldValue::Bytes, so compare interpreted values
         assert_eq!(decoded.trans(), tx.trans());
-        assert_eq!(
-            decoded.field(FieldId::Data).unwrap().as_string(encoding),
-            "hello"
-        );
+        assert_eq!(decoded.field(FieldId::Data).unwrap().as_string(), "hello");
         assert!(buf.is_empty(), "decode should consume exactly one frame");
     }
 
@@ -293,7 +288,6 @@ mod tests {
 
     #[test]
     fn decodes_correctly_when_bytes_arrive_one_at_a_time() {
-        let encoding = hotline_proto::text_encoding::DEFAULT;
         let tx = Transaction::request(
             Opcode::Login,
             7,
@@ -308,21 +302,17 @@ mod tests {
         let decoded = feed_byte_by_byte(&tx);
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded
-                .field(FieldId::UserName)
-                .unwrap()
-                .as_string(encoding),
+            decoded.field(FieldId::UserName).unwrap().as_string(),
             "RustHL"
         );
         assert_eq!(
-            decoded.field(FieldId::Data).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(),
             "a slightly longer field to cross a few byte boundaries"
         );
     }
 
     #[test]
     fn decodes_two_back_to_back_transactions_from_one_buffer() {
-        let encoding = hotline_proto::text_encoding::DEFAULT;
         let first = Transaction::request(Opcode::KeepConnectionAlive, 1, vec![]);
         let second = Transaction::request(
             Opcode::ChatSend,
@@ -341,10 +331,7 @@ mod tests {
         let decoded_second = codec.decode(&mut buf).unwrap().unwrap();
         assert_eq!(decoded_second.trans(), second.trans());
         assert_eq!(
-            decoded_second
-                .field(FieldId::Data)
-                .unwrap()
-                .as_string(encoding),
+            decoded_second.field(FieldId::Data).unwrap().as_string(),
             "second frame"
         );
         assert!(buf.is_empty());
@@ -431,14 +418,11 @@ mod tests {
 
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded
-                .field(FieldId::UserName)
-                .unwrap()
-                .as_string(encoding),
+            decoded.field(FieldId::UserName).unwrap().as_string(),
             "RustHL"
         );
         assert_eq!(
-            decoded.field(FieldId::Data).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(),
             "a body long enough to split in two"
         );
         assert!(buf.is_empty());
@@ -475,8 +459,8 @@ mod tests {
         assert_eq!(from_whole.trans(), from_split.trans());
         assert_eq!(from_whole.is_error(), from_split.is_error());
         assert_eq!(
-            from_whole.field(FieldId::Data).unwrap().as_string(encoding),
-            from_split.field(FieldId::Data).unwrap().as_string(encoding)
+            from_whole.field(FieldId::Data).unwrap().as_string(),
+            from_split.field(FieldId::Data).unwrap().as_string()
         );
     }
 
@@ -568,7 +552,7 @@ mod tests {
 
         assert_eq!(decoded.trans(), tx.trans());
         assert_eq!(
-            decoded.field(FieldId::Data).unwrap().as_string(encoding),
+            decoded.field(FieldId::Data).unwrap().as_string(),
             "a body long enough to split"
         );
         assert!(codec.partials.is_empty(), "no partial may be stranded");

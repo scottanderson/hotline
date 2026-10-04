@@ -1,6 +1,6 @@
 //! Account administration requests.
 
-use hotline_proto::{Access, Encoding, Field, FieldId, FieldList, Opcode, Received};
+use hotline_proto::{Access, Field, FieldId, FieldList, Opcode, Received};
 
 use crate::client::HotlineClient;
 use crate::error::Result;
@@ -48,18 +48,15 @@ impl UserAccount {
     ///
     /// [`myTran_GetUser`]: hotline_proto::Opcode::GetUser
     /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
-    fn from_fields(fields: &FieldList<Received>, encoding: &'static Encoding) -> Self {
+    fn from_fields(fields: &FieldList<Received>) -> Self {
         let has_password = fields
             .field(FieldId::UserPassword)
             .is_some_and(|f| !f.as_bytes().is_empty());
         Self {
-            name: fields
-                .string(FieldId::UserName, encoding)
-                .unwrap_or_default()
-                .into(),
+            name: fields.string(FieldId::UserName).unwrap_or_default().into(),
             login: fields
                 .field(FieldId::UserLogin)
-                .map(|f| f.as_deobfuscated_string(encoding))
+                .map(|f| f.as_deobfuscated_string())
                 .unwrap_or_default()
                 .into(),
             password: if has_password {
@@ -121,11 +118,10 @@ impl HotlineClient {
     /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
     pub async fn get_user_list(&self) -> Result<Vec<UserAccount>> {
         let reply = self.request(Opcode::GetUserList, Vec::new()).await?;
-        let encoding = self.encoding().get();
         Ok(reply
             .fields(FieldId::Data)
-            .map(|f| FieldList::decode(f.as_bytes()))
-            .map(|record| record.map(|r| UserAccount::from_fields(&r, encoding)))
+            .map(Field::as_field_list)
+            .map(|record| record.map(|r| UserAccount::from_fields(&r)))
             .collect::<hotline_proto::Result<_>>()?)
     }
 
@@ -167,10 +163,7 @@ impl HotlineClient {
     pub async fn get_user(&self, login: &str) -> Result<UserAccount> {
         let fields = vec![Field::string(FieldId::UserLogin, login)];
         let reply = self.request(Opcode::GetUser, fields).await?;
-        Ok(UserAccount::from_fields(
-            &reply.fields,
-            self.encoding().get(),
-        ))
+        Ok(UserAccount::from_fields(&reply.fields))
     }
 
     /// Replace the account with `account`'s login, [`myTran_SetUser`] (353).

@@ -216,8 +216,7 @@ impl Session {
         let Some(target_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
-        let encoding = self.encoding();
-        let Some(message) = tx.string(FieldId::Data, encoding) else {
+        let Some(message) = tx.string(FieldId::Data) else {
             return vec![tx.reply_error("missing message")];
         };
         let options = tx
@@ -311,8 +310,7 @@ impl Session {
         if self.message_flood_banned(tx, state).await {
             return vec![tx.reply(vec![])];
         }
-        let encoding = self.encoding();
-        let Some(message) = tx.string(FieldId::Data, encoding) else {
+        let Some(message) = tx.string(FieldId::Data) else {
             return vec![tx.reply_error("missing message")];
         };
 
@@ -420,17 +418,11 @@ mod tests {
 
         let reply = &session.on_get_client_info_text(&request, &state).await[0];
         assert_eq!(
-            reply
-                .received(encoding)
-                .string(FieldId::UserName, encoding)
-                .unwrap(),
+            reply.received(encoding).string(FieldId::UserName).unwrap(),
             "Bob"
         );
         assert!(reply.field(FieldId::UserID).is_none());
-        let text = reply
-            .received(encoding)
-            .string(FieldId::Data, encoding)
-            .unwrap();
+        let text = reply.received(encoding).string(FieldId::Data).unwrap();
         assert!(text.contains("Nickname:   Bob"));
         assert!(text.contains("Name:       Bobby"));
         assert!(text.contains("Account:    bob"));
@@ -507,10 +499,7 @@ mod tests {
         );
 
         let reply = &session.on_get_client_info_text(&request, &state).await[0];
-        let text = reply
-            .received(encoding)
-            .string(FieldId::Data, encoding)
-            .unwrap();
+        let text = reply.received(encoding).string(FieldId::Data).unwrap();
         assert!(text.contains(
             "-------- File Downloads ---------\r\rfirst.txt             0%   <1K\r\r\
              ------- Folder Downloads --------\r\rNone.\r\r\
@@ -550,10 +539,7 @@ mod tests {
         );
 
         let reply = &session.on_get_client_info_text(&request, &state).await[0];
-        let text = reply
-            .received(encoding)
-            .string(FieldId::Data, encoding)
-            .unwrap();
+        let text = reply.received(encoding).string(FieldId::Data).unwrap();
         assert!(text.contains("Account:    (guest)"));
         assert!(text.contains("Name:       (none)"));
         assert!(!text.contains("Version:"));
@@ -625,10 +611,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a DisconnectMsg push notifying the target of the ban");
         assert_eq!(
-            notice
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            notice.received(encoding).string(FieldId::Data).unwrap(),
             "You are permanently banned on this server."
         );
         assert_eq!(
@@ -671,10 +654,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a DisconnectMsg push notifying the target of the ban");
         assert_eq!(
-            notice
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            notice.received(encoding).string(FieldId::Data).unwrap(),
             "You are temporarily banned on this server."
         );
     }
@@ -808,10 +788,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Msg push");
         assert_eq!(
-            delivered
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            delivered.received(encoding).string(FieldId::Data).unwrap(),
             "hi there"
         );
         assert!(
@@ -879,10 +856,7 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0]
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            replies[0].received(encoding).string(FieldId::Data).unwrap(),
             "Bob does not accept private messages."
         );
         assert_eq!(
@@ -926,10 +900,7 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0]
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            replies[0].received(encoding).string(FieldId::Data).unwrap(),
             "At lunch, back soon."
         );
         assert_eq!(
@@ -946,10 +917,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("automatic response still lets the message through");
         assert_eq!(
-            delivered
-                .received(encoding)
-                .string(FieldId::Data, encoding)
-                .unwrap(),
+            delivered.received(encoding).string(FieldId::Data).unwrap(),
             "hi there"
         );
     }
@@ -1053,14 +1021,8 @@ mod tests {
         let bytes =
             |tx: &Transaction<Received>| tx.field(FieldId::Data).unwrap().as_bytes().to_vec();
         assert_ne!(bytes(&sjis_data), bytes(&utf8_data));
-        assert_eq!(
-            sjis_data.string(FieldId::Data, sjis).as_deref(),
-            Some(konnichiwa)
-        );
-        assert_eq!(
-            utf8_data.string(FieldId::Data, utf8).as_deref(),
-            Some(konnichiwa)
-        );
+        assert_eq!(sjis_data.string(FieldId::Data).as_deref(), Some(konnichiwa));
+        assert_eq!(utf8_data.string(FieldId::Data).as_deref(), Some(konnichiwa));
     }
 
     #[tokio::test]
@@ -1089,7 +1051,7 @@ mod tests {
             sent.received(encoding)
                 .field(FieldId::Data)
                 .unwrap()
-                .as_string(encoding),
+                .as_string(),
             "server going down"
         );
 

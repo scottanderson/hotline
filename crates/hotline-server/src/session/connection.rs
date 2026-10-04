@@ -473,9 +473,8 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
-        let encoding = self.encoding();
-        let login = tx.login(encoding);
-        let password = tx.password(encoding);
+        let login = tx.login();
+        let password = tx.password();
 
         // An empty login field means "guest", same as the client omitting it.
         let login = login
@@ -526,7 +525,7 @@ impl Session {
 
         // A named login with an icon, or a pre-150 client, joins right away.
         let icon = tx.icon().unwrap_or(0);
-        let name = tx.name(encoding);
+        let name = tx.name();
         let named = name.as_deref().is_some_and(|name| !name.is_empty()) && icon != 0;
         if named || !modern {
             let selfinfo = self.complete_join(name, icon, state).await;
@@ -573,8 +572,7 @@ impl Session {
         state: &SharedState,
     ) -> Vec<Transaction> {
         let icon = tx.icon().unwrap_or(0);
-        let encoding = self.encoding();
-        let name = tx.name(encoding);
+        let name = tx.name();
         let selfinfo = self.complete_join(name, icon, state).await;
         self.record_activity(Activity::Connect, state).await;
         let mut replies = vec![tx.reply(vec![]), selfinfo];
@@ -666,8 +664,7 @@ impl Session {
         if self.flood_banned(FloodEvent::NameChange, state).await {
             return vec![];
         }
-        let encoding = self.encoding();
-        if let Some(name) = tx.name(encoding) {
+        if let Some(name) = tx.name() {
             self.name = name.into();
         }
         let icon = tx.icon().unwrap_or(0);
@@ -679,7 +676,7 @@ impl Session {
         self.refuses_pm = options.contains(UserChangeOptions::REFUSE_PM);
         self.refuses_chat = options.contains(UserChangeOptions::REFUSE_CHAT);
         self.automatic_response = options.contains(UserChangeOptions::AUTO_RESPONSE).then(|| {
-            tx.string(FieldId::AutomaticResponse, encoding)
+            tx.string(FieldId::AutomaticResponse)
                 .filter(|text| !text.is_empty())
                 .unwrap_or_else(|| {
                     "I'm not able to respond right now. Please try later!".to_string()
@@ -919,9 +916,7 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0]
-                .received(encoding)
-                .string(FieldId::ServerName, encoding),
+            replies[0].received(encoding).string(FieldId::ServerName),
             Some(String::new())
         );
     }
@@ -952,10 +947,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
         assert_eq!(
-            notify
-                .received(encoding)
-                .string(FieldId::UserName, encoding)
-                .unwrap(),
+            notify.received(encoding).string(FieldId::UserName).unwrap(),
             "Alice"
         );
         assert_eq!(
@@ -1163,7 +1155,7 @@ mod tests {
         assert_eq!(
             replies[0]
                 .received(text_encoding::DEFAULT)
-                .string(FieldId::ErrorText, text_encoding::DEFAULT),
+                .string(FieldId::ErrorText),
             Some("Incorrect login.".to_string())
         );
         let kick = rx
@@ -1222,7 +1214,7 @@ mod tests {
         assert_eq!(
             replies[0]
                 .received(text_encoding::DEFAULT)
-                .string(FieldId::ErrorText, text_encoding::DEFAULT),
+                .string(FieldId::ErrorText),
             Some("Incorrect login.".to_string())
         );
         assert!(rx.try_recv().is_ok());
@@ -1274,10 +1266,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("agreed should announce a join");
         assert_eq!(
-            notify
-                .received(encoding)
-                .string(FieldId::UserName, encoding)
-                .unwrap(),
+            notify.received(encoding).string(FieldId::UserName).unwrap(),
             "Alice"
         );
         assert!(matches!(session.state, SessionState::Joined));
@@ -1422,9 +1411,7 @@ mod tests {
             b"URL "
         );
         assert_eq!(
-            banner
-                .received(encoding)
-                .string(FieldId::ServerBannerUrl, encoding),
+            banner.received(encoding).string(FieldId::ServerBannerUrl),
             Some("https://example.com/banner.jpg".to_string())
         );
     }

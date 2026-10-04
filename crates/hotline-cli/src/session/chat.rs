@@ -33,8 +33,7 @@ impl ClientSession {
     /// [`myTran_ChatMsg`]: hotline_proto::Opcode::ChatMsg
     /// [`myField_ChatID`]: hotline_proto::FieldId::ChatID
     pub(super) fn room_chat_msg(&mut self, tx: &Transaction<Received>) -> bool {
-        let encoding = self.encoding.get();
-        let text = tx.string(FieldId::Data, encoding).unwrap_or_default();
+        let text = tx.string(FieldId::Data).unwrap_or_default();
         let Some(room) = self.push_room(tx) else {
             return false;
         };
@@ -49,7 +48,6 @@ impl ClientSession {
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     pub(super) fn apply_invite_to_chat(&mut self, tx: &Transaction<Received>) {
-        let encoding = self.encoding.get();
         let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
             return;
         };
@@ -59,7 +57,7 @@ impl ClientSession {
             return;
         }
         let from = tx
-            .string(FieldId::UserName, encoding)
+            .string(FieldId::UserName)
             .unwrap_or_else(|| "someone".to_string());
         self.push(
             format!("{from} invited you to a private chat"),
@@ -75,7 +73,7 @@ impl ClientSession {
     ///
     /// [`myTran_NotifyChatChangeUser`]: hotline_proto::Opcode::NotifyChatChangeUser
     pub(super) fn apply_notify_chat_change_user(&mut self, tx: &Transaction<Received>) {
-        let Some(user) = tx.user_entry(self.encoding.get()) else {
+        let Some(user) = tx.user_entry() else {
             return;
         };
         let Some(room) = self.push_room(tx) else {
@@ -110,8 +108,7 @@ impl ClientSession {
     ///
     /// [`myTran_NotifyChatSubject`]: hotline_proto::Opcode::NotifyChatSubject
     pub(super) fn apply_notify_chat_subject(&mut self, tx: &Transaction<Received>) {
-        let encoding = self.encoding.get();
-        let Some(subject) = tx.string(FieldId::ChatSubject, encoding) else {
+        let Some(subject) = tx.string(FieldId::ChatSubject) else {
             return;
         };
         match self.push_room(tx) {

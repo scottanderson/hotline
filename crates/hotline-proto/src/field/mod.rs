@@ -7,7 +7,8 @@
 //! A field is in one of two states. A [`Built`] field holds a typed
 //! [`FieldValue`], so `Debug` shows the real value, and its text stays text
 //! until [`Field::encode`]. A [`Received`] field holds the bytes read off the
-//! wire until a reader such as [`Field::as_string`] interprets them.
+//! wire and the connection's encoding, until a reader such as
+//! [`Field::as_string`] interprets them.
 
 use crate::error::{ProtoError, Result};
 use crate::numbers::decode as decode_number;
@@ -25,9 +26,19 @@ pub use value::FieldValue;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Built(FieldValue);
 
-/// The state of a field read off the wire: its bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Received(Vec<u8>);
+/// The state of a field read off the wire: its bytes, and the encoding
+/// of the connection that read them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Received {
+    bytes: Vec<u8>,
+    encoding: &'static Encoding,
+}
+
+impl std::fmt::Debug for Received {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Received").field(&self.bytes).finish()
+    }
+}
 
 /// A single transaction parameter, [`Built`] or [`Received`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,21 +137,29 @@ impl Field {
     pub fn received(&self, encoding: &'static Encoding) -> Field<Received> {
         Field {
             id: self.id,
-            state: Received(self.state.0.encode(encoding)),
+            state: Received {
+                bytes: self.state.0.encode(encoding),
+                encoding,
+            },
         }
     }
 }
 
 impl Field<Received> {
+    /// The encoding of the connection that read this field.
+    pub const fn encoding(&self) -> &'static Encoding {
+        self.state.encoding
+    }
+
     /// Interpret this field as deobfuscated text.
-    pub fn as_deobfuscated_string(&self, encoding: &'static Encoding) -> String {
-        text_encoding::decode(encoding, &xor_ff(&self.state.0))
+    pub fn as_deobfuscated_string(&self) -> String {
+        text_encoding::decode(self.encoding(), &xor_ff(&self.state.bytes))
     }
 
     /// Interpret this field's data as `u16`. `None` unless the payload
     /// is exactly 2 bytes.
     pub fn as_u16(&self) -> Option<u16> {
-        let bytes: [u8; 2] = self.state.0.as_slice().try_into().ok()?;
+        let bytes: [u8; 2] = self.state.bytes.as_slice().try_into().ok()?;
         Some(u16::from_be_bytes(bytes))
     }
 
@@ -148,7 +167,7 @@ impl Field<Received> {
     /// payload, since a value that happens to be small is free to
     /// arrive encoded in the shorter width.
     pub fn as_u32(&self) -> Option<u32> {
-        decode_number(&self.state.0)
+        decode_number(&self.state.bytes)
     }
 
     /// Interpret this field's data as the 64-bit [`myField_UserAccess`] (110)
@@ -157,26 +176,31 @@ impl Field<Received> {
     ///
     /// [`myField_UserAccess`]: crate::FieldId::UserAccess
     pub fn as_u64(&self) -> Option<u64> {
-        let bytes: [u8; 8] = self.state.0.as_slice().try_into().ok()?;
+        let bytes: [u8; 8] = self.state.bytes.as_slice().try_into().ok()?;
         Some(u64::from_be_bytes(bytes))
     }
 
-    /// Interpret this field's data as text, decoding it as `encoding`. The
-    /// wire has no mandated text encoding; a legacy client picks its own,
+    /// Interpret this field's data as text in [`Field::encoding`]. The wire
+    /// has no mandated text encoding; a legacy client picks its own,
     /// communicated out of band from the field itself (see
     /// `hotline_codec::TransactionCodec`).
-    pub fn as_string(&self, encoding: &'static Encoding) -> String {
-        text_encoding::decode(encoding, &self.state.0)
+    pub fn as_string(&self) -> String {
+        text_encoding::decode(self.encoding(), &self.state.bytes)
     }
 
     /// [`Field::as_string`] plus the byte length of the text on the wire.
-    pub fn as_string_len(&self, encoding: &'static Encoding) -> (String, usize) {
-        (self.as_string(encoding), self.state.0.len())
+    pub fn as_string_len(&self) -> (String, usize) {
+        (self.as_string(), self.state.bytes.len())
     }
 
     /// The raw bytes.
     pub fn as_bytes(&self) -> &[u8] {
-        &self.state.0
+        &self.state.bytes
+    }
+
+    /// Interpret this field's data as a nested [`FieldList`].
+    pub fn as_field_list(&self) -> Result<FieldList<Received>> {
+        FieldList::decode(self.as_bytes(), self.encoding())
     }
 
     /// Byte length of the fixed prefix before a field's variable-length
@@ -185,7 +209,7 @@ impl Field<Received> {
 
     /// Decode one field from the front of `buf`, returning the field and
     /// the number of bytes consumed.
-    pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
+    pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<(Self, usize)> {
         let prefix: [u8; Self::PREFIX_LEN] = buf
             .get(..Self::PREFIX_LEN)
             .map(TryInto::try_into)
@@ -209,7 +233,10 @@ impl Field<Received> {
         Ok((
             Self {
                 id: FieldId::from(id),
-                state: Received(buf[Self::PREFIX_LEN..total].to_vec()),
+                state: Received {
+                    bytes: buf[Self::PREFIX_LEN..total].to_vec(),
+                    encoding,
+                },
             },
             total,
         ))
@@ -232,9 +259,9 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let f = Field::string(FieldId::UserName, "RustHL");
         let encoded = f.encode(encoding).unwrap();
-        let (decoded, consumed) = Field::decode(&encoded).unwrap();
+        let (decoded, consumed) = Field::decode(&encoded, encoding).unwrap();
         assert_eq!(consumed, encoded.len());
-        assert_eq!(decoded.as_string(encoding), "RustHL");
+        assert_eq!(decoded.as_string(), "RustHL");
     }
 
     #[test]
@@ -242,8 +269,8 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         // e-acute exists in Mac OS Roman, so it round-trips exactly.
         let f = Field::string(FieldId::Data, "h\u{e9}llo");
-        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
-        assert_eq!(decoded.as_string(encoding), "h\u{e9}llo");
+        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap(), encoding).unwrap();
+        assert_eq!(decoded.as_string(), "h\u{e9}llo");
     }
 
     #[test]
@@ -251,8 +278,8 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         // An emoji has no Mac OS Roman encoding, so it's lossy.
         let f = Field::string(FieldId::Data, "hello \u{1f389}");
-        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
-        assert_eq!(decoded.as_string(encoding), "hello ?");
+        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap(), encoding).unwrap();
+        assert_eq!(decoded.as_string(), "hello ?");
     }
 
     #[test]
@@ -309,17 +336,14 @@ mod tests {
         let f = Field::obfuscated_string(FieldId::UserLogin, "guest");
         // On the wire it must NOT be the plaintext bytes.
         assert_ne!(f.encode(encoding).unwrap()[4..], *b"guest");
-        assert_eq!(
-            f.received(encoding).as_deobfuscated_string(encoding),
-            "guest"
-        );
+        assert_eq!(f.received(encoding).as_deobfuscated_string(), "guest");
     }
 
     #[test]
     fn decoded_field_debug_shows_raw_bytes_not_a_guess() {
         let encoding = text_encoding::DEFAULT;
         let f = Field::string(FieldId::UserName, "x");
-        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap()).unwrap();
+        let (decoded, _) = Field::decode(&f.encode(encoding).unwrap(), encoding).unwrap();
         let debug = format!("{decoded:?}");
         // Decode can't know this was text: it stays bytes until
         // something calls as_string() on it.
@@ -341,7 +365,11 @@ mod tests {
     #[test]
     fn decoding_an_unrecognized_field_id_preserves_its_wire_value() {
         let f = Field::bytes(FieldId::Unknown(9999), vec![1, 2, 3]);
-        let (decoded, _) = Field::decode(&f.encode(text_encoding::DEFAULT).unwrap()).unwrap();
+        let (decoded, _) = Field::decode(
+            &f.encode(text_encoding::DEFAULT).unwrap(),
+            text_encoding::DEFAULT,
+        )
+        .unwrap();
         assert_eq!(decoded.id, FieldId::Unknown(9999));
     }
 }

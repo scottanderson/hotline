@@ -44,8 +44,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let encoding = self.encoding();
-        let Some((text, len)) = tx.string_len(FieldId::Data, encoding) else {
+        let Some((text, len)) = tx.string_len(FieldId::Data) else {
             return vec![tx.reply_error("missing post text")];
         };
         if len > 8192 {
@@ -73,8 +72,7 @@ impl Session {
         &self,
         tx: &Transaction<Received>,
     ) -> std::result::Result<HlPath, &'static str> {
-        let encoding = self.encoding();
-        match tx.news_path(encoding) {
+        match tx.news_path() {
             Some(Ok(path)) => Ok(path),
             Some(Err(_)) => Err("bad path"),
             None => Ok(HlPath::default()),
@@ -162,8 +160,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_FLDR) {
             return vec![tx.reply_error(reason)];
         }
-        let encoding = self.encoding();
-        let Some(name) = tx.string(FieldId::FileName, encoding) else {
+        let Some(name) = tx.string(FieldId::FileName) else {
             return vec![tx.reply_error("missing name")];
         };
         let path = match self.news_path(tx) {
@@ -187,8 +184,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_CAT) {
             return vec![tx.reply_error(reason)];
         }
-        let encoding = self.encoding();
-        let Some(name) = tx.news_category_name(encoding) else {
+        let Some(name) = tx.news_category_name() else {
             return vec![tx.reply_error("missing name")];
         };
         let path = match self.news_path(tx) {
@@ -236,7 +232,7 @@ impl Session {
         // The reply always echoes back the requested flavor, but only
         // includes the article body when it matches what's stored.
         let encoding = self.encoding();
-        let requested_flavor = tx.news_article_flavor(encoding).unwrap_or_default();
+        let requested_flavor = tx.news_article_flavor().unwrap_or_default();
         fields.push(Field::string(
             FieldId::NewsArtDataFlav,
             requested_flavor.clone(),
@@ -264,7 +260,7 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let encoding = self.encoding();
-        let Some(title) = tx.news_article_title(encoding) else {
+        let Some(title) = tx.news_article_title() else {
             return vec![tx.reply_error("missing title")];
         };
         let Some(data) = tx.news_article_data() else {
@@ -276,7 +272,7 @@ impl Session {
         // this field; a real client always sends it, so defaulting to a
         // real MIME type here instead is a deliberate divergence.
         let mime_type = tx
-            .news_article_flavor(encoding)
+            .news_article_flavor()
             .unwrap_or_else(|| "text/plain".to_string());
         let data = body_from_wire(&mime_type, data, encoding);
 
@@ -347,10 +343,7 @@ mod tests {
         let get = request(Opcode::GetMsgs, 2, vec![]);
         let reply = session.on_get_msgs(&get, &state).await;
         let [reply] = reply.try_into().unwrap();
-        let news = reply
-            .received(encoding)
-            .string(FieldId::Data, encoding)
-            .unwrap();
+        let news = reply.received(encoding).string(FieldId::Data).unwrap();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
     }
@@ -445,9 +438,7 @@ mod tests {
         assert_eq!(replies.len(), 1);
         assert!(replies[0].is_error());
         assert_eq!(
-            replies[0]
-                .received(encoding)
-                .string(FieldId::ErrorText, encoding),
+            replies[0].received(encoding).string(FieldId::ErrorText),
             Some("Your news post was not accepted because it was too big.".to_string())
         );
         assert!(state.news().await.is_empty(), "oversized post not stored");
@@ -619,9 +610,7 @@ mod tests {
             .map(|f| f.as_bytes().to_vec());
         assert_eq!(data, Some(b"body text".to_vec()));
         assert_eq!(
-            reply
-                .received(encoding)
-                .string(FieldId::NewsArtTitle, encoding),
+            reply.received(encoding).string(FieldId::NewsArtTitle),
             Some("Hello".to_string())
         );
 

@@ -32,7 +32,7 @@ impl Session {
         // `myField_FilePath` (202) is optional in the request; root is assumed
         // when absent.
         let encoding = self.encoding();
-        let dir = match tx.file_path(FieldId::FilePath, encoding) {
+        let dir = match tx.file_path(FieldId::FilePath) {
             Some(Ok(dir)) => dir,
             Some(Err(_)) => return vec![tx.reply_error("bad path")],
             None => HlPath::default(),
@@ -80,10 +80,7 @@ impl Session {
         &self,
         tx: &Transaction<Received>,
     ) -> std::result::Result<(String, HlPath), &'static str> {
-        let encoding = self.encoding();
-        let name = tx
-            .string(FieldId::FileName, encoding)
-            .ok_or("missing file name")?;
+        let name = tx.string(FieldId::FileName).ok_or("missing file name")?;
         let dir = self.path_field(tx, FieldId::FilePath)?;
         Ok((name, dir))
     }
@@ -543,9 +540,8 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let encoding = self.encoding();
-        let new_name = tx.string(FieldId::FileNewName, encoding);
-        let comment = tx.string(FieldId::FileComment, encoding);
+        let new_name = tx.string(FieldId::FileNewName);
+        let comment = tx.string(FieldId::FileComment);
         if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
         }
@@ -616,9 +612,8 @@ impl Session {
             Ok(dir) => dir,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let encoding = self.encoding();
         let link_name = tx
-            .string(FieldId::FileNewName, encoding)
+            .string(FieldId::FileNewName)
             .unwrap_or_else(|| name.clone());
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
@@ -2112,10 +2107,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert_eq!(
-            reply
-                .received(encoding)
-                .string(FieldId::FileName, encoding)
-                .unwrap(),
+            reply.received(encoding).string(FieldId::FileName).unwrap(),
             "a.txt"
         );
         assert_eq!(
@@ -2157,10 +2149,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert_eq!(
-            reply
-                .received(encoding)
-                .string(FieldId::FileName, encoding)
-                .unwrap(),
+            reply.received(encoding).string(FieldId::FileName).unwrap(),
             "a.txt"
         );
     }
@@ -2367,9 +2356,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(
-            reply
-                .received(encoding)
-                .string(FieldId::FileComment, encoding),
+            reply.received(encoding).string(FieldId::FileComment),
             Some("a note".to_string())
         );
     }

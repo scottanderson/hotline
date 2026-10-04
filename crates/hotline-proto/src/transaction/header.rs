@@ -6,6 +6,7 @@
 use crate::error::Result;
 use crate::field::{FieldList, Received};
 use crate::opcode::TransactionType;
+use crate::text_encoding::Encoding;
 use crate::transaction::Transaction;
 use crate::wire::PacketReader;
 
@@ -97,8 +98,13 @@ impl TransactionHeader {
     /// Finish decoding into a [`Transaction`]: `body` is the field count
     /// followed by the fields, either one part's own bytes or several
     /// parts reassembled.
-    pub fn finish_decode(self, body: &[u8]) -> Result<Transaction<Received>> {
-        let fields = FieldList::decode(body)?;
+    /// Text fields keep `encoding`.
+    pub fn finish_decode(
+        self,
+        body: &[u8],
+        encoding: &'static Encoding,
+    ) -> Result<Transaction<Received>> {
+        let fields = FieldList::decode(body, encoding)?;
         Ok(Transaction {
             r#type: self.r#type,
             trans: self.trans,

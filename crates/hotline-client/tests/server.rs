@@ -109,15 +109,8 @@ async fn send_instant_msg_reaches_its_target() {
     alice.send_instant_msg(bob_id, "hi bob").await.unwrap();
 
     let msg = next_push(&mut bob_events, Opcode::ServerMsg).await;
-    let encoding = hotline_proto::text_encoding::DEFAULT;
-    assert_eq!(
-        msg.string(FieldId::Data, encoding).as_deref(),
-        Some("hi bob")
-    );
-    assert_eq!(
-        msg.string(FieldId::UserName, encoding).as_deref(),
-        Some("alice")
-    );
+    assert_eq!(msg.string(FieldId::Data).as_deref(), Some("hi bob"));
+    assert_eq!(msg.string(FieldId::UserName).as_deref(), Some("alice"));
 }
 
 #[tokio::test]
@@ -133,9 +126,8 @@ async fn disconnect_user_with_a_ban_tells_the_user_why() {
         .unwrap();
 
     let msg = next_push(&mut bob_events, Opcode::DisconnectMsg).await;
-    let encoding = hotline_proto::text_encoding::DEFAULT;
     assert_eq!(
-        msg.string(FieldId::Data, encoding).as_deref(),
+        msg.string(FieldId::Data).as_deref(),
         Some("You are temporarily banned on this server.")
     );
 }
@@ -170,9 +162,8 @@ async fn user_broadcast_reaches_every_user() {
     admin.user_broadcast("server going down").await.unwrap();
 
     let msg = next_push(&mut bob_events, Opcode::UserBroadcast).await;
-    let encoding = hotline_proto::text_encoding::DEFAULT;
     assert_eq!(
-        msg.string(FieldId::Data, encoding).as_deref(),
+        msg.string(FieldId::Data).as_deref(),
         Some("server going down")
     );
 }
@@ -192,16 +183,12 @@ async fn set_client_user_info_renames_and_sets_the_automatic_response() {
     };
     bob.set_client_user_info(&info).await.unwrap();
     let change = next_push(&mut alice_events, Opcode::NotifyChangeUser).await;
-    let encoding = hotline_proto::text_encoding::DEFAULT;
-    let user = change.user_entry(encoding).unwrap();
+    let user = change.user_entry().unwrap();
     assert_eq!((&*user.name, user.icon), ("robert", 7));
 
     alice.send_instant_msg(user.user_id, "hi").await.unwrap();
     let reply = next_push(&mut alice_events, Opcode::ServerMsg).await;
-    assert_eq!(
-        reply.string(FieldId::Data, encoding).as_deref(),
-        Some("away")
-    );
+    assert_eq!(reply.string(FieldId::Data).as_deref(), Some("away"));
 }
 
 #[tokio::test]
@@ -229,8 +216,7 @@ async fn old_post_news_reaches_readers_and_get_msgs() {
     alice.old_post_news("hello news").await.unwrap();
 
     let post = next_push(&mut bob_events, Opcode::NewMsg).await;
-    let encoding = hotline_proto::text_encoding::DEFAULT;
-    let entry = post.string(FieldId::Data, encoding).unwrap();
+    let entry = post.string(FieldId::Data).unwrap();
     assert!(entry.contains("hello news"), "{entry:?}");
     assert!(alice.get_msgs().await.unwrap().contains("hello news"));
 }
@@ -690,7 +676,6 @@ async fn a_private_chat_room_carries_chat_subject_and_leave() {
     let addr = start_server().await;
     let (alice, mut alice_events) = join_as(addr, "admin", "admin", "alice").await;
     let (bob, mut bob_events) = join_as(addr, "admin", "admin", "bob").await;
-    let encoding = hotline_proto::text_encoding::DEFAULT;
 
     let bob_id = user_id(&alice, "bob").await;
     let room = alice.invite_new_chat(bob_id).await.unwrap();
@@ -708,13 +693,13 @@ async fn a_private_chat_room_carries_chat_subject_and_leave() {
     alice.send_room_chat(chat_id, "hi room").await.unwrap();
     let msg = next_push(&mut bob_events, Opcode::ChatMsg).await;
     assert_eq!(msg.field(FieldId::ChatID).unwrap().as_u32(), Some(chat_id));
-    let text = msg.string(FieldId::Data, encoding).unwrap();
+    let text = msg.string(FieldId::Data).unwrap();
     assert!(text.contains("hi room"), "{text:?}");
 
     alice.set_chat_subject(chat_id, "plans").await.unwrap();
     let subject = next_push(&mut bob_events, Opcode::NotifyChatSubject).await;
     assert_eq!(
-        subject.string(FieldId::ChatSubject, encoding).as_deref(),
+        subject.string(FieldId::ChatSubject).as_deref(),
         Some("plans")
     );
 

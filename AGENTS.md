@@ -44,7 +44,7 @@ voice. This applies to replies, comments, docs, and commit messages.
 ## Code
 
 - `hotline-proto` has no I/O and no async.
-- Every text conversion takes the connection's `&'static Encoding`.
+- Every text conversion uses the connection's `&'static Encoding`.
 - `Session` holds per-connection state. `SharedState` holds shared
   state. Do not keep a copy of a fact in both.
 - Sessions reach each other only through the `SharedState` channel for

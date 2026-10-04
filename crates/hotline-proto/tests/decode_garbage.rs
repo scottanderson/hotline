@@ -54,9 +54,9 @@ fn decoders_reject_garbage_without_panicking() {
         let _ = HtxfHeader::decode(&buf);
         let _ = ClientHandshake::decode(&buf);
         let _ = ServerHandshake::decode(&buf);
-        let _ = Field::decode(&buf);
-        let _ = FieldList::decode(&buf);
-        let _ = Transaction::decode_from_client(&buf);
-        let _ = Transaction::decode_from_server(&buf);
+        let _ = Field::decode(&buf, DEFAULT);
+        let _ = FieldList::decode(&buf, DEFAULT);
+        let _ = Transaction::decode_from_client(&buf, DEFAULT);
+        let _ = Transaction::decode_from_server(&buf, DEFAULT);
     }
 }

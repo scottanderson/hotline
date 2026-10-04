@@ -56,8 +56,7 @@ impl HotlineClient {
     pub async fn get_file_info(&self, path: &HlPath, name: &str) -> Result<FileInfo> {
         let fields = self.name_fields(path, name)?;
         let reply = self.request(Opcode::GetFileInfo, fields).await?;
-        let encoding = self.encoding().get();
-        let text = |id| reply.string(id, encoding).map(Into::into);
+        let text = |id| reply.string(id).map(Into::into);
         Ok(FileInfo {
             name: text(FieldId::FileName).unwrap_or_else(|| name.into()),
             size: reply

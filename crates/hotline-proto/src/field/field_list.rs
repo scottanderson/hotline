@@ -82,7 +82,7 @@ impl FieldList {
 
 impl FieldList<Received> {
     /// Decode the `count`-prefixed field list [`FieldList::encode`] produces.
-    pub fn decode(body: &[u8]) -> Result<Self> {
+    pub fn decode(body: &[u8], encoding: &'static Encoding) -> Result<Self> {
         let prefix: [u8; Self::COUNT_LEN] = body
             .get(..Self::COUNT_LEN)
             .map(TryInto::try_into)
@@ -98,7 +98,7 @@ impl FieldList<Received> {
         let mut offset = Self::COUNT_LEN;
         let mut fields = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            let (field, consumed) = Field::decode(&body[offset..])?;
+            let (field, consumed) = Field::decode(&body[offset..], encoding)?;
             offset += consumed;
             fields.push(field);
         }
@@ -106,14 +106,14 @@ impl FieldList<Received> {
     }
 
     /// `id`'s field as text, if present.
-    pub fn string(&self, id: FieldId, encoding: &'static Encoding) -> Option<String> {
-        self.field(id).map(|f| f.as_string(encoding))
+    pub fn string(&self, id: FieldId) -> Option<String> {
+        self.field(id).map(Field::as_string)
     }
 
-    /// `id`'s field as text plus its `encoding` byte length, if present.
+    /// `id`'s field as text plus its byte length, if present.
     /// See [`Field::as_string_len`].
-    pub fn string_len(&self, id: FieldId, encoding: &'static Encoding) -> Option<(String, usize)> {
-        self.field(id).map(|f| f.as_string_len(encoding))
+    pub fn string_len(&self, id: FieldId) -> Option<(String, usize)> {
+        self.field(id).map(Field::as_string_len)
     }
 }
 

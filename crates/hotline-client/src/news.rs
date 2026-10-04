@@ -59,10 +59,9 @@ impl HotlineClient {
     pub async fn get_news_art_name_list(&self, path: &HlPath) -> Result<Vec<NewsArticleSummary>> {
         let fields = self.news_path_field(path)?.into_iter().collect();
         let reply = self.request(Opcode::GetNewsArtNameList, fields).await?;
-        let encoding = self.encoding().get();
         match reply.field(FieldId::NewsArtListData) {
             Some(field) => {
-                let listing = NewsArticleListData::decode(field.as_bytes(), encoding)?;
+                let listing = NewsArticleListData::decode(field.as_bytes(), field.encoding())?;
                 Ok(listing.articles)
             }
             None => Ok(Vec::new()),
@@ -83,8 +82,7 @@ impl HotlineClient {
         fields.push(Field::u32(FieldId::NewsArtID, id));
         fields.push(Field::string(FieldId::NewsArtDataFlav, flavor));
         let reply = self.request(Opcode::GetNewsArtData, fields).await?;
-        let encoding = self.encoding().get();
-        let text = |id| reply.string(id, encoding).unwrap_or_default().into();
+        let text = |id| reply.string(id).unwrap_or_default().into();
         let article_id = |field| {
             reply
                 .field(field)

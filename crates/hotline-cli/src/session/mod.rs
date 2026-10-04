@@ -134,7 +134,7 @@ impl ClientSession {
     fn show_unmatched_error(&mut self, tx: &Transaction<Received>) {
         if tx.is_error() {
             let text = tx
-                .string(FieldId::ErrorText, self.encoding.get())
+                .string(FieldId::ErrorText)
                 .unwrap_or_else(|| "unknown error".to_string());
             self.push(text, LineKind::Error);
         }
@@ -184,8 +184,7 @@ impl ClientSession {
     ///
     /// [`myTran_ShowAgreement`]: hotline_proto::Opcode::ShowAgreement
     fn apply_show_agreement(&mut self, tx: &Transaction<Received>) -> EventOutcome {
-        let encoding = self.encoding.get();
-        match tx.string(FieldId::Data, encoding) {
+        match tx.string(FieldId::Data) {
             Some(text) => {
                 self.show_agreement(text);
                 EventOutcome::Applied
@@ -198,9 +197,8 @@ impl ClientSession {
     ///
     /// [`myTran_ServerMsg`]: hotline_proto::Opcode::ServerMsg
     fn apply_server_msg(&mut self, tx: &Transaction<Received>) {
-        let encoding = self.encoding.get();
-        let text = tx.string(FieldId::Data, encoding);
-        let from = tx.string(FieldId::UserName, encoding);
+        let text = tx.string(FieldId::Data);
+        let from = tx.string(FieldId::UserName);
         match (from, text) {
             // A private message carries the sender's name; a
             // permission-denied or admin broadcast notice
@@ -222,8 +220,7 @@ impl ClientSession {
     ///
     /// [`myTran_NewMsg`]: hotline_proto::Opcode::NewMsg
     fn apply_new_msg(&mut self, tx: &Transaction<Received>) {
-        let encoding = self.encoding.get();
-        if let Some(entry) = tx.string(FieldId::Data, encoding) {
+        if let Some(entry) = tx.string(FieldId::Data) {
             if let Some(news) = &mut self.news {
                 news.insert_str(0, &entry);
             }
@@ -238,8 +235,7 @@ impl ClientSession {
         if self.room_chat_msg(tx) {
             return;
         }
-        let encoding = self.encoding.get();
-        if let Some(text) = tx.string(FieldId::Data, encoding) {
+        if let Some(text) = tx.string(FieldId::Data) {
             self.push_lines(&display_text(&text), LineKind::Chat);
         }
     }
@@ -248,9 +244,8 @@ impl ClientSession {
     ///
     /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
     fn apply_disconnect_msg(&mut self, tx: &Transaction<Received>) -> EventOutcome {
-        let encoding = self.encoding.get();
         let reason = tx
-            .string(FieldId::Data, encoding)
+            .string(FieldId::Data)
             .unwrap_or_else(|| "disconnected by the server".to_string());
         self.push(display_text(&reason), LineKind::Error);
         EventOutcome::Quit
@@ -261,8 +256,7 @@ impl ClientSession {
     ///
     /// [`myTran_ServerBanner`]: hotline_proto::Opcode::ServerBanner
     fn apply_server_banner(&mut self, tx: &Transaction<Received>) {
-        let encoding = self.encoding.get();
-        if let Some(url) = tx.string(FieldId::ServerBannerUrl, encoding) {
+        if let Some(url) = tx.string(FieldId::ServerBannerUrl) {
             self.push(format!("server banner: {url}"), LineKind::System);
         }
     }
@@ -290,7 +284,7 @@ impl ClientSession {
     ///
     /// [`myTran_NotifyChangeUser`]: hotline_proto::Opcode::NotifyChangeUser
     fn apply_notify_change_user(&mut self, tx: &Transaction<Received>) {
-        let Some(user) = tx.user_entry(self.encoding.get()) else {
+        let Some(user) = tx.user_entry() else {
             return;
         };
         match self.users.iter().position(|u| u.user_id == user.user_id) {
@@ -334,8 +328,7 @@ impl ClientSession {
         self.access = tx.access().unwrap_or(self.access);
 
         // This session's own uid/icon/name.
-        let encoding = self.encoding.get();
-        if let Some(result) = tx.user_list_entry(encoding) {
+        if let Some(result) = tx.user_list_entry() {
             match result {
                 Ok(entry) => match self.users.iter_mut().find(|u| u.user_id == entry.user_id) {
                     Some(existing) => *existing = entry,
@@ -353,11 +346,10 @@ impl ClientSession {
     ///
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
     fn apply_user_broadcast(&mut self, tx: &Transaction<Received>) {
-        let encoding = self.encoding.get();
-        let Some(text) = tx.string(FieldId::Data, encoding) else {
+        let Some(text) = tx.string(FieldId::Data) else {
             return;
         };
-        let from = match tx.string(FieldId::UserName, encoding) {
+        let from = match tx.string(FieldId::UserName) {
             Some(name) => format!(" from {name}"),
             None => String::new(),
         };
@@ -667,7 +659,7 @@ mod tests {
         session.set_client_user_info(&client, info.clone()).await;
         assert_eq!(session.user_info(), info);
         let change = test_support::next_push(&mut events, Opcode::NotifyChangeUser).await;
-        let user = change.user_entry(client.encoding().get()).unwrap();
+        let user = change.user_entry().unwrap();
         assert_eq!((&*user.name, user.icon), ("you", 3));
     }
 
