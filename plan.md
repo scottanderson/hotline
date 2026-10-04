@@ -94,6 +94,11 @@ below, in priority order.
   and `ProcessTran_SetChatSubject` send no reply, and its client does
   not wait for one. `hls` replies, with an error when the request
   fails. `hlc` sends both without waiting and shows an error reply.
+- **No HTTP tunnel listeners.** openline also listens on the base port
+  plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`,
+  `UHttpTransport.cp`). Only openline's own client uses the tunnel.
+  `HLProtocol.md` does not document it, mhxd does not implement it, and
+  no client is at hand to test against, so `hls` does not support it.
 - **Move and alias check drop boxes.** openline's `ProcessTran_MoveFile`
   and `ProcessTran_MakeFileAlias` check no drop box. A user who guessed
   a name could move a file out of a drop box, or alias it, and then
@@ -136,28 +141,20 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-2. **No HTTP tunnel listeners.** openline also listens on the base port
-   plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`).
-   The tunnel is openline's `UHttpTransport.cp`, about 5,000 lines with
-   `UHttpTransact.cp`. A client joins a `GET` and a `POST` connection by
-   a GUID in the URL. Data then moves in coded `SData` blocks with
-   padding. `HLProtocol.md` does not document it and mhxd does not
-   implement it, so no client is at hand to test against.
-
-3. **`hls` does not map file names like openline.** openline's Windows
+2. **`hls` does not map file names like openline.** openline's Windows
    `UFileSys::ValidateFileName` (`UFileSys(W).cp`) turns `\ / : * ? "
    < > |`, control bytes, and a leading `.` into `-`, and strips
    trailing dots and spaces. `hls` rejects a separator, `.`, `..`, and
    a `:` on Windows, but it does not map names. On Windows, a reserved
    name such as `CON` or `NUL` still passes.
 
-4. **No transaction negotiates a connection's text encoding.** The
+3. **No transaction negotiates a connection's text encoding.** The
    user's decision is Mac OS Roman on the wire unless the client
    negotiates another encoding. `EncodingHandle` can change a
    connection's encoding, but no request does it yet. openline has no
    such request, so the design needs a decision first.
 
-5. **Decide how `hlc` finds a partial upload.** openline's client
+4. **Decide how `hlc` finds a partial upload.** openline's client
    (`CMyFileListView::HasPartialFile`) matches a listed file with type
    `HTft` and creator `HTLC`, under its name with or without `.hpf`. It
    matches a folder only with type `fldr` and creator 0. `hlc` matches
