@@ -14,7 +14,9 @@ use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
 use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
-use hotline_proto::{ClientHandshake, Field, FieldId, Opcode, ServerHandshake, Transaction};
+use hotline_proto::{
+    ClientHandshake, Field, FieldId, HtxfHeader, Opcode, ServerHandshake, Transaction,
+};
 
 use crate::ban::Ban;
 use crate::client_info_text::ClientInfoText;
@@ -656,6 +658,13 @@ impl HotlineClient {
         let encoding = self.encoding.get();
         Ok(Some(Field::bytes(id, path.encode(encoding)?)))
     }
+}
+
+/// Connect to the `HTXF` address `addr` and send `header`.
+pub(crate) async fn open_transfer(addr: SocketAddr, header: HtxfHeader) -> Result<TcpStream> {
+    let mut stream = TcpStream::connect(addr).await?;
+    stream.write_all(&header.encode()).await?;
+    Ok(stream)
 }
 
 /// A chat reply's [`myField_ChatID`] (114).

@@ -3,9 +3,8 @@
 use std::net::SocketAddr;
 
 use hotline_proto::{Encoding, HtxfHeader, HtxfType};
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
+use crate::client::open_transfer;
 use crate::error::Result;
 use crate::folder_receiver::FolderReceiver;
 
@@ -38,13 +37,12 @@ impl FolderDownload {
         let Some(reference) = self.reference else {
             return Ok(FolderReceiver::new(None, 0, self.encoding));
         };
-        let mut stream = TcpStream::connect(self.transfer_addr).await?;
         let header = HtxfHeader {
             reference,
             len: 0,
             transfer_type: HtxfType::Folder,
         };
-        stream.write_all(&header.encode()).await?;
+        let stream = open_transfer(self.transfer_addr, header).await?;
         Ok(FolderReceiver::new(
             Some(stream),
             self.item_count,

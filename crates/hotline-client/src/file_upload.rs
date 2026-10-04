@@ -5,8 +5,8 @@ use std::net::SocketAddr;
 use hotline_proto::htxf::FLAT_FILE_HEADER_LEN;
 use hotline_proto::{HtxfHeader, HtxfType};
 use tokio::io::{AsyncRead, AsyncWriteExt};
-use tokio::net::TcpStream;
 
+use crate::client::open_transfer;
 use crate::error::Result;
 use crate::flat_file::write_flat_file;
 
@@ -39,13 +39,12 @@ impl FileUpload {
     /// Returns once the server closes the connection.
     pub async fn send<R: AsyncRead + Unpin>(self, data: &mut R) -> Result<u64> {
         let remaining = self.file_size - self.offset;
-        let mut stream = TcpStream::connect(self.transfer_addr).await?;
         let header = HtxfHeader {
             reference: self.reference,
             len: Self::transfer_size(remaining).unwrap_or(u32::MAX),
             transfer_type: HtxfType::File,
         };
-        stream.write_all(&header.encode()).await?;
+        let mut stream = open_transfer(self.transfer_addr, header).await?;
         let sent = write_flat_file(&mut stream, data, remaining).await?;
         stream.shutdown().await?;
         tokio::io::copy(&mut stream, &mut tokio::io::sink()).await?;

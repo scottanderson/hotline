@@ -3,9 +3,9 @@
 use std::net::SocketAddr;
 
 use hotline_proto::{HtxfHeader, HtxfType};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::AsyncWrite;
 
+use crate::client::open_transfer;
 use crate::error::Result;
 use crate::flat_file::read_flat_file;
 
@@ -33,13 +33,12 @@ impl FileDownload {
     /// Returns the number of bytes written. A queued download waits on the
     /// open connection until the server starts it.
     pub async fn receive<W: AsyncWrite + Unpin>(self, out: &mut W) -> Result<u64> {
-        let mut stream = TcpStream::connect(self.transfer_addr).await?;
         let header = HtxfHeader {
             reference: self.reference,
             len: 0,
             transfer_type: HtxfType::File,
         };
-        stream.write_all(&header.encode()).await?;
+        let mut stream = open_transfer(self.transfer_addr, header).await?;
         read_flat_file(&mut stream, out).await
     }
 }
