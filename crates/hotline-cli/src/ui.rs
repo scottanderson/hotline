@@ -277,7 +277,7 @@ fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border(view.focus == Focus::Files))
-        .title(format!("files /{}", session.file_path.components.join("/")));
+        .title(format!("files {}", session.folder_text()));
     let Some(files) = &session.files else {
         frame.render_widget(Paragraph::new("loading files").block(block), area);
         return;

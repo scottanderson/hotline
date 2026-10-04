@@ -477,12 +477,17 @@ impl ClientSession {
     ///
     /// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
     pub async fn disconnect_user(&mut self, client: &HotlineClient, user_id: u16, ban: Ban) {
-        let name = match self.users.iter().find(|u| u.user_id == user_id) {
-            Some(user) => user.name.clone(),
-            None => format!("#{user_id}").into(),
-        };
+        let name = self.user_name(user_id);
         if let Err(e) = client.disconnect_user(user_id, &name, ban).await {
             self.push(format!("failed to disconnect {name}: {e}"), LineKind::Error);
+        }
+    }
+
+    /// The name of the user `user_id`, or `#<user_id>` for a user not in the list.
+    pub fn user_name(&self, user_id: u16) -> String {
+        match self.users.iter().find(|u| u.user_id == user_id) {
+            Some(user) => user.name.to_string(),
+            None => format!("#{user_id}"),
         }
     }
 
@@ -495,10 +500,7 @@ impl ClientSession {
         let text = wire_text(text);
         match client.send_instant_msg(user_id, &text).await {
             Ok(()) => {
-                let to = match self.users.iter().find(|u| u.user_id == user_id) {
-                    Some(user) => user.name.to_string(),
-                    None => format!("#{user_id}"),
-                };
+                let to = self.user_name(user_id);
                 self.push_lines(&format!("[PM to {to}] {text}"), LineKind::Chat);
             }
             Err(e) => self.push(format!("failed to send: {e}"), LineKind::Error),

@@ -945,7 +945,9 @@ impl View {
                         return self.choose(user_id, item, users);
                     }
                 }
-                Modal::Info { .. } | Modal::FileInfo(_) => self.modal = None,
+                Modal::Info { .. } | Modal::FileInfo(_) | Modal::Article { .. } => {
+                    self.modal = None
+                }
                 Modal::InstantMsg { .. }
                 | Modal::Disconnect { .. }
                 | Modal::FileEdit { .. }
@@ -965,7 +967,6 @@ impl View {
                 | Modal::Options(_)
                 | Modal::OpenAccount { .. }
                 | Modal::DeleteAccount { .. } => {}
-                Modal::Article { .. } => self.modal = None,
             }
             return Action::None;
         }

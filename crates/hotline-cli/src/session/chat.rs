@@ -141,16 +141,13 @@ impl ClientSession {
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     pub async fn invite_to_chat(&mut self, client: &HotlineClient, chat_id: u32, user_id: u16) {
-        let name = match self.users.iter().find(|u| u.user_id == user_id) {
-            Some(user) => user.name.to_string(),
-            None => format!("#{user_id}"),
-        };
-        let line = match client.invite_to_chat(chat_id, user_id).await {
+        let name = self.user_name(user_id);
+        let (text, kind) = match client.invite_to_chat(chat_id, user_id).await {
             Ok(()) => (format!("invited {name}"), LineKind::System),
             Err(e) => (format!("failed to invite {name}: {e}"), LineKind::Error),
         };
         if let Some(room) = self.room_mut(chat_id) {
-            room.push(line.0, line.1);
+            room.push(text, kind);
         }
     }
 

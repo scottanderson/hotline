@@ -62,14 +62,8 @@ impl ClientSession {
                 return None;
             }
         };
-        let queue = match download.waiting_count {
-            0 => String::new(),
-            n => format!(", {n} ahead in the queue"),
-        };
-        let from = match offset {
-            0 => String::new(),
-            n => format!(" from byte {n}"),
-        };
+        let queue = queue_text(download.waiting_count);
+        let from = from_text(offset);
         self.push(format!("downloading {name}{from}{queue}"), LineKind::System);
 
         let queued = self.queued_flag(download.waiting_count);
@@ -138,10 +132,7 @@ impl ClientSession {
                 return None;
             }
         };
-        let queue = match download.waiting_count {
-            0 => String::new(),
-            n => format!(", {n} ahead in the queue"),
-        };
+        let queue = queue_text(download.waiting_count);
         let items = download.item_count;
         self.push(
             format!("downloading {name} ({items} items{queue})"),
@@ -258,10 +249,7 @@ impl ClientSession {
             let text = format!("cannot read {}: {e}", local.display());
             return self.push(text, LineKind::Error);
         }
-        let from = match offset {
-            0 => String::new(),
-            n => format!(" from byte {n}"),
-        };
+        let from = from_text(offset);
         self.push(format!("uploading {name}{from}"), LineKind::System);
 
         let done = done.clone();
@@ -473,6 +461,22 @@ fn local_name(name: &str) -> String {
     }
 }
 
+/// `, <n> ahead in the queue` for a queued transfer, or nothing.
+fn queue_text(waiting_count: u32) -> String {
+    match waiting_count {
+        0 => String::new(),
+        n => format!(", {n} ahead in the queue"),
+    }
+}
+
+/// ` from byte <n>` for a resumed transfer, or nothing.
+fn from_text(offset: u32) -> String {
+    match offset {
+        0 => String::new(),
+        n => format!(" from byte {n}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,13 +484,13 @@ mod tests {
 
     #[test]
     fn walk_local_lists_each_folder_before_its_items() {
-        let root = std::env::temp_dir().join(format!("hlc-walk-{}", std::process::id()));
-        std::fs::create_dir_all(root.join("Sub")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("Sub")).unwrap();
         std::fs::write(root.join("a.txt"), b"alpha").unwrap();
         std::fs::write(root.join("Sub").join("b.txt"), b"be").unwrap();
 
-        let items = walk_local(&root);
-        std::fs::remove_dir_all(&root).unwrap();
+        let items = walk_local(root);
 
         let items: Vec<_> = items
             .unwrap()
