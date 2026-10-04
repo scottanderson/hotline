@@ -205,8 +205,8 @@ impl Session {
         replies
     }
 
-    /// [`myTran_InviteToChat`] (113): invite another user to a room this session
-    /// belongs to.
+    /// [`myTran_InviteToChat`] (113): invite each listed user to a room this
+    /// session belongs to. The reply is an error only when no user is invited.
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     pub(super) async fn on_invite_to_chat(
@@ -224,25 +224,31 @@ impl Session {
             .field(FieldId::ChatID)
             .and_then(Field::as_u32)
             .unwrap_or(0);
-        let target_id = tx
-            .field(FieldId::UserID)
-            .and_then(Field::as_u16)
-            .unwrap_or(0);
-        if chat_id == 0 || target_id == 0 {
+        let target_ids: Vec<u16> = tx
+            .fields(FieldId::UserID)
+            .filter_map(Field::as_u16)
+            .filter(|&id| id != 0)
+            .collect();
+        if chat_id == 0 || target_ids.is_empty() {
             return vec![tx.reply_error("missing chat id or user id")];
-        }
-        if let Err(reason) = state
-            .invite_to_chat_room(chat_id, self.user_id, target_id)
-            .await
-        {
-            return vec![tx.reply_error(reason)];
         }
 
         let mut replies = Vec::new();
-        if let Some(target) = state.user(target_id).await {
-            if let Some(bounce) = self.refusal_bounce(target_id, &target, true) {
-                replies.push(bounce);
+        let mut invited = false;
+        let mut refusal = None;
+        for target_id in target_ids {
+            if let Err(reason) = state
+                .invite_to_chat_room(chat_id, self.user_id, target_id)
+                .await
+            {
+                refusal = Some(reason);
+                continue;
             }
+            invited = true;
+            let Some(target) = state.user(target_id).await else {
+                continue;
+            };
+            replies.extend(self.refusal_bounce(target_id, &target, true));
             if !target.refuses_chat {
                 state
                     .send_to(
@@ -258,6 +264,9 @@ impl Session {
                     )
                     .await;
             }
+        }
+        if let Some(reason) = refusal.filter(|_| !invited) {
+            return vec![tx.reply_error(reason)];
         }
         replies.push(tx.reply(vec![]));
         replies
@@ -1416,6 +1425,39 @@ mod tests {
             notify.received(encoding).string(FieldId::ChatSubject),
             Some("Welcome".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn invite_to_chat_invites_every_listed_user_and_skips_a_failed_one() {
+        let alice = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(alice.user_id).await;
+        state.insert_user(test_user(2, "Bob")).await;
+        state.insert_user(test_user(3, "Carol")).await;
+        let mut bob_rx = state.register_recipient(2).await;
+        let mut carol_rx = state.register_recipient(3).await;
+
+        let invite = request(
+            Opcode::InviteToChat,
+            1,
+            vec![
+                Field::u32(FieldId::ChatID, chat_id),
+                Field::u16(FieldId::UserID, 2),
+                Field::u16(FieldId::UserID, 99),
+                Field::u16(FieldId::UserID, 3),
+            ],
+        );
+        let replies = alice.on_invite_to_chat(&invite, &state).await;
+
+        assert!(!replies.last().unwrap().is_error());
+        for rx in [&mut bob_rx, &mut carol_rx] {
+            let push = rx
+                .try_recv()
+                .ok()
+                .and_then(RecipientMessage::into_push)
+                .expect("expected an InviteToChat push");
+            assert_eq!(push.r#type(), TransactionType::Push(Opcode::InviteToChat));
+        }
     }
 
     #[tokio::test]

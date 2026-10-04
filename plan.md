@@ -1097,6 +1097,12 @@ one-shared-room model.
      only when the sender was a member of the room, as openline's
      `ProcessTran_LeaveChat` checks `clientList.RemoveItem`.
 
+146. `myTran_InviteToChat` (113) invites every listed `myField_UserID`
+     (103) and skips a target that it cannot invite, as openline's
+     `ProcessTran_InviteToChat` does. The reply is an error only when no
+     target is invited, so a request with one target gets the same error
+     as before.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
