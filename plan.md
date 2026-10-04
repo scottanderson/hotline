@@ -1103,6 +1103,10 @@ one-shared-room model.
      target is invited, so a request with one target gets the same error
      as before.
 
+147. The `myTran_JoinChat` (115) reply sends `myField_ChatSubject` (115)
+     first and only when the room has a subject, and it lists only
+     members with a name, as openline's `ProcessTran_JoinChat` does.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

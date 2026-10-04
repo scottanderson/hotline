@@ -273,7 +273,8 @@ impl Session {
     }
 
     /// [`myTran_JoinChat`] (115): join a room, accepting an invitation or
-    /// supplying its password.
+    /// supplying its password. The reply has the room's subject, if it has
+    /// one, then each member with a name.
     ///
     /// [`myTran_JoinChat`]: hotline_proto::Opcode::JoinChat
     pub(super) async fn on_join_chat(
@@ -307,11 +308,18 @@ impl Session {
 
         let room = state.chat_room(chat_id).await.unwrap_or_default();
         let mut fields = Vec::new();
+        if !room.subject.is_empty() {
+            fields.push(Field::string(FieldId::ChatSubject, room.subject));
+        }
         for member_id in room.members {
             if member_id != self.user_id {
                 state.send_to(member_id, notify.clone()).await;
             }
-            if let Some(entry) = state.user(member_id).await {
+            if let Some(entry) = state
+                .user(member_id)
+                .await
+                .filter(|entry| !entry.name.is_empty())
+            {
                 fields.push(Field::bytes(
                     FieldId::UserNameWithInfo,
                     UserNameWithInfo {
@@ -324,7 +332,6 @@ impl Session {
                 ));
             }
         }
-        fields.push(Field::string(FieldId::ChatSubject, room.subject));
         tx.reply(fields)
     }
 
@@ -1082,13 +1089,7 @@ mod tests {
             vec![1, 2],
             "should list members in join order, not reversed"
         );
-        assert_eq!(
-            join_reply
-                .received(encoding)
-                .string(FieldId::ChatSubject)
-                .unwrap(),
-            ""
-        );
+        assert!(join_reply.field(FieldId::ChatSubject).is_none());
 
         let members = state.chat_room_members(chat_id).await.unwrap();
         assert_eq!(members.len(), 2);
@@ -1199,6 +1200,33 @@ mod tests {
         assert!(
             reply.is_error(),
             "a password isn't the only gate - no password set still requires an invite"
+        );
+    }
+
+    #[tokio::test]
+    async fn join_chat_sends_the_subject_only_when_the_room_has_one() {
+        let bob = test_session("Bob", Access::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+        let join = request(
+            Opcode::JoinChat,
+            1,
+            vec![Field::u32(FieldId::ChatID, chat_id)],
+        );
+
+        state.invite(chat_id, bob.user_id).await;
+        let reply = bob.on_join_chat(&join, &state).await;
+        assert!(reply.field(FieldId::ChatSubject).is_none());
+
+        state.set_chat_subject(chat_id, "Topic".to_string()).await;
+        state.invite(chat_id, bob.user_id).await;
+        let reply = bob.on_join_chat(&join, &state).await;
+        assert_eq!(
+            reply
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ChatSubject)
+                .as_deref(),
+            Some("Topic")
         );
     }
 
