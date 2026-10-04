@@ -617,7 +617,7 @@ impl Session {
             .unwrap_or_else(|| name.clone());
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
-            .symlink_file(requester, &dir, &name, &link_dir, &link_name)
+            .symlink_file(requester, &dir, &name, &link_dir, &link_name, self.access)
             .await
         {
             return vec![tx.reply_error(reason)];
@@ -1153,6 +1153,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn move_file_out_of_a_dropbox_is_denied_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let r#move = request(
+            Opcode::MoveFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "secret.txt"),
+                Field::bytes(
+                    FieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
+                ),
+                Field::bytes(
+                    FieldId::FileNewPath,
+                    HlPath::default().encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_move_file(&r#move, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            state
+                .file_exists(requester, &HlPath::new(["Drop Box"]), "secret.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn make_file_alias_of_a_dropbox_file_is_denied_without_view_drop_boxes() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let alias = request(
+            Opcode::MakeFileAlias,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "secret.txt"),
+                Field::bytes(
+                    FieldId::FilePath,
+                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
+                ),
+                Field::bytes(
+                    FieldId::FileNewPath,
+                    HlPath::default().encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_make_file_alias(&alias, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), "secret.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
     async fn get_file_info_in_a_dropbox_is_denied_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
@@ -1273,39 +1351,6 @@ mod tests {
                 .file_exists(requester, &HlPath::new(["Drop Box"]), "a.txt")
                 .await
         );
-    }
-
-    #[tokio::test]
-    async fn make_file_alias_of_a_dropbox_target_succeeds_without_view_drop_boxes() {
-        let encoding = text_encoding::DEFAULT;
-        let files = crate::file::InMemoryFileProvider::default();
-        files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
-        let state = state_with_files(files);
-        let mut access = Access::all();
-        access.remove(Access::VIEW_DROP_BOXES);
-        let session = test_session("Alice", access);
-
-        let symlink = request(
-            Opcode::MakeFileAlias,
-            1,
-            vec![
-                Field::string(FieldId::FileName, "secret.txt"),
-                Field::bytes(
-                    FieldId::FilePath,
-                    HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
-                ),
-                Field::bytes(
-                    FieldId::FileNewPath,
-                    HlPath::default().encode(encoding).unwrap(),
-                ),
-            ],
-        );
-        let [reply] = session
-            .on_make_file_alias(&symlink, &state)
-            .await
-            .try_into()
-            .unwrap();
-        assert!(!reply.is_error());
     }
 
     fn folder_request(

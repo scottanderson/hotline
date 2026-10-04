@@ -713,7 +713,8 @@ impl SharedState {
     }
 
     /// Move a file or folder into another directory, keeping its name,
-    /// after checking the matching privilege.
+    /// after checking drop box visibility of the source and the matching
+    /// privilege.
     pub async fn move_file(
         &self,
         requester: FileRequester<'_>,
@@ -722,6 +723,7 @@ impl SharedState {
         to_dir: &HlPath,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
+        dropbox_access(dir, Some(name), access)?;
         let info = self
             .files
             .info(requester, dir, name)
@@ -741,7 +743,8 @@ impl SharedState {
     }
 
     /// Create an alias at `link_dir`/`link_name` pointing at
-    /// `target_dir`/`target_name`.
+    /// `target_dir`/`target_name`, after checking drop box visibility of
+    /// the target.
     pub async fn symlink_file(
         &self,
         requester: FileRequester<'_>,
@@ -749,7 +752,9 @@ impl SharedState {
         target_name: &str,
         link_dir: &HlPath,
         link_name: &str,
+        access: Access,
     ) -> Result<(), Cow<'static, str>> {
+        dropbox_access(target_dir, Some(target_name), access)?;
         self.files
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await

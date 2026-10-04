@@ -94,6 +94,11 @@ below, in priority order.
   and `ProcessTran_SetChatSubject` send no reply, and its client does
   not wait for one. `hls` replies, with an error when the request
   fails. `hlc` sends both without waiting and shows an error reply.
+- **Move and alias check drop boxes.** openline's `ProcessTran_MoveFile`
+  and `ProcessTran_MakeFileAlias` check no drop box. A user who guessed
+  a name could move a file out of a drop box, or alias it, and then
+  download it. `hls` refuses both without `VIEW_DROP_BOXES` when the
+  source is in a drop box. Delete matches openline: it shows nothing.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -139,29 +144,20 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-3. **Decide whether move, alias, and delete check drop boxes.**
-   `myTran_MoveFile` (208), `myTran_MakeFileAlias` (209), and
-   `myTran_DeleteFile` (204) do not check `VIEW_DROP_BOXES`, like
-   openline's `ProcessTran_MoveFile`, `ProcessTran_MakeFileAlias`, and
-   `ProcessTran_DeleteFile`. A user who guesses a name in a drop box
-   can move it out, or alias it, and then download it. A check through
-   `dropbox_access` on the source path would close this, as a
-   deliberate divergence.
-
-4. **`hls` does not map file names like openline.** openline's Windows
+3. **`hls` does not map file names like openline.** openline's Windows
    `UFileSys::ValidateFileName` (`UFileSys(W).cp`) turns `\ / : * ? "
    < > |`, control bytes, and a leading `.` into `-`, and strips
    trailing dots and spaces. `hls` rejects a separator, `.`, `..`, and
    a `:` on Windows, but it does not map names. On Windows, a reserved
    name such as `CON` or `NUL` still passes.
 
-5. **No transaction negotiates a connection's text encoding.** The
+4. **No transaction negotiates a connection's text encoding.** The
    user's decision is Mac OS Roman on the wire unless the client
    negotiates another encoding. `EncodingHandle` can change a
    connection's encoding, but no request does it yet. openline has no
    such request, so the design needs a decision first.
 
-6. **Decide how `hlc` finds a partial upload.** openline's client
+5. **Decide how `hlc` finds a partial upload.** openline's client
    (`CMyFileListView::HasPartialFile`) matches a listed file with type
    `HTft` and creator `HTLC`, under its name with or without `.hpf`. It
    matches a folder only with type `fldr` and creator 0. `hlc` matches
@@ -890,6 +886,10 @@ one-shared-room model.
      skips an item that resolves to a folder or file it already has,
      such as an alias of an ancestor. `FileProvider::resolved_path`
      gives the resolved path; the in-memory provider has no aliases.
+
+113. `myTran_MoveFile` (208) and `myTran_MakeFileAlias` (209) check
+     drop box visibility of the source, as a deliberate divergence.
+     `myTran_DeleteFile` (204) still does not, like openline.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
