@@ -32,10 +32,6 @@ impl Session {
             return Vec::new();
         }
         let encoding = self.encoding();
-        let Some(message) = tx.string(FieldId::Data) else {
-            return Vec::new();
-        };
-
         if let Err(reason) = self.access.require(Access::SEND_CHAT) {
             // Sent only to the denied client; `myTran_ChatSend` (105) gets no reply.
             return vec![Transaction::push(
@@ -47,6 +43,7 @@ impl Session {
             )];
         }
 
+        let message = tx.string(FieldId::Data).unwrap_or_default();
         let chat_id = tx.field(FieldId::ChatID).and_then(Field::as_u32);
         if let Some((prefix, command_line)) = config
             .console_prefix
@@ -806,6 +803,43 @@ mod tests {
             .unwrap()
             .as_string();
         assert!(text.contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn chat_send_without_data_relays_an_empty_line() {
+        let session = test_session("Alice", Access::default());
+        let state = SharedState::default();
+        let request = request(Opcode::ChatSend, 1, vec![]);
+
+        let mut rx = state.register_recipient(1).await;
+        session
+            .on_chat_send(&request, &state, &ServerConfig::default())
+            .await;
+
+        let relay = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push")
+            .received(text_encoding::DEFAULT);
+        assert_eq!(
+            relay.string(FieldId::Data).as_deref(),
+            Some("\r        Alice:  ")
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_send_without_send_chat_or_data_sends_a_server_notice() {
+        let session = test_session("Alice", Access::empty());
+        let state = SharedState::default();
+        let request = request(Opcode::ChatSend, 1, vec![]);
+
+        let reply = session
+            .on_chat_send(&request, &state, &ServerConfig::default())
+            .await;
+
+        assert_eq!(reply.len(), 1);
+        assert_eq!(reply[0].r#type(), TransactionType::Push(Opcode::ServerMsg));
     }
 
     #[tokio::test]

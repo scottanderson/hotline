@@ -1041,6 +1041,10 @@ No items are open.
      `ProcessTran_DownloadFile` does. It registers no transfer and
      records no download.
 
+138. `myTran_ChatSend` (105) checks `SEND_CHAT` before it reads
+     `myField_Data` (101), and relays a request with no `myField_Data`
+     as an empty line, as openline's `ProcessTran_ChatSend` does.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
