@@ -11,7 +11,7 @@ mod user_change_options;
 mod user_flags;
 mod user_name;
 
-pub use date::HlDate;
+pub use date::{civil_from_days, days_from_civil, HlDate};
 pub use file_name::{FileNameWithInfo, PARTIAL_CREATOR, PARTIAL_TYPE};
 pub use news_article_list_data::NewsArticleListData;
 pub use news_article_summary::{NewsArticleSummary, NewsFlavor};

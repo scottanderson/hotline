@@ -27,7 +27,7 @@ use crate::console::fields::{
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::file::{
-    BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem, PARTIAL_TYPE,
+    BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem, ItemTimes, PARTIAL_TYPE,
 };
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
@@ -637,6 +637,16 @@ impl SharedState {
             .await
             .ok_or("file or folder not found.")?;
         Ok(info)
+    }
+
+    /// When `dir`/`name` was made and last changed.
+    pub async fn file_times(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> ItemTimes {
+        self.files.times(requester, dir, name).await
     }
 
     /// Delete a file, or a folder and everything under it, after

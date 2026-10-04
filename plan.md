@@ -136,17 +136,11 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **`myTran_GetFileInfo` (206) sends a zero modify date.** openline's
-   `ProcessTran_GetFileInfo` sends the item's real create and modify
-   dates. `on_get_file_info` sends `myField_FileModifyDate` (209) as
-   all zeros, and no `myField_FileCreateDate` (208). The disk has a
-   modify time. A fix needs a `FileProvider` method for the dates, and
-   a `SystemTime` to `HlDate` conversion that the news code can share.
-2. **A single-file upload does not check free disk space.** openline's
+1. **A single-file upload does not check free disk space.** openline's
    `ProcessTran_UploadFile` checks the free space before it accepts an
    upload. hls has no check for a file or a folder upload. A check
    needs a platform call, such as `statvfs` on Unix.
-3. **A permanent ban drops the kicker's note.** openline's
+2. **A permanent ban drops the kicker's note.** openline's
    `ProcessTran_DisconnectUser` stores the `myField_Data` (101) text
    with a permanent ban. `BanRecord` has no field for it, so the ban
    file cannot show why an address is banned.
@@ -976,6 +970,15 @@ one-shared-room model.
      `BuildNewsCatList` does. Each entry is a type byte, 1 for a bundle
      or 10 for a category, then the name
      (`NewsCategoryListEntry::encode_old`).
+
+128. `myTran_GetFileInfo` (206) sends the item's real
+     `myField_FileModifyDate` (209), and its `myField_FileCreateDate`
+     (208) when the provider knows it, as openline's
+     `ProcessTran_GetFileInfo` does. `FileProvider::times` returns
+     `ItemTimes`. The disk provider reads them from the file's metadata,
+     and a provider that keeps no times sends a zero modify date.
+     `HlDate::from(SystemTime)` converts a time, and the news code uses
+     it too.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

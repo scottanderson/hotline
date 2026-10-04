@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 
-use super::{partial_upload_name, BoxedReader, BoxedWriter, FileRequester, FolderItem};
+use super::{partial_upload_name, BoxedReader, BoxedWriter, FileRequester, FolderItem, ItemTimes};
 
 /// Storage backing [`myTran_GetFileNameList`] (200),
 /// [`myTran_DownloadFile`] (202), and [`myTran_UploadFile`] (203).
@@ -171,6 +171,11 @@ pub trait FileProvider: Send + Sync {
         dir: &HlPath,
         name: &str,
     ) -> Option<FileNameWithInfo>;
+
+    /// When `dir`/`name` was made and last changed.
+    async fn times(&self, _requester: FileRequester<'_>, _dir: &HlPath, _name: &str) -> ItemTimes {
+        ItemTimes::default()
+    }
 
     /// Delete a file, or a folder and everything under it. Trusts
     /// `is_dir` rather than re-deriving it, closing a TOCTOU window.

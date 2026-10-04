@@ -1,5 +1,7 @@
 //! File listing, transfer setup, and file/folder maintenance.
 
+use std::time::SystemTime;
+
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::htxf;
 use hotline_proto::types::{self, HlDate, HlPath};
@@ -489,9 +491,9 @@ impl Session {
     }
 
     /// [`myTran_GetFileInfo`] (206): fetch a file or folder's metadata.
-    /// Type/creator/creation date are omitted; nothing in this server persists
-    /// real HFS metadata for them (see `HTXF`'s `INFO` fork). Comment is sent
-    /// when one is stored.
+    /// Type/creator are omitted; nothing in this server persists real HFS
+    /// metadata for them (see `HTXF`'s `INFO` fork). Comment is sent when one
+    /// is stored.
     ///
     /// [`myTran_GetFileInfo`]: hotline_proto::Opcode::GetFileInfo
     pub(super) async fn on_get_file_info(
@@ -518,18 +520,20 @@ impl Session {
             Ok(comment) => comment,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let zero_date = HlDate {
-            year: 0,
-            milliseconds: 0,
-            seconds: 0,
-        }
-        .encode()
-        .to_vec();
+        let times = state.file_times(requester, &dir, &name).await;
+        let date = |time: Option<SystemTime>| {
+            time.map_or(HlDate::default(), HlDate::from)
+                .encode()
+                .to_vec()
+        };
         let mut fields = vec![
             Field::string(FieldId::FileName, info.name),
             Field::u32(FieldId::FileSize, info.size),
-            Field::bytes(FieldId::FileModifyDate, zero_date),
         ];
+        if times.created.is_some() {
+            fields.push(Field::bytes(FieldId::FileCreateDate, date(times.created)));
+        }
+        fields.push(Field::bytes(FieldId::FileModifyDate, date(times.modified)));
         if let Some(comment) = comment {
             fields.push(Field::string(FieldId::FileComment, comment));
         }

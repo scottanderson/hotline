@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 use crate::news::flavor_map::{self, FlavorMapRef};
-use crate::news::iso_date::{self, civil_from_days, days_from_civil};
+use crate::news::iso_date;
 use crate::news::NewsArticle;
 
 /// Longest reply chain, our own limit. Keeps a saved thread within
@@ -114,7 +114,7 @@ impl NewsCategory {
             NewsArticle {
                 parent_id,
                 flags,
-                date: now_as_hl_date(),
+                date: HlDate::from(SystemTime::now()),
                 title: title.into(),
                 poster: poster.into(),
                 data: [(mime_type, data)].into(),
@@ -324,24 +324,6 @@ impl<'de> Deserialize<'de> for NewsCategory {
             articles,
             roots,
         ))
-    }
-}
-
-/// The current time as an [`HlDate`]: `year(2) | milliseconds(2) |
-/// seconds-since-midnight-Jan-1(4)`.
-fn now_as_hl_date() -> HlDate {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let days = (secs / 86400) as i64;
-    let secs_of_day = (secs % 86400) as u32;
-    let (year, _month, _day) = civil_from_days(days);
-    let days_since_jan1 = days - days_from_civil(year, 1, 1);
-    HlDate {
-        year: year as u16,
-        milliseconds: now.subsec_millis() as u16,
-        seconds: days_since_jan1 as u32 * 86400 + secs_of_day,
     }
 }
 

@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 use hotline_server::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
-    FileRequester,
+    FileRequester, ItemTimes,
 };
 use tokio::sync::RwLock;
 
@@ -289,6 +289,19 @@ impl FileProvider for DiskFileProvider {
         })
     }
 
+    async fn times(&self, _requester: FileRequester<'_>, dir: &HlPath, name: &str) -> ItemTimes {
+        let Some(path) = self.resolve_file(dir, name) else {
+            return ItemTimes::default();
+        };
+        match tokio::fs::metadata(&path).await {
+            Ok(metadata) => ItemTimes {
+                created: metadata.created().ok(),
+                modified: metadata.modified().ok(),
+            },
+            Err(_) => ItemTimes::default(),
+        }
+    }
+
     async fn delete(
         &self,
         _requester: FileRequester<'_>,
@@ -432,6 +445,33 @@ mod tests {
 
     fn requester() -> FileRequester<'static> {
         FileRequester { login: "alice" }
+    }
+
+    #[tokio::test]
+    async fn times_reads_the_modify_time() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+
+        let times = provider
+            .times(requester(), &HlPath::default(), "a.txt")
+            .await;
+
+        let modified = std::fs::metadata(dir.path().join("a.txt"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(times.modified, Some(modified));
+        assert_eq!(
+            provider
+                .times(requester(), &HlPath::default(), "missing")
+                .await,
+            ItemTimes::default()
+        );
     }
 
     #[tokio::test]
