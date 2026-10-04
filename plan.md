@@ -1122,6 +1122,10 @@ one-shared-room model.
      first and only when the room has a subject, and it lists only
      members with a name, as openline's `ProcessTran_JoinChat` does.
 
+148. `myTran_LeaveChat` (116) with chat ID 0 does nothing, as openline's
+     `GetChatByID` finds no room for ID 0 in `ProcessTran_LeaveChat`.
+     The sender stays in the main room, and no one gets a notice.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

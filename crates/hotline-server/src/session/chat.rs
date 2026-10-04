@@ -335,7 +335,8 @@ impl Session {
         tx.reply(fields)
     }
 
-    /// [`myTran_LeaveChat`] (116): leave a chat room.
+    /// [`myTran_LeaveChat`] (116): leave a chat room. Chat ID 0, the main
+    /// room, cannot be left.
     ///
     /// [`myTran_LeaveChat`]: hotline_proto::Opcode::LeaveChat
     pub(super) async fn on_leave_chat(
@@ -349,6 +350,9 @@ impl Session {
         let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
+        if chat_id == 0 {
+            return vec![];
+        }
         let Some(remaining) = state.leave_chat_room(chat_id, self.user_id).await else {
             return vec![];
         };
@@ -1121,6 +1125,21 @@ mod tests {
             creator_rx.try_recv().is_err(),
             "must not also broadcast room chat publicly"
         );
+    }
+
+    #[tokio::test]
+    async fn leave_chat_of_the_main_room_does_nothing() {
+        let state = SharedState::default();
+        state.add_chat_member(0, 1).await;
+        state.add_chat_member(0, 2).await;
+        let mut creator_rx = state.register_recipient(1).await;
+        let bob = test_session("Bob", Access::all());
+        let bob = Session { user_id: 2, ..bob };
+
+        let part = request(Opcode::LeaveChat, 1, vec![Field::u32(FieldId::ChatID, 0)]);
+        assert!(bob.on_leave_chat(&part, &state).await.is_empty());
+        assert!(creator_rx.try_recv().is_err());
+        assert!(state.chat_room_members(0).await.unwrap().contains(&2));
     }
 
     #[tokio::test]
