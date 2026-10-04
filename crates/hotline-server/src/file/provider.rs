@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::io;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
@@ -30,8 +32,10 @@ pub trait FileProvider: Send + Sync {
 
     /// Every file and folder under `dir`/`name`, in pre-order, each folder
     /// just before its contents. Each file's size comes from
-    /// [`Self::size`], skipping any entry it rejects. Empty if `name` is a
-    /// file; `None` if it doesn't exist.
+    /// [`Self::size`], skipping any entry it rejects. An entry whose
+    /// [`Self::resolved_path`] the walk already has, such as an alias of an
+    /// ancestor, is skipped. Empty if `name` is a file; `None` if it doesn't
+    /// exist.
     async fn walk(
         &self,
         requester: FileRequester<'_>,
@@ -43,6 +47,8 @@ pub trait FileProvider: Send + Sync {
         if !info.is_folder() {
             return Some(items);
         }
+        let mut seen = HashSet::new();
+        seen.extend(self.resolved_path(requester, dir, name).await);
         let mut root = dir.components.clone();
         root.push(name.to_string());
         let mut stack: Vec<(Vec<String>, FileNameWithInfo)> = Vec::new();
@@ -56,11 +62,16 @@ pub trait FileProvider: Send + Sync {
             let Some((mut path, entry)) = stack.pop() else {
                 break;
             };
+            let dir = HlPath::new(root.iter().chain(&path));
+            if let Some(resolved) = self.resolved_path(requester, &dir, &entry.name).await {
+                if !seen.insert(resolved) {
+                    continue;
+                }
+            }
             let is_folder = entry.is_folder();
             let size = if is_folder {
                 0
             } else {
-                let dir = HlPath::new(root.iter().chain(&path));
                 match self.size(requester, &dir, &entry.name).await {
                     Some(size) => size,
                     None => continue,
@@ -81,6 +92,17 @@ pub trait FileProvider: Send + Sync {
 
     /// Whether a file or folder already exists at this path.
     async fn exists(&self, requester: FileRequester<'_>, dir: &HlPath, name: &str) -> bool;
+
+    /// Where `dir`/`name` leads after its aliases resolve, the same for an
+    /// alias and its target. `None` if the storage has no aliases.
+    async fn resolved_path(
+        &self,
+        _requester: FileRequester<'_>,
+        _dir: &HlPath,
+        _name: &str,
+    ) -> Option<PathBuf> {
+        None
+    }
 
     /// Open a file for reading, for a [`myTran_DownloadFile`] (202) download.
     ///

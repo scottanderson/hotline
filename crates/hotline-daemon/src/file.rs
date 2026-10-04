@@ -158,8 +158,12 @@ impl FileProvider for DiskFileProvider {
         let mut read_dir = tokio::fs::read_dir(&path).await.ok()?;
         let mut entries = Vec::new();
         while let Ok(Some(entry)) = read_dir.next_entry().await {
-            let Ok(metadata) = entry.metadata().await else {
-                continue;
+            let metadata = match tokio::fs::metadata(entry.path()).await {
+                Ok(metadata) => metadata,
+                Err(_) => match entry.metadata().await {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                },
             };
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
@@ -196,6 +200,17 @@ impl FileProvider for DiskFileProvider {
             return false;
         };
         tokio::fs::metadata(&path).await.is_ok()
+    }
+
+    async fn resolved_path(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<PathBuf> {
+        tokio::fs::canonicalize(self.resolve_file(dir, name)?)
+            .await
+            .ok()
     }
 
     async fn open_read(
@@ -476,7 +491,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn walk_skips_a_symlinked_folder() {
+    async fn walk_skips_an_alias_of_an_ancestor() {
         let dir = tempfile::tempdir().unwrap();
         let top = dir.path().join("Top");
         tokio::fs::create_dir(&top).await.unwrap();
@@ -490,6 +505,111 @@ mod tests {
             .await
             .unwrap();
         assert!(items.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_enters_a_symlinked_folder_outside_the_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().join("Top");
+        let other = dir.path().join("Other");
+        tokio::fs::create_dir(&top).await.unwrap();
+        tokio::fs::create_dir(&other).await.unwrap();
+        tokio::fs::write(other.join("inner.txt"), b"x")
+            .await
+            .unwrap();
+        tokio::fs::symlink(&other, top.join("alias")).await.unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let items = provider
+            .walk(requester(), &HlPath::default(), "Top")
+            .await
+            .unwrap();
+        let summary: Vec<_> = items
+            .iter()
+            .map(|i| (i.path.components.join("/"), i.is_folder))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("alias".to_string(), true),
+                ("alias/inner.txt".to_string(), false),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_skips_an_alias_of_a_file_it_already_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().join("Top");
+        tokio::fs::create_dir(&top).await.unwrap();
+        tokio::fs::write(top.join("a.txt"), b"x").await.unwrap();
+        tokio::fs::symlink(top.join("a.txt"), top.join("b.txt"))
+            .await
+            .unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let items = provider
+            .walk(requester(), &HlPath::default(), "Top")
+            .await
+            .unwrap();
+        let names: Vec<_> = items.iter().map(|i| i.path.components.join("/")).collect();
+        assert_eq!(names, ["a.txt"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_shows_a_symlinked_folder_as_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir(dir.path().join("real"))
+            .await
+            .unwrap();
+        tokio::fs::symlink(dir.path().join("real"), dir.path().join("alias"))
+            .await
+            .unwrap();
+        tokio::fs::symlink(dir.path().join("gone"), dir.path().join("broken"))
+            .await
+            .unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let entries = provider
+            .list(requester(), &HlPath::default())
+            .await
+            .unwrap();
+        let kinds: Vec<_> = entries.iter().map(|e| (&*e.name, e.is_folder())).collect();
+        assert_eq!(kinds, [("alias", true), ("broken", false), ("real", true)]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_of_a_symlinked_folder_keeps_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir(dir.path().join("real"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("real").join("keep.txt"), b"x")
+            .await
+            .unwrap();
+        tokio::fs::symlink(dir.path().join("real"), dir.path().join("alias"))
+            .await
+            .unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        provider
+            .delete(requester(), &HlPath::default(), "alias", true)
+            .await
+            .unwrap();
+        assert!(!dir.path().join("alias").exists());
+        assert!(dir.path().join("real").join("keep.txt").exists());
     }
 
     #[cfg(unix)]

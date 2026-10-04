@@ -33,8 +33,6 @@ below, in priority order.
 - **Folder transfer drops some of openline's safeguards.** No
   disk-space check before a `myTran_UploadFldr` (213), and no skip for
   an item whose path is too long for openline's fixed 1024-byte buffer.
-  A folder download also skips a symlinked folder in `hls`; openline
-  resolves aliases and skips only one that loops back to an ancestor.
 - **Any received byte restarts a folder upload's idle timer.** openline's
   `ProcessFldrUploads` restarts it only while file data arrives, not
   while item headers do.
@@ -141,15 +139,7 @@ one-shared-room model.
    padding. `HLProtocol.md` does not document it and mhxd does not
    implement it, so no client is at hand to test against.
 
-3. **`hls` lists a folder alias as a file.** `DiskFileProvider::list`
-   reads `DirEntry::metadata`, which does not follow a symlink. So a
-   folder made by `myTran_MakeFileAlias` (209) shows as a small file,
-   and a client does not open it as a folder. openline resolves an
-   alias for the list. The fix makes `list` follow a symlink. Then the
-   folder walk must skip a folder that loops back to an ancestor, as
-   openline does, or a folder download never ends.
-
-4. **Decide whether move, alias, and delete check drop boxes.**
+3. **Decide whether move, alias, and delete check drop boxes.**
    `myTran_MoveFile` (208), `myTran_MakeFileAlias` (209), and
    `myTran_DeleteFile` (204) do not check `VIEW_DROP_BOXES`, like
    openline's `ProcessTran_MoveFile`, `ProcessTran_MakeFileAlias`, and
@@ -158,20 +148,20 @@ one-shared-room model.
    `dropbox_access` on the source path would close this, as a
    deliberate divergence.
 
-5. **`hls` does not map file names like openline.** openline's Windows
+4. **`hls` does not map file names like openline.** openline's Windows
    `UFileSys::ValidateFileName` (`UFileSys(W).cp`) turns `\ / : * ? "
    < > |`, control bytes, and a leading `.` into `-`, and strips
    trailing dots and spaces. `hls` rejects a separator, `.`, `..`, and
    a `:` on Windows, but it does not map names. On Windows, a reserved
    name such as `CON` or `NUL` still passes.
 
-6. **No transaction negotiates a connection's text encoding.** The
+5. **No transaction negotiates a connection's text encoding.** The
    user's decision is Mac OS Roman on the wire unless the client
    negotiates another encoding. `EncodingHandle` can change a
    connection's encoding, but no request does it yet. openline has no
    such request, so the design needs a decision first.
 
-7. **Decide how `hlc` finds a partial upload.** openline's client
+6. **Decide how `hlc` finds a partial upload.** openline's client
    (`CMyFileListView::HasPartialFile`) matches a listed file with type
    `HTft` and creator `HTLC`, under its name with or without `.hpf`. It
    matches a folder only with type `fldr` and creator 0. `hlc` matches
@@ -893,6 +883,13 @@ one-shared-room model.
      the list. A 320 entry has no count, so `hlc` shows 0. openline's
      client lists a type other than bundle (1) or category (10) with a
      plain icon. `hlc` has no row for one, so it leaves it out.
+
+112. `hls` lists a folder alias as a folder. `DiskFileProvider::list`
+     follows a symlink, and lists a broken one as a file. Like
+     openline's `CMyDLItem`, a folder download resolves each alias and
+     skips an item that resolves to a folder or file it already has,
+     such as an alias of an ancestor. `FileProvider::resolved_path`
+     gives the resolved path; the in-memory provider has no aliases.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
