@@ -17,6 +17,9 @@ use super::connection::{KickBan, MsgOption, Session};
 /// The most bytes of a permanent ban's note.
 const MAX_BAN_NOTE: usize = 63;
 
+/// The most bytes of a private message, its quote, or a broadcast.
+const MAX_MESSAGE: usize = 4096;
+
 /// `lines`, or `None.` when there are none.
 fn or_none(lines: String) -> String {
     if lines.is_empty() {
@@ -209,7 +212,9 @@ impl Session {
     }
 
     /// [`myTran_SendInstantMsg`] (108): a private instant message to one other
-    /// user.
+    /// user. Options 2 and 3 send the sender's refusal text in place of the
+    /// message. The message and its quote are cut to `MAX_MESSAGE` bytes,
+    /// and an empty message is not sent.
     ///
     /// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
     pub(super) async fn on_send_instant_msg(
@@ -235,7 +240,15 @@ impl Session {
             .field(FieldId::Options)
             .and_then(Field::as_u16)
             .unwrap_or(0);
-        let is_user_message = MsgOption::from(options) == MsgOption::UserMessage;
+        let option = MsgOption::from(options);
+        let is_user_message = option == MsgOption::UserMessage;
+        let message = match option {
+            MsgOption::RefuseMessage => format!("{} does not accept private messages.", self.name),
+            MsgOption::RefuseChat => format!("{} does not accept private chats.", self.name),
+            _ => message,
+        };
+        let encoding = self.encoding();
+        let message = text_encoding::cut(encoding, &message, MAX_MESSAGE);
 
         let target = match state.require_connected_user(target_id).await {
             Ok(target) => target,
@@ -245,15 +258,19 @@ impl Session {
         if is_user_message {
             replies.extend(self.refusal_bounce(target_id, &target, false));
         }
-        if !target.refuses_pm {
+        if !target.refuses_pm && !message.is_empty() {
             let mut fields = vec![
                 Field::u16(FieldId::UserID, self.user_id),
                 Field::string(FieldId::UserName, self.name.clone()),
                 Field::u16(FieldId::Options, options),
                 Field::string(FieldId::Data, message),
             ];
-            if let Some(quote) = tx.field(FieldId::QuotingMsg) {
-                fields.push(Field::string(FieldId::QuotingMsg, quote.as_string()));
+            if let Some(quote) = tx
+                .string(FieldId::QuotingMsg)
+                .filter(|quote| !quote.is_empty())
+            {
+                let quote = text_encoding::cut(encoding, &quote, MAX_MESSAGE);
+                fields.push(Field::string(FieldId::QuotingMsg, quote));
             }
             state
                 .send_to(target_id, Transaction::push(Opcode::ServerMsg, fields))
@@ -306,7 +323,7 @@ impl Session {
     }
 
     /// [`myTran_UserBroadcast`] (355): a message broadcast to every connected
-    /// user.
+    /// user, cut to `MAX_MESSAGE` bytes. An empty message is not sent.
     ///
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
     pub(super) async fn on_user_broadcast(
@@ -323,6 +340,10 @@ impl Session {
         let Some(message) = tx.string(FieldId::Data) else {
             return vec![tx.reply_error("missing message")];
         };
+        let message = text_encoding::cut(self.encoding(), &message, MAX_MESSAGE);
+        if message.is_empty() {
+            return vec![tx.reply(vec![])];
+        }
 
         state
             .announce(
@@ -1040,6 +1061,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_instant_msg_with_an_empty_quote_sends_no_quote() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
+
+        let request = request(
+            Opcode::SendInstantMsg,
+            1,
+            vec![
+                Field::u16(FieldId::UserID, 42),
+                Field::string(FieldId::Data, "hi"),
+                Field::string(FieldId::QuotingMsg, ""),
+            ],
+        );
+        session.on_send_instant_msg(&request, &state).await;
+
+        let delivered = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ServerMsg push");
+        assert!(delivered.field(FieldId::QuotingMsg).is_none());
+    }
+
+    #[tokio::test]
+    async fn send_instant_msg_with_a_refusal_option_sends_the_refusal_text() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
+        let send = |option| {
+            request(
+                Opcode::SendInstantMsg,
+                1,
+                vec![
+                    Field::u16(FieldId::UserID, 42),
+                    Field::u16(FieldId::Options, option),
+                    Field::string(FieldId::Data, "ignored"),
+                ],
+            )
+        };
+
+        for (option, text) in [
+            (2, "Alice does not accept private messages."),
+            (3, "Alice does not accept private chats."),
+        ] {
+            session.on_send_instant_msg(&send(option), &state).await;
+            let delivered = target_rx
+                .try_recv()
+                .ok()
+                .and_then(RecipientMessage::into_push)
+                .expect("expected a ServerMsg push");
+            assert_eq!(
+                delivered
+                    .received(encoding)
+                    .string(FieldId::Data)
+                    .as_deref(),
+                Some(text)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn send_instant_msg_cuts_the_message_and_quote_and_skips_an_empty_one() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
+        let send = |data: String| {
+            request(
+                Opcode::SendInstantMsg,
+                1,
+                vec![
+                    Field::u16(FieldId::UserID, 42),
+                    Field::string(FieldId::Data, data),
+                    Field::string(FieldId::QuotingMsg, "q".repeat(5000)),
+                ],
+            )
+        };
+
+        session
+            .on_send_instant_msg(&send("m".repeat(5000)), &state)
+            .await;
+        let delivered = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ServerMsg push")
+            .received(encoding);
+        assert_eq!(delivered.string(FieldId::Data).unwrap().len(), MAX_MESSAGE);
+        assert_eq!(
+            delivered.string(FieldId::QuotingMsg).unwrap().len(),
+            MAX_MESSAGE
+        );
+
+        let replies = session
+            .on_send_instant_msg(&send(String::new()), &state)
+            .await;
+        assert!(!replies.last().unwrap().is_error());
+        assert!(target_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn send_instant_msg_to_a_user_who_is_gone_is_an_error() {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
@@ -1095,6 +1222,40 @@ mod tests {
         );
         let replies = session.on_send_instant_msg(&request, &state).await;
         assert!(replies[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn user_broadcast_is_cut_and_an_empty_one_is_not_sent() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let mut rx = state.register_recipient(2).await;
+        let broadcast = |data: String| {
+            request(
+                Opcode::UserBroadcast,
+                1,
+                vec![Field::string(FieldId::Data, data)],
+            )
+        };
+
+        session
+            .on_user_broadcast(&broadcast("b".repeat(5000)), &state)
+            .await;
+        let sent = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a UserBroadcast push");
+        assert_eq!(
+            sent.received(encoding).string(FieldId::Data).unwrap().len(),
+            MAX_MESSAGE
+        );
+
+        let replies = session
+            .on_user_broadcast(&broadcast(String::new()), &state)
+            .await;
+        assert!(!replies[0].is_error());
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

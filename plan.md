@@ -1011,6 +1011,17 @@ No items are open.
      alias shows as a folder, because the provider does not mark an
      alias.
 
+134. `myTran_SendInstantMsg` (108) and `myTran_UserBroadcast` (355) cut
+     the message, and the `myField_QuotingMsg` (214) of a private
+     message, to 4096 bytes, and send nothing for an empty message, as
+     openline's `ProcessTran_SendInstantMsg` and
+     `ProcessTran_UserBroadcast` do. A private message with option 2 or
+     3 sends "<name> does not accept private messages." or "private
+     chats." in place of its text. An empty quote is left out. One case
+     differs on purpose: a
+     request with no `myField_Data` (101) still gets the "missing
+     message" error, where openline replies with success.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
