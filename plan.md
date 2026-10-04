@@ -925,6 +925,18 @@ None.
      `myField_AutomaticResponse` (215), as openline's
      `ProcessTran_Agreed` does.
 
+123. An account change applies to each online user of that account as
+     openline's `SetOnlineAccount` does. A new access gets a
+     `myTran_UserAccess` (354) push with only `myField_UserAccess`
+     (202). The user name becomes the client's own cleaned name with
+     `ANY_NAME`, or the account's name cut to 31 bytes without it.
+     Either name can be empty, as in openline: with `ANY_NAME` when the
+     client never sent a name, and without it when the account name is
+     empty. `myTran_GetUserNameList` (300) leaves out a user with an
+     empty name, as openline's `ProcessTran_GetUserNameList` does. A
+     `myTran_NotifyChangeUser` (301) goes out only when the access or
+     the name changed.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

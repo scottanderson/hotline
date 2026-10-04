@@ -779,6 +779,19 @@ mod tests {
         bob.apply_access_update(received, &state).await;
 
         assert_eq!(bob.access, Access::BROADCAST);
+        let access = bob_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("the live update should push the new access");
+        assert_eq!(access.r#type(), TransactionType::Push(Opcode::UserAccess));
+        assert_eq!(
+            access
+                .received(text_encoding::DEFAULT)
+                .field(FieldId::UserAccess)
+                .and_then(Field::as_u64),
+            Some(Access::BROADCAST.bits())
+        );
         let notify = bob_rx
             .try_recv()
             .ok()
@@ -794,7 +807,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_user_renames_only_when_use_any_name_is_revoked() {
+    async fn set_user_gives_the_account_name_then_restores_the_chosen_name() {
         let admin = test_session("Admin", Access::all());
         let state = SharedState::default();
         state
@@ -846,9 +859,6 @@ mod tests {
         bob.apply_access_update(update, &state).await;
         assert_eq!(&*bob.name, "Bob");
 
-        // Still holds USE_ANY_NAME, so this modify must not touch the name.
-        bob.name = "Bobby Returns".into();
-        bob.access = Access::ANY_NAME;
         let regrant = request(
             Opcode::SetUser,
             1,
@@ -863,7 +873,7 @@ mod tests {
         admin.on_set_user(&regrant, &state).await;
         let update = next_access_update(&mut bob_rx);
         bob.apply_access_update(update, &state).await;
-        assert_eq!(&*bob.name, "Bobby Returns");
+        assert_eq!(&*bob.name, "Bobby the Great");
     }
 
     #[tokio::test]

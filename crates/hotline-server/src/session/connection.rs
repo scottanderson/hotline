@@ -120,6 +120,9 @@ enum SessionEnd {
 pub struct Session {
     pub(super) user_id: u16,
     pub(super) name: Box<str>,
+    /// The cleaned name the client last sent. The user name while the
+    /// user holds `ANY_NAME`.
+    pub(super) real_name: Box<str>,
     /// Account login this session authenticated as, empty until login.
     pub(super) login: Box<str>,
     /// The account's own registered display name, empty until login. See
@@ -180,6 +183,7 @@ impl Session {
         let mut session = Session {
             user_id,
             name: format!("guest{user_id}").into(),
+            real_name: Box::default(),
             // Empty until on_login succeeds.
             login: Box::default(),
             account_name: Box::default(),
@@ -672,16 +676,16 @@ impl Session {
     /// `ANY_NAME` the user gets the sent name. Without it, the user gets
     /// the account's name `at_login`, and keeps the name after login.
     fn take_user_name(&mut self, sent: Option<&str>, at_login: bool) {
-        let encoding = self.encoding();
+        let sent: String = sent
+            .unwrap_or_default()
+            .chars()
+            .map(|c| if c.is_control() { '*' } else { c })
+            .collect();
+        self.real_name = user_name(&sent, self.encoding());
         if self.access.contains(Access::ANY_NAME) {
-            let sent: String = sent
-                .unwrap_or_default()
-                .chars()
-                .map(|c| if c.is_control() { '*' } else { c })
-                .collect();
-            self.name = user_name(&sent, encoding);
+            self.name = self.real_name.clone();
         } else if at_login {
-            self.name = user_name(&self.account_name, encoding);
+            self.name = user_name(&self.account_name, self.encoding());
         }
     }
 
@@ -746,28 +750,44 @@ impl Session {
         }
     }
 
-    /// Applies a live account-modify change for this session's login.
+    /// Applies a live account-modify change for this session's login. A
+    /// new access gets a [`myTran_UserAccess`] (354) push. The name becomes
+    /// the client's own with `ANY_NAME`, or the account's cut to 31 bytes
+    /// without it. Either one can be empty.
+    ///
+    /// [`myTran_UserAccess`]: hotline_proto::Opcode::UserAccess
     pub(super) async fn apply_access_update(&mut self, update: AccessUpdate, state: &SharedState) {
         if self.login.is_empty() || update.login != self.login {
             return;
         }
-        // Only force the account's name when this modify revokes USE_ANY_NAME.
-        let losing_use_any_name =
-            self.access.contains(Access::ANY_NAME) && !update.access.contains(Access::ANY_NAME);
-        self.access = update.access;
-        self.account_name = update.name.clone().unwrap_or_default();
+        let access_changed = self.access != update.access;
+        if access_changed {
+            self.access = update.access;
+            state
+                .send_to(
+                    self.user_id,
+                    Transaction::push(
+                        Opcode::UserAccess,
+                        vec![Field::u64(FieldId::UserAccess, self.access.bits())],
+                    ),
+                )
+                .await;
+        }
+        self.account_name = update.name.unwrap_or_default();
         if let Some(login) = update.renamed_to {
             self.login = login;
         }
-        if losing_use_any_name {
-            if let Some(name) = update.name {
-                if name != self.name {
-                    self.name = name;
-                }
-            }
+        let name = if self.access.contains(Access::ANY_NAME) {
+            self.real_name.clone()
+        } else {
+            cut_name(&self.account_name, self.encoding()).into()
+        };
+        let name_changed = name != self.name;
+        self.name = name;
+        if access_changed || name_changed {
+            let icon = self.current_icon(state).await;
+            self.announce_user_change(icon, state, false).await;
         }
-        let icon = self.current_icon(state).await;
-        self.announce_user_change(icon, state, false).await;
     }
 
     /// Applies a console-command-driven live update (see
@@ -846,6 +866,14 @@ impl Session {
 
 /// `name` cut to 31 bytes in `encoding`, or `***` if it is empty.
 fn user_name(name: &str, encoding: &'static Encoding) -> Box<str> {
+    match cut_name(name, encoding) {
+        "" => "***".into(),
+        name => name.into(),
+    }
+}
+
+/// `name` cut to 31 bytes in `encoding`, at a character boundary.
+fn cut_name<'a>(name: &'a str, encoding: &'static Encoding) -> &'a str {
     let mut len = 0;
     let end = name
         .char_indices()
@@ -854,10 +882,7 @@ fn user_name(name: &str, encoding: &'static Encoding) -> Box<str> {
             len > 31
         })
         .map_or(name.len(), |(i, _)| i);
-    match &name[..end] {
-        "" => "***".into(),
-        name => name.into(),
-    }
+    &name[..end]
 }
 
 #[cfg(test)]
@@ -1272,6 +1297,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_access_update_takes_an_empty_name_as_is() {
+        let state = SharedState::default();
+        for access in [Access::empty(), Access::ANY_NAME] {
+            let mut session = test_session("Bob", access);
+            session.login = "bob".into();
+            session.real_name = Box::default();
+            let update = AccessUpdate {
+                login: "bob".into(),
+                renamed_to: None,
+                access,
+                name: None,
+            };
+            session.apply_access_update(update, &state).await;
+            assert_eq!(&*session.name, "");
+        }
+    }
+
+    #[tokio::test]
     async fn login_without_name_defers_join_until_agreed() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
@@ -1618,6 +1661,7 @@ mod tests {
         let mut session = Session {
             user_id: 1,
             name: "guest1".into(),
+            real_name: Box::default(),
             login: Box::default(),
             account_name: Box::default(),
             access: Access::empty(),

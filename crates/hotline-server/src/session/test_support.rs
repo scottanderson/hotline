@@ -22,6 +22,7 @@ pub(super) fn test_session(name: &str, access: Access) -> Session {
     Session {
         user_id: 1,
         name: name.into(),
+        real_name: name.into(),
         login: Box::default(),
         account_name: Box::default(),
         access,
@@ -80,14 +81,17 @@ pub(super) fn test_user(user_id: u16, name: &str) -> UserEntry {
     }
 }
 
-/// Drains `rx` until an `AccessUpdate` arrives, skipping the
-/// `UserChange` push a prior `apply_access_update` already queued.
+/// Drains `rx` until an `AccessUpdate` arrives, skipping the pushes a
+/// prior `apply_access_update` already queued.
 pub(super) fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> AccessUpdate {
     loop {
         match rx.try_recv().expect("expected an access update") {
             RecipientMessage::AccessUpdate(update) => return update,
             RecipientMessage::Push(tx) => {
-                assert_eq!(tx.r#type(), TransactionType::Push(Opcode::NotifyChangeUser));
+                assert!(matches!(
+                    tx.r#type(),
+                    TransactionType::Push(Opcode::NotifyChangeUser | Opcode::UserAccess)
+                ));
             }
             RecipientMessage::Console(_) => panic!("unexpected console update"),
             RecipientMessage::Disconnect => panic!("unexpected disconnect"),

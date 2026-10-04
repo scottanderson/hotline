@@ -23,7 +23,7 @@ fn or_none(lines: String) -> String {
 }
 
 impl Session {
-    /// [`myTran_GetUserNameList`] (300)
+    /// [`myTran_GetUserNameList`] (300): every user with a name.
     ///
     /// [`myTran_GetUserNameList`]: hotline_proto::Opcode::GetUserNameList
     pub(super) async fn on_get_user_name_list(
@@ -39,6 +39,7 @@ impl Session {
             .users()
             .await
             .into_iter()
+            .filter(|u| !u.name.is_empty())
             .map(|u| UserNameWithInfo {
                 user_id: u.user_id,
                 icon: u.icon,
@@ -347,6 +348,46 @@ mod tests {
         let request = request(Opcode::GetUserNameList, 1, vec![]);
 
         assert!(session.on_get_user_name_list(&request, &state).await[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn get_user_name_list_skips_a_user_with_an_empty_name() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        for (user_id, name) in [(2, ""), (3, "Carol")] {
+            state
+                .insert_user(UserEntry {
+                    user_id,
+                    login: "guest".into(),
+                    account_name: Box::default(),
+                    name: name.into(),
+                    icon: 0,
+                    client_version: None,
+                    access: Access::empty(),
+                    access_extra: AccessExtra::default(),
+                    remote_addr: "192.0.2.1:5500".parse().unwrap(),
+                    connected_at: Instant::now(),
+                    last_active: Instant::now(),
+                    refuses_pm: false,
+                    refuses_chat: false,
+                    automatic_response: None,
+                })
+                .await;
+        }
+        let request = request(Opcode::GetUserNameList, 1, vec![]);
+
+        let reply = &session.on_get_user_name_list(&request, &state).await[0];
+        let encoding = text_encoding::DEFAULT;
+        let ids: Vec<u16> = reply
+            .received(encoding)
+            .fields(FieldId::UserNameWithInfo)
+            .map(|f| {
+                UserNameWithInfo::decode(f.as_bytes(), encoding)
+                    .unwrap()
+                    .user_id
+            })
+            .collect();
+        assert_eq!(ids, [3]);
     }
 
     #[tokio::test]
