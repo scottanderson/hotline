@@ -63,7 +63,9 @@ impl Session {
             true => format!("\r *** {} ", self.name),
             false => format!("\r{:>13.13}:  ", self.name),
         };
+        let message = text_encoding::cut(encoding, &message, MAX_CHAT_LINE);
         let text = format!("\r{message}").replace('\r', &prefix);
+        let text = text_encoding::cut(encoding, &text, MAX_CHAT_LINE).to_string();
         let mut sent = self.data_bytes(tx).to_vec();
         sent.truncate(MAX_CHAT_LINE);
         let relayed = text_encoding::encode(encoding, &text).len();
@@ -550,6 +552,32 @@ mod tests {
             .string(FieldId::Data)
             .unwrap();
         assert_eq!(text, "\r *** Alice waves");
+    }
+
+    #[tokio::test]
+    async fn chat_send_relay_is_cut_to_8192_bytes() {
+        let session = test_session("Alice", Access::default());
+        let state = SharedState::default();
+        let request = request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Data, "a".repeat(10_000))],
+        );
+
+        let mut rx = state.register_recipient(1).await;
+        session
+            .on_chat_send(&request, &state, &ServerConfig::default())
+            .await;
+
+        let relay = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a Chat push")
+            .received(text_encoding::DEFAULT);
+        let text = relay.string(FieldId::Data).unwrap();
+        assert_eq!(text.len(), MAX_CHAT_LINE);
+        assert!(text.starts_with("\r        Alice:  aaa"));
     }
 
     #[tokio::test]

@@ -937,6 +937,13 @@ None.
      `myTran_NotifyChangeUser` (301) goes out only when the access or
      the name changed.
 
+124. `myTran_ChatSend` (105) relays at most 8192 bytes, as openline's
+     `ProcessTran_ChatSend` does. The cut uses the sender's encoding,
+     and each recipient encodes the relay again, so a recipient in
+     another encoding can get more bytes. The message is cut to 8192 bytes
+     before the name prefixes, and the relay is cut again after them,
+     each at a character boundary (`text_encoding::cut`).
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

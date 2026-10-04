@@ -60,6 +60,23 @@ pub fn decode(encoding: &'static Encoding, bytes: &[u8]) -> String {
     encoding.decode_without_bom_handling(bytes).0.into_owned()
 }
 
+/// The longest start of `s` that encodes to at most `max` bytes in
+/// `encoding`, cut at a character boundary.
+pub fn cut<'a>(encoding: &'static Encoding, s: &'a str, max: usize) -> &'a str {
+    if encode(encoding, s).len() <= max {
+        return s;
+    }
+    let mut len = 0;
+    let end = s
+        .char_indices()
+        .find(|&(i, c)| {
+            len += encode(encoding, &s[i..i + c.len_utf8()]).len();
+            len > max
+        })
+        .map_or(s.len(), |(i, _)| i);
+    &s[..end]
+}
+
 /// Encode `s` as `encoding`. An unmappable codepoint becomes a single
 /// `FALLBACK_BYTE`, not `encoding_rs`'s own multi-byte numeric
 /// reference (`"&#127881;"`).
@@ -112,6 +129,13 @@ pub fn encode_truncated(encoding: &'static Encoding, s: &str, max: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cut_keeps_whole_characters_within_the_encoded_limit() {
+        assert_eq!(cut(DEFAULT, "caf\u{e9}s", 4), "caf\u{e9}");
+        assert_eq!(cut(encoding_rs::UTF_8, "caf\u{e9}s", 4), "caf");
+        assert_eq!(cut(DEFAULT, "short", 31), "short");
+    }
 
     #[test]
     fn from_label_reads_a_known_label() {

@@ -780,7 +780,7 @@ impl Session {
         let name = if self.access.contains(Access::ANY_NAME) {
             self.real_name.clone()
         } else {
-            cut_name(&self.account_name, self.encoding()).into()
+            text_encoding::cut(self.encoding(), &self.account_name, 31).into()
         };
         let name_changed = name != self.name;
         self.name = name;
@@ -866,23 +866,10 @@ impl Session {
 
 /// `name` cut to 31 bytes in `encoding`, or `***` if it is empty.
 fn user_name(name: &str, encoding: &'static Encoding) -> Box<str> {
-    match cut_name(name, encoding) {
+    match text_encoding::cut(encoding, name, 31) {
         "" => "***".into(),
         name => name.into(),
     }
-}
-
-/// `name` cut to 31 bytes in `encoding`, at a character boundary.
-fn cut_name<'a>(name: &'a str, encoding: &'static Encoding) -> &'a str {
-    let mut len = 0;
-    let end = name
-        .char_indices()
-        .find(|&(i, c)| {
-            len += text_encoding::encode(encoding, &name[i..i + c.len_utf8()]).len();
-            len > 31
-        })
-        .map_or(name.len(), |(i, _)| i);
-    &name[..end]
 }
 
 #[cfg(test)]

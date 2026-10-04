@@ -18,5 +18,5 @@ pub use memory::InMemoryFloodPolicy;
 pub use none::NoFloodPolicy;
 pub use policy::FloodPolicy;
 
-/// Most of one chat line that counts, openline's relay cap.
+/// The most bytes of one chat line, before and after the name prefixes.
 pub(crate) const MAX_CHAT_LINE: usize = 8192;
