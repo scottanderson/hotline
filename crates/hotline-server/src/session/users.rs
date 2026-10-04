@@ -243,7 +243,7 @@ impl Session {
                 Field::string(FieldId::Data, message),
             ];
             if let Some(quote) = tx.field(FieldId::QuotingMsg) {
-                fields.push(Field::bytes(FieldId::QuotingMsg, quote.as_bytes().to_vec()));
+                fields.push(Field::string(FieldId::QuotingMsg, quote.as_string()));
             }
             state
                 .send_to(target_id, Transaction::push(Opcode::ServerMsg, fields))
@@ -947,6 +947,42 @@ mod tests {
 
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn send_instant_msg_relays_the_quote_in_the_recipients_encoding() {
+        let sjis = hotline_proto::Encoding::for_label(b"shift-jis").unwrap();
+        let utf8 = hotline_proto::Encoding::for_label(b"utf-8").unwrap();
+        let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}";
+        let session = test_session("Alice", Access::all());
+        session.encoding.set(sjis);
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(42).await;
+
+        let request = Transaction::request(
+            Opcode::SendInstantMsg,
+            1,
+            vec![
+                Field::u16(FieldId::UserID, 42),
+                Field::string(FieldId::Data, "hi"),
+                Field::string(FieldId::QuotingMsg, konnichiwa),
+            ],
+        )
+        .received(sjis);
+        session.on_send_instant_msg(&request, &state).await;
+
+        let delivered = target_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ServerMsg push");
+        assert_eq!(
+            delivered
+                .received(utf8)
+                .string(FieldId::QuotingMsg)
+                .as_deref(),
+            Some(konnichiwa)
+        );
     }
 
     #[tokio::test]
