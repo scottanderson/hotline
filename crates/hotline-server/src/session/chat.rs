@@ -40,7 +40,10 @@ impl Session {
             // Sent only to the denied client; `myTran_ChatSend` (105) gets no reply.
             return vec![Transaction::push(
                 Opcode::ServerMsg,
-                vec![Field::string(FieldId::Data, reason)],
+                vec![
+                    Field::u16(FieldId::ChatOptions, 1),
+                    Field::string(FieldId::Data, reason),
+                ],
             )];
         }
 
@@ -775,6 +778,31 @@ mod tests {
             .unwrap()
             .as_string();
         assert!(text.contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn chat_send_without_send_chat_sends_a_server_notice() {
+        let session = test_session("Alice", Access::empty());
+        let state = SharedState::default();
+        let request = request(
+            Opcode::ChatSend,
+            1,
+            vec![Field::string(FieldId::Data, "hi")],
+        );
+
+        let reply = session
+            .on_chat_send(&request, &state, &ServerConfig::default())
+            .await;
+
+        assert_eq!(reply.len(), 1);
+        assert_eq!(reply[0].r#type(), TransactionType::Push(Opcode::ServerMsg));
+        assert_eq!(
+            reply[0]
+                .received(text_encoding::DEFAULT)
+                .field(FieldId::ChatOptions)
+                .and_then(Field::as_u16),
+            Some(1)
+        );
     }
 
     #[tokio::test]

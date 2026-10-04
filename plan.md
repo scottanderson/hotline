@@ -903,6 +903,12 @@ None.
      gets the refusal or the automatic response as a `myTran_ServerMsg`
      (104), and the target gets no invite.
 
+120. The `myTran_ServerMsg` (104) that refuses chat without `SEND_CHAT`,
+     and the one that skips a `myTran_SetUserList` (349) record with a
+     taken login, carry `myField_ChatOptions` (109) = 1, as openline's
+     `ProcessTran_ChatSend` and `ProcessTran_SetUserList` send them.
+     openline's client shows such a push as a server message.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

@@ -375,12 +375,15 @@ impl Session {
                     self.user_id,
                     Transaction::push(
                         Opcode::ServerMsg,
-                        vec![Field::string(
-                            FieldId::Data,
-                            format!(
-                                "Cannot create account \"{login}\" because there is already an account with that login."
+                        vec![
+                            Field::string(
+                                FieldId::Data,
+                                format!(
+                                    "Cannot create account \"{login}\" because there is already an account with that login."
+                                ),
                             ),
-                        )],
+                            Field::u16(FieldId::ChatOptions, 1),
+                        ],
                     ),
                 )
                 .await;
@@ -1275,6 +1278,40 @@ mod tests {
         let alice = state.account("alice").await.unwrap();
         assert_eq!(&*alice.password, "alice's");
         assert_eq!(alice.access, Access::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn set_user_list_new_record_with_a_taken_login_sends_a_server_notice() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        state
+            .put_account("bob".to_string(), Account::guest())
+            .await
+            .unwrap();
+        let mut rx = state.register_recipient(session.user_id).await;
+
+        let record = user_list_record(
+            None,
+            "Bob",
+            "bob",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::all(),
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        session.on_set_user_list(&request, &state).await;
+
+        let notice = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ServerMsg push")
+            .received(text_encoding::DEFAULT);
+        assert_eq!(notice.r#type(), TransactionType::Push(Opcode::ServerMsg));
+        assert_eq!(
+            notice.field(FieldId::ChatOptions).and_then(Field::as_u16),
+            Some(1)
+        );
+        assert_eq!(state.account("bob").await.unwrap(), Account::guest());
     }
 
     #[tokio::test]
