@@ -950,6 +950,13 @@ None.
      there to resume it. A drop box that does not exist is an error, as
      any missing folder is.
 
+126. A banned address can connect, and `myTran_Login` (107) then fails
+     with "You are permanently banned on this server." or "You are
+     temporarily banned on this server.", as openline's
+     `ProcessTran_Login` does. hls closed such a connection at accept,
+     so the user saw no reason. The transfer port drops a banned
+     address at accept, as openline's does.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

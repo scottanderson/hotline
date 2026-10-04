@@ -477,6 +477,9 @@ impl Session {
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
+        if let Err(reason) = state.require_not_banned(self.remote_addr.ip()).await {
+            return self.reject_login(tx, state, reason).await;
+        }
         let login = tx.login();
         let password = tx.password();
 
@@ -912,6 +915,39 @@ mod tests {
 
         session.access.insert(Access::NEWS_READ_ART);
         assert!(session.may_receive(TransactionType::Push(Opcode::NewMsg)));
+    }
+
+    #[tokio::test]
+    async fn login_from_a_banned_address_says_why() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let ip = session.remote_addr.ip();
+        let login = request(Opcode::Login, 1, vec![]);
+
+        state.ban(ip, None).await.unwrap();
+        let replies = session
+            .on_login(&login, &state, &ServerConfig::default())
+            .await;
+        assert_eq!(
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText)
+                .as_deref(),
+            Some("You are permanently banned on this server.")
+        );
+
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        state.ban(ip, Some(later)).await.unwrap();
+        let replies = session
+            .on_login(&login, &state, &ServerConfig::default())
+            .await;
+        assert_eq!(
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText)
+                .as_deref(),
+            Some("You are temporarily banned on this server.")
+        );
     }
 
     #[tokio::test]

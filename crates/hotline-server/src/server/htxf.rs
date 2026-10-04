@@ -37,6 +37,10 @@ pub(crate) async fn run_htxf_listener(listener: TcpListener, state: SharedState)
                 continue;
             }
         };
+        if state.is_banned(peer.ip()).await.is_some() {
+            tracing::debug!(%peer, "htxf: rejected connection from banned address");
+            continue;
+        }
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_htxf_connection(stream, peer, &state).await {
@@ -530,6 +534,27 @@ mod tests {
     use hotline_proto::types::HlPath;
     use tokio::io::AsyncWriteExt;
     use tokio::task::JoinHandle;
+
+    #[tokio::test]
+    async fn htxf_listener_closes_a_connection_from_a_banned_address() {
+        use tokio::io::AsyncReadExt;
+
+        let state = SharedState::default();
+        state.ban("127.0.0.1".parse().unwrap(), None).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run_htxf_listener(listener, state));
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let mut buf = Vec::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut buf),
+        )
+        .await
+        .expect("the server should close the socket");
+        assert_eq!(read.unwrap(), 0);
+    }
 
     #[test]
     fn stored_item_path_validates_every_name() {

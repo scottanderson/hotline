@@ -66,11 +66,6 @@ impl Server {
 
         loop {
             let (stream, peer) = listener.accept().await?;
-            // Reject a banned address before the handshake.
-            if self.state.is_banned(peer.ip()).await.is_some() {
-                tracing::debug!(%peer, "rejected connection from banned address");
-                continue;
-            }
             let Some(permit) = self.connections.try_acquire(peer.ip()) else {
                 tracing::debug!(%peer, "rejected connection over the connection limit");
                 continue;

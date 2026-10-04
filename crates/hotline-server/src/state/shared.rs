@@ -1463,6 +1463,17 @@ impl SharedState {
         self.bans.is_banned(ip).await
     }
 
+    /// `Err` with the reason a login fails if `ip` is banned.
+    pub async fn require_not_banned(&self, ip: IpAddr) -> Result<(), &'static str> {
+        match self.is_banned(ip).await {
+            None => Ok(()),
+            Some(BanRecord { until: None, .. }) => {
+                Err("You are permanently banned on this server.")
+            }
+            Some(_) => Err("You are temporarily banned on this server."),
+        }
+    }
+
     /// Ban `ip` until `until`, or permanently if `None`.
     pub async fn ban(
         &self,
