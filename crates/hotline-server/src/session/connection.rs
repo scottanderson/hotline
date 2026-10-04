@@ -85,6 +85,11 @@ pub(super) const MAX_FLAT_NEWS_LEN: usize = u16::MAX as usize;
 /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
 const KICK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The longest [`myField_AutomaticResponse`] (215) kept, in bytes.
+///
+/// [`myField_AutomaticResponse`]: hotline_proto::FieldId::AutomaticResponse
+const MAX_AUTOMATIC_RESPONSE: usize = 127;
+
 /// Reads and discards `stream` until it ends or `timeout` elapses.
 async fn drain_with_timeout<S: Stream + Unpin>(mut stream: S, timeout: Duration) {
     let _ = tokio::time::timeout(timeout, async { while stream.next().await.is_some() {} }).await;
@@ -708,7 +713,8 @@ impl Session {
     }
 
     /// Sets the refusal options and the automatic response from
-    /// [`myField_Options`] (113) and [`myField_AutomaticResponse`] (215).
+    /// [`myField_Options`] (113) and [`myField_AutomaticResponse`] (215),
+    /// cut to 127 bytes.
     ///
     /// [`myField_Options`]: hotline_proto::FieldId::Options
     /// [`myField_AutomaticResponse`]: hotline_proto::FieldId::AutomaticResponse
@@ -723,10 +729,12 @@ impl Session {
         self.automatic_response = options.contains(UserChangeOptions::AUTO_RESPONSE).then(|| {
             tx.string(FieldId::AutomaticResponse)
                 .filter(|text| !text.is_empty())
-                .unwrap_or_else(|| {
-                    "I'm not able to respond right now. Please try later!".to_string()
-                })
-                .into()
+                .map_or_else(
+                    || "I'm not able to respond right now. Please try later!".into(),
+                    |text| {
+                        text_encoding::cut(self.encoding(), &text, MAX_AUTOMATIC_RESPONSE).into()
+                    },
+                )
         });
     }
 
@@ -2051,6 +2059,29 @@ mod tests {
         session.on_set_client_user_info(&request, &state).await;
 
         assert_eq!(session.automatic_response.as_deref(), Some("Back in five."));
+    }
+
+    #[tokio::test]
+    async fn set_client_user_info_cuts_the_automatic_response_to_127_bytes() {
+        let mut session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+
+        let request = request(
+            Opcode::SetClientUserInfo,
+            1,
+            vec![
+                Field::string(FieldId::UserName, "Alice".to_string()),
+                Field::u16(FieldId::UserIconID, 0),
+                Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
+                Field::string(FieldId::AutomaticResponse, "a".repeat(200)),
+            ],
+        );
+        session.on_set_client_user_info(&request, &state).await;
+
+        assert_eq!(
+            session.automatic_response.as_deref().map(str::len),
+            Some(MAX_AUTOMATIC_RESPONSE)
+        );
     }
 
     #[tokio::test]

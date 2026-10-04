@@ -1085,6 +1085,10 @@ one-shared-room model.
      the body, and so keeps an article with no text. hls checks the body
      first and adds nothing.
 
+143. The `myField_AutomaticResponse` (215) text is cut to 127 bytes, as
+     openline's `SetClientUserInfo` reads it into its 128-byte
+     `psAutomaticResponseText`.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
