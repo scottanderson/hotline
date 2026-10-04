@@ -56,6 +56,28 @@ pub fn partial_upload_name(name: &str) -> String {
     format!("{name}{PARTIAL_SUFFIX}")
 }
 
+/// The display name of a file type code, for the codes that have one.
+pub(crate) const fn type_name(file_type: [u8; 4]) -> Option<&'static str> {
+    match &file_type {
+        b"APPL" => Some("Application Program"),
+        b"SITD" => Some("StuffIt Archive"),
+        b"TEXT" => Some("Text File"),
+        b"HTft" => Some("Incomplete File"),
+        b"HTbm" => Some("Hotline Bookmark"),
+        _ => None,
+    }
+}
+
+/// The display name of a creator code, for the codes that have one.
+pub(crate) const fn creator_name(creator: [u8; 4]) -> Option<&'static str> {
+    match &creator {
+        b"HTLC" | b"HTLS" => Some("Hotline"),
+        b"SIT!" => Some("StuffIt"),
+        b"ttxt" => Some("SimpleText"),
+        _ => None,
+    }
+}
+
 /// `file_type`/`creator` inferred from a file's extension, the same
 /// fallback openline's non-HFS (Windows) build uses in place of real Mac
 /// type/creator metadata (`_FSWinExtToMacTypeCode` in `UFileSys(W).cp`).

@@ -1002,6 +1002,15 @@ No items are open.
      `_FSCountDirItems`. A client shows it as the number of items in the
      folder. Both file providers count the folder's direct entries.
 
+133. `myTran_GetFileInfo` (206) sends `myField_FileType` (213),
+     `myField_FileTypeString` (205), and `myField_FileCreatorString`
+     (206), as openline's `ProcessTran_GetFileInfo` does. A folder sends
+     "Folder", "n/a", and `fldr`, and no `myField_FileSize` (207). A
+     file sends the display name of a known type or creator code, and
+     the code itself for any other. This replaces entry 2. A folder
+     alias shows as a folder, because the provider does not mark an
+     alias.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

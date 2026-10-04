@@ -10,7 +10,7 @@ use hotline_proto::{Field, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::Activity;
-use crate::file::{validate_file_name, FileRequester};
+use crate::file::{creator_name, type_name, validate_file_name, FileRequester};
 use crate::state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
     TransferRef, TransferTarget,
@@ -490,10 +490,10 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
-    /// [`myTran_GetFileInfo`] (206): fetch a file or folder's metadata.
-    /// Type/creator are omitted; nothing in this server persists real HFS
-    /// metadata for them (see `HTXF`'s `INFO` fork). Comment is sent when one
-    /// is stored.
+    /// [`myTran_GetFileInfo`] (206): fetch a file or folder's metadata. A
+    /// type or creator code with a display name sends the name, and any
+    /// other sends the code. Only a file sends its size. Comment is sent
+    /// when one is stored.
     ///
     /// [`myTran_GetFileInfo`]: hotline_proto::Opcode::GetFileInfo
     pub(super) async fn on_get_file_info(
@@ -526,10 +526,21 @@ impl Session {
                 .encode()
                 .to_vec()
         };
-        let mut fields = vec![
-            Field::string(FieldId::FileName, info.name),
-            Field::u32(FieldId::FileSize, info.size),
-        ];
+        let mut fields = if info.is_folder() {
+            vec![
+                Field::string(FieldId::FileTypeString, "Folder"),
+                Field::string(FieldId::FileCreatorString, "n/a"),
+                Field::bytes(FieldId::FileType, info.file_type),
+            ]
+        } else {
+            vec![
+                Field::bytes(FieldId::FileType, info.file_type),
+                code_field(FieldId::FileTypeString, info.file_type, type_name),
+                code_field(FieldId::FileCreatorString, info.creator, creator_name),
+                Field::u32(FieldId::FileSize, info.size),
+            ]
+        };
+        fields.push(Field::string(FieldId::FileName, info.name));
         if times.created.is_some() {
             fields.push(Field::bytes(FieldId::FileCreateDate, date(times.created)));
         }
@@ -659,6 +670,12 @@ impl Session {
         }
         vec![tx.reply(vec![])]
     }
+}
+
+/// A field with the display name of `code`, or with `code` itself when it
+/// has none.
+fn code_field(id: FieldId, code: [u8; 4], name: fn([u8; 4]) -> Option<&'static str>) -> Field {
+    name(code).map_or_else(|| Field::bytes(id, code), |name| Field::string(id, name))
 }
 
 #[cfg(test)]
@@ -2333,12 +2350,80 @@ mod tests {
                 .and_then(Field::as_u32),
             Some(5)
         );
-        // No real HFS metadata is persisted, so these are omitted rather
-        // than sent zeroed.
-        assert!(reply.field(FieldId::FileTypeString).is_none());
-        assert!(reply.field(FieldId::FileCreatorString).is_none());
+        let reply = reply.received(encoding);
+        assert_eq!(reply.string(FieldId::FileType).as_deref(), Some("TEXT"));
+        assert_eq!(
+            reply.string(FieldId::FileTypeString).as_deref(),
+            Some("Text File")
+        );
+        assert_eq!(
+            reply.string(FieldId::FileCreatorString).as_deref(),
+            Some("SimpleText")
+        );
         assert!(reply.field(FieldId::FileCreateDate).is_none());
         assert!(reply.field(FieldId::FileComment).is_none());
+    }
+
+    #[tokio::test]
+    async fn get_file_info_of_a_folder_sends_its_kind_and_no_size() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::FILE_GETINFO);
+
+        let getinfo = request(
+            Opcode::GetFileInfo,
+            1,
+            vec![Field::string(FieldId::FileName, "Top")],
+        );
+        let [reply] = session
+            .on_get_file_info(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let reply = reply.received(encoding);
+        assert_eq!(
+            reply.string(FieldId::FileTypeString).as_deref(),
+            Some("Folder")
+        );
+        assert_eq!(
+            reply.string(FieldId::FileCreatorString).as_deref(),
+            Some("n/a")
+        );
+        assert_eq!(reply.string(FieldId::FileType).as_deref(), Some("fldr"));
+        assert!(reply.field(FieldId::FileSize).is_none());
+    }
+
+    #[tokio::test]
+    async fn get_file_info_sends_a_code_with_no_display_name_as_is() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.gif", *b"GIF89a");
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::FILE_GETINFO);
+
+        let getinfo = request(
+            Opcode::GetFileInfo,
+            1,
+            vec![Field::string(FieldId::FileName, "a.gif")],
+        );
+        let [reply] = session
+            .on_get_file_info(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let reply = reply.received(encoding);
+        assert_eq!(
+            reply.string(FieldId::FileTypeString).as_deref(),
+            Some("GIFf")
+        );
+        assert_eq!(
+            reply.string(FieldId::FileCreatorString).as_deref(),
+            Some("GKON")
+        );
     }
 
     #[tokio::test]
