@@ -15,6 +15,11 @@ use crate::state::SharedState;
 
 use super::connection::Session;
 
+/// The longest [`myField_ChatSubject`] (115) kept, in bytes.
+///
+/// [`myField_ChatSubject`]: hotline_proto::FieldId::ChatSubject
+const MAX_CHAT_SUBJECT: usize = 255;
+
 impl Session {
     /// [`myTran_ChatSend`] (105): public or (if [`myField_ChatID`] (114) is
     /// present) private-room chat, gated on `SEND_CHAT`. A message that
@@ -377,7 +382,7 @@ impl Session {
     }
 
     /// [`myTran_SetChatSubject`] (120): set a chat room's subject and/or its join
-    /// password.
+    /// password. The subject is cut to 255 bytes.
     ///
     /// [`myTran_SetChatSubject`]: hotline_proto::Opcode::SetChatSubject
     pub(super) async fn on_set_chat_subject(
@@ -391,7 +396,9 @@ impl Session {
         let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
-        let subject = tx.string(FieldId::ChatSubject);
+        let subject = tx.string(FieldId::ChatSubject).map(|subject| {
+            text_encoding::cut(self.encoding(), &subject, MAX_CHAT_SUBJECT).to_string()
+        });
         let password = tx.string(FieldId::UserPassword);
         if subject.is_none() && password.is_none() {
             return vec![tx.reply_error("missing subject or password")];
@@ -1303,6 +1310,28 @@ mod tests {
         assert_eq!(
             notify.received(encoding).string(FieldId::UserPassword),
             Some("hunter2".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn set_chat_subject_cuts_the_subject_to_255_bytes() {
+        let member = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(member.user_id).await;
+
+        let request = request(
+            Opcode::SetChatSubject,
+            1,
+            vec![
+                Field::u32(FieldId::ChatID, chat_id),
+                Field::string(FieldId::ChatSubject, "s".repeat(300)),
+            ],
+        );
+        let replies = member.on_set_chat_subject(&request, &state).await;
+        assert!(!replies[0].is_error());
+        assert_eq!(
+            state.chat_room(chat_id).await.unwrap().subject.len(),
+            MAX_CHAT_SUBJECT
         );
     }
 

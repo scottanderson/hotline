@@ -1089,6 +1089,10 @@ one-shared-room model.
      openline's `SetClientUserInfo` reads it into its 128-byte
      `psAutomaticResponseText`.
 
+144. `myTran_SetChatSubject` (120) cuts the `myField_ChatSubject` (115)
+     to 255 bytes, as openline's `ProcessTran_SetChatSubject` reads it
+     with `GetPString` into a 256-byte buffer.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
