@@ -487,10 +487,9 @@ impl SharedState {
         access: Access,
         resume: bool,
     ) -> Result<u64, Cow<'static, str>> {
-        self.files
-            .list(requester, dir)
-            .await
-            .ok_or("file or folder not found.")?;
+        if !self.folder_exists(requester, dir).await {
+            Err("file or folder not found.")?;
+        }
         upload_destination_access(dir, access)?;
         if self.files.exists(requester, dir, name).await {
             Err("file already exists.")?;
@@ -504,6 +503,17 @@ impl SharedState {
         } else {
             Ok(0)
         }
+    }
+
+    /// Whether `dir` is a folder that `requester` can see. The root always is.
+    async fn folder_exists(&self, requester: FileRequester<'_>, dir: &HlPath) -> bool {
+        let Some((name, parent)) = dir.components.split_last() else {
+            return true;
+        };
+        self.files
+            .info(requester, &HlPath::new(parent), name)
+            .await
+            .is_some_and(|info| info.is_folder())
     }
 
     /// Start (or resume) a [`myTran_UploadFldr`] (213) upload of folder
@@ -521,10 +531,9 @@ impl SharedState {
         access: Access,
         resume: bool,
     ) -> Result<(), Cow<'static, str>> {
-        self.files
-            .list(requester, dir)
-            .await
-            .ok_or("file or folder not found.")?;
+        if !self.folder_exists(requester, dir).await {
+            Err("file or folder not found.")?;
+        }
         upload_destination_access(dir, access)?;
         let existing = self.files.info(requester, dir, name).await;
         if resume {

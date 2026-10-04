@@ -1908,6 +1908,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_file_into_a_file_is_an_error() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = request(
+            Opcode::UploadFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "b.txt"),
+                Field::bytes(
+                    FieldId::FilePath,
+                    HlPath::new(["a.txt"]).encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
     async fn delete_file_removes_a_file() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"bye");
