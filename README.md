@@ -163,7 +163,10 @@ cargo run -p hotline-cli -- --host 127.0.0.1 --port 5500 --login guest --nick Ru
 | `bans.json`     | address bans                     | `--ban-file`        |
 | `tracker-id`    | the ID that trackers list you by | `--tracker-id-file` |
 
-Text in these files is UTF-8. On the wire, text uses Mac OS Roman.
+Text in these files is UTF-8. On the wire, text uses Mac OS Roman by
+default. `--encoding utf-8` changes the wire encoding of every
+connection. It takes a WHATWG label, such as `shift_jis`. Every client
+must use the same encoding, for example `hlc --encoding utf-8`.
 
 Clients connect on `--port` (5500 by default). File transfers use the
 next port, so open both in your firewall.
@@ -248,6 +251,7 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --nick Alice
 | `--nick`         | `RustHL`    | the name in the user list                      |
 | `--icon`         | 0           | the icon ID                                    |
 | `--download-dir` | `.`         | the folder that downloads go to                |
+| `--encoding`     | `macintosh` | the text encoding, the same as the server's    |
 | `--tracker`      |             | list a tracker's servers and exit, no login    |
 
 Use `HLC_PASSWORD` in place of `--password` when other users share the

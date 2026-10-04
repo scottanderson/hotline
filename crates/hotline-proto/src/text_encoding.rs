@@ -41,6 +41,17 @@ impl From<&'static Encoding> for EncodingHandle {
     }
 }
 
+/// The encoding with the [WHATWG](https://encoding.spec.whatwg.org/)
+/// label `label`, such as `macintosh` or `utf-8`. `Err` for an unknown
+/// label, or for an encoding that encodes to another one, such as UTF-16.
+pub fn from_label(label: &str) -> Result<&'static Encoding, String> {
+    match Encoding::for_label(label.trim().as_bytes()) {
+        Some(encoding) if encoding.output_encoding() == encoding => Ok(encoding),
+        Some(encoding) => Err(format!("{} cannot encode text", encoding.name())),
+        None => Err(format!("unknown encoding {label:?}")),
+    }
+}
+
 /// Byte substituted for an unmappable codepoint.
 const FALLBACK_BYTE: u8 = b'?';
 
@@ -101,6 +112,20 @@ pub fn encode_truncated(encoding: &'static Encoding, s: &str, max: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_label_reads_a_known_label() {
+        assert_eq!(from_label("macintosh"), Ok(DEFAULT));
+        assert_eq!(from_label("UTF-8"), Ok(encoding_rs::UTF_8));
+        assert_eq!(from_label("shift_jis"), Ok(encoding_rs::SHIFT_JIS));
+    }
+
+    #[test]
+    fn from_label_rejects_an_unknown_label_and_utf16() {
+        assert!(from_label("klingon").is_err());
+        assert!(from_label("utf-16le").is_err());
+        assert!(from_label("replacement").is_err());
+    }
 
     #[test]
     fn default_is_mac_os_roman() {

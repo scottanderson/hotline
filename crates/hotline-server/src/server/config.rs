@@ -1,6 +1,8 @@
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use hotline_proto::text_encoding::{self, Encoding};
+
 /// `max_downloads`'s default, openline's `mOptions.nMaxDownloads`.
 pub const DEFAULT_MAX_DOWNLOADS: usize = 100;
 
@@ -41,6 +43,8 @@ pub struct ServerConfig {
     pub max_connections_per_address: Option<NonZeroUsize>,
     /// Time from accept to a completed login before the connection closes.
     pub login_timeout: Duration,
+    /// Text encoding of every connection.
+    pub encoding: &'static Encoding,
 }
 
 impl Default for ServerConfig {
@@ -55,6 +59,7 @@ impl Default for ServerConfig {
             max_connections: NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS),
             max_connections_per_address: NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS_PER_ADDRESS),
             login_timeout: DEFAULT_LOGIN_TIMEOUT,
+            encoding: text_encoding::DEFAULT,
         }
     }
 }

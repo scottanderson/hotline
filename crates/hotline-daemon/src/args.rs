@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use hotline_proto::text_encoding::{self, Encoding};
 use hotline_server::{
     DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS, DEFAULT_MAX_DOWNLOADS,
     DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
@@ -21,6 +22,11 @@ pub struct Args {
     /// Server name reported to clients on login.
     #[arg(long, default_value = "Hotline")]
     pub name: String,
+
+    /// Text encoding of every connection, as a WHATWG label such as
+    /// `macintosh` or `utf-8`.
+    #[arg(long, default_value = "macintosh", value_parser = text_encoding::from_label)]
+    pub encoding: &'static Encoding,
 
     /// Agreement text shown to clients on login (empty disables it).
     #[arg(long, default_value = "Hotline")]

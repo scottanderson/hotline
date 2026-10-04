@@ -173,7 +173,7 @@ impl Session {
         };
         handshake?;
 
-        let encoding = EncodingHandle::default();
+        let encoding = EncodingHandle::from(config.encoding);
         let codec = TransactionCodec::for_server(encoding.clone());
 
         let user_id = state.next_user_id();

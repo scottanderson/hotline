@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use hotline_proto::text_encoding::{self, Encoding};
 
 /// Terminal UI Hotline client.
 #[derive(Parser, Debug)]
@@ -33,6 +34,11 @@ pub struct Args {
     /// Folder that downloads are saved in.
     #[arg(long, default_value = ".")]
     pub download_dir: PathBuf,
+
+    /// Text encoding of the connection, as a WHATWG label such as
+    /// `macintosh` or `utf-8`. It must match the server's.
+    #[arg(long, default_value = "macintosh", value_parser = text_encoding::from_label)]
+    pub encoding: &'static Encoding,
 
     /// List the servers a tracker knows about, then exit without
     /// connecting. Takes `host[:port]`; the port defaults to 5498.

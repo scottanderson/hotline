@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = format!("{}:{}", args.host, args.port);
     let (client, mut events) = HotlineClient::connect(&addr).await?;
+    client.encoding().set(args.encoding);
     let login = client.login(&args.login, &args.password).await?;
 
     let mut session = ClientSession::new(args.nick, args.icon, client.encoding());

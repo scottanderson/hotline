@@ -153,12 +153,6 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-2. **No transaction negotiates a connection's text encoding.** The
-   user's decision is Mac OS Roman on the wire unless the client
-   negotiates another encoding. `EncodingHandle` can change a
-   connection's encoding, but no request does it yet. openline has no
-   such request, so the design needs a decision first.
-
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
@@ -897,6 +891,13 @@ one-shared-room model.
      `myTran_SetFileInfo` (207), and `myTran_MakeFileAlias` (209).
      A lookup uses the name as sent, so a file put on disk by hand
      keeps its name.
+
+116. The wire encoding is a setting, with no negotiation on the wire.
+     openline has no request for it. `ServerConfig::encoding` (`hls
+     --encoding`) sets every connection's encoding, Mac OS Roman by
+     default. `hlc --encoding` sets the client's to match.
+     `text_encoding::from_label` rejects an encoding such as UTF-16,
+     which encodes to another encoding.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

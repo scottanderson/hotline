@@ -95,6 +95,34 @@ async fn user_id(client: &HotlineClient, nick: &str) -> u16 {
 }
 
 #[tokio::test]
+async fn a_server_in_utf8_counts_a_nick_in_characters() {
+    let utf8 = hotline_proto::text_encoding::from_label("utf-8").unwrap();
+    let config = ServerConfig {
+        encoding: utf8,
+        ..ServerConfig::default()
+    };
+    let addr = start_server_config(config, Providers::default()).await;
+    let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}";
+    let mut clients = Vec::new();
+    for nick in [konnichiwa, "bob"] {
+        let (client, mut events) = HotlineClient::connect(addr).await.unwrap();
+        client.encoding().set(utf8);
+        client.login("guest", "").await.unwrap();
+        next_push(&mut events, Opcode::ShowAgreement).await;
+        client.agree(nick, 0).await.unwrap();
+        clients.push((client, events));
+    }
+
+    clients[0].0.send_chat("hi").await.unwrap();
+
+    let msg = next_push(&mut clients[1].1, Opcode::ChatMsg).await;
+    assert_eq!(
+        msg.string(FieldId::Data),
+        Some(format!("\r        {konnichiwa}:  hi"))
+    );
+}
+
+#[tokio::test]
 async fn send_instant_msg_reaches_its_target() {
     let addr = start_server().await;
     let (alice, _alice_events) = join(addr, "alice").await;

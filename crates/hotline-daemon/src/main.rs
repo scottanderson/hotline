@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         max_connections_per_address: NonZeroUsize::new(args.max_connections_per_address),
         max_downloads: args.max_downloads,
         max_downloads_per_client: args.max_downloads_per_client,
+        encoding: args.encoding,
         ..ServerConfig::default()
     };
 
