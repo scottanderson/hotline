@@ -31,7 +31,7 @@ use downloads::RunningDownload;
 pub use event_outcome::EventOutcome;
 pub use keep_alive::KEEP_ALIVE;
 pub use mode::Mode;
-pub use threaded_news::{NewsFolder, NewsItem};
+pub use threaded_news::{ArticleText, NewsFolder, NewsItem};
 
 pub struct ClientSession {
     pub nick: Box<str>,

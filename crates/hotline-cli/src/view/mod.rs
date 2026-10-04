@@ -201,7 +201,7 @@ impl View {
             (Some(Modal::UserMenu { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
             }
-            (Some(Modal::Info { .. } | Modal::FileInfo(_)), ..) => &[("Esc", "close")],
+            (Some(Modal::Info(_) | Modal::FileInfo(_)), ..) => &[("Esc", "close")],
             (Some(Modal::FileEdit { .. }), ..) => &[("Enter", "save"), ("Esc", "cancel")],
             (Some(Modal::Disconnect { .. }), ..) => &[
                 ("d", "disconnect"),
@@ -218,7 +218,7 @@ impl View {
                 ..,
             ) => &[("r", "resume"), ("o", "replace"), ("Esc", "cancel")],
             (Some(Modal::Confirm(_)), ..) => &[("r", "resume"), ("Esc", "cancel")],
-            (Some(Modal::Invite { .. }), ..) => &[("Enter", "join"), ("Esc", "decline")],
+            (Some(Modal::Invite(_)), ..) => &[("Enter", "join"), ("Esc", "decline")],
             (Some(Modal::Subject { .. }), ..) => &[("Enter", "set"), ("Esc", "cancel")],
             (Some(Modal::PickDownload { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "cancel it"), ("Esc", "close")]
@@ -226,7 +226,7 @@ impl View {
             (Some(Modal::PickUser { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "invite"), ("Esc", "cancel")]
             }
-            (Some(Modal::Article { .. }), ..) => &[("r", "reply"), ("Esc", "close")],
+            (Some(Modal::Article(_)), ..) => &[("r", "reply"), ("Esc", "close")],
             (Some(Modal::Post { .. }), ..) => &[
                 ("Tab", "title or text"),
                 ("Enter", "post"),
@@ -491,13 +491,13 @@ impl View {
             return self.options_form_key(form, key);
         }
         match (&mut modal, key.code) {
-            (Modal::Article { id, title, .. }, KeyCode::Char('r')) => {
-                let title = match title.strip_prefix("Re: ") {
-                    Some(_) => title.to_string(),
-                    None => format!("Re: {title}"),
+            (Modal::Article(article), KeyCode::Char('r')) => {
+                let title = match article.title.strip_prefix("Re: ") {
+                    Some(_) => article.title.to_string(),
+                    None => format!("Re: {}", article.title),
                 };
                 self.modal = Some(Modal::Post {
-                    parent_id: *id,
+                    parent_id: article.id,
                     title,
                     body: String::new(),
                     on_body: true,
@@ -561,9 +561,9 @@ impl View {
                     kind: *kind,
                 };
             }
-            (Modal::Invite { chat_id, .. }, KeyCode::Enter) => return Action::JoinChat(*chat_id),
-            (Modal::Invite { chat_id, .. }, KeyCode::Esc) => {
-                return Action::RejectChatInvite(*chat_id);
+            (Modal::Invite(invite), KeyCode::Enter) => return Action::JoinChat(invite.chat_id),
+            (Modal::Invite(invite), KeyCode::Esc) => {
+                return Action::RejectChatInvite(invite.chat_id);
             }
             (Modal::InstantMsg { input, .. } | Modal::Broadcast { input }, _)
                 if is_new_line(key) =>
@@ -571,7 +571,7 @@ impl View {
                 input.push('\n');
             }
             (_, KeyCode::Esc)
-            | (Modal::Info { .. } | Modal::FileInfo(_) | Modal::Article { .. }, KeyCode::Enter) => {
+            | (Modal::Info(_) | Modal::FileInfo(_) | Modal::Article(_), KeyCode::Enter) => {
                 return Action::None;
             }
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
@@ -945,9 +945,7 @@ impl View {
                         return self.choose(user_id, item, users);
                     }
                 }
-                Modal::Info { .. } | Modal::FileInfo(_) | Modal::Article { .. } => {
-                    self.modal = None
-                }
+                Modal::Info(_) | Modal::FileInfo(_) | Modal::Article(_) => self.modal = None,
                 Modal::InstantMsg { .. }
                 | Modal::Disconnect { .. }
                 | Modal::FileEdit { .. }
@@ -956,7 +954,7 @@ impl View {
                 | Modal::Upload { .. }
                 | Modal::SaveAs { .. }
                 | Modal::Confirm(_)
-                | Modal::Invite { .. }
+                | Modal::Invite(_)
                 | Modal::Subject { .. }
                 | Modal::PickUser { .. }
                 | Modal::PickDownload { .. }
@@ -1207,6 +1205,8 @@ mod tests {
     use hotline_client::{ClientUserInfo, Password, UserAccount};
     use hotline_proto::types::{UserChangeOptions, UserFlags};
     use hotline_proto::Access;
+
+    use crate::session::{ArticleText, ChatInvite};
 
     fn users() -> Vec<UserNameWithInfo> {
         ["Alice", "Bob"]
@@ -1795,10 +1795,10 @@ mod tests {
     #[test]
     fn an_invite_joins_on_enter_and_declines_on_esc() {
         let invite = || {
-            Some(Modal::Invite {
+            Some(Modal::Invite(ChatInvite {
                 chat_id: 7,
                 from: "Alice".into(),
-            })
+            }))
         };
         let mut view = View {
             modal: invite(),
@@ -1937,12 +1937,12 @@ mod tests {
     #[test]
     fn a_reply_to_an_article_posts_its_title_and_text() {
         let mut view = View {
-            modal: Some(Modal::Article {
+            modal: Some(Modal::Article(ArticleText {
                 id: 4,
                 title: "Hello".into(),
                 poster: "Alice".into(),
                 text: "hi".into(),
-            }),
+            })),
             ..View::default()
         };
         let _ = view.handle_key(key(KeyCode::Char('r')), &users(), &files());

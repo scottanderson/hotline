@@ -160,10 +160,7 @@ async fn run(
         view.can_broadcast = session.can_broadcast();
         view.can_disconnect = session.can_disconnect();
         if view.modal.is_none() {
-            view.modal = session.invites.pop_front().map(|invite| Modal::Invite {
-                chat_id: invite.chat_id,
-                from: invite.from,
-            });
+            view.modal = session.invites.pop_front().map(Modal::Invite);
         }
         terminal.draw(|f| ui::draw(f, session, &mut view))?;
     }
@@ -230,12 +227,10 @@ async fn perform(
             session.send_instant_msg(client, user_id, &text).await;
         }
         Action::GetClientInfoText(user_id) => {
-            if let Some(info) = session.get_client_info_text(client, user_id).await {
-                view.modal = Some(Modal::Info {
-                    name: info.name,
-                    text: info.text,
-                });
-            }
+            view.modal = session
+                .get_client_info_text(client, user_id)
+                .await
+                .map(Modal::Info);
         }
         Action::DisconnectUser { user_id, ban } => {
             session.disconnect_user(client, user_id, ban).await;
@@ -318,12 +313,7 @@ async fn perform(
         Action::OpenNewsItem(index) => {
             let path = session.threaded_path.clone();
             if let Some(article) = session.open_news_item(client, index).await {
-                view.modal = Some(Modal::Article {
-                    id: article.id,
-                    title: article.title,
-                    poster: article.poster,
-                    text: article.text.into(),
-                });
+                view.modal = Some(Modal::Article(article));
             } else if session.threaded_path != path {
                 view.news = ListCursor::default();
             }

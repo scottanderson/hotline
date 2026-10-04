@@ -537,8 +537,8 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             let text = file_info_lines(info).join("\n");
             draw_text_modal(frame, screen, 70, format!("info for {}", info.name), text);
         }
-        Modal::Invite { from, .. } => {
-            let text = format!("{from} invites you to a private chat.");
+        Modal::Invite(invite) => {
+            let text = format!("{} invites you to a private chat.", invite.from);
             draw_question(frame, screen, "private chat", text);
         }
         Modal::Subject { input, .. } => {
@@ -573,14 +573,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
                 .border_style(border(true));
             draw_list_modal(frame, area, block, items, *selected);
         }
-        Modal::Article {
-            title,
-            poster,
-            text,
-            ..
-        } => {
-            let text = text.replace('\r', "\n");
-            draw_text_modal(frame, screen, 76, format!("{title} ({poster})"), text);
+        Modal::Article(article) => {
+            let text = article.text.replace('\r', "\n");
+            let title = format!("{} ({})", article.title, article.poster);
+            draw_text_modal(frame, screen, 76, title, text);
         }
         Modal::Post {
             parent_id,
@@ -636,9 +632,9 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         Modal::DeleteNews { name, .. } => {
             draw_question(frame, screen, "delete?", format!("Delete {name}?"));
         }
-        Modal::Info { name, text } => {
-            let text = text.replace('\r', "\n");
-            draw_text_modal(frame, screen, 70, format!("info for {name}"), text);
+        Modal::Info(info) => {
+            let text = info.text.replace('\r', "\n");
+            draw_text_modal(frame, screen, 70, format!("info for {}", info.name), text);
         }
     }
 }

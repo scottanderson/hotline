@@ -1,8 +1,8 @@
-use hotline_client::FileInfo;
+use hotline_client::{ClientInfoText, FileInfo};
 
 use super::{AccountForm, OptionsForm};
 use crate::file_edit::FileEdit;
-use crate::session::NewsFolder;
+use crate::session::{ArticleText, ChatInvite, NewsFolder};
 use crate::transfer::Conflict;
 
 /// A box drawn over the main screen that takes every key until it closes.
@@ -28,7 +28,7 @@ pub enum Modal {
     /// This user's name, icon, and options.
     Options(OptionsForm),
     /// A user's info text.
-    Info { name: Box<str>, text: Box<str> },
+    Info(ClientInfoText),
     /// The local path of a file or folder to upload to the current folder.
     Upload { input: String },
     /// A transfer that waits for resume, replace, or cancel.
@@ -46,16 +46,11 @@ pub enum Modal {
     /// A new local name for the download of `name`.
     SaveAs { name: Box<str>, input: String },
     /// An invitation to a private chat room.
-    Invite { chat_id: u32, from: Box<str> },
+    Invite(ChatInvite),
     /// A new subject for the room `chat_id`.
     Subject { chat_id: u32, input: String },
     /// A threaded news article to read.
-    Article {
-        id: u32,
-        title: Box<str>,
-        poster: Box<str>,
-        text: Box<str>,
-    },
+    Article(ArticleText),
     /// A new article: a reply to `parent_id`, or a new thread if `0`.
     Post {
         parent_id: u32,
