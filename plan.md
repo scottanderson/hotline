@@ -155,6 +155,21 @@ one-shared-room model.
    login, openline sends only the error reply and waits 30 seconds for
    the client to close. hls closes at once. The user decides which
    behavior a real client needs.
+3. **Account fields have no length limit.** openline's
+   `SMyUserDataFile` keeps 64 bytes of a name and 32 bytes of a login
+   and a password. `ProcessTran_NewUser`, `ProcessTran_SetUser`, and
+   `ProcessTran_SetUserList` cut each field to fit. hls keeps any
+   length. A fix must cut the login and the password in the same way
+   at login, or a user with a long password cannot log in.
+4. **`myTran_SetUser` (353) keeps a field that the request leaves
+   out.** openline's `ProcessTran_SetUser` clears the record, so a
+   missing `myField_UserName` (102) or `myField_UserAccess` (110) gives
+   an empty name or no access. hls keeps the old value. openline's
+   client always sends both fields.
+5. **Decide whether a failed comment write stops a rename.**
+   openline's `ProcessTran_SetFileInfo` ignores a failed comment write
+   and still renames. hls replies with the error and does not rename.
+   A port would drop that error reply, so the user decides.
 
 ## Resolved
 
