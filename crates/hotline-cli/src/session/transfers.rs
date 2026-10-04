@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use hotline_client::{FolderDownload, FolderUpload, HotlineClient};
 use hotline_proto::htxf::FolderItemHeader;
-use hotline_proto::types::HlPath;
+use hotline_proto::types::{FileNameWithInfo, HlPath};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;
@@ -181,7 +181,7 @@ impl ClientSession {
         let conflict_local = || local.to_string_lossy().into();
         match tokio::fs::metadata(local).await {
             Ok(metadata) if metadata.is_dir() => {
-                if start == Start::Ask && self.lists(&name, true) {
+                if start == Start::Ask && self.lists_folder(&name) {
                     return Some(Conflict::RemoteFolderExists {
                         local: conflict_local(),
                     });
@@ -189,7 +189,11 @@ impl ClientSession {
                 self.upload_folder(client, local, name, start, done).await;
             }
             Ok(_) => {
-                if start == Start::Ask && self.lists(&format!("{name}.hpf"), false) {
+                let partial = self
+                    .files
+                    .as_deref()
+                    .is_some_and(|files| lists_partial_upload(files, &name));
+                if start == Start::Ask && partial {
                     return Some(Conflict::PartialUpload {
                         local: conflict_local(),
                     });
@@ -204,13 +208,12 @@ impl ClientSession {
         None
     }
 
-    /// `true` if the current folder's listing has a file, or a folder if
-    /// `is_folder`, called `name`.
-    fn lists(&self, name: &str, is_folder: bool) -> bool {
+    /// `true` if the current folder's listing has a folder called `name`.
+    fn lists_folder(&self, name: &str) -> bool {
         self.files
             .iter()
             .flatten()
-            .any(|f| &*f.name == name && f.is_folder() == is_folder)
+            .any(|f| &*f.name == name && f.is_folder())
     }
 
     /// [`myTran_UploadFile`] (203) for the local file at `local`.
@@ -477,6 +480,15 @@ fn from_text(offset: u32) -> String {
     }
 }
 
+/// `true` if `files` has a partial upload of `name`: a file `name.hpf`,
+/// or a file `name` with type `HTft` and creator `HTLC`.
+fn lists_partial_upload(files: &[FileNameWithInfo], name: &str) -> bool {
+    let partial = format!("{name}.hpf");
+    files.iter().filter(|f| !f.is_folder()).any(|f| {
+        *f.name == partial || (&*f.name == name && &f.file_type == b"HTft" && &f.creator == b"HTLC")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,6 +661,36 @@ mod tests {
         let mut data = Vec::new();
         download.receive(&mut data).await.unwrap();
         assert_eq!(data, b"hello");
+    }
+
+    fn listed(name: &str, file_type: &[u8; 4], creator: &[u8; 4]) -> FileNameWithInfo {
+        FileNameWithInfo {
+            file_type: *file_type,
+            creator: *creator,
+            size: 0,
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn lists_partial_upload_matches_an_hpf_name_of_any_type() {
+        let files = [listed("a.txt.hpf", b"TEXT", b"ttxt")];
+        assert!(lists_partial_upload(&files, "a.txt"));
+    }
+
+    #[test]
+    fn lists_partial_upload_matches_a_partial_type_and_creator() {
+        let files = [listed("a.txt", b"HTft", b"HTLC")];
+        assert!(lists_partial_upload(&files, "a.txt"));
+    }
+
+    #[test]
+    fn lists_partial_upload_skips_a_finished_file_and_a_folder() {
+        let files = [
+            listed("a.txt", b"TEXT", b"ttxt"),
+            listed("a.txt.hpf", b"fldr", b"\0\0\0\0"),
+        ];
+        assert!(!lists_partial_upload(&files, "a.txt"));
     }
 
     #[test]

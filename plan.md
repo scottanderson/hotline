@@ -154,14 +154,6 @@ one-shared-room model.
    connection's encoding, but no request does it yet. openline has no
    such request, so the design needs a decision first.
 
-4. **Decide how `hlc` finds a partial upload.** openline's client
-   (`CMyFileListView::HasPartialFile`) matches a listed file with type
-   `HTft` and creator `HTLC`, under its name with or without `.hpf`. It
-   matches a folder only with type `fldr` and creator 0. `hlc` matches
-   the name `name.hpf` with any type, and any listed folder. A literal
-   port could miss a partial file on mhxd without HFS, because mhxd
-   lists a file's type from its own type map.
-
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
@@ -887,6 +879,12 @@ one-shared-room model.
 113. `myTran_MoveFile` (208) and `myTran_MakeFileAlias` (209) check
      drop box visibility of the source, as a deliberate divergence.
      `myTran_DeleteFile` (204) still does not, like openline.
+
+114. `hlc` finds a partial upload by either rule. Like openline's client
+     (`CMyFileListView::HasPartialFile`), it matches a listed file
+     `name` with type `HTft` and creator `HTLC`. It also matches a file
+     `name.hpf` of any type, which finds a partial file on mhxd without
+     HFS, where the type comes from mhxd's type map.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
