@@ -194,7 +194,7 @@ impl HotlineClient {
                 vec![
                     Field::obfuscated_string(FieldId::UserLogin, login),
                     Field::obfuscated_string(FieldId::UserPassword, password),
-                    Field::u16(FieldId::Vers, 151),
+                    Field::u16(FieldId::Vers, 190),
                 ],
             )
             .await?;
