@@ -71,7 +71,8 @@ impl HotlineClient {
 
     /// Rename the file or folder `name` in the folder at `path` to `new_name`,
     /// and set its `comment`, [`myTran_SetFileInfo`] (207). An empty
-    /// `new_name` or `comment` is not sent.
+    /// `new_name` is not sent. `None` keeps the comment, and an empty
+    /// comment clears it.
     ///
     /// [`myTran_SetFileInfo`]: hotline_proto::Opcode::SetFileInfo
     pub async fn set_file_info(
@@ -79,14 +80,16 @@ impl HotlineClient {
         path: &HlPath,
         name: &str,
         new_name: &str,
-        comment: &str,
+        comment: Option<&str>,
     ) -> Result<()> {
         let mut fields = self.name_fields(path, name)?;
         if !new_name.is_empty() {
             fields.push(Field::string(FieldId::FileNewName, new_name));
         }
-        if !comment.is_empty() {
-            fields.push(Field::string(FieldId::FileComment, comment));
+        match comment {
+            Some("") => fields.push(Field::bytes(FieldId::FileComment, vec![0])),
+            Some(comment) => fields.push(Field::string(FieldId::FileComment, comment)),
+            None => {}
         }
         self.request(Opcode::SetFileInfo, fields).await?;
         Ok(())

@@ -815,9 +815,9 @@ None.
      `c` sets the comment, `m` moves, and `a` makes an alias. A move or
      an alias asks for a `/`-separated folder from the root. Like
      openline's client (`CMySetFileInfoTask`), `myTran_SetFileInfo`
-     (207) leaves out an empty new name or comment, so `hlc` cannot
-     clear a comment. openline sends `myField_FilePath` (202) and
-     `myField_FileNewPath` (212) empty at the root, except in
+     (207) leaves out an empty new name, and sends an empty comment as
+     one zero byte to clear it. openline sends `myField_FilePath` (202)
+     and `myField_FileNewPath` (212) empty at the root, except in
      `myTran_SetFileInfo` (207). `hlc` leaves them out, as it already
      does for listings and transfers.
 
@@ -908,6 +908,13 @@ None.
      taken login, carry `myField_ChatOptions` (109) = 1, as openline's
      `ProcessTran_ChatSend` and `ProcessTran_SetUserList` send them.
      openline's client shows such a push as a server message.
+
+121. `myTran_SetFileInfo` (207) stores a `myField_FileComment` (210) of
+     one zero byte as an empty comment, as openline's
+     `ProcessTran_SetFileInfo` does. openline's client sends that byte
+     to clear a comment, and `hlc` now does too. A `myField_FileNewName`
+     (211) that is empty or the same as the current name skips the
+     rename.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

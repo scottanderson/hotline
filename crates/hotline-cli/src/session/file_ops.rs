@@ -47,8 +47,8 @@ impl ClientSession {
         let path = &self.file_path;
         let done = match edit {
             FileEdit::NewFolder => client.new_folder(path, text).await,
-            FileEdit::Rename => client.set_file_info(path, name, text, "").await,
-            FileEdit::Comment => client.set_file_info(path, name, "", text).await,
+            FileEdit::Rename => client.set_file_info(path, name, text, None).await,
+            FileEdit::Comment => client.set_file_info(path, name, "", Some(text)).await,
             FileEdit::Move => client.move_file(path, name, &parse_folder(text)).await,
             FileEdit::Alias => {
                 client

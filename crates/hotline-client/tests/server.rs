@@ -292,7 +292,7 @@ async fn file_operations_create_describe_move_alias_and_delete() {
 
     admin.new_folder(&root, "Games").await.unwrap();
     admin
-        .set_file_info(&root, "readme.txt", "read.me", "a note")
+        .set_file_info(&root, "readme.txt", "read.me", Some("a note"))
         .await
         .unwrap();
     let info = admin.get_file_info(&root, "read.me").await.unwrap();
@@ -300,6 +300,12 @@ async fn file_operations_create_describe_move_alias_and_delete() {
         (&*info.name, info.size, &*info.comment),
         ("read.me", 2, "a note")
     );
+    admin
+        .set_file_info(&root, "read.me", "read.me", Some(""))
+        .await
+        .unwrap();
+    let info = admin.get_file_info(&root, "read.me").await.unwrap();
+    assert_eq!(&*info.comment, "");
 
     admin.move_file(&root, "read.me", &games).await.unwrap();
     assert_eq!(names(&admin, &games).await, ["read.me"]);

@@ -554,13 +554,21 @@ impl Session {
         };
         let new_name = match tx
             .string(FieldId::FileNewName)
-            .map(|name| validate_file_name(&name))
+            .filter(|new_name| !new_name.is_empty() && *new_name != name)
+            .map(|new_name| validate_file_name(&new_name))
             .transpose()
         {
             Ok(new_name) => new_name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let comment = tx.string(FieldId::FileComment);
+        // A comment of one zero byte clears the comment.
+        let comment = tx.string(FieldId::FileComment).map(|comment| {
+            if comment == "\0" {
+                String::new()
+            } else {
+                comment
+            }
+        });
         if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
         }
