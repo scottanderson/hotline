@@ -1068,10 +1068,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_list_of_a_dropbox_is_empty_without_view_drop_boxes() {
+    async fn get_file_name_list_of_a_dropbox_shows_only_partial_uploads_without_view_drop_boxes() {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
+        files.seed(&HlPath::new(["Drop Box"]), "mine.txt.hpf", *b"h");
         let state = state_with_files(files);
         let mut access = Access::all();
         access.remove(Access::VIEW_DROP_BOXES);
@@ -1091,7 +1092,17 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        assert!(reply.fields.is_empty());
+        let names: Vec<_> = reply
+            .received(encoding)
+            .fields
+            .iter()
+            .map(|f| {
+                hotline_proto::types::FileNameWithInfo::decode(f.as_bytes(), encoding)
+                    .unwrap()
+                    .name
+            })
+            .collect();
+        assert_eq!(names, [Box::from("mine.txt.hpf")]);
     }
 
     #[tokio::test]

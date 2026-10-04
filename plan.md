@@ -944,6 +944,12 @@ None.
      before the name prefixes, and the relay is cut again after them,
      each at a character boundary (`text_encoding::cut`).
 
+125. Without `VIEW_DROP_BOXES`, `myTran_GetFileNameList` (200) in a drop
+     box lists only the entries with type `HTft`, as openline's
+     `BuildFileList` does. A client can find its own partial upload
+     there to resume it. A drop box that does not exist is an error, as
+     any missing folder is.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

@@ -26,7 +26,9 @@ use crate::console::fields::{
     format_access, format_access_extra, parse_0wn_fields, parse_access_fields,
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
-use crate::file::{BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem};
+use crate::file::{
+    BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem, PARTIAL_TYPE,
+};
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
     body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
@@ -399,7 +401,7 @@ impl SharedState {
     }
 
     /// List a directory as seen by `requester`. `dir` is empty for the
-    /// root folder. A blocked drop box lists as empty, not an error.
+    /// root folder. A blocked drop box lists only its partial uploads.
     /// `None` if the directory doesn't exist or isn't visible.
     pub async fn list_files(
         &self,
@@ -407,10 +409,11 @@ impl SharedState {
         dir: &HlPath,
         access: Access,
     ) -> Option<Vec<FileNameWithInfo>> {
+        let mut files = self.files.list(requester, dir).await?;
         if dropbox_blocked(dir, None, access) {
-            return Some(Vec::new());
+            files.retain(|file| file.file_type == PARTIAL_TYPE);
         }
-        self.files.list(requester, dir).await
+        Some(files)
     }
 
     /// A file's size in bytes, for starting a [`myTran_DownloadFile`] (202)
