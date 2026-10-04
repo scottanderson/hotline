@@ -13,6 +13,15 @@ pub trait RequireFlags: bitflags::Flags + Copy {
         Err(format!("You are not allowed to {actions}."))
     }
 
+    /// `Err` describes every flag in `any_of` when `self` has none of them.
+    fn require_any(self, any_of: Self) -> Result<(), String> {
+        if self.intersects(any_of) {
+            return Ok(());
+        }
+        let actions = any_of.actions();
+        Err(format!("You are not allowed to {actions}."))
+    }
+
     /// Description of the actions that the privilege guards against, e.g.
     /// "participate in chat" for `SEND_CHAT`.
     fn actions(&self) -> String;

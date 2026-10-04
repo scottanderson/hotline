@@ -259,6 +259,13 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
+        let account_access = Access::CREATE_USER | Access::MODIFY_USER | Access::DELETE_USER;
+        if let Err(reason) = self.access.require_any(account_access) {
+            return vec![tx.reply_error(reason)];
+        }
+        if tx.field(FieldId::Data).is_none() {
+            return vec![tx.reply_error("Error saving list of accounts.")];
+        }
         let mut save_error = false;
         for field in tx.fields(FieldId::Data) {
             let Ok(record) = field.as_field_list() else {
@@ -999,6 +1006,41 @@ mod tests {
         assert_eq!(login, "bob");
         let password = bob.field(FieldId::UserPassword).unwrap();
         assert_eq!(password.as_bytes(), b"x");
+    }
+
+    #[tokio::test]
+    async fn set_user_list_denied_without_an_account_privilege() {
+        let session = test_session("Alice", Access::SEND_CHAT);
+        let state = SharedState::default();
+
+        let record = user_list_record(
+            None,
+            "Guest",
+            "guest",
+            Field::obfuscated_string(FieldId::UserPassword, "secret"),
+            Access::empty(),
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        let [reply] = session
+            .on_set_user_list(&request, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_with_no_records_is_an_error() {
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+
+        let request = request(Opcode::SetUserList, 1, vec![]);
+        let [reply] = session
+            .on_set_user_list(&request, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
     }
 
     #[tokio::test]

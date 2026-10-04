@@ -1073,6 +1073,12 @@ one-shared-room model.
      of a longer body, and keeps the low 16 bits when it stores the
      value in a `Uint16`. A cut user ID can name the wrong user.
 
+141. `myTran_SetUserList` (349) refuses a user who has none of
+     `CREATE_USER`, `MODIFY_USER`, and `DELETE_USER`, and replies "Error
+     saving list of accounts." to a request with no records, as
+     openline's `ProcessTran_SetUserList` does. A user without account
+     privileges can no longer learn which logins exist from the notices.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
