@@ -898,6 +898,11 @@ None.
      replies with an error, as openline's `ProcessTran_SendInstantMsg`
      does. It replied with success and sent nothing.
 
+119. `myTran_InviteNewChat` (112) respects a target that refuses private
+     chat, as openline's `ProcessTran_InviteNewChat` does. The sender
+     gets the refusal or the automatic response as a `myTran_ServerMsg`
+     (104), and the target gets no invite.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

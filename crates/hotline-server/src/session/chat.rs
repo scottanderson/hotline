@@ -160,12 +160,17 @@ impl Session {
 
         let chat_id = state.create_chat_room(self.user_id).await;
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
+        let mut replies = Vec::new();
         for target_id in target_ids {
             if target_id == self.user_id {
                 continue;
             }
-            if let Err(reason) = state.require_connected_user(target_id).await {
-                tracing::debug!(target_id, reason, "skipping undeliverable chat invite");
+            let Some(target) = state.user(target_id).await else {
+                tracing::debug!(target_id, "skipping undeliverable chat invite");
+                continue;
+            };
+            replies.extend(self.refusal_bounce(target_id, &target, true));
+            if target.refuses_chat {
                 continue;
             }
             state.invite(chat_id, target_id).await;
@@ -183,13 +188,14 @@ impl Session {
                 )
                 .await;
         }
-        vec![tx.reply(vec![
+        replies.push(tx.reply(vec![
             Field::u32(FieldId::ChatID, chat_id),
             Field::u16(FieldId::UserID, self.user_id),
             Field::u16(FieldId::UserIconID, icon),
             Field::u16(FieldId::UserFlags, self.user_flags().bits()),
             Field::string(FieldId::UserName, self.name.clone()),
-        ])]
+        ]));
+        replies
     }
 
     /// [`myTran_InviteToChat`] (113): invite another user to a room this session
@@ -1432,6 +1438,46 @@ mod tests {
             Some(MsgOption::RefuseChat.into())
         );
         assert!(!replies[1].is_error());
+        assert!(
+            bob_rx.try_recv().is_err(),
+            "a refusing target must not receive the invite"
+        );
+    }
+
+    #[tokio::test]
+    async fn invite_new_chat_bounces_and_is_not_delivered_when_target_refuses() {
+        let alice = test_session("Alice", Access::all());
+        let state = SharedState::default();
+        state
+            .insert_user(UserEntry {
+                refuses_chat: true,
+                ..test_user(2, "Bob")
+            })
+            .await;
+        let mut bob_rx = state.register_recipient(2).await;
+
+        let invite = request(
+            Opcode::InviteNewChat,
+            1,
+            vec![Field::u16(FieldId::UserID, 2)],
+        );
+        let replies = alice.on_invite_new_chat(&invite, &state).await;
+
+        assert_eq!(replies.len(), 2);
+        assert_eq!(
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::Data)
+                .unwrap(),
+            "Bob does not accept private chats."
+        );
+        assert!(!replies[1].is_error());
+        let chat_id = replies[1]
+            .received(text_encoding::DEFAULT)
+            .field(FieldId::ChatID)
+            .and_then(Field::as_u32)
+            .unwrap();
+        assert!(!state.is_invited(chat_id, 2).await);
         assert!(
             bob_rx.try_recv().is_err(),
             "a refusing target must not receive the invite"
