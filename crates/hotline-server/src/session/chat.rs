@@ -333,8 +333,9 @@ impl Session {
         let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
-        let remaining = state.chat_room_members(chat_id).await.unwrap_or_default();
-        state.leave_chat_room(chat_id, self.user_id).await;
+        let Some(remaining) = state.leave_chat_room(chat_id, self.user_id).await else {
+            return vec![];
+        };
 
         let notify = Transaction::push(
             Opcode::NotifyChatDeleteUser,
@@ -343,7 +344,7 @@ impl Session {
                 Field::u16(FieldId::UserID, self.user_id),
             ],
         );
-        for member in remaining.into_iter().filter(|&m| m != self.user_id) {
+        for member in remaining {
             state.send_to(member, notify.clone()).await;
         }
         vec![]
@@ -1110,6 +1111,23 @@ mod tests {
             creator_rx.try_recv().is_err(),
             "must not also broadcast room chat publicly"
         );
+    }
+
+    #[tokio::test]
+    async fn leave_chat_by_a_non_member_notifies_no_one() {
+        let state = SharedState::default();
+        let chat_id = state.create_chat_room(1).await;
+
+        let mut creator_rx = state.register_recipient(1).await;
+        let bob = test_session("Bob", Access::all());
+        let bob = Session { user_id: 2, ..bob };
+        let part = request(
+            Opcode::LeaveChat,
+            1,
+            vec![Field::u32(FieldId::ChatID, chat_id)],
+        );
+        assert!(bob.on_leave_chat(&part, &state).await.is_empty());
+        assert!(creator_rx.try_recv().is_err());
     }
 
     #[tokio::test]

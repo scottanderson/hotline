@@ -1368,14 +1368,18 @@ impl SharedState {
 
     /// Remove `user_id` from a chat room, deleting the room once its
     /// last member leaves. Chat ID `0` (the main room) is never deleted.
-    pub async fn leave_chat_room(&self, chat_id: u32, user_id: u16) {
+    /// Returns the remaining members, or `None` if `user_id` was not a
+    /// member.
+    pub async fn leave_chat_room(&self, chat_id: u32, user_id: u16) -> Option<Vec<u16>> {
         let mut rooms = self.chat_rooms.write().await;
-        if let Some(room) = rooms.get_mut(&chat_id) {
-            room.members.retain(|&id| id != user_id);
-            if chat_id != 0 && room.members.is_empty() {
-                rooms.remove(&chat_id);
-            }
+        let room = rooms.get_mut(&chat_id)?;
+        let position = room.members.iter().position(|&id| id == user_id)?;
+        room.members.remove(position);
+        let remaining = room.members.clone();
+        if chat_id != 0 && remaining.is_empty() {
+            rooms.remove(&chat_id);
         }
+        Some(remaining)
     }
 
     /// Remove `user_id` from every chat room, deleting any that

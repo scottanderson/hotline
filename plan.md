@@ -1093,6 +1093,10 @@ one-shared-room model.
      to 255 bytes, as openline's `ProcessTran_SetChatSubject` reads it
      with `GetPString` into a 256-byte buffer.
 
+145. `myTran_LeaveChat` (116) sends `myTran_NotifyChatDeleteUser` (118)
+     only when the sender was a member of the room, as openline's
+     `ProcessTran_LeaveChat` checks `clientList.RemoveItem`.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
