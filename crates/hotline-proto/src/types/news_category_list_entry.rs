@@ -1,6 +1,32 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
+
 use crate::error::{ProtoError, Result};
 use crate::text_encoding::{self, Encoding};
 use crate::wire::{SliceReader, VecWriter};
+
+/// The item type in a [`myField_NewsCatListData15`] (323) entry.
+///
+/// [`myField_NewsCatListData15`]: crate::FieldId::NewsCatListData15
+#[derive(Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
+#[repr(u16)]
+enum NewsItemType {
+    Bundle = 2,
+    Category = 3,
+    #[num_enum(catch_all)]
+    Other(u16),
+}
+
+/// The item type in a [`myField_NewsCatListData`] (320) entry.
+///
+/// [`myField_NewsCatListData`]: crate::FieldId::NewsCatListData
+#[derive(Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+enum OldNewsItemType {
+    Bundle = 1,
+    Category = 10,
+    #[num_enum(catch_all)]
+    Other(u8),
+}
 
 /// One entry of a [`myField_NewsCatListData15`] (323) news bundle/category
 /// listing: a plain folder, or a leaf category holding a thread of
@@ -36,7 +62,7 @@ impl NewsCategoryListEntry {
     pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         Ok(match self {
             Self::Bundle { count, name } => VecWriter::new()
-                .u16(2)
+                .u16(NewsItemType::Bundle.into())
                 .u16(*count)
                 .with_encoding(encoding)
                 .pstring(name)?
@@ -48,7 +74,7 @@ impl NewsCategoryListEntry {
                 del_sn,
                 name,
             } => VecWriter::new()
-                .u16(3)
+                .u16(NewsItemType::Category.into())
                 .u16(*count)
                 .bytes(guid)
                 .u32(*add_sn)
@@ -64,12 +90,13 @@ impl NewsCategoryListEntry {
         let mut r = SliceReader::new(buf);
         let kind = r.u16()?;
         let count = r.u16()?;
+        let kind = NewsItemType::from(kind);
         match kind {
-            2 => Ok(Self::Bundle {
+            NewsItemType::Bundle => Ok(Self::Bundle {
                 count,
                 name: r.with_encoding(encoding).pstring()?.into(),
             }),
-            3 => {
+            NewsItemType::Category => {
                 let guid = r.array()?;
                 let add_sn = r.u32()?;
                 let del_sn = r.u32()?;
@@ -81,7 +108,7 @@ impl NewsCategoryListEntry {
                     name: r.with_encoding(encoding).pstring()?.into(),
                 })
             }
-            kind => Err(ProtoError::Malformed(format!(
+            NewsItemType::Other(kind) => Err(ProtoError::Malformed(format!(
                 "unknown news item type: {kind}"
             ))),
         }
@@ -101,16 +128,16 @@ impl NewsCategoryListEntry {
                 available: buf.len(),
             })?;
         let name = text_encoding::decode(encoding, &name[..name.len().min(255)]).into();
-        Ok(match kind {
-            1 => Some(Self::Bundle { count: 0, name }),
-            10 => Some(Self::Category {
+        Ok(match OldNewsItemType::from(kind) {
+            OldNewsItemType::Bundle => Some(Self::Bundle { count: 0, name }),
+            OldNewsItemType::Category => Some(Self::Category {
                 count: 0,
                 guid: [0; 16],
                 add_sn: 0,
                 del_sn: 0,
                 name,
             }),
-            _ => None,
+            OldNewsItemType::Other(_) => None,
         })
     }
 
