@@ -171,6 +171,18 @@ one-shared-room model.
    connection's encoding, but no request does it yet. openline has no
    such request, so the design needs a decision first.
 
+7. **Decide how `hlc` finds a partial upload.** openline's client
+   (`CMyFileListView::HasPartialFile`) matches a listed file with type
+   `HTft` and creator `HTLC`, under its name with or without `.hpf`. It
+   matches a folder only with type `fldr` and creator 0. `hlc` matches
+   the name `name.hpf` with any type, and any listed folder. A literal
+   port could miss a partial file on mhxd without HFS, because mhxd
+   lists a file's type from its own type map.
+
+8. **`hlc` reads only `myField_NewsCatListData15` (323).** openline's
+   client falls back to `myField_NewsCatListData` (320) for an older
+   server. mhxd sends 323.
+
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
