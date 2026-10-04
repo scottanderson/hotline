@@ -1059,6 +1059,11 @@ one-shared-room model.
      `myField_Data` (101), and relays a request with no `myField_Data`
      as an empty line, as openline's `ProcessTran_ChatSend` does.
 
+139. `myField_FileXferOptions` (204) is read as a 2-byte or a 4-byte
+     number, as openline's `GetInteger` reads it in
+     `ProcessTran_DownloadFile`, `ProcessTran_UploadFile`, and
+     `ProcessTran_UploadFldr`.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

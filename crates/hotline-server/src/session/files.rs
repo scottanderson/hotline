@@ -141,7 +141,7 @@ impl Session {
 
         // `myField_FileXferOptions` (204) == 2 requests the raw file bytes with
         // no resume support.
-        let raw = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(2);
+        let raw = tx.field(FieldId::FileXferOptions).and_then(Field::as_u32) == Some(2);
         if raw && data_size == 0 {
             return vec![tx.reply(vec![Field::u32(FieldId::TransferSize, 0)])];
         }
@@ -265,7 +265,7 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
+        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u32) == Some(1);
         let size = tx
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
@@ -385,7 +385,7 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
+        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u32) == Some(1);
         let size = tx
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
@@ -1552,6 +1552,29 @@ mod tests {
         assert!(reply.field(FieldId::RefNum).is_none());
         assert!(reply.field(FieldId::FileSize).is_none());
         assert_eq!(log.activities(), []);
+    }
+
+    #[tokio::test]
+    async fn download_file_reads_four_byte_transfer_options() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "empty.txt", *b"");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = request(
+            Opcode::DownloadFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "empty.txt"),
+                Field::u32(FieldId::FileXferOptions, 2),
+            ],
+        );
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.field(FieldId::RefNum).is_none());
     }
 
     #[tokio::test]
