@@ -526,6 +526,22 @@ impl Session {
         // No myField_Vers (160) counts as pre-150.
         let modern = self.client_version.unwrap_or(0) >= 150;
 
+        // A named login with an icon, or a pre-150 client, joins right away.
+        let icon = tx.icon().unwrap_or(0);
+        let name = tx.name();
+        let named = name.as_deref().is_some_and(|name| !name.is_empty()) && icon != 0;
+        let joined = named || !modern;
+        if joined {
+            if named {
+                self.take_user_name(name.as_deref(), true);
+            }
+            let selfinfo = self.complete_join(icon, state).await;
+            if named {
+                self.record_activity(Activity::Connect, state).await;
+            }
+            replies.push(selfinfo);
+        }
+
         // DONT_SHOW_AGREEMENT skips the real text, not just its display.
         let show_agreement = !self.access.contains(Access::NO_AGREEMENT);
         let have_agreement = !config.agreement.is_empty();
@@ -541,19 +557,7 @@ impl Session {
             ));
         }
 
-        // A named login with an icon, or a pre-150 client, joins right away.
-        let icon = tx.icon().unwrap_or(0);
-        let name = tx.name();
-        let named = name.as_deref().is_some_and(|name| !name.is_empty()) && icon != 0;
-        if named || !modern {
-            if named {
-                self.take_user_name(name.as_deref(), true);
-            }
-            let selfinfo = self.complete_join(icon, state).await;
-            if named {
-                self.record_activity(Activity::Connect, state).await;
-            }
-            replies.push(selfinfo);
+        if joined {
             if let Some(banner) = self.banner_push(state).await {
                 replies.push(banner);
             }
@@ -1468,6 +1472,32 @@ mod tests {
             "a modern client with a name and a non-zero icon joins immediately"
         );
         assert!(matches!(session.state, SessionState::Joined));
+    }
+
+    #[tokio::test]
+    async fn login_with_name_sends_user_access_before_the_agreement() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+
+        let login = request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::u16(FieldId::Vers, 151),
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
+            ],
+        );
+        let replies = session.on_login(&login, &state, &config).await;
+
+        let position = |opcode| {
+            replies
+                .iter()
+                .position(|tx| tx.r#type() == TransactionType::Push(opcode))
+                .unwrap()
+        };
+        assert!(position(Opcode::UserAccess) < position(Opcode::ShowAgreement));
     }
 
     #[tokio::test]

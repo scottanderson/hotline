@@ -119,6 +119,11 @@ below, in priority order.
   a name could move a file out of a drop box, or alias it, and then
   download it. `hls` refuses both without `VIEW_DROP_BOXES` when the
   source is in a drop box. Delete matches openline: it shows nothing.
+- **A login with a name and an icon gets the banner.** openline's
+  `ProcessTran_Login` sends no `myTran_ServerBanner` (122), and only
+  `ProcessTran_Agreed` sends it. After such a login, openline handles a
+  later `myTran_Agreed` (121) as a logged-in transaction, so the client
+  never gets a banner. `hls` sends the banner after the agreement push.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -1026,6 +1031,10 @@ No items are open.
      before the rename, as openline's `ProcessTran_SetFileInfo` does. A
      comment sent with a refused rename is still set. The rename moves
      the comment to the new name.
+
+136. A login with a name and an icon sends `myTran_UserAccess` (354)
+     before `myTran_ShowAgreement` (109), as openline's
+     `ProcessTran_Login` does.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
