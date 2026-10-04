@@ -140,7 +140,21 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-No items are open.
+1. **An account cannot have its own files or news.** openline's
+   `GetClientRootFolder` and `GetClientRootNewsFolder` use
+   `Users/<login>/Files` and `Users/<login>/News` when the folder
+   exists, and the shared folder when it does not. hls gives every
+   account the same root. A fix needs a per-account root in
+   `FileProvider` and the news providers, and a place for these folders
+   in the `hls` data directory.
+2. **Decide the notice opcode and the close after a refusal.** openline
+   sends `myTran_ServerMsg` (104) to a client that a kick bans, to a
+   client whose account is deleted, and to a client at an address that
+   gets a permanent ban. It then closes the connection. hls sends
+   `myTran_DisconnectMsg` (111) and keeps a drain window. After a failed
+   login, openline sends only the error reply and waits 30 seconds for
+   the client to close. hls closes at once. The user decides which
+   behavior a real client needs.
 
 ## Resolved
 
