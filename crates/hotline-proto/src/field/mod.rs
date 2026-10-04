@@ -156,16 +156,14 @@ impl Field<Received> {
         text_encoding::decode(self.encoding(), &xor_ff(&self.state.bytes))
     }
 
-    /// Interpret this field's data as `u16`. `None` unless the payload
-    /// is exactly 2 bytes.
+    /// Interpret this field's data as `u16`. Accepts a 1, 2, or 4 byte
+    /// payload whose value fits in 16 bits.
     pub fn as_u16(&self) -> Option<u16> {
-        let bytes: [u8; 2] = self.state.bytes.as_slice().try_into().ok()?;
-        Some(u16::from_be_bytes(bytes))
+        self.as_u32()?.try_into().ok()
     }
 
-    /// Interpret this field's data as `u32`. Accepts a 2 or 4 byte
-    /// payload, since a value that happens to be small is free to
-    /// arrive encoded in the shorter width.
+    /// Interpret this field's data as `u32`. Accepts a 1, 2, or 4 byte
+    /// payload.
     pub fn as_u32(&self) -> Option<u32> {
         decode_number(&self.state.bytes)
     }
@@ -300,6 +298,17 @@ mod tests {
         let f = Field::u16(FieldId::UserID, 42);
         assert_eq!(*f.value(), FieldValue::U16(42));
         assert_eq!(f.received(text_encoding::DEFAULT).as_u16(), Some(42));
+    }
+
+    #[test]
+    fn as_u16_reads_one_and_four_byte_payloads() {
+        let encoding = text_encoding::DEFAULT;
+        let one = Field::bytes(FieldId::UserID, vec![7]);
+        assert_eq!(one.received(encoding).as_u16(), Some(7));
+        let four = Field::bytes(FieldId::UserID, vec![0, 0, 0, 42]);
+        assert_eq!(four.received(encoding).as_u16(), Some(42));
+        let wide = Field::bytes(FieldId::UserID, vec![0, 1, 0, 0]);
+        assert_eq!(wide.received(encoding).as_u16(), None);
     }
 
     #[test]

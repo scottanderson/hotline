@@ -6,12 +6,9 @@
 //! [`crate::field::Field::u32`] uses.
 //!
 //! [`encode`] picks whichever of the 2-byte or 4-byte width is
-//! smaller. [`decode`] stays tolerant of either width regardless of
-//! the value's magnitude, since a sender is free to use the wider
-//! encoding even for a small value. `32` bits is the ceiling: the one
-//! genuinely 64-bit field (`ACCESS`, a bitmask rather than a
-//! magnitude) is handled separately via [`crate::field::Field::u64`] /
-//! [`crate::field::Field::as_u64`].
+//! smaller. [`decode`] takes a 1, 2, or 4 byte body for any value.
+//! `ACCESS` is the one 64-bit field. Read and write it with
+//! [`crate::field::Field::as_u64`] and [`crate::field::Field::u64`].
 
 use std::ops::Deref;
 
@@ -56,10 +53,11 @@ pub const fn encode(value: u32) -> EncodedInt {
     }
 }
 
-/// Decode a 2-byte or 4-byte unsigned integer field body. `None` for
-/// any other length rather than guessing.
+/// Decode a 1, 2, or 4 byte unsigned integer field body. `None` for
+/// any other length.
 pub const fn decode(bytes: &[u8]) -> Option<u32> {
     match bytes.len() {
+        1 => Some(bytes[0] as u32),
         2 => Some(u16::from_be_bytes([bytes[0], bytes[1]]) as u32),
         4 => Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
         _ => None,
@@ -85,7 +83,13 @@ mod tests {
     }
 
     #[test]
+    fn decodes_one_byte() {
+        assert_eq!(decode(&[7]), Some(7));
+    }
+
+    #[test]
     fn rejects_odd_widths() {
+        assert_eq!(decode(&[]), None);
         assert_eq!(decode(&[0, 0, 0]), None);
     }
 

@@ -1064,6 +1064,15 @@ one-shared-room model.
      `ProcessTran_DownloadFile`, `ProcessTran_UploadFile`, and
      `ProcessTran_UploadFldr`.
 
+140. `Field::as_u16` and `Field::as_u32` read a 1, 2, or 4 byte integer
+     field, as openline's `UFieldData::GetInteger` does. mhxd's `hx`
+     client sends a 4-byte `myField_UserID` (103). hls now reads it.
+     Divergence: both readers give `None` for any other length, and
+     `as_u16` gives `None` for a value that does not fit in 16 bits.
+     openline reads 0 for a 0 or 3 byte body, reads the first 4 bytes
+     of a longer body, and keeps the low 16 bits when it stores the
+     value in a `Uint16`. A cut user ID can name the wrong user.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
