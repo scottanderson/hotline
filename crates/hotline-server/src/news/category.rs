@@ -21,6 +21,7 @@ pub(crate) const MAX_REPLY_CHAIN_LEN: usize = 32;
 /// [`myField_NewsCatListData15`]: hotline_proto::FieldId::NewsCatListData15
 #[derive(Debug, Clone)]
 pub struct NewsCategory {
+    /// The category's unique ID.
     pub guid: Uuid,
     /// Incremented by one each time an article is added. Never reset.
     pub add_sn: u32,
@@ -28,6 +29,7 @@ pub struct NewsCategory {
     /// initial value once a category is created.
     pub del_sn: u32,
     next_article_id: u32,
+    /// Every article, keyed by ID.
     pub articles: HashMap<u32, NewsArticle>,
     /// Top-level (`parent_id == 0`) article IDs, oldest posted first.
     pub roots: Vec<u32>,
@@ -35,13 +37,24 @@ pub struct NewsCategory {
 
 impl NewsCategory {
     pub(crate) fn new() -> Self {
+        Self::from_articles(Uuid::new_v4(), 1, HashMap::new(), Vec::new())
+    }
+
+    /// A category that holds `articles`, with `roots` at the top level.
+    pub(crate) const fn from_articles(
+        guid: Uuid,
+        next_article_id: u32,
+        articles: HashMap<u32, NewsArticle>,
+        roots: Vec<u32>,
+    ) -> Self {
         Self {
-            guid: Uuid::new_v4(),
-            add_sn: 1,
+            guid,
+            // add_sn always equals next_article_id; see add_article.
+            add_sn: next_article_id,
             del_sn: 1,
-            next_article_id: 1,
-            articles: HashMap::new(),
-            roots: Vec::new(),
+            next_article_id,
+            articles,
+            roots,
         }
     }
 
@@ -305,15 +318,12 @@ impl<'de> Deserialize<'de> for NewsCategory {
             .map(|node| flatten(node, 0, &mut seen, &mut articles))
             .collect::<Result<Vec<u32>, _>>()
             .map_err(D::Error::custom)?;
-        Ok(NewsCategory {
-            guid: raw.guid,
-            // add_sn always equals next_article_id; see add_article.
-            add_sn: raw.next_article_id,
-            del_sn: 1,
-            next_article_id: raw.next_article_id,
+        Ok(NewsCategory::from_articles(
+            raw.guid,
+            raw.next_article_id,
             articles,
             roots,
-        })
+        ))
     }
 }
 

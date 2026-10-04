@@ -26,13 +26,17 @@ use args::Args;
 use banner::FileBannerProvider;
 use bans::FileBanProvider;
 use file::DiskFileProvider;
-use news::{FileFlatNewsProvider, FileThreadedNewsProvider};
+use news::{import_openline_news, FileFlatNewsProvider, FileThreadedNewsProvider};
 use tracker::{run_beacon, TrackerTarget};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+
+    if let Some(dir) = &args.import_news {
+        return import_news(dir, &args).await;
+    }
 
     let config = ServerConfig {
         bind_addr: format!("{}:{}", args.bind, args.port).into(),
@@ -193,5 +197,22 @@ async fn shutdown_signal() -> anyhow::Result<()> {
     }
     #[cfg(not(unix))]
     tokio::signal::ctrl_c().await?;
+    Ok(())
+}
+
+/// Writes the news tree in the openline folder `dir` to `--news-tree-file`.
+async fn import_news(dir: &Path, args: &Args) -> anyhow::Result<()> {
+    let out = Path::new(&args.news_tree_file);
+    anyhow::ensure!(
+        !out.exists(),
+        "{} already exists (--news-tree-file); move it away to import",
+        out.display()
+    );
+    let tree = import_openline_news(dir, args.encoding)
+        .with_context(|| format!("failed to import news from {}", dir.display()))?;
+    tokio::fs::write(out, serde_json::to_vec_pretty(&tree)?)
+        .await
+        .with_context(|| format!("failed to write {}", out.display()))?;
+    tracing::info!(from = %dir.display(), to = %out.display(), "imported openline news");
     Ok(())
 }

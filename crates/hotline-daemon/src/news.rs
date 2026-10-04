@@ -1,13 +1,14 @@
 //! `hls`'s file-backed news providers.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use hotline_proto::text_encoding::Encoding;
 use hotline_server::{
-    FlatNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle, NewsItemKind, NewsListKind,
-    ThreadedNewsProvider,
+    FlatNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle, NewsCategory, NewsItemKind,
+    NewsListKind, ThreadedNewsProvider, HLNZ_MAGIC,
 };
 use tokio::sync::Mutex;
 
@@ -178,9 +179,129 @@ impl ThreadedNewsProvider for FileThreadedNewsProvider {
     }
 }
 
+/// The news tree in an openline `News` folder. A folder is a bundle, and
+/// an `HLNZ` file is a category with its text in `encoding`. A hidden
+/// item, another file, or an item that does not read is skipped.
+pub fn import_openline_news(
+    dir: &Path,
+    encoding: &'static Encoding,
+) -> std::io::Result<NewsBundle> {
+    let mut tree = NewsBundle::default();
+    import_folder(dir, &mut Vec::new(), &mut tree, encoding)?;
+    Ok(tree)
+}
+
+fn import_folder(
+    dir: &Path,
+    components: &mut Vec<String>,
+    tree: &mut NewsBundle,
+    encoding: &'static Encoding,
+) -> std::io::Result<()> {
+    let mut entries = std::fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let Ok(name) = entry.file_name().into_string() else {
+            tracing::warn!(path = %path.display(), "skipped a news item whose name is not UTF-8");
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skipped a news item");
+                continue;
+            }
+        };
+        if metadata.is_dir() {
+            if let Err(e) = tree.mkdir(components, &name) {
+                tracing::warn!(path = %path.display(), error = e, "skipped a news bundle");
+                continue;
+            }
+            components.push(name);
+            if let Err(e) = import_folder(&path, components, tree, encoding) {
+                tracing::warn!(path = %path.display(), error = %e, "skipped part of a news bundle");
+            }
+            components.pop();
+            continue;
+        }
+        let bytes = match read_hlnz(&path) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skipped a news item");
+                continue;
+            }
+        };
+        if let Err(e) = NewsCategory::from_hlnz(&bytes, encoding)
+            .and_then(|category| tree.insert_category(components, &name, category))
+        {
+            tracing::warn!(path = %path.display(), error = e, "skipped a news category");
+        }
+    }
+    Ok(())
+}
+
+/// The bytes of the file at `path`, or `None` if it is not an `HLNZ` file.
+fn read_hlnz(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut magic = [0; 4];
+    match file.read_exact(&mut magic) {
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        result => result?,
+    }
+    if &magic != HLNZ_MAGIC {
+        return Ok(None);
+    }
+    let mut bytes = magic.to_vec();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
 #[cfg(test)]
 mod tests {
+    use hotline_proto::text_encoding;
+
     use super::*;
+
+    /// An `HLNZ` file with no articles.
+    fn empty_category() -> Vec<u8> {
+        let mut bytes = HLNZ_MAGIC.to_vec();
+        bytes.extend(2u32.to_be_bytes());
+        bytes.extend([0; 16 + 8]);
+        bytes.extend(256u32.to_be_bytes());
+        bytes.resize(512, 0);
+        bytes
+    }
+
+    #[test]
+    fn import_openline_news_maps_folders_and_hlnz_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Bundle")).unwrap();
+        std::fs::write(dir.path().join("Bundle/General"), empty_category()).unwrap();
+        std::fs::write(dir.path().join("Top"), empty_category()).unwrap();
+        std::fs::write(dir.path().join(".hidden"), empty_category()).unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "text").unwrap();
+        std::fs::write(dir.path().join("Broken"), HLNZ_MAGIC).unwrap();
+        std::fs::write(dir.path().join("x"), "").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("missing", dir.path().join("Dangling")).unwrap();
+
+        let tree = import_openline_news(dir.path(), text_encoding::DEFAULT).unwrap();
+
+        let mut top = tree.list_dir(&[]).unwrap();
+        top.sort_by(|a, b| a.0.cmp(&b.0));
+        let names: Vec<_> = top.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["Bundle", "Top"]);
+        assert_eq!(
+            tree.item_kind(&["Bundle".into(), "General".into()]),
+            Some(NewsItemKind::Category)
+        );
+    }
 
     #[tokio::test]
     async fn flat_news_persists_as_plain_text() {

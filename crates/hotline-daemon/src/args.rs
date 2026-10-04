@@ -54,6 +54,11 @@ pub struct Args {
     #[arg(long, default_value = "news.json")]
     pub news_tree_file: String,
 
+    /// Import an openline `News` folder into `--news-tree-file`, then
+    /// exit. The text in it uses `--encoding`.
+    #[arg(long)]
+    pub import_news: Option<PathBuf>,
+
     /// File to persist address bans to, as JSON (created if missing).
     #[arg(long, default_value = "bans.json")]
     pub ban_file: String,

@@ -17,6 +17,10 @@ below, in priority order.
   these at a small fixed buffer and truncates silently past it; this
   server accepts up to the wire format's real 255-byte `pstring` limit
   and errors past that instead. More permissive by design; not changed.
+- **Threaded news lives in one `news.json` file.** openline keeps each
+  category in its own `HLNZ` database file, with a block allocator and
+  an ID hash table (`HotlineServNewsDatabase.cp`). No client reads
+  these files. `hls --import-news` reads them once into `news.json`.
 - **Console commands differ from mhxd in small ways.** `/access <uid>`
   with no fields shows the target's privileges; mhxd has no such view.
   `/access` applies its fields all or nothing, but mhxd keeps the fields
@@ -132,26 +136,7 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **Threaded news storage does not match openline's on-disk
-   binary database format.** Openline stores each news category
-   in its own file. Each file starts with an `HLNZ` header (version 2,
-   `_NZ_SDBHeader`). The file also has a free-block bitmap table and an
-   ID-to-offset hash table (`_NZ_SHashInfo`/`_NZ_SIDOffset`). Each
-   article is a chain of fixed-size blocks: one `_NZ_SNewsItemBlock`
-   index block, plus one `_NZ_SGenericBlock` block for each stored MIME
-   type. Files sit at `<bundle>/<category>` on disk. A real sample file
-   confirms this: it starts with `HLNZ`, version 2, block size 256.
-   This server stores the whole news tree in one `news.json` file
-   instead (`hotline-daemon/src/news.rs`,
-   `FileThreadedNewsProvider`/`ThreadedNewsProvider`). A matching format
-   needs three new parts: a binary codec (in `hotline-proto`'s style,
-   pure encode/decode, no I/O, testable without a filesystem), a block
-   allocator that can split and merge blocks when an article grows past
-   one block, and a new `ThreadedNewsProvider` backend. This work
-   mirrors `HotlineServNewsDatabase.cp`. It is a large, standalone
-   effort, not a quick change. No known client reads the file format
-   directly; only the wire protocol matters for interop. This task
-   stays low priority for now.
+None.
 
 ## Resolved
 
@@ -898,6 +883,16 @@ one-shared-room model.
      default. `hlc --encoding` sets the client's to match.
      `text_encoding::from_label` rejects an encoding such as UTF-16,
      which encodes to another encoding.
+
+117. `hls --import-news` imports an openline `News` folder. A folder is
+     a bundle, and an `HLNZ` version 2 file is a category.
+     `NewsCategory::from_hlnz` walks the article tree in the order of
+     openline's `_NZ_AddToList`: an article, its flavors, its replies,
+     then its next sibling. It reads at most the header's article
+     count. Like `_NZ_AddToList`, it ends an article's flavor chain at
+     a flavor that does not read and keeps the article. An article with
+     no flavor gets an empty `text/plain` body. Like openline's listing,
+     the import skips a hidden item and an item that does not read.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

@@ -168,6 +168,11 @@ default. `--encoding utf-8` changes the wire encoding of every
 connection. It takes a WHATWG label, such as `shift_jis`. Every client
 must use the same encoding, for example `hlc --encoding utf-8`.
 
+`hls --import-news <folder>` reads the threaded news of an openline
+server: its `News` folder. It writes the tree to `--news-tree-file`,
+then exits. It does not overwrite a file that exists. The text in the
+folder uses `--encoding`.
+
 Clients connect on `--port` (5500 by default). File transfers use the
 next port, so open both in your firewall.
 

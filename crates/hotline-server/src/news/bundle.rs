@@ -113,10 +113,21 @@ impl NewsBundle {
     /// Create a new category named `name` under `components`. See
     /// [`Self::mkdir`] for the error cases.
     pub fn mkcategory(&mut self, components: &[String], name: &str) -> Result<(), &'static str> {
+        self.insert_category(components, name, NewsCategory::new())
+    }
+
+    /// Add `category` as `name` under `components`. See [`Self::mkdir`]
+    /// for the error cases.
+    pub fn insert_category(
+        &mut self,
+        components: &[String],
+        name: &str,
+        category: NewsCategory,
+    ) -> Result<(), &'static str> {
         let parent = self.check_new_name(components, name)?;
         parent
             .entries
-            .insert(name.to_string(), NewsNode::Category(NewsCategory::new()));
+            .insert(name.to_string(), NewsNode::Category(category));
         Ok(())
     }
 
