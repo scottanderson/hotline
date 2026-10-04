@@ -17,6 +17,7 @@
 mod dir;
 mod folder_item;
 mod memory;
+mod name;
 mod node;
 mod provider;
 mod requester;
@@ -26,6 +27,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 pub use folder_item::FolderItem;
 pub use memory::InMemoryFileProvider;
+pub use name::validate_file_name;
 pub use provider::FileProvider;
 pub use requester::FileRequester;
 

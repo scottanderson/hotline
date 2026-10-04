@@ -11,7 +11,7 @@ use hotline_proto::htxf::{self, FolderAction, FolderItemHeader, ForkHeader, Htxf
 use hotline_proto::types::{self, HlPath};
 
 use crate::error::Result;
-use crate::file::FileRequester;
+use crate::file::{validate_file_name, FileRequester};
 use crate::server::counting_stream::CountingStream;
 use crate::server::idle_stream::IdleStream;
 use crate::state::{
@@ -394,9 +394,9 @@ async fn receive_folder(
     for remaining in (0..*item_count).rev() {
         let body = read_u16_prefixed(stream).await?;
         let received = match FolderItemHeader::decode_body(&body, encoding) {
-            Ok(header) => match split_item_path(&root, &header.path) {
+            Ok(header) => match stored_item_path(&root, &header.path) {
                 Some((dir, name)) => {
-                    receive_folder_item(stream, requester, &dir, name, header.is_folder, state)
+                    receive_folder_item(stream, requester, &dir, &name, header.is_folder, state)
                         .await?
                 }
                 None => false,
@@ -470,6 +470,18 @@ fn split_item_path<'a>(root: &[String], path: &'a HlPath) -> Option<(HlPath, &'a
     Some((HlPath::new(root.iter().chain(parents)), name))
 }
 
+/// Like [`split_item_path`] for an uploaded item, with each name as
+/// [`validate_file_name`] stores it. `None` if a name is invalid.
+fn stored_item_path(root: &[String], path: &HlPath) -> Option<(HlPath, String)> {
+    let mut names = path
+        .components
+        .iter()
+        .map(|name| validate_file_name(name).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let name = names.pop()?;
+    Some((HlPath::new(root.iter().chain(&names)), name))
+}
+
 /// The next [`FolderAction`], or `None` once the client closes.
 async fn read_folder_action(stream: &mut (impl AsyncRead + Unpin)) -> Result<Option<FolderAction>> {
     let mut buf = [0u8; 2];
@@ -518,6 +530,15 @@ mod tests {
     use hotline_proto::types::HlPath;
     use tokio::io::AsyncWriteExt;
     use tokio::task::JoinHandle;
+
+    #[test]
+    fn stored_item_path_validates_every_name() {
+        let root = ["Uploads".to_string()];
+        let (dir, name) = stored_item_path(&root, &HlPath::new(["..", "a/b"])).unwrap();
+        assert_eq!(dir, HlPath::new(["Uploads", "--"]));
+        assert_eq!(name, "a-b");
+        assert!(stored_item_path(&root, &HlPath::new(["ok", ""])).is_none());
+    }
 
     fn state_with_files(files: InMemoryFileProvider) -> SharedState {
         SharedState::new(Providers {

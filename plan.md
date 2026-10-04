@@ -99,6 +99,18 @@ below, in priority order.
   `UHttpTransport.cp`). Only openline's own client uses the tunnel.
   `HLProtocol.md` does not document it, mhxd does not implement it, and
   no client is at hand to test against, so `hls` does not support it.
+- **The file name rule maps more.** openline's
+  `UFileSys::ValidateFileName` differs by platform, and so does
+  `validate_file_name`. On Mac OS X, openline only cuts the length.
+  Elsewhere than Windows, `hls` also maps `/` and `\` to `-`, and the
+  names `.` and `..` to dashes, so a name cannot leave its folder. On Windows,
+  openline maps `\ / : * ? " < > |`, control bytes, the bytes 0x81,
+  0x8D to 0x90, 0x9D, and 0x9E, a leading `.`, and each trailing `.` and
+  space to `-`. `hls` maps the C1 control characters U+0080 to U+009F
+  in place of those bytes, and gives a reserved device name such as
+  `CON` a `-`. `hls` cuts a name at 255 UTF-8 bytes, at a character
+  boundary. It also maps the name of a new alias, which openline's
+  `ProcessTran_MakeFileAlias` does not.
 - **Move and alias check drop boxes.** openline's `ProcessTran_MoveFile`
   and `ProcessTran_MakeFileAlias` check no drop box. A user who guessed
   a name could move a file out of a drop box, or alias it, and then
@@ -141,14 +153,7 @@ one-shared-room model.
    directly; only the wire protocol matters for interop. This task
    stays low priority for now.
 
-2. **`hls` does not map file names like openline.** openline's Windows
-   `UFileSys::ValidateFileName` (`UFileSys(W).cp`) turns `\ / : * ? "
-   < > |`, control bytes, and a leading `.` into `-`, and strips
-   trailing dots and spaces. `hls` rejects a separator, `.`, `..`, and
-   a `:` on Windows, but it does not map names. On Windows, a reserved
-   name such as `CON` or `NUL` still passes.
-
-3. **No transaction negotiates a connection's text encoding.** The
+2. **No transaction negotiates a connection's text encoding.** The
    user's decision is Mac OS Roman on the wire unless the client
    negotiates another encoding. `EncodingHandle` can change a
    connection's encoding, but no request does it yet. openline has no
@@ -885,6 +890,13 @@ one-shared-room model.
      `name` with type `HTft` and creator `HTLC`. It also matches a file
      `name.hpf` of any type, which finds a partial file on mhxd without
      HFS, where the type comes from mhxd's type map.
+
+115. `hls` maps a new file or folder name with `validate_file_name`, in
+     `myTran_UploadFile` (203), `myTran_UploadFldr` (213) and each of
+     its items, `myTran_NewFolder` (205), the new name of
+     `myTran_SetFileInfo` (207), and `myTran_MakeFileAlias` (209).
+     A lookup uses the name as sent, so a file put on disk by hand
+     keeps its name.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

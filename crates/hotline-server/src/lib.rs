@@ -40,8 +40,9 @@ pub use banner::{BannerKind, BannerProvider, NoBanner, UrlBannerProvider};
 pub use console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, DefaultChatCommands};
 pub use error::{Result, ServerError};
 pub use file::{
-    partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
-    FileRequester, FolderItem, InMemoryFileProvider, PARTIAL_CREATOR, PARTIAL_SUFFIX, PARTIAL_TYPE,
+    partial_upload_name, type_and_creator_for_name, validate_file_name, BoxedReader, BoxedWriter,
+    FileProvider, FileRequester, FolderItem, InMemoryFileProvider, PARTIAL_CREATOR, PARTIAL_SUFFIX,
+    PARTIAL_TYPE,
 };
 pub use flood::{FloodDecision, FloodEvent, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
 pub use news::{

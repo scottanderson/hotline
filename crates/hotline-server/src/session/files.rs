@@ -8,7 +8,7 @@ use hotline_proto::{Field, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::Activity;
-use crate::file::FileRequester;
+use crate::file::{validate_file_name, FileRequester};
 use crate::state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
     TransferRef, TransferTarget,
@@ -253,6 +253,10 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let name = match validate_file_name(&name) {
+            Ok(name) => name,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let requester = FileRequester { login: &self.login };
         let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
         let resume_offset = match state
@@ -369,6 +373,10 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let name = match validate_file_name(&name) {
+            Ok(name) => name,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let requester = FileRequester { login: &self.login };
         let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
         if let Err(reason) = state
@@ -469,6 +477,10 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let name = match validate_file_name(&name) {
+            Ok(name) => name,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state.mkdir(requester, &dir, &name, self.access).await {
             return vec![tx.reply_error(reason)];
@@ -540,7 +552,14 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let new_name = tx.string(FieldId::FileNewName);
+        let new_name = match tx
+            .string(FieldId::FileNewName)
+            .map(|name| validate_file_name(&name))
+            .transpose()
+        {
+            Ok(new_name) => new_name,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let comment = tx.string(FieldId::FileComment);
         if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
@@ -615,6 +634,10 @@ impl Session {
         let link_name = tx
             .string(FieldId::FileNewName)
             .unwrap_or_else(|| name.clone());
+        let link_name = match validate_file_name(&link_name) {
+            Ok(link_name) => link_name,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
             .symlink_file(requester, &dir, &name, &link_dir, &link_name, self.access)
@@ -2101,6 +2124,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn new_folder_stores_the_validated_name() {
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+
+        let mkdir = request(
+            Opcode::NewFolder,
+            1,
+            vec![Field::string(FieldId::FileName, "AC/DC")],
+        );
+        let [reply] = session
+            .on_new_folder(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(
+            state
+                .file_exists(FileRequester { login: "" }, &HlPath::default(), "AC-DC")
+                .await
+        );
+    }
+
+    #[tokio::test]
     async fn new_folder_denied_without_create_folders() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let mut access = Access::all();
@@ -2256,6 +2302,34 @@ mod tests {
         assert!(
             state
                 .file_exists(requester, &HlPath::default(), "b.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn set_file_info_renames_to_the_validated_name() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let setinfo = request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileNewName, "b/c.txt"),
+            ],
+        );
+        let [reply] = session
+            .on_set_file_info(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(
+            state
+                .file_exists(FileRequester { login: "" }, &HlPath::default(), "b-c.txt")
                 .await
         );
     }
