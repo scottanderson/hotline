@@ -13,6 +13,11 @@ use crate::state::SharedState;
 
 use super::connection::{Session, MAX_FLAT_NEWS_LEN};
 
+/// The first client version that reads [`myField_NewsCatListData15`] (323).
+///
+/// [`myField_NewsCatListData15`]: hotline_proto::FieldId::NewsCatListData15
+const NEWS_CAT_LIST_15_VERSION: u16 = 15;
+
 impl Session {
     /// [`myTran_GetMsgs`] (101): read the classic (non-threaded) news.
     ///
@@ -97,8 +102,16 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let encoding = self.encoding();
+        let old_client = self.client_version.unwrap_or(0) < NEWS_CAT_LIST_15_VERSION;
         let mut fields = Vec::with_capacity(entries.len());
         for entry in entries {
+            if old_client {
+                fields.push(Field::bytes(
+                    FieldId::NewsCatListData,
+                    entry.encode_old(encoding),
+                ));
+                continue;
+            }
             match entry.encode(encoding) {
                 Ok(bytes) => fields.push(Field::bytes(FieldId::NewsCatListData15, bytes)),
                 Err(_) => return vec![tx.reply_error("news listing too large to encode")],
@@ -482,6 +495,38 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert_eq!(reply.fields.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_news_cat_name_list_sends_the_old_field_below_version_15() {
+        let state = SharedState::default();
+        state
+            .news_mkcategory(&HlPath::default(), "General")
+            .await
+            .unwrap();
+        let mut session = test_session("Alice", Access::all());
+        let listdir = request(Opcode::GetNewsCatNameList, 1, vec![]);
+
+        let [reply] = session
+            .on_get_news_cat_name_list(&listdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let reply = reply.received(text_encoding::DEFAULT);
+        assert_eq!(
+            reply.field(FieldId::NewsCatListData).map(Field::as_bytes),
+            Some(&b"\x0aGeneral"[..])
+        );
+
+        session.client_version = Some(15);
+        let [reply] = session
+            .on_get_news_cat_name_list(&listdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let reply = reply.received(text_encoding::DEFAULT);
+        assert!(reply.field(FieldId::NewsCatListData).is_none());
+        assert!(reply.field(FieldId::NewsCatListData15).is_some());
     }
 
     #[tokio::test]

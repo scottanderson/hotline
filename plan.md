@@ -957,6 +957,13 @@ None.
      so the user saw no reason. The transfer port drops a banned
      address at accept, as openline's does.
 
+127. `myTran_GetNewsCatNameList` (370) sends each entry as
+     `myField_NewsCatListData` (320) to a client below version 15, or
+     one that sent no `myField_Vers` (160), as openline's
+     `BuildNewsCatList` does. Each entry is a type byte, 1 for a bundle
+     or 10 for a category, then the name
+     (`NewsCategoryListEntry::encode_old`).
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

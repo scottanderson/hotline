@@ -85,6 +85,23 @@ impl NewsCategoryListEntry {
         })
     }
 
+    /// Encode as a [`myField_NewsCatListData`] (320) entry: a type byte,
+    /// then the name, cut to 255 bytes.
+    ///
+    /// [`myField_NewsCatListData`]: crate::FieldId::NewsCatListData
+    pub fn encode_old(&self, encoding: &'static Encoding) -> Vec<u8> {
+        let (kind, name) = match self {
+            Self::Bundle { name, .. } => (OldNewsItemType::Bundle, name),
+            Self::Category { name, .. } => (OldNewsItemType::Category, name),
+        };
+        let mut out = vec![u8::from(kind)];
+        out.extend(text_encoding::encode(
+            encoding,
+            text_encoding::cut(encoding, name, 255),
+        ));
+        out
+    }
+
     /// Decode from a field's raw data.
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
         let mut r = SliceReader::new(buf);
@@ -153,6 +170,24 @@ impl NewsCategoryListEntry {
 mod tests {
     use super::*;
     use crate::text_encoding;
+
+    #[test]
+    fn encode_old_round_trips_with_decode_old() {
+        let encoding = text_encoding::DEFAULT;
+        let bundle = NewsCategoryListEntry::Bundle {
+            count: 3,
+            name: "Caf\u{e9}".into(),
+        };
+        let bytes = bundle.encode_old(encoding);
+        assert_eq!(bytes, b"\x01Caf\x8e");
+        assert_eq!(
+            NewsCategoryListEntry::decode_old(&bytes, encoding).unwrap(),
+            Some(NewsCategoryListEntry::Bundle {
+                count: 0,
+                name: "Caf\u{e9}".into(),
+            })
+        );
+    }
 
     #[test]
     fn a_bundle_and_a_category_round_trip() {
