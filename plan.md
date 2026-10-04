@@ -1036,6 +1036,11 @@ No items are open.
      before `myTran_ShowAgreement` (109), as openline's
      `ProcessTran_Login` does.
 
+137. A raw `myTran_DownloadFile` (202) of an empty file replies with
+     only a zero `myField_TransferSize` (108), as openline's
+     `ProcessTran_DownloadFile` does. It registers no transfer and
+     records no download.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

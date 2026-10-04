@@ -114,9 +114,11 @@ impl Session {
     /// client resuming an interrupted download sends
     /// [`myField_FileResumeData`] (203) with the byte count it already has; that
     /// portion of the data fork is skipped, though the flattened-object header
-    /// is always resent.
+    /// is always resent. A raw request for an empty file gets only a zero
+    /// [`myField_TransferSize`] (108).
     ///
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
+    /// [`myField_TransferSize`]: hotline_proto::FieldId::TransferSize
     /// [`myField_FileResumeData`]: hotline_proto::FieldId::FileResumeData
     pub(super) async fn on_download_file(
         &self,
@@ -140,6 +142,9 @@ impl Session {
         // `myField_FileXferOptions` (204) == 2 requests the raw file bytes with
         // no resume support.
         let raw = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(2);
+        if raw && data_size == 0 {
+            return vec![tx.reply(vec![Field::u32(FieldId::TransferSize, 0)])];
+        }
         let (resume_offset, total_size) = if raw {
             (0, data_size)
         } else {
@@ -1514,6 +1519,39 @@ mod tests {
             Some(0)
         );
         assert!(reply.field(FieldId::RefNum).is_none());
+    }
+
+    #[tokio::test]
+    async fn download_file_raw_of_an_empty_file_replies_without_a_ref() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "empty.txt", *b"");
+        let (state, log) = state_recording_activity(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = request(
+            Opcode::DownloadFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "empty.txt"),
+                Field::u16(FieldId::FileXferOptions, 2),
+            ],
+        );
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert_eq!(
+            reply
+                .received(text_encoding::DEFAULT)
+                .field(FieldId::TransferSize)
+                .and_then(Field::as_u32),
+            Some(0)
+        );
+        assert!(reply.field(FieldId::RefNum).is_none());
+        assert!(reply.field(FieldId::FileSize).is_none());
+        assert_eq!(log.activities(), []);
     }
 
     #[tokio::test]
