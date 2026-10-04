@@ -64,6 +64,7 @@ fn drop_comments(
 pub struct InMemoryFileProvider {
     root: Arc<Mutex<Dir>>,
     comments: Mutex<HashMap<(Vec<String>, String), String>>,
+    free_space: Mutex<Option<u64>>,
 }
 
 impl InMemoryFileProvider {
@@ -75,6 +76,11 @@ impl InMemoryFileProvider {
             .make_dirs(&dir.components)
             .expect("the seed path runs through a file");
         d.entries.insert(name.to_string(), Node::File(data.into()));
+    }
+
+    /// Set the bytes that [`FileProvider::free_space`] reports.
+    pub fn set_free_space(&self, bytes: Option<u64>) {
+        *self.free_space.lock().unwrap() = bytes;
     }
 }
 
@@ -117,6 +123,10 @@ impl FileProvider for InMemoryFileProvider {
             Node::File(data) => Some(data.len() as u64),
             Node::Dir(_) => None,
         }
+    }
+
+    async fn free_space(&self, _requester: FileRequester<'_>, _dir: &HlPath) -> Option<u64> {
+        *self.free_space.lock().unwrap()
     }
 
     async fn exists(&self, _requester: FileRequester<'_>, dir: &HlPath, name: &str) -> bool {

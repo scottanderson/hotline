@@ -34,8 +34,7 @@ below, in priority order.
   disconnected". This server instead reads and discards for
   `KICK_DRAIN_TIMEOUT` (3 seconds) so the client can display the
   `myTran_DisconnectMsg` (111) notice, then closes regardless.
-- **Folder transfer drops some of openline's safeguards.** No
-  disk-space check before a `myTran_UploadFldr` (213), and no skip for
+- **Folder transfer drops one of openline's safeguards.** No skip for
   an item whose path is too long for openline's fixed 1024-byte buffer.
 - **Any received byte restarts a folder upload's idle timer.** openline's
   `ProcessFldrUploads` restarts it only while file data arrives, not
@@ -136,11 +135,7 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **A single-file upload does not check free disk space.** openline's
-   `ProcessTran_UploadFile` checks the free space before it accepts an
-   upload. hls has no check for a file or a folder upload. A check
-   needs a platform call, such as `statvfs` on Unix.
-2. **A permanent ban drops the kicker's note.** openline's
+1. **A permanent ban drops the kicker's note.** openline's
    `ProcessTran_DisconnectUser` stores the `myField_Data` (101) text
    with a permanent ban. `BanRecord` has no field for it, so the ban
    file cannot show why an address is banned.
@@ -979,6 +974,16 @@ one-shared-room model.
      and a provider that keeps no times sends a zero modify date.
      `HlDate::from(SystemTime)` converts a time, and the news code uses
      it too.
+
+129. `myTran_UploadFile` (203) and `myTran_UploadFldr` (213) refuse an
+     upload when `size + 512000` is more than the free space, as
+     openline's `ProcessTran_UploadFile` and `ProcessTran_UploadFldr`
+     do. The file check skips a resume, and the folder check runs before
+     the folder is made, also on a resume. `FileProvider::free_space`
+     returns `None` when it does not know, and the upload goes on. The
+     disk provider reads `statvfs` on Unix and returns `None` on other
+     platforms. The error text is openline's, with the file or folder
+     name.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

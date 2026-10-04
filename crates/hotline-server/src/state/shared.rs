@@ -48,6 +48,9 @@ use crate::state::{
 /// connection, openline's 500 s.
 const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 
+/// The bytes an upload must leave free on the disk.
+const UPLOAD_SPACE_MARGIN: u64 = 512_000;
+
 /// State shared by every [`crate::Session`], behind cheap `Arc` clones.
 #[derive(Clone)]
 pub struct SharedState {
@@ -474,7 +477,8 @@ impl SharedState {
     /// Whether `requester` may start (or resume) a [`myTran_UploadFile`] (203)
     /// upload of `name` under `dir`. `dir` must exist, and must be under an
     /// "Upload"/"Drop Box" folder unless `upload_anywhere`. A finished file
-    /// already at `name` rejects the request. With `resume` true, an
+    /// already at `name` rejects the request. A new upload of `size` bytes
+    /// needs `UPLOAD_SPACE_MARGIN` more bytes free. With `resume` true, an
     /// in-progress upload is also required, and its current size is returned
     /// as the resume offset (`0` otherwise).
     ///
@@ -486,6 +490,7 @@ impl SharedState {
         name: &str,
         access: Access,
         resume: bool,
+        size: u64,
     ) -> Result<u64, Cow<'static, str>> {
         if !self.folder_exists(requester, dir).await {
             Err("file or folder not found.")?;
@@ -501,7 +506,28 @@ impl SharedState {
                 .await
                 .ok_or("file or folder not found.")?)
         } else {
+            self.require_free_space(requester, dir, "file", name, size)
+                .await?;
             Ok(0)
+        }
+    }
+
+    /// Refuse an upload of the `kind` `name`, `size` bytes, into `dir` when
+    /// the disk has less than `size` plus `UPLOAD_SPACE_MARGIN` free. An
+    /// unknown free space is enough.
+    async fn require_free_space(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        kind: &str,
+        name: &str,
+        size: u64,
+    ) -> Result<(), String> {
+        match self.files.free_space(requester, dir).await {
+            Some(free) if size + UPLOAD_SPACE_MARGIN > free => Err(format!(
+                "Cannot accept upload of the {kind} \"{name}\" because there is not enough free disk space."
+            )),
+            _ => Ok(()),
         }
     }
 
@@ -520,7 +546,8 @@ impl SharedState {
     /// `name` under `dir`, creating the folder if it's missing. `dir` must
     /// exist, with the same destination rule as [`Self::authorize_upload`].
     /// Resuming needs a folder already at `name`; otherwise nothing may be
-    /// there yet.
+    /// there yet. The folder's `size` bytes need `UPLOAD_SPACE_MARGIN`
+    /// more bytes free.
     ///
     /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
     pub async fn start_folder_upload(
@@ -530,6 +557,7 @@ impl SharedState {
         name: &str,
         access: Access,
         resume: bool,
+        size: u64,
     ) -> Result<(), Cow<'static, str>> {
         if !self.folder_exists(requester, dir).await {
             Err("file or folder not found.")?;
@@ -541,10 +569,13 @@ impl SharedState {
             if !info.is_folder() {
                 Err("file already exists.")?;
             }
-            return Ok(());
-        }
-        if existing.is_some() {
+        } else if existing.is_some() {
             Err("file already exists.")?;
+        }
+        self.require_free_space(requester, dir, "folder", name, size)
+            .await?;
+        if resume {
+            return Ok(());
         }
         self.files
             .mkdir(requester, dir, name)

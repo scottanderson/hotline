@@ -261,18 +261,18 @@ impl Session {
         };
         let requester = FileRequester { login: &self.login };
         let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
+        let size = tx
+            .field(FieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap_or(0);
         let resume_offset = match state
-            .authorize_upload(requester, &dir, &name, self.access, resume)
+            .authorize_upload(requester, &dir, &name, self.access, resume, size.into())
             .await
         {
             Ok(offset) => offset,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
 
-        let size = tx
-            .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
-            .unwrap_or(0);
         let reference = state
             .register_transfer(PendingTransfer {
                 kind: TransferKind::File(FileTransfer {
@@ -381,8 +381,12 @@ impl Session {
         };
         let requester = FileRequester { login: &self.login };
         let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(1);
+        let size = tx
+            .field(FieldId::TransferSize)
+            .and_then(Field::as_u32)
+            .unwrap_or(0);
         if let Err(reason) = state
-            .start_folder_upload(requester, &dir, &name, self.access, resume)
+            .start_folder_upload(requester, &dir, &name, self.access, resume, size.into())
             .await
         {
             return vec![tx.reply_error(reason)];
@@ -397,10 +401,6 @@ impl Session {
                 .await;
             return vec![tx.reply(vec![])];
         }
-        let size = tx
-            .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
-            .unwrap_or(0);
         let reference = state
             .register_transfer(PendingTransfer {
                 kind: TransferKind::Folder(FolderTransfer {
@@ -1782,6 +1782,81 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert!(reply.field(FieldId::RefNum).is_some());
+    }
+
+    #[tokio::test]
+    async fn upload_file_needs_the_size_plus_a_margin_free() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.set_free_space(Some(512_100));
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+        let put = |size| {
+            request(
+                Opcode::UploadFile,
+                1,
+                vec![
+                    Field::string(FieldId::FileName, "a.txt"),
+                    Field::u32(FieldId::TransferSize, size),
+                ],
+            )
+        };
+
+        let [reply] = session
+            .on_upload_file(&put(101), &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            reply
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText)
+                .as_deref(),
+            Some(
+                "Cannot accept upload of the file \"a.txt\" because there is not enough free disk space."
+            )
+        );
+        let [reply] = session
+            .on_upload_file(&put(100), &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn upload_fldr_needs_the_size_plus_a_margin_free_even_to_resume() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.set_free_space(Some(512_100));
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"x");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+        let put = |name, size, resume| {
+            let mut fields = vec![
+                Field::u32(FieldId::FldrItemCount, 1),
+                Field::u32(FieldId::TransferSize, size),
+            ];
+            if resume {
+                fields.push(Field::u16(FieldId::FileXferOptions, 1));
+            }
+            folder_request(Opcode::UploadFldr, &[], name, fields)
+        };
+        let is_error = |tx: Transaction<Received>| {
+            let session = &session;
+            let state = &state;
+            async move {
+                let [reply] = session.on_upload_fldr(&tx, state).await.try_into().unwrap();
+                reply.is_error()
+            }
+        };
+
+        assert!(is_error(put("New", 101, false)).await);
+        assert!(
+            !state
+                .file_exists(FileRequester { login: "Alice" }, &HlPath::default(), "New")
+                .await
+        );
+        assert!(is_error(put("Top", 101, true)).await);
+        assert!(!is_error(put("Top", 100, true)).await);
     }
 
     #[tokio::test]

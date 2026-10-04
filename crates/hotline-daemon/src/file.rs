@@ -289,6 +289,16 @@ impl FileProvider for DiskFileProvider {
         })
     }
 
+    #[cfg(unix)]
+    async fn free_space(&self, _requester: FileRequester<'_>, dir: &HlPath) -> Option<u64> {
+        let path = self.resolve_dir(dir)?;
+        let stat = tokio::task::spawn_blocking(move || rustix::fs::statvfs(&path))
+            .await
+            .ok()?
+            .ok()?;
+        Some(stat.f_bavail.saturating_mul(stat.f_frsize))
+    }
+
     async fn times(&self, _requester: FileRequester<'_>, dir: &HlPath, name: &str) -> ItemTimes {
         let Some(path) = self.resolve_file(dir, name) else {
             return ItemTimes::default();
@@ -445,6 +455,26 @@ mod tests {
 
     fn requester() -> FileRequester<'static> {
         FileRequester { login: "alice" }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn free_space_reads_the_disk_and_is_none_for_a_bad_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+
+        assert!(provider
+            .free_space(requester(), &HlPath::default())
+            .await
+            .is_some());
+        assert_eq!(
+            provider
+                .free_space(requester(), &HlPath::new(["missing"]))
+                .await,
+            None
+        );
     }
 
     #[tokio::test]

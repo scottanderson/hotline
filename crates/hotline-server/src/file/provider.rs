@@ -172,6 +172,11 @@ pub trait FileProvider: Send + Sync {
         name: &str,
     ) -> Option<FileNameWithInfo>;
 
+    /// The bytes free on the disk that holds `dir`. `None` when unknown.
+    async fn free_space(&self, _requester: FileRequester<'_>, _dir: &HlPath) -> Option<u64> {
+        None
+    }
+
     /// When `dir`/`name` was made and last changed.
     async fn times(&self, _requester: FileRequester<'_>, _dir: &HlPath, _name: &str) -> ItemTimes {
         ItemTimes::default()
