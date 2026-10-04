@@ -894,6 +894,10 @@ None.
      no flavor gets an empty `text/plain` body. Like openline's listing,
      the import skips a hidden item and an item that does not read.
 
+118. `myTran_SendInstantMsg` (108) to a user who is not connected
+     replies with an error, as openline's `ProcessTran_SendInstantMsg`
+     does. It replied with success and sent nothing.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

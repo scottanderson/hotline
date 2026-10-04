@@ -225,17 +225,15 @@ impl Session {
             .unwrap_or(0);
         let is_user_message = MsgOption::from(options) == MsgOption::UserMessage;
 
-        let target = state.user(target_id).await;
+        let target = match state.require_connected_user(target_id).await {
+            Ok(target) => target,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let mut replies = Vec::new();
         if is_user_message {
-            if let Some(bounce) = target
-                .as_ref()
-                .and_then(|target| self.refusal_bounce(target_id, target, false))
-            {
-                replies.push(bounce);
-            }
+            replies.extend(self.refusal_bounce(target_id, &target, false));
         }
-        if !target.is_some_and(|target| target.refuses_pm) {
+        if !target.refuses_pm {
             let mut fields = vec![
                 Field::u16(FieldId::UserID, self.user_id),
                 Field::string(FieldId::UserName, self.name.clone()),
@@ -769,6 +767,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
         let mut sender_rx = state.register_recipient(session.user_id).await;
 
         let request = request(
@@ -802,6 +801,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
 
         let request = request(
             Opcode::SendInstantMsg,
@@ -958,6 +958,7 @@ mod tests {
         session.encoding.set(sjis);
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
 
         let request = Transaction::request(
             Opcode::SendInstantMsg,
@@ -986,11 +987,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_instant_msg_to_a_user_who_is_gone_is_an_error() {
+        let session = test_session("Alice", Access::all());
+        let state = SharedState::default();
+
+        let request = request(
+            Opcode::SendInstantMsg,
+            1,
+            vec![
+                Field::u16(FieldId::UserID, 42),
+                Field::string(FieldId::Data, "hi"),
+            ],
+        );
+        let replies = session.on_send_instant_msg(&request, &state).await;
+
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].is_error());
+    }
+
+    #[tokio::test]
     async fn msg_allowed_via_access_extra_msg_without_send_message() {
         let mut session = test_session("Alice", Access::empty());
         session.access_extra.insert(AccessExtra::MSG_OVERRIDE);
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
 
         let request = request(
             Opcode::SendInstantMsg,

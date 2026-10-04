@@ -190,12 +190,9 @@ impl SharedState {
             .collect()
     }
 
-    /// `Err("no such user")` unless `user_id` is currently connected.
-    pub async fn require_connected_user(&self, user_id: u16) -> Result<(), &'static str> {
-        self.has_user(user_id)
-            .await
-            .then_some(())
-            .ok_or("no such user")
+    /// The connected user `user_id`, or `Err("no such user")`.
+    pub async fn require_connected_user(&self, user_id: u16) -> Result<UserEntry, &'static str> {
+        self.user(user_id).await.ok_or("no such user")
     }
 
     /// Whether `target_id` may be kicked: `Err` if that user holds
