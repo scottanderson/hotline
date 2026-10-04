@@ -916,6 +916,15 @@ None.
      (211) that is empty or the same as the current name skips the
      rename.
 
+122. The user name follows openline's `SetClientUserInfo`. With
+     `ANY_NAME`, a user gets the sent name, cut to 31 bytes in the
+     connection's encoding, with each control character as `*` and an
+     empty name as `***`. Without it, a user gets the account's name at
+     login and keeps it after `myTran_SetClientUserInfo` (304).
+     `myTran_Agreed` (121) also reads `myField_Options` (113) and
+     `myField_AutomaticResponse` (215), as openline's
+     `ProcessTran_Agreed` does.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

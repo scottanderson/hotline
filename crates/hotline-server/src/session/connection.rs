@@ -14,7 +14,7 @@ use tokio_util::codec::Framed;
 use hotline_codec::TransactionCodec;
 use hotline_proto::consts::Access;
 use hotline_proto::opcode::{Opcode, TransactionType};
-use hotline_proto::text_encoding::{Encoding, EncodingHandle};
+use hotline_proto::text_encoding::{self, Encoding, EncodingHandle};
 use hotline_proto::types::{UserChangeOptions, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{ClientHandshake, Field, Received, ServerHandshake, Transaction};
@@ -528,7 +528,10 @@ impl Session {
         let name = tx.name();
         let named = name.as_deref().is_some_and(|name| !name.is_empty()) && icon != 0;
         if named || !modern {
-            let selfinfo = self.complete_join(name, icon, state).await;
+            if named {
+                self.take_user_name(name.as_deref(), true);
+            }
+            let selfinfo = self.complete_join(icon, state).await;
             if named {
                 self.record_activity(Activity::Connect, state).await;
             }
@@ -572,8 +575,9 @@ impl Session {
         state: &SharedState,
     ) -> Vec<Transaction> {
         let icon = tx.icon().unwrap_or(0);
-        let name = tx.name();
-        let selfinfo = self.complete_join(name, icon, state).await;
+        self.take_user_name(tx.name().as_deref(), true);
+        self.take_options(tx);
+        let selfinfo = self.complete_join(icon, state).await;
         self.record_activity(Activity::Connect, state).await;
         let mut replies = vec![tx.reply(vec![]), selfinfo];
         if let Some(banner) = self.banner_push(state).await {
@@ -612,16 +616,8 @@ impl Session {
     /// session `Joined`, and build its own [`myTran_UserAccess`] (354) push.
     ///
     /// [`myTran_UserAccess`]: hotline_proto::Opcode::UserAccess
-    async fn complete_join(
-        &mut self,
-        name: Option<String>,
-        icon: u16,
-        state: &SharedState,
-    ) -> Transaction {
+    async fn complete_join(&mut self, icon: u16, state: &SharedState) -> Transaction {
         self.state = SessionState::Joined;
-        if let Some(name) = name {
-            self.name = name.into();
-        }
         // Not echoed back to the joiner.
         self.announce_user_change(icon, state, true).await;
 
@@ -664,10 +660,37 @@ impl Session {
         if self.flood_banned(FloodEvent::NameChange, state).await {
             return vec![];
         }
-        if let Some(name) = tx.name() {
-            self.name = name.into();
-        }
+        self.take_user_name(tx.name().as_deref(), false);
         let icon = tx.icon().unwrap_or(0);
+        self.take_options(tx);
+        // Later changes are self-inclusive, unlike the join announcement.
+        self.announce_user_change(icon, state, false).await;
+        Vec::new()
+    }
+
+    /// Sets the user name from the name the client `sent`. With
+    /// `ANY_NAME` the user gets the sent name. Without it, the user gets
+    /// the account's name `at_login`, and keeps the name after login.
+    fn take_user_name(&mut self, sent: Option<&str>, at_login: bool) {
+        let encoding = self.encoding();
+        if self.access.contains(Access::ANY_NAME) {
+            let sent: String = sent
+                .unwrap_or_default()
+                .chars()
+                .map(|c| if c.is_control() { '*' } else { c })
+                .collect();
+            self.name = user_name(&sent, encoding);
+        } else if at_login {
+            self.name = user_name(&self.account_name, encoding);
+        }
+    }
+
+    /// Sets the refusal options and the automatic response from
+    /// [`myField_Options`] (113) and [`myField_AutomaticResponse`] (215).
+    ///
+    /// [`myField_Options`]: hotline_proto::FieldId::Options
+    /// [`myField_AutomaticResponse`]: hotline_proto::FieldId::AutomaticResponse
+    fn take_options(&mut self, tx: &Transaction<Received>) {
         let options = UserChangeOptions::from_bits_truncate(
             tx.field(FieldId::Options)
                 .and_then(Field::as_u16)
@@ -683,9 +706,6 @@ impl Session {
                 })
                 .into()
         });
-        // Later changes are self-inclusive, unlike the join announcement.
-        self.announce_user_change(icon, state, false).await;
-        Vec::new()
     }
 
     /// Register this session's current name/icon and broadcast a
@@ -821,6 +841,22 @@ impl Session {
         flags.set(UserFlags::REFUSES_PM, self.refuses_pm);
         flags.set(UserFlags::REFUSES_CHAT, self.refuses_chat);
         flags
+    }
+}
+
+/// `name` cut to 31 bytes in `encoding`, or `***` if it is empty.
+fn user_name(name: &str, encoding: &'static Encoding) -> Box<str> {
+    let mut len = 0;
+    let end = name
+        .char_indices()
+        .find(|&(i, c)| {
+            len += text_encoding::encode(encoding, &name[i..i + c.len_utf8()]).len();
+            len > 31
+        })
+        .map_or(name.len(), |(i, _)| i);
+    match &name[..end] {
+        "" => "***".into(),
+        name => name.into(),
     }
 }
 
@@ -1637,6 +1673,77 @@ mod tests {
         assert_eq!(entry.user_id, 1); // test_session()'s fixed user_id
         assert_eq!(&*entry.name, "Alice");
         assert_eq!(entry.icon, 42);
+    }
+
+    fn agreed_as(name: &str, options: UserChangeOptions) -> Transaction<Received> {
+        request(
+            Opcode::Agreed,
+            1,
+            vec![
+                Field::string(FieldId::UserName, name),
+                Field::u16(FieldId::UserIconID, 42),
+                Field::u16(FieldId::Options, options.bits()),
+            ],
+        )
+    }
+
+    #[tokio::test]
+    async fn agreed_without_any_name_takes_the_account_name() {
+        let mut session = test_session("guest1", Access::default() - Access::ANY_NAME);
+        session.account_name = "Guest".into();
+        let state = SharedState::default();
+
+        let agreed = agreed_as("Mallory", UserChangeOptions::empty());
+        session.on_agreed(&agreed, &state).await;
+
+        assert_eq!(&*session.name, "Guest");
+    }
+
+    #[tokio::test]
+    async fn agreed_with_any_name_cleans_and_cuts_the_name() {
+        let mut session = test_session("guest1", Access::ANY_NAME);
+        let state = SharedState::default();
+
+        let long = format!("a\rb{}", "c".repeat(40));
+        session
+            .on_agreed(&agreed_as(&long, UserChangeOptions::empty()), &state)
+            .await;
+        assert_eq!(&*session.name, format!("a*b{}", "c".repeat(28)));
+
+        session
+            .on_agreed(&agreed_as("", UserChangeOptions::empty()), &state)
+            .await;
+        assert_eq!(&*session.name, "***");
+    }
+
+    #[tokio::test]
+    async fn agreed_reads_the_refusal_options() {
+        let mut session = test_session("guest1", Access::default());
+        let state = SharedState::default();
+
+        let agreed = agreed_as("Alice", UserChangeOptions::REFUSE_PM);
+        session.on_agreed(&agreed, &state).await;
+
+        assert!(session.refuses_pm);
+        assert!(session.user_flags().contains(UserFlags::REFUSES_PM));
+    }
+
+    #[tokio::test]
+    async fn set_client_user_info_without_any_name_keeps_the_name() {
+        let mut session = test_session("Guest", Access::default() - Access::ANY_NAME);
+        let state = SharedState::default();
+
+        let request = request(
+            Opcode::SetClientUserInfo,
+            1,
+            vec![
+                Field::string(FieldId::UserName, "Mallory"),
+                Field::u16(FieldId::UserIconID, 0),
+            ],
+        );
+        session.on_set_client_user_info(&request, &state).await;
+
+        assert_eq!(&*session.name, "Guest");
     }
 
     #[tokio::test]
