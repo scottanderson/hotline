@@ -989,6 +989,14 @@ No items are open.
      `BanRecord`. An empty note is left out of the file, and an old file
      without notes still loads.
 
+131. A push sent to every session (`SharedState::publish` and
+     `announce`) reaches a session only after its login completes.
+     openline's `BroadcastTran` checks `hasLoggedIn`. Its chat and news
+     relays check the client's privileges, which `SetClientUserInfo`
+     sets only when the login completes. A connection at the agreement
+     step gets no chat, news, or user list pushes. A push to one
+     session (`send_to`) still arrives at any time.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

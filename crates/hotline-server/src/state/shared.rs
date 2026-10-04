@@ -248,15 +248,12 @@ impl SharedState {
         self.recipients.read().await.len()
     }
 
-    /// Publish a transaction to every session (e.g. a chat message or a
-    /// user list change notification). Sessions that are slow/gone just
-    /// miss it; delivery is best-effort like the real protocol's chat.
-    /// Not privilege-gated here - see `Session::may_receive`,
-    /// checked by each recipient using privileges it already holds in
-    /// memory rather than a shared-state lookup on this hot path.
+    /// Send a transaction to every session, such as a chat line or a user
+    /// list change. A slow or closed session misses it. Each recipient
+    /// filters it with `Session::may_receive_broadcast`.
     pub async fn publish(&self, tx: Transaction) {
         for sender in self.recipients.read().await.values() {
-            let _ = sender.try_send(RecipientMessage::Push(tx.clone()));
+            let _ = sender.try_send(RecipientMessage::Broadcast(tx.clone()));
         }
     }
 
@@ -280,7 +277,7 @@ impl SharedState {
     pub async fn announce(&self, exclude_user_id: u16, tx: Transaction) {
         for (&user_id, sender) in self.recipients.read().await.iter() {
             if user_id != exclude_user_id {
-                let _ = sender.try_send(RecipientMessage::Push(tx.clone()));
+                let _ = sender.try_send(RecipientMessage::Broadcast(tx.clone()));
             }
         }
     }

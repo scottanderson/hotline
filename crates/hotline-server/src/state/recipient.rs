@@ -7,6 +7,8 @@ use super::{AccessUpdate, ConsoleUpdate};
 pub enum RecipientMessage {
     /// A wire transaction to forward as-is.
     Push(Transaction),
+    /// A wire transaction sent to every session, forwarded only after login.
+    Broadcast(Transaction),
     /// A live privilege change for this session's login to apply.
     AccessUpdate(AccessUpdate),
     /// A console-command-driven change for this exact session to apply.
@@ -19,7 +21,7 @@ impl RecipientMessage {
     #[cfg(test)]
     pub(crate) fn into_push(self) -> Option<Transaction> {
         match self {
-            Self::Push(transaction) => Some(transaction),
+            Self::Push(transaction) | Self::Broadcast(transaction) => Some(transaction),
             _ => None,
         }
     }

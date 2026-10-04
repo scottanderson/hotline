@@ -87,7 +87,7 @@ pub(super) fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> A
     loop {
         match rx.try_recv().expect("expected an access update") {
             RecipientMessage::AccessUpdate(update) => return update,
-            RecipientMessage::Push(tx) => {
+            RecipientMessage::Push(tx) | RecipientMessage::Broadcast(tx) => {
                 assert!(matches!(
                     tx.r#type(),
                     TransactionType::Push(Opcode::NotifyChangeUser | Opcode::UserAccess)

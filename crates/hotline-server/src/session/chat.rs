@@ -750,7 +750,7 @@ mod tests {
 
         assert!(reply.is_empty());
         let relayed = rx.try_recv().expect("relayed as ordinary chat");
-        let RecipientMessage::Push(push) = relayed else {
+        let Some(push) = relayed.into_push() else {
             panic!("expected a chat push");
         };
         let text = push

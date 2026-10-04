@@ -274,6 +274,11 @@ impl Session {
                                 break Ok(SessionEnd::Kicked);
                             }
                         }
+                        Some(RecipientMessage::Broadcast(tx)) => {
+                            if session.may_receive_broadcast(tx.r#type()) {
+                                writer.send(tx).await?;
+                            }
+                        }
                         Some(RecipientMessage::AccessUpdate(update)) => {
                             session.apply_access_update(update, state).await;
                         }
@@ -338,6 +343,12 @@ impl Session {
             TransactionType::Push(Opcode::NewMsg) => self.access.contains(Access::NEWS_READ_ART),
             _ => true,
         }
+    }
+
+    /// Whether this session should receive a push sent to every session:
+    /// only after login, and then as [`Self::may_receive`] says.
+    const fn may_receive_broadcast(&self, opcode: TransactionType) -> bool {
+        matches!(self.state, SessionState::Joined) && self.may_receive(opcode)
     }
 
     /// Handle one request, returning zero or more transactions in reply.
@@ -915,6 +926,18 @@ mod tests {
 
         session.access.insert(Access::NEWS_READ_ART);
         assert!(session.may_receive(TransactionType::Push(Opcode::NewMsg)));
+    }
+
+    #[test]
+    fn may_receive_broadcast_waits_for_login() {
+        let mut session = test_session("Alice", Access::all());
+        session.state = SessionState::Agreement;
+        assert!(!session.may_receive_broadcast(TransactionType::Push(Opcode::ChatMsg)));
+
+        session.state = SessionState::Joined;
+        assert!(session.may_receive_broadcast(TransactionType::Push(Opcode::ChatMsg)));
+        session.access.remove(Access::READ_CHAT);
+        assert!(!session.may_receive_broadcast(TransactionType::Push(Opcode::ChatMsg)));
     }
 
     #[tokio::test]
