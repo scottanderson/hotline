@@ -147,6 +147,21 @@ fn is_plain_name(name: &str) -> bool {
         && components.next().is_none()
 }
 
+/// How many entries with a UTF-8 name the folder at `path` holds. 0 when
+/// it cannot be read.
+async fn count_entries(path: &Path) -> u32 {
+    let Ok(mut read_dir) = tokio::fs::read_dir(path).await else {
+        return 0;
+    };
+    let mut count = 0;
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        if entry.file_name().to_str().is_some() {
+            count += 1;
+        }
+    }
+    count
+}
+
 #[async_trait]
 impl FileProvider for DiskFileProvider {
     async fn list(
@@ -172,7 +187,7 @@ impl FileProvider for DiskFileProvider {
                 FileNameWithInfo {
                     file_type: *b"fldr",
                     creator: *b"\0\0\0\0",
-                    size: 0,
+                    size: count_entries(&entry.path()).await,
                     name: name.into(),
                 }
             } else {
@@ -511,6 +526,12 @@ mod tests {
             .await
             .unwrap();
         tokio::fs::create_dir(dir.path().join("sub")).await.unwrap();
+        tokio::fs::create_dir(dir.path().join("sub").join("inner"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("sub").join("b.txt"), b"")
+            .await
+            .unwrap();
 
         let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
             .await
@@ -526,6 +547,7 @@ mod tests {
         assert_eq!(entries[0].size, 2);
         assert_eq!(&*entries[1].name, "sub");
         assert_eq!(&entries[1].file_type, b"fldr");
+        assert_eq!(entries[1].size, 2);
     }
 
     #[tokio::test]
@@ -630,6 +652,29 @@ mod tests {
             .unwrap();
         let names: Vec<_> = items.iter().map(|i| i.path.components.join("/")).collect();
         assert_eq!(names, ["a.txt"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_counts_only_the_entries_it_would_show_in_a_folder() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Top");
+        tokio::fs::create_dir(&folder).await.unwrap();
+        tokio::fs::write(folder.join("a.txt"), b"x").await.unwrap();
+        let raw = std::ffi::OsStr::from_bytes(b"\xff.txt");
+        tokio::fs::write(folder.join(raw), b"x").await.unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let entries = provider
+            .list(requester(), &HlPath::default())
+            .await
+            .unwrap();
+        let top = entries.iter().find(|e| &*e.name == "Top").unwrap();
+        assert_eq!(top.size, 1);
     }
 
     #[cfg(unix)]

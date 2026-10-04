@@ -21,7 +21,7 @@ pub struct FileNameWithInfo {
     pub file_type: [u8; 4],
     /// 4-character Mac creator code.
     pub creator: [u8; 4],
-    /// File size in bytes (`0` for folders).
+    /// A file's size in bytes, or the number of entries in a folder.
     pub size: u32,
     /// File/folder name.
     pub name: Box<str>,

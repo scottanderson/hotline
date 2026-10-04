@@ -98,7 +98,7 @@ impl FileProvider for InMemoryFileProvider {
             .iter()
             .map(|(name, entry)| {
                 let (file_type, creator, size) = match entry {
-                    Node::Dir(_) => (*b"fldr", *b"\0\0\0\0", 0),
+                    Node::Dir(d) => (*b"fldr", *b"\0\0\0\0", d.entries.len() as u32),
                     Node::File(f) => {
                         let (file_type, creator) = type_and_creator_for_name(name);
                         (file_type, creator, f.len() as u32)
@@ -401,6 +401,20 @@ mod tests {
 
     fn requester() -> FileRequester<'static> {
         FileRequester { login: "alice" }
+    }
+
+    #[tokio::test]
+    async fn list_gives_a_folder_its_entry_count_as_its_size() {
+        let provider = InMemoryFileProvider::default();
+        provider.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
+        provider.seed(&HlPath::new(["Top", "Sub"]), "b.txt", *b"x");
+
+        let entries = provider
+            .list(requester(), &HlPath::default())
+            .await
+            .unwrap();
+        assert_eq!(&*entries[0].name, "Top");
+        assert_eq!(entries[0].size, 2);
     }
 
     #[tokio::test]

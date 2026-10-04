@@ -997,6 +997,11 @@ No items are open.
      step gets no chat, news, or user list pushes. A push to one
      session (`send_to`) still arrives at any time.
 
+132. `myTran_GetFileNameList` (200) gives a folder's entry count as its
+     size, as openline's `BuildFileList` does with the count from
+     `_FSCountDirItems`. A client shows it as the number of items in the
+     folder. Both file providers count the folder's direct entries.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
