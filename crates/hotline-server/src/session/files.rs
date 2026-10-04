@@ -551,10 +551,9 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// [`myTran_SetFileInfo`] (207): rename a file or folder, and/or set its
-    /// [`myField_FileComment`] (210). A rename, if present, applies before the
-    /// comment, so a comment sent alongside a rename lands on the renamed
-    /// entry.
+    /// [`myTran_SetFileInfo`] (207): set a file or folder's
+    /// [`myField_FileComment`] (210), then rename it. A comment sent with a
+    /// refused rename is still set.
     ///
     /// [`myTran_SetFileInfo`]: hotline_proto::Opcode::SetFileInfo
     /// [`myField_FileComment`]: hotline_proto::FieldId::FileComment
@@ -588,19 +587,17 @@ impl Session {
             return vec![tx.reply(vec![])];
         }
         let requester = FileRequester { login: &self.login };
-        let mut name = name;
-        if let Some(new_name) = &new_name {
+        if let Some(comment) = &comment {
             if let Err(reason) = state
-                .rename_file(requester, &dir, &name, new_name, self.access)
+                .set_file_comment(requester, &dir, &name, comment, self.access)
                 .await
             {
                 return vec![tx.reply_error(reason)];
             }
-            name = new_name.clone();
         }
-        if let Some(comment) = &comment {
+        if let Some(new_name) = &new_name {
             if let Err(reason) = state
-                .set_file_comment(requester, &dir, &name, comment, self.access)
+                .rename_file(requester, &dir, &name, new_name, self.access)
                 .await
             {
                 return vec![tx.reply_error(reason)];
@@ -2687,6 +2684,41 @@ mod tests {
         assert_eq!(
             reply.received(encoding).string(FieldId::FileComment),
             Some("a note".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn set_file_info_sets_the_comment_when_the_rename_is_denied() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"x");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::RENAME_FILE);
+        let session = test_session("Alice", access);
+        let requester = FileRequester { login: "Alice" };
+
+        let set = request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileNewName, "b.txt"),
+                Field::string(FieldId::FileComment, "kept"),
+            ],
+        );
+        let [reply] = session
+            .on_set_file_info(&set, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+        assert_eq!(
+            state
+                .file_comment(requester, &HlPath::default(), "a.txt", Access::all())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("kept")
         );
     }
 

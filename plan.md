@@ -1022,6 +1022,11 @@ No items are open.
      request with no `myField_Data` (101) still gets the "missing
      message" error, where openline replies with success.
 
+135. `myTran_SetFileInfo` (207) sets the `myField_FileComment` (210)
+     before the rename, as openline's `ProcessTran_SetFileInfo` does. A
+     comment sent with a refused rename is still set. The rename moves
+     the comment to the new name.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
