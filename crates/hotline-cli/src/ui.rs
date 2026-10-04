@@ -429,9 +429,11 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
 
 /// Draw `text` scrolled to its last line, with the cursor at its end if `cursor`.
 fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor: bool) {
-    let lines = text.split('\n').count() as u16;
+    let lines = u16::try_from(text.split('\n').count()).unwrap_or(u16::MAX);
     let rows = input_rows(text);
-    let paragraph = Paragraph::new(text).block(block).scroll((lines - rows, 0));
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .scroll((lines.saturating_sub(rows), 0));
     frame.render_widget(paragraph, area);
 
     if cursor {
