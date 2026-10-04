@@ -257,7 +257,8 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// [`myTran_PostNewsArt`] (410): post a threaded news article.
+    /// [`myTran_PostNewsArt`] (410): post a threaded news article. An empty
+    /// body is an error.
     ///
     /// [`myTran_PostNewsArt`]: hotline_proto::Opcode::PostNewsArt
     pub(super) async fn on_post_news_art(
@@ -276,7 +277,7 @@ impl Session {
         let Some(title) = tx.news_article_title() else {
             return vec![tx.reply_error("missing title")];
         };
-        let Some(data) = tx.news_article_data() else {
+        let Some(data) = tx.news_article_data().filter(|data| !data.is_empty()) else {
             return vec![tx.reply_error("missing article data")];
         };
         let parent_id = tx.news_article_id().unwrap_or(0);
@@ -758,6 +759,41 @@ mod tests {
         let data = reply.field(FieldId::Data).unwrap().as_bytes();
         assert!(data.len() <= MAX_FLAT_NEWS_LEN);
         assert!(std::str::from_utf8(data).is_ok());
+    }
+
+    #[tokio::test]
+    async fn post_news_art_with_an_empty_body_is_an_error() {
+        let encoding = text_encoding::DEFAULT;
+        let state = SharedState::default();
+        let session = test_session("Alice", Access::all());
+        state
+            .news_mkcategory(&HlPath::default(), "General")
+            .await
+            .unwrap();
+
+        let post = request(
+            Opcode::PostNewsArt,
+            1,
+            vec![
+                Field::bytes(
+                    FieldId::NewsPath,
+                    HlPath::new(["General"]).encode(encoding).unwrap(),
+                ),
+                Field::string(FieldId::NewsArtTitle, "Hello"),
+                Field::bytes(FieldId::NewsArtData, Vec::new()),
+            ],
+        );
+        let [reply] = session
+            .on_post_news_art(&post, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+        let list = state
+            .news_list_articles(&HlPath::new(["General"]), encoding)
+            .await
+            .unwrap();
+        assert!(list.articles.is_empty());
     }
 
     #[tokio::test]

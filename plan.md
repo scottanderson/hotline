@@ -1079,6 +1079,12 @@ one-shared-room model.
      openline's `ProcessTran_SetUserList` does. A user without account
      privileges can no longer learn which logins exist from the notices.
 
+142. `myTran_PostNewsArt` (410) with an empty `myField_NewsArtData`
+     (333) is an error, as in openline's `ProcessTran_PostNewsArt`. One
+     part differs on purpose: openline adds the article before it checks
+     the body, and so keeps an article with no text. hls checks the body
+     first and adds nothing.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
