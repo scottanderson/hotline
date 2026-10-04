@@ -47,6 +47,7 @@ fn decoders_reject_garbage_without_panicking() {
         let _ = UserNameWithInfo::decode(&buf, DEFAULT);
         let _ = NewsArticleListData::decode(&buf, DEFAULT);
         let _ = NewsCategoryListEntry::decode(&buf, DEFAULT);
+        let _ = NewsCategoryListEntry::decode_old(&buf, DEFAULT);
         let _ = decode_resume_data(&buf);
         let _ = decode_flat_file_prefix(&buf);
         let _ = FolderItemHeader::decode_body(&buf, DEFAULT);

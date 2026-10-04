@@ -3,10 +3,37 @@
 use hotline_proto::types::{
     HlDate, HlPath, NewsArticleListData, NewsArticleSummary, NewsCategoryListEntry,
 };
-use hotline_proto::{Field, FieldId, Opcode};
+use hotline_proto::{Field, FieldId, Opcode, Received, Transaction};
 
 use crate::client::HotlineClient;
 use crate::error::Result;
+
+/// The entries of a [`myTran_GetNewsCatNameList`] (370) reply. A reply whose
+/// first field is not [`myField_NewsCatListData15`] (323) lists
+/// [`myField_NewsCatListData`] (320) entries.
+///
+/// [`myTran_GetNewsCatNameList`]: hotline_proto::Opcode::GetNewsCatNameList
+/// [`myField_NewsCatListData15`]: hotline_proto::FieldId::NewsCatListData15
+/// [`myField_NewsCatListData`]: hotline_proto::FieldId::NewsCatListData
+fn category_entries(
+    reply: &Transaction<Received>,
+) -> hotline_proto::Result<Vec<NewsCategoryListEntry>> {
+    if reply
+        .fields
+        .first()
+        .is_some_and(|f| f.id == FieldId::NewsCatListData15)
+    {
+        return reply
+            .fields(FieldId::NewsCatListData15)
+            .map(|f| NewsCategoryListEntry::decode(f.as_bytes(), f.encoding()))
+            .collect();
+    }
+    let entries = reply
+        .fields(FieldId::NewsCatListData)
+        .map(|f| NewsCategoryListEntry::decode_old(f.as_bytes(), f.encoding()))
+        .collect::<hotline_proto::Result<Vec<_>>>()?;
+    Ok(entries.into_iter().flatten().collect())
+}
 
 /// The MIME type of a plain text article.
 pub const TEXT_PLAIN: &str = "text/plain";
@@ -45,11 +72,7 @@ impl HotlineClient {
     ) -> Result<Vec<NewsCategoryListEntry>> {
         let fields = self.news_path_field(path)?.into_iter().collect();
         let reply = self.request(Opcode::GetNewsCatNameList, fields).await?;
-        let encoding = self.encoding().get();
-        Ok(reply
-            .fields(FieldId::NewsCatListData15)
-            .map(|f| NewsCategoryListEntry::decode(f.as_bytes(), encoding))
-            .collect::<hotline_proto::Result<_>>()?)
+        Ok(category_entries(&reply)?)
     }
 
     /// List the articles in the category at `path`, in thread order,
@@ -177,5 +200,47 @@ impl HotlineClient {
     /// [`myField_NewsPath`]: hotline_proto::FieldId::NewsPath
     fn news_path_field(&self, path: &HlPath) -> Result<Option<Field>> {
         self.path_field(FieldId::NewsPath, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hotline_proto::text_encoding;
+
+    fn reply(fields: Vec<Field>) -> Transaction<Received> {
+        Transaction::request(Opcode::GetNewsCatNameList, 1, vec![])
+            .received(text_encoding::DEFAULT)
+            .reply(fields)
+            .received(text_encoding::DEFAULT)
+    }
+
+    #[test]
+    fn category_entries_reads_the_old_field_without_a_323_first() {
+        let entries = category_entries(&reply(vec![
+            Field::bytes(FieldId::NewsCatListData, b"\x01Folder".to_vec()),
+            Field::bytes(FieldId::NewsCatListData, b"\xffReadMe".to_vec()),
+            Field::bytes(FieldId::NewsCatListData, b"\x0aGeneral".to_vec()),
+        ]))
+        .unwrap();
+        let names: Vec<_> = entries.iter().map(NewsCategoryListEntry::name).collect();
+        assert_eq!(names, ["Folder", "General"]);
+    }
+
+    #[test]
+    fn category_entries_reads_only_323_when_it_comes_first() {
+        let category = NewsCategoryListEntry::Bundle {
+            count: 1,
+            name: "New".into(),
+        };
+        let entries = category_entries(&reply(vec![
+            Field::bytes(
+                FieldId::NewsCatListData15,
+                category.encode(text_encoding::DEFAULT).unwrap(),
+            ),
+            Field::bytes(FieldId::NewsCatListData, b"\x01Old".to_vec()),
+        ]))
+        .unwrap();
+        assert_eq!(entries, [category]);
     }
 }

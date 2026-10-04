@@ -1,5 +1,5 @@
 use crate::error::{ProtoError, Result};
-use crate::text_encoding::Encoding;
+use crate::text_encoding::{self, Encoding};
 use crate::wire::{SliceReader, VecWriter};
 
 /// One entry of a [`myField_NewsCatListData15`] (323) news bundle/category
@@ -87,6 +87,33 @@ impl NewsCategoryListEntry {
         }
     }
 
+    /// Decode a [`myField_NewsCatListData`] (320) entry: a type byte, then
+    /// the name. Its counts are 0. `None` unless the type is a bundle (1)
+    /// or a category (10).
+    ///
+    /// [`myField_NewsCatListData`]: crate::FieldId::NewsCatListData
+    pub fn decode_old(buf: &[u8], encoding: &'static Encoding) -> Result<Option<Self>> {
+        let (&kind, name) = buf
+            .split_first()
+            .filter(|(_, name)| !name.is_empty())
+            .ok_or(ProtoError::UnexpectedEof {
+                needed: 2,
+                available: buf.len(),
+            })?;
+        let name = text_encoding::decode(encoding, &name[..name.len().min(255)]).into();
+        Ok(match kind {
+            1 => Some(Self::Bundle { count: 0, name }),
+            10 => Some(Self::Category {
+                count: 0,
+                guid: [0; 16],
+                add_sn: 0,
+                del_sn: 0,
+                name,
+            }),
+            _ => None,
+        })
+    }
+
     /// The bundle's or category's name.
     pub fn name(&self) -> &str {
         match self {
@@ -123,5 +150,54 @@ mod tests {
                 entry
             );
         }
+    }
+
+    #[test]
+    fn decode_old_reads_a_bundle_and_a_category() {
+        let encoding = text_encoding::DEFAULT;
+        assert_eq!(
+            NewsCategoryListEntry::decode_old(b"\x01Folder", encoding).unwrap(),
+            Some(NewsCategoryListEntry::Bundle {
+                count: 0,
+                name: "Folder".into(),
+            })
+        );
+        assert_eq!(
+            NewsCategoryListEntry::decode_old(b"\x0aGeneral", encoding).unwrap(),
+            Some(NewsCategoryListEntry::Category {
+                count: 0,
+                guid: [0; 16],
+                add_sn: 0,
+                del_sn: 0,
+                name: "General".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn decode_old_skips_another_type() {
+        let encoding = text_encoding::DEFAULT;
+        assert_eq!(
+            NewsCategoryListEntry::decode_old(b"\xffReadMe", encoding).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn decode_old_rejects_an_entry_without_a_name() {
+        let encoding = text_encoding::DEFAULT;
+        assert!(NewsCategoryListEntry::decode_old(b"\x01", encoding).is_err());
+        assert!(NewsCategoryListEntry::decode_old(b"", encoding).is_err());
+    }
+
+    #[test]
+    fn decode_old_keeps_255_bytes_of_the_name() {
+        let encoding = text_encoding::DEFAULT;
+        let mut buf = vec![1];
+        buf.extend([b'a'; 300]);
+        let entry = NewsCategoryListEntry::decode_old(&buf, encoding)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.name().len(), 255);
     }
 }

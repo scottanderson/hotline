@@ -179,10 +179,6 @@ one-shared-room model.
    port could miss a partial file on mhxd without HFS, because mhxd
    lists a file's type from its own type map.
 
-8. **`hlc` reads only `myField_NewsCatListData15` (323).** openline's
-   client falls back to `myField_NewsCatListData` (320) for an older
-   server. mhxd sends 323.
-
 ## Resolved
 
 1. `UserSelfinfo`'s `UserAccess` field now sends the session's real privileges
@@ -887,6 +883,16 @@ one-shared-room model.
      185 or more, and `myTran_GetUserNameList` (300) to an older one.
      `hlc` now sends every client opcode except
      `myTran_DownloadBanner` (212).
+
+111. `hlc` reads `myField_NewsCatListData` (320) from an older server.
+     Like openline's client (`CMyNewsCategoryListView`), it reads 320
+     when the first field of a `myTran_GetNewsCatNameList` (370) reply
+     is not `myField_NewsCatListData15` (323). openline's server sends
+     320 to a client older than version 15. A 320 entry has a type
+     byte and a name, cut to 255 bytes. An entry without a name fails
+     the list. A 320 entry has no count, so `hlc` shows 0. openline's
+     client lists a type other than bundle (1) or category (10) with a
+     plain icon. `hlc` has no row for one, so it leaves it out.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
