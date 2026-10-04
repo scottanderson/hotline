@@ -2,6 +2,7 @@ use hotline_client::FileInfo;
 
 use super::{AccountForm, OptionsForm};
 use crate::file_edit::FileEdit;
+use crate::session::NewsFolder;
 use crate::transfer::Conflict;
 
 /// A box drawn over the main screen that takes every key until it closes.
@@ -63,8 +64,8 @@ pub enum Modal {
         /// `true` while keys go to `body`.
         on_body: bool,
     },
-    /// The name of a new bundle, or a category if `category`.
-    NewsName { category: bool, input: String },
+    /// The name of a new bundle or category.
+    NewsName { kind: NewsFolder, input: String },
     /// A check before the threaded news item at `index` is deleted.
     DeleteNews { index: usize, name: Box<str> },
     /// An account to create or change.

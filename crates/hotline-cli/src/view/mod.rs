@@ -17,6 +17,7 @@ use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use ratatui::layout::Rect;
 
 use crate::file_edit::FileEdit;
+use crate::session::NewsFolder;
 use crate::transfer::{Conflict, Start};
 use crate::ui::{self, Areas};
 
@@ -554,10 +555,10 @@ impl View {
                     text: std::mem::take(body),
                 };
             }
-            (Modal::NewsName { category, input }, KeyCode::Enter) if !input.is_empty() => {
+            (Modal::NewsName { kind, input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::NewNewsItem {
                     name: std::mem::take(input),
-                    category: *category,
+                    kind: *kind,
                 };
             }
             (Modal::Invite { chat_id, .. }, KeyCode::Enter) => return Action::JoinChat(*chat_id),
@@ -906,7 +907,11 @@ impl View {
             }
             KeyCode::Char(c @ ('b' | 'c')) => {
                 self.modal = Some(Modal::NewsName {
-                    category: c == 'c',
+                    kind: if c == 'c' {
+                        NewsFolder::Category
+                    } else {
+                        NewsFolder::Bundle
+                    },
                     input: String::new(),
                 });
             }
@@ -1966,7 +1971,7 @@ mod tests {
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::NewNewsItem {
                 name: "Gen".into(),
-                category: true,
+                kind: NewsFolder::Category,
             }
         );
 

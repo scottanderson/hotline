@@ -355,8 +355,8 @@ async fn perform(
             });
         }
         Action::DeleteNewsItem(index) => session.delete_news_item(client, index).await,
-        Action::NewNewsItem { name, category } => {
-            session.new_news_item(client, &name, category).await;
+        Action::NewNewsItem { name, kind } => {
+            session.new_news_item(client, &name, kind).await;
         }
         Action::ListAccounts => {
             session.list_accounts(client).await;

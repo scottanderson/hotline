@@ -85,6 +85,24 @@ fn threaded(articles: Vec<NewsArticleSummary>) -> Vec<NewsItem> {
         .collect()
 }
 
+/// The kind of folder to create in threaded news.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewsFolder {
+    /// A bundle, which holds bundles and categories.
+    Bundle,
+    /// A category, which holds articles.
+    Category,
+}
+
+impl NewsFolder {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Bundle => "bundle",
+            Self::Category => "category",
+        }
+    }
+}
+
 impl ClientSession {
     /// List the bundle or category at `threaded_path`.
     pub async fn list_threaded_news(&mut self, client: &HotlineClient) {
@@ -201,12 +219,11 @@ impl ClientSession {
         }
     }
 
-    /// Create a bundle, or a category if `category`, called `name` in the
-    /// current bundle.
-    pub async fn new_news_item(&mut self, client: &HotlineClient, name: &str, category: bool) {
-        let created = match category {
-            true => client.new_news_cat(&self.threaded_path, name).await,
-            false => client.new_news_fldr(&self.threaded_path, name).await,
+    /// Create a `kind` called `name` in the current bundle.
+    pub async fn new_news_item(&mut self, client: &HotlineClient, name: &str, kind: NewsFolder) {
+        let created = match kind {
+            NewsFolder::Category => client.new_news_cat(&self.threaded_path, name).await,
+            NewsFolder::Bundle => client.new_news_fldr(&self.threaded_path, name).await,
         };
         match created {
             Ok(()) => self.list_threaded_news(client).await,
@@ -259,7 +276,9 @@ mod tests {
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
 
-        session.new_news_item(&client, "General", true).await;
+        session
+            .new_news_item(&client, "General", NewsFolder::Category)
+            .await;
         assert_eq!(
             session.threaded.as_deref().unwrap(),
             [NewsItem::Category {

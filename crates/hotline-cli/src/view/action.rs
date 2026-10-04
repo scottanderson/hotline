@@ -1,6 +1,7 @@
 use hotline_client::{Ban, ClientUserInfo, UserAccount};
 
 use crate::file_edit::FileEdit;
+use crate::session::NewsFolder;
 use crate::transfer::{Conflict, Start};
 
 /// What the caller must do after one key press or mouse click.
@@ -106,10 +107,10 @@ pub enum Action {
     /// Ask before the threaded news item at this index is deleted.
     AskDeleteNews(usize),
     DeleteNewsItem(usize),
-    /// Create a bundle, or a category if `category`, in the current bundle.
+    /// Create a bundle or category in the current bundle.
     NewNewsItem {
         name: String,
-        category: bool,
+        kind: NewsFolder,
     },
     /// List the accounts again.
     ListAccounts,

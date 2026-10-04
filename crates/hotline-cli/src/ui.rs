@@ -628,9 +628,8 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             let text = format!("Delete the account {login}?");
             draw_question(frame, screen, "delete?", text);
         }
-        Modal::NewsName { category, input } => {
-            let what = if *category { "category" } else { "bundle" };
-            draw_input_modal(frame, screen, format!("new {what}"), input);
+        Modal::NewsName { kind, input } => {
+            draw_input_modal(frame, screen, format!("new {}", kind.label()), input);
         }
         Modal::DeleteNews { name, .. } => {
             draw_question(frame, screen, "delete?", format!("Delete {name}?"));
