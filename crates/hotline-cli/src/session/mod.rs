@@ -22,7 +22,7 @@ use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::EncodingHandle;
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::FieldId;
-use hotline_proto::{Access, Field, Transaction};
+use hotline_proto::{Access, Field, Received, Transaction};
 
 use crate::line::{Line, LineKind};
 
@@ -131,7 +131,7 @@ impl ClientSession {
     }
 
     /// Show the error text of a reply that no request waits for.
-    fn show_unmatched_error(&mut self, tx: &Transaction) {
+    fn show_unmatched_error(&mut self, tx: &Transaction<Received>) {
         if tx.is_error() {
             let text = tx
                 .string(FieldId::ErrorText, self.encoding.get())
@@ -149,7 +149,7 @@ impl ClientSession {
 
     /// Apply one server-initiated transaction (chat relay, user list
     /// change, permission denial, ...) to the session state.
-    pub fn apply_server_event(&mut self, tx: &Transaction) -> EventOutcome {
+    pub fn apply_server_event(&mut self, tx: &Transaction<Received>) -> EventOutcome {
         let TransactionType::Push(opcode) = tx.r#type() else {
             self.show_unmatched_error(tx);
             return EventOutcome::Applied;
@@ -183,7 +183,7 @@ impl ClientSession {
     /// With no text, the caller accepts right away.
     ///
     /// [`myTran_ShowAgreement`]: hotline_proto::Opcode::ShowAgreement
-    fn apply_show_agreement(&mut self, tx: &Transaction) -> EventOutcome {
+    fn apply_show_agreement(&mut self, tx: &Transaction<Received>) -> EventOutcome {
         let encoding = self.encoding.get();
         match tx.string(FieldId::Data, encoding) {
             Some(text) => {
@@ -197,7 +197,7 @@ impl ClientSession {
     /// [`myTran_ServerMsg`] (104).
     ///
     /// [`myTran_ServerMsg`]: hotline_proto::Opcode::ServerMsg
-    fn apply_server_msg(&mut self, tx: &Transaction) {
+    fn apply_server_msg(&mut self, tx: &Transaction<Received>) {
         let encoding = self.encoding.get();
         let text = tx.string(FieldId::Data, encoding);
         let from = tx.string(FieldId::UserName, encoding);
@@ -221,7 +221,7 @@ impl ClientSession {
     /// [`myTran_NewMsg`] (102): a new classic news post.
     ///
     /// [`myTran_NewMsg`]: hotline_proto::Opcode::NewMsg
-    fn apply_new_msg(&mut self, tx: &Transaction) {
+    fn apply_new_msg(&mut self, tx: &Transaction<Received>) {
         let encoding = self.encoding.get();
         if let Some(entry) = tx.string(FieldId::Data, encoding) {
             if let Some(news) = &mut self.news {
@@ -234,7 +234,7 @@ impl ClientSession {
     /// [`myTran_ChatMsg`] (106).
     ///
     /// [`myTran_ChatMsg`]: hotline_proto::Opcode::ChatMsg
-    fn apply_chat_msg(&mut self, tx: &Transaction) {
+    fn apply_chat_msg(&mut self, tx: &Transaction<Received>) {
         if self.room_chat_msg(tx) {
             return;
         }
@@ -247,7 +247,7 @@ impl ClientSession {
     /// [`myTran_DisconnectMsg`] (111).
     ///
     /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
-    fn apply_disconnect_msg(&mut self, tx: &Transaction) -> EventOutcome {
+    fn apply_disconnect_msg(&mut self, tx: &Transaction<Received>) -> EventOutcome {
         let encoding = self.encoding.get();
         let reason = tx
             .string(FieldId::Data, encoding)
@@ -260,7 +260,7 @@ impl ClientSession {
     /// A banner image is not shown.
     ///
     /// [`myTran_ServerBanner`]: hotline_proto::Opcode::ServerBanner
-    fn apply_server_banner(&mut self, tx: &Transaction) {
+    fn apply_server_banner(&mut self, tx: &Transaction<Received>) {
         let encoding = self.encoding.get();
         if let Some(url) = tx.string(FieldId::ServerBannerUrl, encoding) {
             self.push(format!("server banner: {url}"), LineKind::System);
@@ -270,7 +270,7 @@ impl ClientSession {
     /// [`myTran_DownloadInfo`] (211): a queued download's place in the queue.
     ///
     /// [`myTran_DownloadInfo`]: hotline_proto::Opcode::DownloadInfo
-    fn apply_download_info(&mut self, tx: &Transaction) {
+    fn apply_download_info(&mut self, tx: &Transaction<Received>) {
         let waiting = tx
             .field(FieldId::WaitingCount)
             .and_then(Field::as_u32)
@@ -289,7 +289,7 @@ impl ClientSession {
     /// [`myTran_NotifyChangeUser`] (301).
     ///
     /// [`myTran_NotifyChangeUser`]: hotline_proto::Opcode::NotifyChangeUser
-    fn apply_notify_change_user(&mut self, tx: &Transaction) {
+    fn apply_notify_change_user(&mut self, tx: &Transaction<Received>) {
         let Some(user) = tx.user_entry(self.encoding.get()) else {
             return;
         };
@@ -314,7 +314,7 @@ impl ClientSession {
     /// [`myTran_NotifyDeleteUser`] (302).
     ///
     /// [`myTran_NotifyDeleteUser`]: hotline_proto::Opcode::NotifyDeleteUser
-    fn apply_notify_delete_user(&mut self, tx: &Transaction) {
+    fn apply_notify_delete_user(&mut self, tx: &Transaction<Received>) {
         let Some(user_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
             return;
         };
@@ -330,7 +330,7 @@ impl ClientSession {
     /// [`myTran_UserAccess`] (354).
     ///
     /// [`myTran_UserAccess`]: hotline_proto::Opcode::UserAccess
-    fn apply_user_access(&mut self, tx: &Transaction) {
+    fn apply_user_access(&mut self, tx: &Transaction<Received>) {
         self.access = tx.access().unwrap_or(self.access);
 
         // This session's own uid/icon/name.
@@ -352,7 +352,7 @@ impl ClientSession {
     /// [`myTran_UserBroadcast`] (355): a message from an administrator to every user.
     ///
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
-    fn apply_user_broadcast(&mut self, tx: &Transaction) {
+    fn apply_user_broadcast(&mut self, tx: &Transaction<Received>) {
         let encoding = self.encoding.get();
         let Some(text) = tx.string(FieldId::Data, encoding) else {
             return;
@@ -530,7 +530,7 @@ mod tests {
 
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
         session.news = Some("From bob\rold".to_string());
-        let post = Transaction::push(
+        let post = test_support::push(
             Opcode::NewMsg,
             vec![Field::string(FieldId::Data, "From alice\rhello")],
         );
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn server_banner_shows_its_url() {
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let banner = Transaction::push(
+        let banner = test_support::push(
             Opcode::ServerBanner,
             vec![
                 Field::bytes(FieldId::ServerBannerType, b"URL ".to_vec()),
@@ -571,8 +571,10 @@ mod tests {
     #[test]
     fn show_unmatched_error_shows_the_error_text() {
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let invite = Transaction::request(Opcode::InviteToChat, 7, vec![]);
-        let _ = session.apply_server_event(&invite.reply_error("no such user"));
+        let encoding = hotline_proto::text_encoding::DEFAULT;
+        let invite = Transaction::request(Opcode::InviteToChat, 7, vec![]).received(encoding);
+        let error = invite.reply_error("no such user");
+        let _ = session.apply_server_event(&error.received(encoding));
         assert_eq!(&*session.lines.last().unwrap().text, "no such user");
         assert_eq!(session.lines.last().unwrap().kind, LineKind::Error);
     }
@@ -581,7 +583,7 @@ mod tests {
     fn server_banner_ignores_an_image_banner() {
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
         let before = session.lines.len();
-        let banner = Transaction::push(
+        let banner = test_support::push(
             Opcode::ServerBanner,
             vec![Field::bytes(FieldId::ServerBannerType, b"JPEG".to_vec())],
         );
@@ -592,7 +594,7 @@ mod tests {
     #[test]
     fn user_broadcast_names_the_sender() {
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let broadcast = Transaction::push(
+        let broadcast = test_support::push(
             Opcode::UserBroadcast,
             vec![
                 Field::u16(FieldId::UserID, 1),
@@ -610,7 +612,7 @@ mod tests {
     #[test]
     fn download_info_shows_the_place_in_the_queue() {
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let info = Transaction::push(
+        let info = test_support::push(
             Opcode::DownloadInfo,
             vec![
                 Field::u32(FieldId::RefNum, 9),
@@ -634,7 +636,7 @@ mod tests {
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             task.abort_handle(),
         );
-        let info = Transaction::push(
+        let info = test_support::push(
             Opcode::DownloadInfo,
             vec![
                 Field::u32(FieldId::RefNum, 9),
@@ -679,7 +681,7 @@ mod tests {
         use hotline_proto::opcode::Opcode;
 
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let chat = Transaction::push(
+        let chat = test_support::push(
             Opcode::ChatMsg,
             vec![Field::string(FieldId::Data, "\rAlice: one\rtwo")],
         );
@@ -709,7 +711,7 @@ mod tests {
         use hotline_proto::FieldId;
 
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let invite = Transaction::push(
+        let invite = test_support::push(
             Opcode::InviteToChat,
             vec![
                 Field::string(FieldId::UserName, "Alice"),
@@ -736,7 +738,7 @@ mod tests {
         use hotline_proto::FieldId;
 
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let admin_change = Transaction::push(
+        let admin_change = test_support::push(
             Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserID, 2),
@@ -752,7 +754,7 @@ mod tests {
         assert!(user.flags.contains(UserFlags::ADMIN));
 
         // Existing user: a later update should still reflect current flags.
-        let demoted = Transaction::push(
+        let demoted = test_support::push(
             Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserID, 2),
@@ -772,7 +774,7 @@ mod tests {
         use hotline_proto::FieldId;
 
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
-        let joined = Transaction::push(
+        let joined = test_support::push(
             Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserID, 2),
@@ -783,7 +785,7 @@ mod tests {
         );
         let _ = session.apply_server_event(&joined);
 
-        let renamed = Transaction::push(
+        let renamed = test_support::push(
             Opcode::NotifyChangeUser,
             vec![
                 Field::u16(FieldId::UserID, 2),

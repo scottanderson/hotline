@@ -4,7 +4,7 @@ use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::htxf;
 use hotline_proto::types::{self, HlDate, HlPath};
 use hotline_proto::FieldId;
-use hotline_proto::{Field, Transaction};
+use hotline_proto::{Field, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::Activity;
@@ -22,7 +22,7 @@ impl Session {
     /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
     pub(super) async fn on_get_file_name_list(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access_extra.require(AccessExtra::FILE_LIST) {
@@ -57,13 +57,13 @@ impl Session {
     /// [`myField_FileNewPath`]: hotline_proto::FieldId::FileNewPath
     pub(super) fn path_field(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         id: FieldId,
     ) -> std::result::Result<HlPath, &'static str> {
         let encoding = self.encoding();
         match tx
             .field(id)
-            .map(|field| HlPath::decode(&field.as_bytes(encoding), encoding))
+            .map(|field| HlPath::decode(field.as_bytes(), encoding))
         {
             Some(Ok(path)) => Ok(path),
             Some(Err(_)) => Err("malformed file path"),
@@ -78,7 +78,7 @@ impl Session {
     /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
     pub(super) fn file_name_and_dir(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
     ) -> std::result::Result<(String, HlPath), &'static str> {
         let encoding = self.encoding();
         let name = tx
@@ -96,7 +96,7 @@ impl Session {
     /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
     pub(super) fn file_name_and_dir_from_path_tail(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
     ) -> std::result::Result<(String, HlPath), &'static str> {
         if tx.field(FieldId::FileName).is_some() {
             return self.file_name_and_dir(tx);
@@ -121,7 +121,7 @@ impl Session {
     /// [`myField_FileResumeData`]: hotline_proto::FieldId::FileResumeData
     pub(super) async fn on_download_file(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DOWNLOAD_FILE) {
@@ -141,12 +141,11 @@ impl Session {
         // `myField_FileXferOptions` (204) == 2 requests the raw file bytes with
         // no resume support.
         let raw = tx.field(FieldId::FileXferOptions).and_then(Field::as_u16) == Some(2);
-        let encoding = self.encoding();
         let (resume_offset, total_size) = if raw {
             (0, data_size)
         } else {
             let resume_offset = match tx.field(FieldId::FileResumeData) {
-                Some(field) => match types::decode_resume_data(&field.as_bytes(encoding)) {
+                Some(field) => match types::decode_resume_data(field.as_bytes()) {
                     Ok(already_have) => (already_have as u64).min(data_size),
                     Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
                 },
@@ -215,7 +214,7 @@ impl Session {
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     pub(super) async fn on_download_banner(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access_extra.require(AccessExtra::BANNER_GET) {
@@ -246,7 +245,7 @@ impl Session {
     /// [`myField_FileResumeData`]: hotline_proto::FieldId::FileResumeData
     pub(super) async fn on_upload_file(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::UPLOAD_FILE) {
@@ -308,7 +307,7 @@ impl Session {
     /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
     pub(super) async fn on_download_fldr(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DOWNLOAD_FOLDER) {
@@ -362,7 +361,7 @@ impl Session {
     /// [`myField_FldrItemCount`]: hotline_proto::FieldId::FldrItemCount
     pub(super) async fn on_upload_fldr(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::UPLOAD_FOLDER) {
@@ -425,7 +424,7 @@ impl Session {
     /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
     pub(super) async fn on_kill_download(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Some(reference) = tx
@@ -444,7 +443,7 @@ impl Session {
     /// [`myTran_DeleteFile`]: hotline_proto::Opcode::DeleteFile
     pub(super) async fn on_delete_file(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         let (name, dir) = match self.file_name_and_dir(tx) {
@@ -463,7 +462,7 @@ impl Session {
     /// [`myTran_NewFolder`]: hotline_proto::Opcode::NewFolder
     pub(super) async fn on_new_folder(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::CREATE_FOLDER) {
@@ -488,7 +487,7 @@ impl Session {
     /// [`myTran_GetFileInfo`]: hotline_proto::Opcode::GetFileInfo
     pub(super) async fn on_get_file_info(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
@@ -537,7 +536,7 @@ impl Session {
     /// [`myField_FileComment`]: hotline_proto::FieldId::FileComment
     pub(super) async fn on_set_file_info(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         let (name, dir) = match self.file_name_and_dir(tx) {
@@ -577,7 +576,7 @@ impl Session {
     /// [`myTran_MoveFile`]: hotline_proto::Opcode::MoveFile
     pub(super) async fn on_move_file(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         let (name, dir) = match self.file_name_and_dir(tx) {
@@ -603,7 +602,7 @@ impl Session {
     /// [`myTran_MakeFileAlias`]: hotline_proto::Opcode::MakeFileAlias
     pub(super) async fn on_make_file_alias(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::MAKE_ALIAS) {
@@ -649,7 +648,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::BANNER_GET);
 
-        let get = Transaction::request(Opcode::DownloadBanner, 1, vec![]);
+        let get = request(Opcode::DownloadBanner, 1, vec![]);
         let [reply] = session
             .on_download_banner(&get, &state)
             .await
@@ -667,7 +666,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::BANNER_GET);
 
-        let get = Transaction::request(Opcode::DownloadBanner, 1, vec![]);
+        let get = request(Opcode::DownloadBanner, 1, vec![]);
         let [reply] = session
             .on_download_banner(&get, &state)
             .await
@@ -676,10 +675,12 @@ mod tests {
         assert!(!reply.is_error());
 
         let reference = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
         let size = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
@@ -699,7 +700,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::BANNER_GET);
 
-        let get = Transaction::request(Opcode::DownloadBanner, 1, vec![]);
+        let get = request(Opcode::DownloadBanner, 1, vec![]);
         let [reply] = session
             .on_download_banner(&get, &state)
             .await
@@ -720,7 +721,7 @@ mod tests {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::empty());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -740,7 +741,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -753,15 +754,18 @@ mod tests {
 
         assert!(!reply.is_error());
         let reference = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
         let total_size = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(total_size, 5 + htxf::FLAT_FILE_HEADER_LEN as u32);
         let file_size = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::FileSize)
             .and_then(Field::as_u32)
             .unwrap();
@@ -781,7 +785,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -801,7 +805,7 @@ mod tests {
         files.seed(&HlPath::default(), "a.txt", *b"hello");
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -812,11 +816,12 @@ mod tests {
             .try_into()
             .unwrap();
         let reference = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
 
-        let kill = Transaction::request(
+        let kill = request(
             Opcode::KillDownload,
             2,
             vec![Field::u32(FieldId::RefNum, reference)],
@@ -843,7 +848,7 @@ mod tests {
         let mut second_session = test_session("Bob", Access::all());
         second_session.user_id = 2;
 
-        let first_get = Transaction::request(
+        let first_get = request(
             Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -855,7 +860,7 @@ mod tests {
             .unwrap();
         assert!(first_reply.field(FieldId::WaitingCount).is_none());
 
-        let second_get = Transaction::request(
+        let second_get = request(
             Opcode::DownloadFile,
             2,
             vec![Field::string(FieldId::FileName, "b.txt")],
@@ -866,6 +871,7 @@ mod tests {
             .try_into()
             .unwrap();
         let waiting_count = second_reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::WaitingCount)
             .and_then(Field::as_u32)
             .unwrap();
@@ -874,6 +880,7 @@ mod tests {
         let mut second_recipient = state.register_recipient(2).await;
 
         let first_reference = first_reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
@@ -882,6 +889,7 @@ mod tests {
             .await;
 
         let second_reference = second_reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
@@ -895,11 +903,15 @@ mod tests {
             hotline_proto::opcode::TransactionType::Push(Opcode::DownloadInfo)
         );
         assert_eq!(
-            push.field(FieldId::RefNum).and_then(Field::as_u32),
+            push.received(text_encoding::DEFAULT)
+                .field(FieldId::RefNum)
+                .and_then(Field::as_u32),
             Some(second_reference)
         );
         assert_eq!(
-            push.field(FieldId::WaitingCount).and_then(Field::as_u32),
+            push.received(text_encoding::DEFAULT)
+                .field(FieldId::WaitingCount)
+                .and_then(Field::as_u32),
             Some(0)
         );
 
@@ -919,7 +931,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![
@@ -935,17 +947,20 @@ mod tests {
 
         assert!(!reply.is_error());
         let total_size = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(total_size, 5 + htxf::FLAT_FILE_HEADER_LEN as u32);
         let file_size = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::FileSize)
             .and_then(Field::as_u32)
             .unwrap();
         assert_eq!(file_size, 11);
 
         let reference = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
@@ -961,7 +976,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![
@@ -977,6 +992,7 @@ mod tests {
 
         assert!(!reply.is_error());
         let total_size = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
@@ -990,7 +1006,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![
@@ -1012,7 +1028,7 @@ mod tests {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "missing.txt")],
@@ -1035,7 +1051,7 @@ mod tests {
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
-        let list = Transaction::request(
+        let list = request(
             Opcode::GetFileNameList,
             1,
             vec![Field::bytes(
@@ -1060,7 +1076,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let list = Transaction::request(
+        let list = request(
             Opcode::GetFileNameList,
             1,
             vec![Field::bytes(
@@ -1087,7 +1103,7 @@ mod tests {
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![
@@ -1116,7 +1132,7 @@ mod tests {
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
-        let delete = Transaction::request(
+        let delete = request(
             Opcode::DeleteFile,
             1,
             vec![
@@ -1152,7 +1168,7 @@ mod tests {
         let mut session = test_session("Alice", access);
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
-        let getinfo = Transaction::request(
+        let getinfo = request(
             Opcode::GetFileInfo,
             1,
             vec![
@@ -1179,7 +1195,7 @@ mod tests {
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
-        let mkdir = Transaction::request(
+        let mkdir = request(
             Opcode::NewFolder,
             1,
             vec![
@@ -1208,7 +1224,7 @@ mod tests {
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![
@@ -1239,7 +1255,7 @@ mod tests {
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
-        let move_tx = Transaction::request(
+        let move_tx = request(
             Opcode::MoveFile,
             1,
             vec![
@@ -1274,7 +1290,7 @@ mod tests {
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
 
-        let symlink = Transaction::request(
+        let symlink = request(
             Opcode::MakeFileAlias,
             1,
             vec![
@@ -1297,7 +1313,12 @@ mod tests {
         assert!(!reply.is_error());
     }
 
-    fn folder_request(opcode: Opcode, dir: &[&str], name: &str, extra: Vec<Field>) -> Transaction {
+    fn folder_request(
+        opcode: Opcode,
+        dir: &[&str],
+        name: &str,
+        extra: Vec<Field>,
+    ) -> Transaction<Received> {
         let encoding = text_encoding::DEFAULT;
         let mut fields = vec![
             Field::string(FieldId::FileName, name),
@@ -1307,7 +1328,7 @@ mod tests {
             ),
         ];
         fields.extend(extra);
-        Transaction::request(opcode, 1, fields)
+        request(opcode, 1, fields)
     }
 
     #[tokio::test]
@@ -1343,7 +1364,13 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let u32_field = |id| reply.field(id).and_then(Field::as_u32).unwrap();
+        let u32_field = |id| {
+            reply
+                .received(text_encoding::DEFAULT)
+                .field(id)
+                .and_then(Field::as_u32)
+                .unwrap()
+        };
         assert_eq!(u32_field(FieldId::TransferSize), 7);
         assert_eq!(u32_field(FieldId::FldrItemCount), 3);
         assert!(reply.field(FieldId::WaitingCount).is_none());
@@ -1380,7 +1407,10 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         assert_eq!(
-            reply.field(FieldId::FldrItemCount).and_then(Field::as_u32),
+            reply
+                .received(text_encoding::DEFAULT)
+                .field(FieldId::FldrItemCount)
+                .and_then(Field::as_u32),
             Some(0)
         );
         assert!(reply.field(FieldId::RefNum).is_none());
@@ -1393,13 +1423,13 @@ mod tests {
         let (state, log) = state_recording_activity(files);
         let session = test_session("Alice", Access::all());
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::DownloadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
         );
         session.on_download_file(&get, &state).await;
-        let missing = Transaction::request(
+        let missing = request(
             Opcode::DownloadFile,
             2,
             vec![Field::string(FieldId::FileName, "b.txt")],
@@ -1452,7 +1482,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
 
         let put = |name| {
-            Transaction::request(
+            request(
                 Opcode::UploadFile,
                 1,
                 vec![Field::string(FieldId::FileName, name)],
@@ -1548,6 +1578,7 @@ mod tests {
         assert_eq!(info.file_type, *b"fldr");
 
         let reference = reply
+            .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
@@ -1600,7 +1631,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let resume = || vec![Field::u16(FieldId::FileXferOptions, 1)];
         let put = |name, extra| folder_request(Opcode::UploadFldr, &[], name, extra);
-        let is_error = |tx: Transaction| {
+        let is_error = |tx: Transaction<Received>| {
             let session = &session;
             let state = &state;
             async move {
@@ -1622,7 +1653,7 @@ mod tests {
         access.remove(Access::UPLOAD_ANYWHERE);
         let session = test_session("Alice", access);
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -1645,7 +1676,7 @@ mod tests {
         access.remove(Access::UPLOAD_ANYWHERE);
         let session = test_session("Alice", access);
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![
@@ -1674,7 +1705,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -1698,7 +1729,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![
@@ -1712,14 +1743,14 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
+        let reply = reply.received(text_encoding::DEFAULT);
         let reference = reply
             .field(FieldId::RefNum)
             .and_then(Field::as_u32)
             .unwrap();
 
         let resume_field = reply.field(FieldId::FileResumeData).unwrap();
-        let already_have =
-            types::decode_resume_data(&resume_field.as_bytes(text_encoding::DEFAULT)).unwrap();
+        let already_have = types::decode_resume_data(resume_field.as_bytes()).unwrap();
         assert_eq!(already_have, 5);
 
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
@@ -1734,7 +1765,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![
@@ -1761,7 +1792,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![
@@ -1804,7 +1835,7 @@ mod tests {
         assert_eq!(info.file_type, crate::file::PARTIAL_TYPE);
         assert_eq!(info.creator, crate::file::PARTIAL_CREATOR);
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![
@@ -1818,13 +1849,9 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let already_have = types::decode_resume_data(
-            &reply
-                .field(FieldId::FileResumeData)
-                .unwrap()
-                .as_bytes(text_encoding::DEFAULT),
-        )
-        .unwrap();
+        let reply = reply.received(text_encoding::DEFAULT);
+        let resume_field = reply.field(FieldId::FileResumeData).unwrap();
+        let already_have = types::decode_resume_data(resume_field.as_bytes()).unwrap();
         assert_eq!(already_have, 5);
 
         state
@@ -1843,7 +1870,7 @@ mod tests {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![
@@ -1866,7 +1893,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let put = Transaction::request(
+        let put = request(
             Opcode::UploadFile,
             1,
             vec![
@@ -1892,7 +1919,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let delete = Transaction::request(
+        let delete = request(
             Opcode::DeleteFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -1919,7 +1946,7 @@ mod tests {
         access.remove(Access::DELETE_FILE);
         let session = test_session("Alice", access);
 
-        let delete = Transaction::request(
+        let delete = request(
             Opcode::DeleteFile,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -1937,7 +1964,7 @@ mod tests {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
-        let delete = Transaction::request(
+        let delete = request(
             Opcode::DeleteFile,
             1,
             vec![Field::string(FieldId::FileName, "missing.txt")],
@@ -1959,7 +1986,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let delete = Transaction::request(
+        let delete = request(
             Opcode::DeleteFile,
             1,
             vec![Field::string(FieldId::FileName, &*partial)],
@@ -1988,7 +2015,7 @@ mod tests {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
-        let mkdir = Transaction::request(
+        let mkdir = request(
             Opcode::NewFolder,
             1,
             vec![Field::string(FieldId::FileName, "NewFolder")],
@@ -2013,7 +2040,7 @@ mod tests {
         access.remove(Access::CREATE_FOLDER);
         let session = test_session("Alice", access);
 
-        let mkdir = Transaction::request(
+        let mkdir = request(
             Opcode::NewFolder,
             1,
             vec![Field::string(FieldId::FileName, "NewFolder")],
@@ -2034,7 +2061,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::FILE_LIST);
 
-        let list = Transaction::request(Opcode::GetFileNameList, 1, vec![]);
+        let list = request(Opcode::GetFileNameList, 1, vec![]);
         let [reply] = session
             .on_get_file_name_list(&list, &state)
             .await
@@ -2051,7 +2078,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::FILE_GETINFO);
 
-        let getinfo = Transaction::request(
+        let getinfo = request(
             Opcode::GetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -2073,7 +2100,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
-        let getinfo = Transaction::request(
+        let getinfo = request(
             Opcode::GetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -2084,9 +2111,18 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        assert_eq!(reply.string(FieldId::FileName, encoding).unwrap(), "a.txt");
         assert_eq!(
-            reply.field(FieldId::FileSize).and_then(Field::as_u32),
+            reply
+                .received(encoding)
+                .string(FieldId::FileName, encoding)
+                .unwrap(),
+            "a.txt"
+        );
+        assert_eq!(
+            reply
+                .received(encoding)
+                .field(FieldId::FileSize)
+                .and_then(Field::as_u32),
             Some(5)
         );
         // No real HFS metadata is persisted, so these are omitted rather
@@ -2106,7 +2142,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
-        let getinfo = Transaction::request(
+        let getinfo = request(
             Opcode::GetFileInfo,
             1,
             vec![Field::bytes(
@@ -2120,7 +2156,13 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        assert_eq!(reply.string(FieldId::FileName, encoding).unwrap(), "a.txt");
+        assert_eq!(
+            reply
+                .received(encoding)
+                .string(FieldId::FileName, encoding)
+                .unwrap(),
+            "a.txt"
+        );
     }
 
     #[tokio::test]
@@ -2130,7 +2172,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![
@@ -2166,7 +2208,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![
@@ -2209,7 +2251,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let move_tx = Transaction::request(
+        let move_tx = request(
             Opcode::MoveFile,
             1,
             vec![
@@ -2248,7 +2290,7 @@ mod tests {
         access.remove(Access::RENAME_FILE);
         let session = test_session("Alice", access);
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![
@@ -2271,7 +2313,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -2299,7 +2341,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.insert(AccessExtra::FILE_GETINFO);
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![
@@ -2314,7 +2356,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
 
-        let getinfo = Transaction::request(
+        let getinfo = request(
             Opcode::GetFileInfo,
             1,
             vec![Field::string(FieldId::FileName, "a.txt")],
@@ -2325,7 +2367,9 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(
-            reply.string(FieldId::FileComment, encoding),
+            reply
+                .received(encoding)
+                .string(FieldId::FileComment, encoding),
             Some("a note".to_string())
         );
     }
@@ -2339,7 +2383,7 @@ mod tests {
         access.remove(Access::SET_FILE_COMMENT);
         let session = test_session("Alice", access);
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![
@@ -2364,7 +2408,7 @@ mod tests {
         access.remove(Access::SET_FOLDER_COMMENT);
         let session = test_session("Alice", access);
 
-        let setinfo = Transaction::request(
+        let setinfo = request(
             Opcode::SetFileInfo,
             1,
             vec![
@@ -2386,7 +2430,7 @@ mod tests {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
 
-        let mkdir = Transaction::request(
+        let mkdir = request(
             Opcode::NewFolder,
             1,
             vec![Field::bytes(
@@ -2416,7 +2460,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let move_tx = Transaction::request(
+        let move_tx = request(
             Opcode::MoveFile,
             1,
             vec![
@@ -2454,7 +2498,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let move_tx = Transaction::request(
+        let move_tx = request(
             Opcode::MoveFile,
             1,
             vec![
@@ -2495,7 +2539,7 @@ mod tests {
         access.remove(Access::MOVE_FILE);
         let session = test_session("Alice", access);
 
-        let move_tx = Transaction::request(
+        let move_tx = request(
             Opcode::MoveFile,
             1,
             vec![
@@ -2524,7 +2568,7 @@ mod tests {
         access.remove(Access::MAKE_ALIAS);
         let session = test_session("Alice", access);
 
-        let symlink = Transaction::request(
+        let symlink = request(
             Opcode::MakeFileAlias,
             1,
             vec![
@@ -2552,7 +2596,7 @@ mod tests {
         let state = state_with_files(files);
         let session = test_session("Alice", Access::all());
 
-        let symlink = Transaction::request(
+        let symlink = request(
             Opcode::MakeFileAlias,
             1,
             vec![

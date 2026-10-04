@@ -48,7 +48,7 @@ impl HotlineClient {
         let encoding = self.encoding().get();
         Ok(reply
             .fields(FieldId::NewsCatListData15)
-            .map(|f| NewsCategoryListEntry::decode(&f.as_bytes(encoding), encoding))
+            .map(|f| NewsCategoryListEntry::decode(f.as_bytes(), encoding))
             .collect::<hotline_proto::Result<_>>()?)
     }
 
@@ -62,7 +62,7 @@ impl HotlineClient {
         let encoding = self.encoding().get();
         match reply.field(FieldId::NewsArtListData) {
             Some(field) => {
-                let listing = NewsArticleListData::decode(&field.as_bytes(encoding), encoding)?;
+                let listing = NewsArticleListData::decode(field.as_bytes(), encoding)?;
                 Ok(listing.articles)
             }
             None => Ok(Vec::new()),
@@ -96,14 +96,14 @@ impl HotlineClient {
             poster: text(FieldId::NewsArtPoster),
             date: reply
                 .field(FieldId::NewsArtDate)
-                .and_then(|f| HlDate::decode(&f.as_bytes(encoding)).ok()),
+                .and_then(|f| HlDate::decode(f.as_bytes()).ok()),
             prev_id: article_id(FieldId::NewsArtPrevArt),
             next_id: article_id(FieldId::NewsArtNextArt),
             parent_id: article_id(FieldId::NewsArtParentArt),
             first_child_id: article_id(FieldId::NewsArt1stChildArt),
             data: reply
                 .field(FieldId::NewsArtData)
-                .map(|f| f.as_bytes(encoding).into_owned())
+                .map(|f| f.as_bytes().to_vec())
                 .unwrap_or_default(),
         })
     }

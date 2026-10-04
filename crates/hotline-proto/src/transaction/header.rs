@@ -4,7 +4,7 @@
 //! from [`crate::transaction::Transaction`].
 
 use crate::error::Result;
-use crate::field::FieldList;
+use crate::field::{FieldList, Received};
 use crate::opcode::TransactionType;
 use crate::transaction::Transaction;
 use crate::wire::PacketReader;
@@ -97,7 +97,7 @@ impl TransactionHeader {
     /// Finish decoding into a [`Transaction`]: `body` is the field count
     /// followed by the fields, either one part's own bytes or several
     /// parts reassembled.
-    pub fn finish_decode(self, body: &[u8]) -> Result<Transaction> {
+    pub fn finish_decode(self, body: &[u8]) -> Result<Transaction<Received>> {
         let fields = FieldList::decode(body)?;
         Ok(Transaction {
             r#type: self.r#type,

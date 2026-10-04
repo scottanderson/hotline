@@ -1,7 +1,7 @@
 //! Private chat rooms.
 
 use hotline_client::{HotlineClient, JoinedChat};
-use hotline_proto::{Field, FieldId, Transaction};
+use hotline_proto::{Field, FieldId, Received, Transaction};
 
 use super::{display_text, wire_text, ChatInvite, ChatRoom, ClientSession};
 use crate::line::LineKind;
@@ -22,7 +22,7 @@ impl ClientSession {
     /// A push's [`myField_ChatID`] (114), if it names a room this client is in.
     ///
     /// [`myField_ChatID`]: hotline_proto::FieldId::ChatID
-    fn push_room(&mut self, tx: &Transaction) -> Option<&mut ChatRoom> {
+    fn push_room(&mut self, tx: &Transaction<Received>) -> Option<&mut ChatRoom> {
         let chat_id = tx.field(FieldId::ChatID).and_then(Field::as_u32)?;
         self.room_mut(chat_id)
     }
@@ -32,7 +32,7 @@ impl ClientSession {
     ///
     /// [`myTran_ChatMsg`]: hotline_proto::Opcode::ChatMsg
     /// [`myField_ChatID`]: hotline_proto::FieldId::ChatID
-    pub(super) fn room_chat_msg(&mut self, tx: &Transaction) -> bool {
+    pub(super) fn room_chat_msg(&mut self, tx: &Transaction<Received>) -> bool {
         let encoding = self.encoding.get();
         let text = tx.string(FieldId::Data, encoding).unwrap_or_default();
         let Some(room) = self.push_room(tx) else {
@@ -48,7 +48,7 @@ impl ClientSession {
     /// second invitation to a waiting room, and any past [`MAX_INVITES`].
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
-    pub(super) fn apply_invite_to_chat(&mut self, tx: &Transaction) {
+    pub(super) fn apply_invite_to_chat(&mut self, tx: &Transaction<Received>) {
         let encoding = self.encoding.get();
         let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
             return;
@@ -74,7 +74,7 @@ impl ClientSession {
     /// [`myTran_NotifyChatChangeUser`] (117): a user joined a room or changed.
     ///
     /// [`myTran_NotifyChatChangeUser`]: hotline_proto::Opcode::NotifyChatChangeUser
-    pub(super) fn apply_notify_chat_change_user(&mut self, tx: &Transaction) {
+    pub(super) fn apply_notify_chat_change_user(&mut self, tx: &Transaction<Received>) {
         let Some(user) = tx.user_entry(self.encoding.get()) else {
             return;
         };
@@ -93,7 +93,7 @@ impl ClientSession {
     /// [`myTran_NotifyChatDeleteUser`] (118): a user left a room.
     ///
     /// [`myTran_NotifyChatDeleteUser`]: hotline_proto::Opcode::NotifyChatDeleteUser
-    pub(super) fn apply_notify_chat_delete_user(&mut self, tx: &Transaction) {
+    pub(super) fn apply_notify_chat_delete_user(&mut self, tx: &Transaction<Received>) {
         let Some(user_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
             return;
         };
@@ -109,7 +109,7 @@ impl ClientSession {
     /// [`myTran_NotifyChatSubject`] (119): a room's new subject.
     ///
     /// [`myTran_NotifyChatSubject`]: hotline_proto::Opcode::NotifyChatSubject
-    pub(super) fn apply_notify_chat_subject(&mut self, tx: &Transaction) {
+    pub(super) fn apply_notify_chat_subject(&mut self, tx: &Transaction<Received>) {
         let encoding = self.encoding.get();
         let Some(subject) = tx.string(FieldId::ChatSubject, encoding) else {
             return;
@@ -237,16 +237,16 @@ mod tests {
         session
     }
 
-    fn room_push(opcode: Opcode, chat_id: u32, mut fields: Vec<Field>) -> Transaction {
+    fn room_push(opcode: Opcode, chat_id: u32, mut fields: Vec<Field>) -> Transaction<Received> {
         fields.push(Field::u32(FieldId::ChatID, chat_id));
-        Transaction::push(opcode, fields)
+        test_support::push(opcode, fields)
     }
 
     #[test]
     fn invite_to_chat_queues_one_invitation_per_room() {
         let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
         let invite = |chat_id| {
-            Transaction::push(
+            test_support::push(
                 Opcode::InviteToChat,
                 vec![
                     Field::u32(FieldId::ChatID, chat_id),
@@ -281,7 +281,7 @@ mod tests {
     /// A [`myTran_NotifyChatChangeUser`] (117) that adds Alice to room 7.
     ///
     /// [`myTran_NotifyChatChangeUser`]: hotline_proto::Opcode::NotifyChatChangeUser
-    fn alice_joins() -> Transaction {
+    fn alice_joins() -> Transaction<Received> {
         room_push(
             Opcode::NotifyChatChangeUser,
             7,

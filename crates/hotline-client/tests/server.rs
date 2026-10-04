@@ -10,7 +10,7 @@ use hotline_client::{
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::{HlPath, UserChangeOptions};
-use hotline_proto::{Access, FieldId, Opcode, Transaction};
+use hotline_proto::{Access, FieldId, Opcode, Received, Transaction};
 use hotline_server::{InMemoryFileProvider, Providers, Server, ServerConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -56,7 +56,10 @@ async fn start_server_config(config: ServerConfig, providers: Providers) -> Sock
 }
 
 /// The next push with `opcode`, skipping every other push.
-async fn next_push(events: &mut UnboundedReceiver<Transaction>, opcode: Opcode) -> Transaction {
+async fn next_push(
+    events: &mut UnboundedReceiver<Transaction<Received>>,
+    opcode: Opcode,
+) -> Transaction<Received> {
     timeout(WAIT, async {
         loop {
             let tx = events.recv().await.expect("connection open");
@@ -75,7 +78,7 @@ async fn join_as(
     login: &str,
     password: &str,
     nick: &str,
-) -> (HotlineClient, UnboundedReceiver<Transaction>) {
+) -> (HotlineClient, UnboundedReceiver<Transaction<Received>>) {
     let (client, mut events) = HotlineClient::connect(addr).await.unwrap();
     client.login(login, password).await.unwrap();
     next_push(&mut events, Opcode::ShowAgreement).await;
@@ -84,7 +87,10 @@ async fn join_as(
 }
 
 /// Log in as `guest` under `nick` and accept the agreement.
-async fn join(addr: SocketAddr, nick: &str) -> (HotlineClient, UnboundedReceiver<Transaction>) {
+async fn join(
+    addr: SocketAddr,
+    nick: &str,
+) -> (HotlineClient, UnboundedReceiver<Transaction<Received>>) {
     join_as(addr, "guest", "", nick).await
 }
 

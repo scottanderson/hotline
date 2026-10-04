@@ -5,7 +5,7 @@ use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::FieldId;
-use hotline_proto::{Field, Transaction};
+use hotline_proto::{Field, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::flood::FloodEvent;
@@ -28,7 +28,7 @@ impl Session {
     /// [`myTran_GetUserNameList`]: hotline_proto::Opcode::GetUserNameList
     pub(super) async fn on_get_user_name_list(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access_extra.require(AccessExtra::USER_GETLIST) {
@@ -58,7 +58,7 @@ impl Session {
     /// [`myTran_GetClientInfoText`]: hotline_proto::Opcode::GetClientInfoText
     pub(super) async fn on_get_client_info_text(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
@@ -137,7 +137,7 @@ impl Session {
     /// [`myField_Options`]: hotline_proto::FieldId::Options
     pub(super) async fn on_disconnect_user(
         &mut self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DISCON_USER) {
@@ -190,8 +190,8 @@ impl Session {
     }
 
     /// The repeat and message count checks for a private message or broadcast.
-    async fn message_flood_banned(&self, tx: &Transaction, state: &SharedState) -> bool {
-        self.flood_banned(FloodEvent::Text(&self.data_bytes(tx)), state)
+    async fn message_flood_banned(&self, tx: &Transaction<Received>, state: &SharedState) -> bool {
+        self.flood_banned(FloodEvent::Text(self.data_bytes(tx)), state)
             .await
             || self.flood_banned(FloodEvent::Message, state).await
     }
@@ -202,7 +202,7 @@ impl Session {
     /// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
     pub(super) async fn on_send_instant_msg(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if self.message_flood_banned(tx, state).await {
@@ -244,10 +244,7 @@ impl Session {
                 Field::string(FieldId::Data, message),
             ];
             if let Some(quote) = tx.field(FieldId::QuotingMsg) {
-                fields.push(Field::bytes(
-                    FieldId::QuotingMsg,
-                    quote.as_bytes(encoding).into_owned(),
-                ));
+                fields.push(Field::bytes(FieldId::QuotingMsg, quote.as_bytes().to_vec()));
             }
             state
                 .send_to(target_id, Transaction::push(Opcode::ServerMsg, fields))
@@ -305,7 +302,7 @@ impl Session {
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
     pub(super) async fn on_user_broadcast(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::BROADCAST) {
@@ -351,7 +348,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::USER_GETLIST);
         let state = SharedState::default();
-        let request = Transaction::request(Opcode::GetUserNameList, 1, vec![]);
+        let request = request(Opcode::GetUserNameList, 1, vec![]);
 
         assert!(session.on_get_user_name_list(&request, &state).await[0].is_error());
     }
@@ -381,12 +378,13 @@ mod tests {
                 automatic_response: None,
             })
             .await;
-        let request = Transaction::request(Opcode::GetUserNameList, 1, vec![]);
+        let request = request(Opcode::GetUserNameList, 1, vec![]);
 
         let reply = &session.on_get_user_name_list(&request, &state).await[0];
         let entry = reply
+            .received(sjis)
             .field(FieldId::UserNameWithInfo)
-            .map(|f| UserNameWithInfo::decode(&f.as_bytes(sjis), sjis).unwrap())
+            .map(|f| UserNameWithInfo::decode(f.as_bytes(), sjis).unwrap())
             .expect("expected bob's user list entry");
         assert_eq!(&*entry.name, konnichiwa);
     }
@@ -414,16 +412,25 @@ mod tests {
                 automatic_response: None,
             })
             .await;
-        let request = Transaction::request(
+        let request = request(
             Opcode::GetClientInfoText,
             1,
             vec![Field::u16(FieldId::UserID, 2)],
         );
 
         let reply = &session.on_get_client_info_text(&request, &state).await[0];
-        assert_eq!(reply.string(FieldId::UserName, encoding).unwrap(), "Bob");
+        assert_eq!(
+            reply
+                .received(encoding)
+                .string(FieldId::UserName, encoding)
+                .unwrap(),
+            "Bob"
+        );
         assert!(reply.field(FieldId::UserID).is_none());
-        let text = reply.string(FieldId::Data, encoding).unwrap();
+        let text = reply
+            .received(encoding)
+            .string(FieldId::Data, encoding)
+            .unwrap();
         assert!(text.contains("Nickname:   Bob"));
         assert!(text.contains("Name:       Bobby"));
         assert!(text.contains("Account:    bob"));
@@ -493,14 +500,17 @@ mod tests {
             let reference = state.register_transfer(file_transfer(name, Get, 10)).await;
             state.admit_download(reference, 2).await;
         }
-        let request = Transaction::request(
+        let request = request(
             Opcode::GetClientInfoText,
             1,
             vec![Field::u16(FieldId::UserID, 2)],
         );
 
         let reply = &session.on_get_client_info_text(&request, &state).await[0];
-        let text = reply.string(FieldId::Data, encoding).unwrap();
+        let text = reply
+            .received(encoding)
+            .string(FieldId::Data, encoding)
+            .unwrap();
         assert!(text.contains(
             "-------- File Downloads ---------\r\rfirst.txt             0%   <1K\r\r\
              ------- Folder Downloads --------\r\rNone.\r\r\
@@ -533,14 +543,17 @@ mod tests {
                 automatic_response: None,
             })
             .await;
-        let request = Transaction::request(
+        let request = request(
             Opcode::GetClientInfoText,
             1,
             vec![Field::u16(FieldId::UserID, 2)],
         );
 
         let reply = &session.on_get_client_info_text(&request, &state).await[0];
-        let text = reply.string(FieldId::Data, encoding).unwrap();
+        let text = reply
+            .received(encoding)
+            .string(FieldId::Data, encoding)
+            .unwrap();
         assert!(text.contains("Account:    (guest)"));
         assert!(text.contains("Name:       (none)"));
         assert!(!text.contains("Version:"));
@@ -550,7 +563,7 @@ mod tests {
     async fn kick_denied_without_privilege() {
         let mut session = test_session("Alice", Access::empty());
         let state = SharedState::default();
-        let request = Transaction::request(
+        let request = request(
             Opcode::DisconnectUser,
             1,
             vec![Field::u16(FieldId::UserID, 2)],
@@ -565,7 +578,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(2).await;
-        let request = Transaction::request(
+        let request = request(
             Opcode::DisconnectUser,
             1,
             vec![Field::u16(FieldId::UserID, 2)],
@@ -590,7 +603,7 @@ mod tests {
         state.insert_user(target).await;
         let mut target_rx = state.register_recipient(2).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::DisconnectUser,
             1,
             vec![
@@ -612,7 +625,10 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a DisconnectMsg push notifying the target of the ban");
         assert_eq!(
-            notice.string(FieldId::Data, encoding).unwrap(),
+            notice
+                .received(encoding)
+                .string(FieldId::Data, encoding)
+                .unwrap(),
             "You are permanently banned on this server."
         );
         assert_eq!(
@@ -632,7 +648,7 @@ mod tests {
         state.insert_user(target).await;
         let mut target_rx = state.register_recipient(2).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::DisconnectUser,
             1,
             vec![
@@ -655,7 +671,10 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a DisconnectMsg push notifying the target of the ban");
         assert_eq!(
-            notice.string(FieldId::Data, encoding).unwrap(),
+            notice
+                .received(encoding)
+                .string(FieldId::Data, encoding)
+                .unwrap(),
             "You are temporarily banned on this server."
         );
     }
@@ -664,7 +683,7 @@ mod tests {
     async fn kick_with_missing_uid_replies_success() {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
-        let request = Transaction::request(Opcode::DisconnectUser, 1, vec![]);
+        let request = request(Opcode::DisconnectUser, 1, vec![]);
         let replies = session.on_disconnect_user(&request, &state).await;
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
@@ -675,7 +694,7 @@ mod tests {
         let state = state_with_flood();
         let mut session = test_session("Alice", Access::all());
         let mut rx = state.register_recipient(session.user_id).await;
-        let ping = || Transaction::request(Opcode::KeepConnectionAlive, 1, vec![]);
+        let ping = || request(Opcode::KeepConnectionAlive, 1, vec![]);
         let config = ServerConfig::default();
 
         for _ in 0..121 {
@@ -700,7 +719,7 @@ mod tests {
         for _ in 0..200 {
             let replies = session
                 .handle(
-                    &Transaction::request(Opcode::KeepConnectionAlive, 1, vec![]),
+                    &request(Opcode::KeepConnectionAlive, 1, vec![]),
                     &state,
                     &config,
                 )
@@ -719,7 +738,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let mut rx = state.register_recipient(session.user_id).await;
         let message = || {
-            Transaction::request(
+            request(
                 Opcode::SendInstantMsg,
                 1,
                 vec![
@@ -747,7 +766,7 @@ mod tests {
     async fn user_broadcast_still_replies_to_the_broadcast_that_bans() {
         let state = state_with_flood();
         let session = test_session("Alice", Access::all());
-        let broadcast = Transaction::request(
+        let broadcast = request(
             Opcode::UserBroadcast,
             1,
             vec![Field::string(FieldId::Data, "buy now")],
@@ -772,7 +791,7 @@ mod tests {
         let mut target_rx = state.register_recipient(42).await;
         let mut sender_rx = state.register_recipient(session.user_id).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SendInstantMsg,
             1,
             vec![
@@ -789,7 +808,10 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Msg push");
         assert_eq!(
-            delivered.string(FieldId::Data, encoding).unwrap(),
+            delivered
+                .received(encoding)
+                .string(FieldId::Data, encoding)
+                .unwrap(),
             "hi there"
         );
         assert!(
@@ -804,7 +826,7 @@ mod tests {
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SendInstantMsg,
             1,
             vec![
@@ -822,7 +844,11 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a Msg push");
         assert_eq!(
-            delivered.field(FieldId::Options).unwrap().as_u16(),
+            delivered
+                .received(text_encoding::DEFAULT)
+                .field(FieldId::Options)
+                .unwrap()
+                .as_u16(),
             Some(MsgOption::UserMessage.into())
         );
     }
@@ -840,7 +866,7 @@ mod tests {
             .await;
         let mut target_rx = state.register_recipient(42).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SendInstantMsg,
             1,
             vec![
@@ -853,11 +879,18 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].string(FieldId::Data, encoding).unwrap(),
+            replies[0]
+                .received(encoding)
+                .string(FieldId::Data, encoding)
+                .unwrap(),
             "Bob does not accept private messages."
         );
         assert_eq!(
-            replies[0].field(FieldId::Options).unwrap().as_u16(),
+            replies[0]
+                .received(encoding)
+                .field(FieldId::Options)
+                .unwrap()
+                .as_u16(),
             Some(MsgOption::RefuseMessage.into())
         );
         assert!(!replies[1].is_error());
@@ -880,7 +913,7 @@ mod tests {
             .await;
         let mut target_rx = state.register_recipient(42).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SendInstantMsg,
             1,
             vec![
@@ -893,11 +926,18 @@ mod tests {
 
         assert_eq!(replies.len(), 2);
         assert_eq!(
-            replies[0].string(FieldId::Data, encoding).unwrap(),
+            replies[0]
+                .received(encoding)
+                .string(FieldId::Data, encoding)
+                .unwrap(),
             "At lunch, back soon."
         );
         assert_eq!(
-            replies[0].field(FieldId::Options).unwrap().as_u16(),
+            replies[0]
+                .received(encoding)
+                .field(FieldId::Options)
+                .unwrap()
+                .as_u16(),
             Some(MsgOption::AutomaticResponse.into())
         );
         let delivered = target_rx
@@ -906,7 +946,10 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("automatic response still lets the message through");
         assert_eq!(
-            delivered.string(FieldId::Data, encoding).unwrap(),
+            delivered
+                .received(encoding)
+                .string(FieldId::Data, encoding)
+                .unwrap(),
             "hi there"
         );
     }
@@ -923,7 +966,7 @@ mod tests {
             })
             .await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SendInstantMsg,
             1,
             vec![
@@ -945,7 +988,7 @@ mod tests {
         let state = SharedState::default();
         let mut target_rx = state.register_recipient(42).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SendInstantMsg,
             1,
             vec![
@@ -964,7 +1007,7 @@ mod tests {
         session.access_extra.remove(AccessExtra::MSG_OVERRIDE);
         let state = SharedState::default();
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SendInstantMsg,
             1,
             vec![
@@ -977,6 +1020,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_broadcast_reaches_recipients_with_different_encodings() {
+        let sjis = hotline_proto::Encoding::for_label(b"shift-jis").unwrap();
+        let utf8 = hotline_proto::Encoding::for_label(b"utf-8").unwrap();
+        let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}";
+        let session = test_session("Alice", Access::all());
+        session.encoding.set(utf8);
+        let state = SharedState::default();
+        let mut sjis_rx = state.register_recipient(2).await;
+        let mut utf8_rx = state.register_recipient(3).await;
+
+        let request = Transaction::request(
+            Opcode::UserBroadcast,
+            1,
+            vec![Field::string(FieldId::Data, konnichiwa)],
+        )
+        .received(utf8);
+        session.on_user_broadcast(&request, &state).await;
+
+        let next = |rx: &mut tokio::sync::mpsc::Receiver<RecipientMessage>| {
+            rx.try_recv()
+                .ok()
+                .and_then(RecipientMessage::into_push)
+                .expect("expected a UserBroadcast push")
+        };
+        let to_sjis = next(&mut sjis_rx);
+        let to_utf8 = next(&mut utf8_rx);
+        assert_eq!(to_sjis, to_utf8);
+
+        let sjis_data = to_sjis.received(sjis);
+        let utf8_data = to_utf8.received(utf8);
+        let bytes =
+            |tx: &Transaction<Received>| tx.field(FieldId::Data).unwrap().as_bytes().to_vec();
+        assert_ne!(bytes(&sjis_data), bytes(&utf8_data));
+        assert_eq!(
+            sjis_data.string(FieldId::Data, sjis).as_deref(),
+            Some(konnichiwa)
+        );
+        assert_eq!(
+            utf8_data.string(FieldId::Data, utf8).as_deref(),
+            Some(konnichiwa)
+        );
+    }
+
+    #[tokio::test]
     async fn message_broadcast_reaches_everyone_except_sender() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
@@ -984,7 +1071,7 @@ mod tests {
         let mut sender_rx = state.register_recipient(session.user_id).await;
         let mut rx = state.register_recipient(2).await;
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::UserBroadcast,
             1,
             vec![Field::string(FieldId::Data, "server going down")],
@@ -999,7 +1086,10 @@ mod tests {
             .expect("expected a UserBroadcast push");
         assert_eq!(sent.r#type(), TransactionType::Push(Opcode::UserBroadcast));
         assert_eq!(
-            sent.field(FieldId::Data).unwrap().as_string(encoding),
+            sent.received(encoding)
+                .field(FieldId::Data)
+                .unwrap()
+                .as_string(encoding),
             "server going down"
         );
 
@@ -1011,7 +1101,7 @@ mod tests {
         let session = test_session("Alice", Access::default());
         let state = SharedState::default();
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::UserBroadcast,
             1,
             vec![Field::string(FieldId::Data, "hi")],

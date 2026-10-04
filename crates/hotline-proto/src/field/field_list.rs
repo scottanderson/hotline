@@ -6,7 +6,7 @@
 
 use crate::error::{ProtoError, Result};
 use crate::field::id::FieldId;
-use crate::field::Field;
+use crate::field::{Built, Field, Received};
 use crate::text_encoding::Encoding;
 use crate::wire::{PacketReader, VecWriter};
 
@@ -17,17 +17,35 @@ use crate::wire::{PacketReader, VecWriter};
 ///
 /// [`myTran_GetUserList`]: crate::Opcode::GetUserList
 /// [`myTran_SetUserList`]: crate::Opcode::SetUserList
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct FieldList(Vec<Field>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldList<S = Built>(Vec<Field<S>>);
 
-impl FieldList {
-    pub(crate) const fn new(fields: Vec<Field>) -> Self {
+impl<S> Default for FieldList<S> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<S> FieldList<S> {
+    pub(crate) const fn new(fields: Vec<Field<S>>) -> Self {
         Self(fields)
     }
 
     /// Byte length of the `count` prefix before a field list's own fields.
     const COUNT_LEN: usize = 2;
 
+    /// Find the first field with the given ID, if present.
+    pub fn field(&self, id: FieldId) -> Option<&Field<S>> {
+        self.0.iter().find(|f| f.id == id)
+    }
+
+    /// Find all fields with the given ID.
+    pub fn fields(&self, id: FieldId) -> impl Iterator<Item = &Field<S>> {
+        self.0.iter().filter(move |f| f.id == id)
+    }
+}
+
+impl FieldList {
     /// Encode as a `count`-prefixed field list: a transaction's own body
     /// shape, and also the shape of one nested account record inside
     /// [`myTran_GetUserList`] (348) / [`myTran_SetUserList`] (349).
@@ -56,6 +74,13 @@ impl FieldList {
             .finish())
     }
 
+    /// This list as a peer reads it after [`FieldList::encode`] with `encoding`.
+    pub fn received(&self, encoding: &'static Encoding) -> FieldList<Received> {
+        FieldList(self.0.iter().map(|f| f.received(encoding)).collect())
+    }
+}
+
+impl FieldList<Received> {
     /// Decode the `count`-prefixed field list [`FieldList::encode`] produces.
     pub fn decode(body: &[u8]) -> Result<Self> {
         let prefix: [u8; Self::COUNT_LEN] = body
@@ -80,16 +105,6 @@ impl FieldList {
         Ok(Self::new(fields))
     }
 
-    /// Find the first field with the given ID, if present.
-    pub fn field(&self, id: FieldId) -> Option<&Field> {
-        self.0.iter().find(|f| f.id == id)
-    }
-
-    /// Find all fields with the given ID.
-    pub fn fields(&self, id: FieldId) -> impl Iterator<Item = &Field> {
-        self.0.iter().filter(move |f| f.id == id)
-    }
-
     /// `id`'s field as text, if present.
     pub fn string(&self, id: FieldId, encoding: &'static Encoding) -> Option<String> {
         self.field(id).map(|f| f.as_string(encoding))
@@ -102,8 +117,8 @@ impl FieldList {
     }
 }
 
-impl std::ops::Deref for FieldList {
-    type Target = [Field];
+impl<S> std::ops::Deref for FieldList<S> {
+    type Target = [Field<S>];
 
     fn deref(&self) -> &Self::Target {
         &self.0

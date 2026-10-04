@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use bytes::{Buf, BytesMut};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
-use hotline_proto::{Transaction, TransactionHeader};
+use hotline_proto::{Received, Transaction, TransactionHeader};
 use tokio_util::codec::{Decoder, Encoder};
 
 use decode_state::DecodeState;
@@ -88,7 +88,7 @@ impl TransactionCodec {
 }
 
 impl Decoder for TransactionCodec {
-    type Item = Transaction;
+    type Item = Transaction<Received>;
     type Error = CodecError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -271,7 +271,7 @@ mod tests {
 
     /// Feeds bytes one at a time to verify `decode` correctly reports
     /// "not enough yet" until the full frame is buffered.
-    fn feed_byte_by_byte(tx: &Transaction) -> Transaction {
+    fn feed_byte_by_byte(tx: &Transaction) -> Transaction<Received> {
         let encoding = hotline_proto::text_encoding::DEFAULT;
         let encoded = tx.encode(encoding).unwrap();
         let mut buf = BytesMut::new();

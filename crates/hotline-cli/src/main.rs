@@ -96,7 +96,7 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     session: &mut ClientSession,
     client: &HotlineClient,
-    events: &mut mpsc::UnboundedReceiver<hotline_proto::Transaction>,
+    events: &mut mpsc::UnboundedReceiver<hotline_proto::Transaction<hotline_proto::Received>>,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
     let mut view = View::default();

@@ -1,6 +1,6 @@
 //! Account administration requests.
 
-use hotline_proto::{Access, Encoding, Field, FieldId, FieldList, Opcode};
+use hotline_proto::{Access, Encoding, Field, FieldId, FieldList, Opcode, Received};
 
 use crate::client::HotlineClient;
 use crate::error::Result;
@@ -48,10 +48,10 @@ impl UserAccount {
     ///
     /// [`myTran_GetUser`]: hotline_proto::Opcode::GetUser
     /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
-    fn from_fields(fields: &FieldList, encoding: &'static Encoding) -> Self {
+    fn from_fields(fields: &FieldList<Received>, encoding: &'static Encoding) -> Self {
         let has_password = fields
             .field(FieldId::UserPassword)
-            .is_some_and(|f| !f.as_bytes(encoding).is_empty());
+            .is_some_and(|f| !f.as_bytes().is_empty());
         Self {
             name: fields
                 .string(FieldId::UserName, encoding)
@@ -124,7 +124,7 @@ impl HotlineClient {
         let encoding = self.encoding().get();
         Ok(reply
             .fields(FieldId::Data)
-            .map(|f| FieldList::decode(&f.as_bytes(encoding)))
+            .map(|f| FieldList::decode(f.as_bytes()))
             .map(|record| record.map(|r| UserAccount::from_fields(&r, encoding)))
             .collect::<hotline_proto::Result<_>>()?)
     }

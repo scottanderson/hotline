@@ -1,6 +1,5 @@
 //! The per-connection `Session`: handshake, run loop, and dispatch.
 
-use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -18,7 +17,7 @@ use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
 use hotline_proto::types::{UserChangeOptions, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
-use hotline_proto::{ClientHandshake, Field, ServerHandshake, Transaction};
+use hotline_proto::{ClientHandshake, Field, Received, ServerHandshake, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::{Activity, ActivityEntry};
@@ -340,7 +339,7 @@ impl Session {
     /// Handle one request, returning zero or more transactions in reply.
     pub(super) async fn handle(
         &mut self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
@@ -375,9 +374,9 @@ impl Session {
     /// `tx`'s [`myField_Data`] (101) bytes, empty if absent.
     ///
     /// [`myField_Data`]: hotline_proto::FieldId::Data
-    pub(super) fn data_bytes<'a>(&self, tx: &'a Transaction) -> Cow<'a, [u8]> {
+    pub(super) fn data_bytes<'a>(&self, tx: &'a Transaction<Received>) -> &'a [u8] {
         tx.field(FieldId::Data)
-            .map(|field| field.as_bytes(self.encoding()))
+            .map(Field::as_bytes)
             .unwrap_or_default()
     }
 
@@ -385,7 +384,7 @@ impl Session {
     async fn handle_agreement(
         &mut self,
         opcode: Opcode,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
@@ -404,7 +403,7 @@ impl Session {
     async fn handle_joined(
         &mut self,
         opcode: Opcode,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
@@ -470,7 +469,7 @@ impl Session {
 
     async fn on_login(
         &mut self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
@@ -548,7 +547,7 @@ impl Session {
     /// unauthenticated.
     async fn reject_login(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
         reason: &str,
     ) -> Vec<Transaction> {
@@ -568,7 +567,11 @@ impl Session {
     /// [`myTran_Agreed`] (121).
     ///
     /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
-    async fn on_agreed(&mut self, tx: &Transaction, state: &SharedState) -> Vec<Transaction> {
+    async fn on_agreed(
+        &mut self,
+        tx: &Transaction<Received>,
+        state: &SharedState,
+    ) -> Vec<Transaction> {
         let icon = tx.icon().unwrap_or(0);
         let encoding = self.encoding();
         let name = tx.name(encoding);
@@ -657,7 +660,7 @@ impl Session {
 
     async fn on_set_client_user_info(
         &mut self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if self.flood_banned(FloodEvent::NameChange, state).await {
@@ -872,11 +875,14 @@ mod tests {
         let state = SharedState::default();
         let config = ServerConfig::default();
 
-        let login = Transaction::request(Opcode::Login, 1, vec![]);
+        let login = request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].field(FieldId::Vers).and_then(Field::as_u16),
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .field(FieldId::Vers)
+                .and_then(Field::as_u16),
             Some(190)
         );
     }
@@ -887,11 +893,12 @@ mod tests {
         let state = SharedState::default();
         let config = ServerConfig::default();
 
-        let login = Transaction::request(Opcode::Login, 1, vec![]);
+        let login = request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
             replies[0]
+                .received(text_encoding::DEFAULT)
                 .field(FieldId::CommunityBannerID)
                 .and_then(Field::as_u16),
             Some(0)
@@ -908,11 +915,13 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(Opcode::Login, 1, vec![]);
+        let login = request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].string(FieldId::ServerName, encoding),
+            replies[0]
+                .received(encoding)
+                .string(FieldId::ServerName, encoding),
             Some(String::new())
         );
     }
@@ -927,7 +936,7 @@ mod tests {
         let mut joiner_rx = state.register_recipient(1).await;
 
         // `myTran_Login` (107) can carry the name and icon too.
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -942,9 +951,18 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
-        assert_eq!(notify.string(FieldId::UserName, encoding).unwrap(), "Alice");
         assert_eq!(
-            notify.field(FieldId::UserIconID).and_then(Field::as_u16),
+            notify
+                .received(encoding)
+                .string(FieldId::UserName, encoding)
+                .unwrap(),
+            "Alice"
+        );
+        assert_eq!(
+            notify
+                .received(encoding)
+                .field(FieldId::UserIconID)
+                .and_then(Field::as_u16),
             Some(42)
         );
         assert!(
@@ -962,7 +980,7 @@ mod tests {
     async fn login_records_the_connect() {
         let mut session = test_session("guest1", Access::default());
         let (state, log) = state_recording_activity(Default::default());
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -980,7 +998,7 @@ mod tests {
     async fn login_without_a_name_and_icon_records_no_connect() {
         let mut session = test_session("guest1", Access::default());
         let (state, log) = state_recording_activity(Default::default());
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![Field::string(FieldId::UserName, "Alice")],
@@ -996,7 +1014,7 @@ mod tests {
         let mut session = test_session("guest1", Access::default());
         let (state, log) = state_recording_activity(Default::default());
         session.state = SessionState::Agreement;
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1016,7 +1034,7 @@ mod tests {
     async fn agreed_records_the_connect() {
         let mut session = test_session("guest1", Access::default());
         let (state, log) = state_recording_activity(Default::default());
-        let agreed = Transaction::request(Opcode::Agreed, 1, vec![]);
+        let agreed = request(Opcode::Agreed, 1, vec![]);
         session.on_agreed(&agreed, &state).await;
         assert_eq!(log.activities(), [Activity::Connect]);
     }
@@ -1039,7 +1057,7 @@ mod tests {
             .await
             .unwrap();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1071,7 +1089,7 @@ mod tests {
             .await
             .unwrap();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1103,7 +1121,7 @@ mod tests {
             .await
             .unwrap();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![Field::obfuscated_string(FieldId::UserLogin, "alice")],
@@ -1132,7 +1150,7 @@ mod tests {
             .unwrap();
         let mut rx = state.register_recipient(session.user_id).await;
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1143,7 +1161,9 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].string(FieldId::ErrorText, text_encoding::DEFAULT),
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText, text_encoding::DEFAULT),
             Some("Incorrect login.".to_string())
         );
         let kick = rx
@@ -1172,7 +1192,7 @@ mod tests {
             .await
             .unwrap();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1192,7 +1212,7 @@ mod tests {
         let config = ServerConfig::default();
         let mut rx = state.register_recipient(session.user_id).await;
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![Field::obfuscated_string(FieldId::UserLogin, "nobody")],
@@ -1200,7 +1220,9 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert_eq!(
-            replies[0].string(FieldId::ErrorText, text_encoding::DEFAULT),
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText, text_encoding::DEFAULT),
             Some("Incorrect login.".to_string())
         );
         assert!(rx.try_recv().is_ok());
@@ -1214,7 +1236,7 @@ mod tests {
         let config = ServerConfig::default();
         let mut rx = state.register_recipient(session.user_id).await;
 
-        let login = Transaction::request(Opcode::Login, 1, vec![]);
+        let login = request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(replies[0].is_error());
@@ -1230,13 +1252,13 @@ mod tests {
         let mut bystander = state.register_recipient(2).await;
 
         session.state = SessionState::Agreement;
-        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
+        let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
         session.on_login(&login, &state, &config).await;
 
         assert!(bystander.try_recv().is_err());
         assert!(matches!(session.state, SessionState::Agreement));
 
-        let agreed = Transaction::request(
+        let agreed = request(
             Opcode::Agreed,
             2,
             vec![
@@ -1251,7 +1273,13 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("agreed should announce a join");
-        assert_eq!(notify.string(FieldId::UserName, encoding).unwrap(), "Alice");
+        assert_eq!(
+            notify
+                .received(encoding)
+                .string(FieldId::UserName, encoding)
+                .unwrap(),
+            "Alice"
+        );
         assert!(matches!(session.state, SessionState::Joined));
     }
 
@@ -1264,7 +1292,7 @@ mod tests {
 
         session.state = SessionState::Agreement;
         // No Version field: counts as pre-150.
-        let login = Transaction::request(Opcode::Login, 1, vec![]);
+        let login = request(Opcode::Login, 1, vec![]);
         session.on_login(&login, &state, &config).await;
 
         assert!(
@@ -1282,7 +1310,7 @@ mod tests {
         let mut bystander = state.register_recipient(2).await;
 
         session.state = SessionState::Agreement;
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1307,7 +1335,7 @@ mod tests {
         let mut bystander = state.register_recipient(2).await;
 
         session.state = SessionState::Agreement;
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1335,7 +1363,7 @@ mod tests {
         }));
         let config = ServerConfig::default();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1352,10 +1380,10 @@ mod tests {
             .expect("expected a myTran_ServerBanner push");
         assert_eq!(
             banner
+                .received(encoding)
                 .field(FieldId::ServerBannerType)
                 .unwrap()
-                .as_bytes(encoding)
-                .as_ref(),
+                .as_bytes(),
             b"JPEG"
         );
         assert!(banner.field(FieldId::ServerBannerUrl).is_none());
@@ -1370,7 +1398,7 @@ mod tests {
         )));
         let config = ServerConfig::default();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1387,14 +1415,16 @@ mod tests {
             .expect("expected a myTran_ServerBanner push");
         assert_eq!(
             banner
+                .received(encoding)
                 .field(FieldId::ServerBannerType)
                 .unwrap()
-                .as_bytes(encoding)
-                .as_ref(),
+                .as_bytes(),
             b"URL "
         );
         assert_eq!(
-            banner.string(FieldId::ServerBannerUrl, encoding),
+            banner
+                .received(encoding)
+                .string(FieldId::ServerBannerUrl, encoding),
             Some("https://example.com/banner.jpg".to_string())
         );
     }
@@ -1408,7 +1438,7 @@ mod tests {
         }));
         let config = ServerConfig::default();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1430,7 +1460,7 @@ mod tests {
         let state = SharedState::default();
         let config = ServerConfig::default();
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1455,7 +1485,7 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
+        let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
         let replies = session.on_login(&login, &state, &config).await;
 
         let agreement = replies
@@ -1474,7 +1504,7 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(Opcode::Login, 1, vec![]);
+        let login = request(Opcode::Login, 1, vec![]);
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(
@@ -1506,7 +1536,7 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![
@@ -1548,7 +1578,7 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![Field::obfuscated_string(FieldId::UserLogin, "skipper")],
@@ -1582,7 +1612,7 @@ mod tests {
         let state = SharedState::default();
         let config = ServerConfig::default();
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::ChatSend,
             1,
             vec![Field::string(FieldId::Data, "hi")],
@@ -1598,7 +1628,7 @@ mod tests {
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
 
-        let agreed = Transaction::request(
+        let agreed = request(
             Opcode::Agreed,
             1,
             vec![
@@ -1613,8 +1643,9 @@ mod tests {
             .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserAccess))
             .expect("on_agreed should push UserAccess");
         let entry = selfinfo
+            .received(encoding)
             .field(FieldId::UserNameWithInfo)
-            .and_then(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding).ok())
+            .and_then(|f| UserNameWithInfo::decode(f.as_bytes(), encoding).ok())
             .expect("UserAccess should carry the joiner's own UserList entry");
         assert_eq!(entry.user_id, 1); // test_session()'s fixed user_id
         assert_eq!(&*entry.name, "Alice");
@@ -1626,7 +1657,7 @@ mod tests {
         let mut session = test_session("guest1", Access::DOWNLOAD_FILE);
         let state = SharedState::default();
 
-        let agreed = Transaction::request(
+        let agreed = request(
             Opcode::Agreed,
             1,
             vec![
@@ -1641,7 +1672,10 @@ mod tests {
             .find(|tx| tx.r#type() == TransactionType::Push(Opcode::UserAccess))
             .expect("on_agreed should push UserAccess");
         assert_eq!(
-            selfinfo.field(FieldId::UserAccess).and_then(Field::as_u64),
+            selfinfo
+                .received(text_encoding::DEFAULT)
+                .field(FieldId::UserAccess)
+                .and_then(Field::as_u64),
             Some(Access::DOWNLOAD_FILE.bits())
         );
     }
@@ -1667,7 +1701,7 @@ mod tests {
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
 
-        let login = Transaction::request(
+        let login = request(
             Opcode::Login,
             1,
             vec![Field::string(FieldId::UserName, "Mod")],
@@ -1680,6 +1714,7 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("login should announce a join");
         let color = notify
+            .received(text_encoding::DEFAULT)
             .field(FieldId::UserFlags)
             .and_then(Field::as_u16)
             .unwrap_or(0);
@@ -1719,6 +1754,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a UserChange push")
+            .received(text_encoding::DEFAULT)
             .field(FieldId::UserFlags)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
@@ -1731,6 +1767,7 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_push)
             .expect("expected a UserChange push")
+            .received(text_encoding::DEFAULT)
             .field(FieldId::UserFlags)
             .and_then(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
@@ -1758,7 +1795,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SetClientUserInfo,
             1,
             vec![
@@ -1784,7 +1821,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SetClientUserInfo,
             1,
             vec![
@@ -1804,7 +1841,7 @@ mod tests {
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
-        let request = Transaction::request(
+        let request = request(
             Opcode::SetClientUserInfo,
             1,
             vec![

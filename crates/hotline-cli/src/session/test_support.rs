@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
-use hotline_proto::{Opcode, Transaction};
+use hotline_proto::{text_encoding, Field, Opcode, Received, Transaction};
 use hotline_server::{Providers, Server, ServerConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -45,8 +45,16 @@ pub async fn start_server_config(config: ServerConfig, providers: Providers) -> 
     panic!("server did not start");
 }
 
+/// A push as the client reads it in the default encoding.
+pub fn push(opcode: Opcode, fields: Vec<Field>) -> Transaction<Received> {
+    Transaction::push(opcode, fields).received(text_encoding::DEFAULT)
+}
+
 /// The next push with `opcode`, skipping every other push.
-pub async fn next_push(events: &mut UnboundedReceiver<Transaction>, opcode: Opcode) -> Transaction {
+pub async fn next_push(
+    events: &mut UnboundedReceiver<Transaction<Received>>,
+    opcode: Opcode,
+) -> Transaction<Received> {
     timeout(WAIT, async {
         loop {
             let tx = events.recv().await.expect("connection open");
@@ -63,7 +71,7 @@ pub async fn next_push(events: &mut UnboundedReceiver<Transaction>, opcode: Opco
 pub async fn join_admin(
     addr: SocketAddr,
     nick: &str,
-) -> (HotlineClient, UnboundedReceiver<Transaction>) {
+) -> (HotlineClient, UnboundedReceiver<Transaction<Received>>) {
     let (client, mut events) = HotlineClient::connect(addr).await.unwrap();
     client.login("admin", "admin").await.unwrap();
     next_push(&mut events, Opcode::ShowAgreement).await;

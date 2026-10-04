@@ -5,7 +5,7 @@ use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding;
 use hotline_proto::types::HlPath;
 use hotline_proto::FieldId;
-use hotline_proto::{Field, Transaction};
+use hotline_proto::{Field, Received, Transaction};
 
 use crate::flood::FloodEvent;
 use crate::news::{body_from_wire, body_to_wire};
@@ -19,7 +19,7 @@ impl Session {
     /// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
     pub(super) async fn on_get_msgs(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
@@ -38,7 +38,7 @@ impl Session {
     /// [`myTran_OldPostNews`]: hotline_proto::Opcode::OldPostNews
     pub(super) async fn on_old_post_news(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
@@ -53,7 +53,7 @@ impl Session {
         }
         let entry = state.post_news(&self.name, &text).await;
         if !self
-            .flood_banned(FloodEvent::Text(&self.data_bytes(tx)), state)
+            .flood_banned(FloodEvent::Text(self.data_bytes(tx)), state)
             .await
         {
             state
@@ -69,7 +69,10 @@ impl Session {
     /// A [`myField_NewsPath`] (325) field, decoded, or root if absent.
     ///
     /// [`myField_NewsPath`]: hotline_proto::FieldId::NewsPath
-    pub(super) fn news_path(&self, tx: &Transaction) -> std::result::Result<HlPath, &'static str> {
+    pub(super) fn news_path(
+        &self,
+        tx: &Transaction<Received>,
+    ) -> std::result::Result<HlPath, &'static str> {
         let encoding = self.encoding();
         match tx.news_path(encoding) {
             Some(Ok(path)) => Ok(path),
@@ -84,7 +87,7 @@ impl Session {
     /// [`myTran_GetNewsCatNameList`]: hotline_proto::Opcode::GetNewsCatNameList
     pub(super) async fn on_get_news_cat_name_list(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         let path = match self.news_path(tx) {
@@ -112,7 +115,7 @@ impl Session {
     /// [`myTran_GetNewsArtNameList`]: hotline_proto::Opcode::GetNewsArtNameList
     pub(super) async fn on_get_news_art_name_list(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         let path = match self.news_path(tx) {
@@ -135,7 +138,7 @@ impl Session {
     /// [`myTran_DelNewsItem`]: hotline_proto::Opcode::DelNewsItem
     pub(super) async fn on_del_news_item(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         let path = match self.news_path(tx) {
@@ -153,7 +156,7 @@ impl Session {
     /// [`myTran_NewNewsFldr`]: hotline_proto::Opcode::NewNewsFldr
     pub(super) async fn on_new_news_fldr(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_FLDR) {
@@ -178,7 +181,7 @@ impl Session {
     /// [`myTran_NewNewsCat`]: hotline_proto::Opcode::NewNewsCat
     pub(super) async fn on_new_news_cat(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_CAT) {
@@ -203,7 +206,7 @@ impl Session {
     /// [`myTran_GetNewsArtData`]: hotline_proto::Opcode::GetNewsArtData
     pub(super) async fn on_get_news_art_data(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
@@ -250,7 +253,7 @@ impl Session {
     /// [`myTran_PostNewsArt`]: hotline_proto::Opcode::PostNewsArt
     pub(super) async fn on_post_news_art(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
@@ -264,7 +267,7 @@ impl Session {
         let Some(title) = tx.news_article_title(encoding) else {
             return vec![tx.reply_error("missing title")];
         };
-        let Some(data) = tx.news_article_data(encoding) else {
+        let Some(data) = tx.news_article_data() else {
             return vec![tx.reply_error("missing article data")];
         };
         let parent_id = tx.news_article_id().unwrap_or(0);
@@ -299,7 +302,7 @@ impl Session {
     /// [`myTran_DelNewsArt`]: hotline_proto::Opcode::DelNewsArt
     pub(super) async fn on_del_news_art(
         &self,
-        tx: &Transaction,
+        tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::NEWS_DELETE_ART) {
@@ -334,17 +337,20 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
 
-        let post = Transaction::request(
+        let post = request(
             Opcode::OldPostNews,
             1,
             vec![Field::string(FieldId::Data, "hello news")],
         );
         session.on_old_post_news(&post, &state).await;
 
-        let get = Transaction::request(Opcode::GetMsgs, 2, vec![]);
+        let get = request(Opcode::GetMsgs, 2, vec![]);
         let reply = session.on_get_msgs(&get, &state).await;
         let [reply] = reply.try_into().unwrap();
-        let news = reply.string(FieldId::Data, encoding).unwrap();
+        let news = reply
+            .received(encoding)
+            .string(FieldId::Data, encoding)
+            .unwrap();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
     }
@@ -358,7 +364,7 @@ mod tests {
 
         for i in 0..20 {
             let body = format!("{i}{}", "x".repeat(8000));
-            let post = Transaction::request(
+            let post = request(
                 Opcode::OldPostNews,
                 1,
                 vec![Field::string(FieldId::Data, body)],
@@ -367,10 +373,11 @@ mod tests {
         }
         assert!(state.news().await.len() > MAX_FLAT_NEWS_LEN);
 
-        let get = Transaction::request(Opcode::GetMsgs, 2, vec![]);
+        let get = request(Opcode::GetMsgs, 2, vec![]);
         let [reply] = session.on_get_msgs(&get, &state).await.try_into().unwrap();
 
-        let data = reply.field(FieldId::Data).unwrap().as_bytes(encoding);
+        let received = reply.received(encoding);
+        let data = received.field(FieldId::Data).unwrap().as_bytes();
         assert_eq!(data.len(), MAX_FLAT_NEWS_LEN);
         // Posts are prepended, so the clamp keeps the newest.
         assert!(data.starts_with(b"From Alice"));
@@ -384,7 +391,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut rx = state.register_recipient(1).await;
-        let post = Transaction::request(
+        let post = request(
             Opcode::OldPostNews,
             1,
             vec![Field::string(FieldId::Data, "hello news")],
@@ -404,7 +411,7 @@ mod tests {
     async fn old_post_news_still_replies_to_the_post_that_bans() {
         let state = state_with_flood();
         let session = test_session("Alice", Access::all());
-        let post = Transaction::request(
+        let post = request(
             Opcode::OldPostNews,
             1,
             vec![Field::string(FieldId::Data, "buy now")],
@@ -428,7 +435,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut rx = state.register_recipient(1).await;
-        let post = Transaction::request(
+        let post = request(
             Opcode::OldPostNews,
             1,
             vec![Field::string(FieldId::Data, "a".repeat(8193))],
@@ -438,7 +445,9 @@ mod tests {
         assert_eq!(replies.len(), 1);
         assert!(replies[0].is_error());
         assert_eq!(
-            replies[0].string(FieldId::ErrorText, encoding),
+            replies[0]
+                .received(encoding)
+                .string(FieldId::ErrorText, encoding),
             Some("Your news post was not accepted because it was too big.".to_string())
         );
         assert!(state.news().await.is_empty(), "oversized post not stored");
@@ -450,7 +459,7 @@ mod tests {
         let state = SharedState::default();
         let session = test_session("Alice", Access::all());
 
-        let mkdir = Transaction::request(
+        let mkdir = request(
             Opcode::NewNewsFldr,
             1,
             vec![Field::string(FieldId::FileName, "Bundle")],
@@ -462,7 +471,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
 
-        let mkcategory = Transaction::request(
+        let mkcategory = request(
             Opcode::NewNewsCat,
             2,
             vec![Field::string(FieldId::NewsCatName, "General")],
@@ -474,7 +483,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
 
-        let listdir = Transaction::request(Opcode::GetNewsCatNameList, 3, vec![]);
+        let listdir = request(Opcode::GetNewsCatNameList, 3, vec![]);
         let [reply] = session
             .on_get_news_cat_name_list(&listdir, &state)
             .await
@@ -491,7 +500,7 @@ mod tests {
         access.remove(Access::NEWS_CREATE_FLDR);
         let session = test_session("Alice", access);
 
-        let mkdir = Transaction::request(
+        let mkdir = request(
             Opcode::NewNewsFldr,
             1,
             vec![Field::string(FieldId::FileName, "Bundle")],
@@ -517,7 +526,7 @@ mod tests {
         let mut denied_access = Access::all();
         denied_access.remove(Access::NEWS_DELETE_FLDR);
         let denied_session = test_session("Bob", denied_access);
-        let delete = Transaction::request(
+        let delete = request(
             Opcode::DelNewsItem,
             1,
             vec![Field::bytes(
@@ -538,7 +547,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let listdir = Transaction::request(Opcode::GetNewsCatNameList, 2, vec![]);
+        let listdir = request(Opcode::GetNewsCatNameList, 2, vec![]);
         let [reply] = session
             .on_get_news_cat_name_list(&listdir, &state)
             .await
@@ -563,7 +572,7 @@ mod tests {
             )
         };
 
-        let post = Transaction::request(
+        let post = request(
             Opcode::PostNewsArt,
             1,
             vec![
@@ -580,7 +589,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
 
-        let listcategory = Transaction::request(Opcode::GetNewsArtNameList, 2, vec![path_field()]);
+        let listcategory = request(Opcode::GetNewsArtNameList, 2, vec![path_field()]);
         let [reply] = session
             .on_get_news_art_name_list(&listcategory, &state)
             .await
@@ -589,7 +598,7 @@ mod tests {
         assert!(!reply.is_error());
         assert_eq!(reply.fields.len(), 1);
 
-        let getthread = Transaction::request(
+        let getthread = request(
             Opcode::GetNewsArtData,
             3,
             vec![
@@ -605,15 +614,18 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         let data = reply
+            .received(encoding)
             .field(FieldId::NewsArtData)
-            .map(|f| f.as_bytes(encoding).into_owned());
+            .map(|f| f.as_bytes().to_vec());
         assert_eq!(data, Some(b"body text".to_vec()));
         assert_eq!(
-            reply.string(FieldId::NewsArtTitle, encoding),
+            reply
+                .received(encoding)
+                .string(FieldId::NewsArtTitle, encoding),
             Some("Hello".to_string())
         );
 
-        let delete = Transaction::request(
+        let delete = request(
             Opcode::DelNewsArt,
             4,
             vec![path_field(), Field::u32(FieldId::NewsArtID, 1)],
@@ -624,7 +636,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let listcategory = Transaction::request(Opcode::GetNewsArtNameList, 5, vec![path_field()]);
+        let listcategory = request(Opcode::GetNewsArtNameList, 5, vec![path_field()]);
         let [reply] = session
             .on_get_news_art_name_list(&listcategory, &state)
             .await
@@ -648,7 +660,7 @@ mod tests {
         let path = HlPath::new(["General"]);
         let path_field = || Field::bytes(FieldId::NewsPath, path.encode(encoding).unwrap());
 
-        let post = Transaction::request(
+        let post = request(
             Opcode::PostNewsArt,
             1,
             vec![
@@ -670,7 +682,7 @@ mod tests {
         let listing = state.news_list_articles(&path, utf8).await.unwrap();
         assert_eq!(listing.articles[0].flavors[0].size, 5);
 
-        let get = Transaction::request(
+        let get = request(
             Opcode::GetNewsArtData,
             2,
             vec![
@@ -684,8 +696,9 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        let data = reply.field(FieldId::NewsArtData).unwrap().as_bytes(utf8);
-        assert_eq!(&*data, "caf\u{e9}".as_bytes());
+        let reply = reply.received(encoding);
+        let data = reply.field(FieldId::NewsArtData).unwrap().as_bytes();
+        assert_eq!(data, "caf\u{e9}".as_bytes());
     }
 
     #[tokio::test]
@@ -696,7 +709,7 @@ mod tests {
         let state = SharedState::default();
 
         for _ in 0..20 {
-            let post = Transaction::request(
+            let post = request(
                 Opcode::OldPostNews,
                 1,
                 vec![Field::string(FieldId::Data, "\u{e9}".repeat(4000))],
@@ -704,12 +717,13 @@ mod tests {
             session.on_old_post_news(&post, &state).await;
         }
 
-        let get = Transaction::request(Opcode::GetMsgs, 2, vec![]);
+        let get = request(Opcode::GetMsgs, 2, vec![]);
         let [reply] = session.on_get_msgs(&get, &state).await.try_into().unwrap();
 
-        let data = reply.field(FieldId::Data).unwrap().as_bytes(utf8);
+        let reply = reply.received(utf8);
+        let data = reply.field(FieldId::Data).unwrap().as_bytes();
         assert!(data.len() <= MAX_FLAT_NEWS_LEN);
-        assert!(std::str::from_utf8(&data).is_ok());
+        assert!(std::str::from_utf8(data).is_ok());
     }
 
     #[tokio::test]
@@ -724,7 +738,7 @@ mod tests {
             .await
             .unwrap();
 
-        let post = Transaction::request(
+        let post = request(
             Opcode::PostNewsArt,
             1,
             vec![

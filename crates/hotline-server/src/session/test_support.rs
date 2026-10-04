@@ -6,7 +6,8 @@ use tokio::sync::mpsc;
 
 use hotline_proto::consts::Access;
 use hotline_proto::opcode::{Opcode, TransactionType};
-use hotline_proto::text_encoding::EncodingHandle;
+use hotline_proto::text_encoding::{self, EncodingHandle};
+use hotline_proto::{Field, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::{Activity, ActivityEntry, ActivityLog};
@@ -35,6 +36,11 @@ pub(super) fn test_session(name: &str, access: Access) -> Session {
         connected_at: Instant::now(),
         encoding: EncodingHandle::default(),
     }
+}
+
+/// A request as the server reads it in the default encoding.
+pub(super) fn request(opcode: Opcode, trans: u32, fields: Vec<Field>) -> Transaction<Received> {
+    Transaction::request(opcode, trans, fields).received(text_encoding::DEFAULT)
 }
 
 /// Shared state with openline's flood limits.

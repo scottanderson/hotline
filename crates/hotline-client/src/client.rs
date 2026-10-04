@@ -15,7 +15,7 @@ use tokio_util::codec::Framed;
 use hotline_codec::TransactionCodec;
 use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::{
-    ClientHandshake, Field, FieldId, HtxfHeader, Opcode, ServerHandshake, Transaction,
+    ClientHandshake, Field, FieldId, HtxfHeader, Opcode, Received, ServerHandshake, Transaction,
 };
 
 use crate::ban::Ban;
@@ -50,7 +50,7 @@ const RESUME: u16 = 1;
 /// permanently closed because the connection ended. See [`read_loop`]'s
 /// shutdown handling.
 enum PendingState {
-    Open(HashMap<u32, oneshot::Sender<Transaction>>),
+    Open(HashMap<u32, oneshot::Sender<Transaction<Received>>>),
     Closed,
 }
 
@@ -81,7 +81,7 @@ impl HotlineClient {
     /// list changes, news posts, disconnect notices, etc).
     pub async fn connect<A: ToSocketAddrs>(
         addr: A,
-    ) -> Result<(Self, mpsc::UnboundedReceiver<Transaction>)> {
+    ) -> Result<(Self, mpsc::UnboundedReceiver<Transaction<Received>>)> {
         let mut stream = TcpStream::connect(addr).await?;
         let peer = stream.peer_addr()?;
 
@@ -132,7 +132,11 @@ impl HotlineClient {
     /// Send a request transaction and wait up to [`REQUEST_TIMEOUT`] for its
     /// matching reply. Returns `Err` if the server replied with the error bit
     /// set.
-    pub async fn request(&self, opcode: Opcode, fields: Vec<Field>) -> Result<Transaction> {
+    pub async fn request(
+        &self,
+        opcode: Opcode,
+        fields: Vec<Field>,
+    ) -> Result<Transaction<Received>> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(opcode, id, fields);
 
@@ -589,7 +593,7 @@ impl HotlineClient {
             let field = reply
                 .field(FieldId::FileResumeData)
                 .ok_or(ClientError::MissingField(FieldId::FileResumeData))?;
-            types::decode_resume_data(&field.as_bytes(self.encoding.get()))?.min(file_size)
+            types::decode_resume_data(field.as_bytes())?.min(file_size)
         } else {
             0
         };
@@ -670,7 +674,7 @@ pub(crate) async fn open_transfer(addr: SocketAddr, header: HtxfHeader) -> Resul
 /// A chat reply's [`myField_ChatID`] (114).
 ///
 /// [`myField_ChatID`]: hotline_proto::FieldId::ChatID
-fn chat_id(reply: &Transaction) -> Result<u32> {
+fn chat_id(reply: &Transaction<Received>) -> Result<u32> {
     reply
         .field(FieldId::ChatID)
         .and_then(Field::as_u32)
@@ -680,7 +684,7 @@ fn chat_id(reply: &Transaction) -> Result<u32> {
 /// A transfer reply's [`myField_RefNum`] (107).
 ///
 /// [`myField_RefNum`]: hotline_proto::FieldId::RefNum
-fn reference(reply: &Transaction) -> Result<u32> {
+fn reference(reply: &Transaction<Received>) -> Result<u32> {
     reply
         .field(FieldId::RefNum)
         .and_then(Field::as_u32)
@@ -698,7 +702,7 @@ fn touch(last_traffic: &LastTraffic) {
 async fn read_loop(
     mut reader: SplitStream<Conn>,
     pending: PendingMap,
-    events: mpsc::UnboundedSender<Transaction>,
+    events: mpsc::UnboundedSender<Transaction<Received>>,
     last_traffic: LastTraffic,
 ) {
     while let Some(Ok(tx)) = reader.next().await {

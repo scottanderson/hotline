@@ -35,7 +35,7 @@ pub use header::TransactionHeader;
 
 use crate::error::{ProtoError, Result};
 use crate::field::FieldId;
-use crate::field::{Field, FieldList};
+use crate::field::{Built, Field, FieldList, Received};
 use crate::opcode::{Opcode, TransactionType};
 use crate::text_encoding::Encoding;
 use crate::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
@@ -47,9 +47,11 @@ use crate::Access;
 /// Assumes a single-part transaction (`len == len2` on the wire); see the
 /// [module docs](self) for `len`/`len2` and [`TransactionHeader`].
 ///
-/// Carries no text encoding of its own; callers supply one per read/write call.
+/// A [`Built`] transaction is one to send. A [`Received`] transaction was
+/// read off the wire. Carries no text encoding of its own; callers supply one
+/// per read/write call.
 #[derive(Clone, PartialEq, Eq)]
-pub struct Transaction {
+pub struct Transaction<S = Built> {
     /// The wire `type` value, already resolved to which direction sent
     /// it. See the [module docs](self) for details.
     r#type: TransactionType,
@@ -59,19 +61,13 @@ pub struct Transaction {
     /// Bit 0 is the error flag; the rest is reserved on the wire.
     flag: u32,
     /// The fields themselves.
-    pub fields: FieldList,
+    pub fields: FieldList<S>,
 }
 
 impl Transaction {
     /// Build a request transaction from a set of fields.
     pub const fn request(opcode: Opcode, trans: u32, fields: Vec<Field>) -> Self {
         Self::assemble(TransactionType::Request(opcode), trans, 0, fields)
-    }
-
-    /// Build a reply to this request transaction, carrying `fields`.
-    pub fn reply(&self, fields: Vec<Field>) -> Self {
-        debug_assert_matches!(self.r#type, TransactionType::Request(_));
-        Self::assemble(TransactionType::Reply, self.trans, 0, fields)
     }
 
     /// Build a server-initiated transaction.
@@ -88,21 +84,6 @@ impl Transaction {
         self
     }
 
-    /// Build an error reply to this (request) transaction: the error flag
-    /// set and a [`myField_ErrorText`] (100) field carrying `message`.
-    /// [`myField_ErrorText`] (100) is server-only, only a server ever sends
-    /// one of these.
-    ///
-    /// [`myField_ErrorText`]: crate::FieldId::ErrorText
-    pub fn reply_error(&self, message: impl Into<String>) -> Self {
-        Self::assemble(
-            TransactionType::Reply,
-            self.trans,
-            1,
-            vec![Field::string(FieldId::ErrorText, message)],
-        )
-    }
-
     /// Shared constructor: every wire representation (request/reply/push)
     /// differs only in `r#type`, `trans`, and `flag`.
     const fn assemble(r#type: TransactionType, trans: u32, flag: u32, fields: Vec<Field>) -> Self {
@@ -114,6 +95,43 @@ impl Transaction {
         }
     }
 
+    /// Encode the full transaction: 20-byte fixed prefix, then
+    /// [`FieldList::encode`]'s output as the body.
+    ///
+    /// Fails if `fields.len()` or any field's data exceeds a `u16`
+    /// (65535), reachable with attacker-controlled input.
+    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
+        let body = FieldList::encode(&self.fields, encoding)?;
+        let len = u32::try_from(body.len()).map_err(|_| ProtoError::TooLong {
+            what: "fields len",
+            len: body.len(),
+        })?;
+
+        Ok(
+            VecWriter::with_capacity(TransactionHeader::LEN + body.len())
+                .u32(self.r#type.as_u32())
+                .u32(self.trans)
+                .u32(self.flag)
+                .u32(len)
+                .u32(len)
+                .bytes(&body)
+                .finish(),
+        )
+    }
+
+    /// This transaction as a peer reads it after [`Transaction::encode`]
+    /// with `encoding`.
+    pub fn received(&self, encoding: &'static Encoding) -> Transaction<Received> {
+        Transaction {
+            r#type: self.r#type,
+            trans: self.trans,
+            flag: self.flag,
+            fields: self.fields.received(encoding),
+        }
+    }
+}
+
+impl<S> Transaction<S> {
     /// This transaction's type, already resolved to the correct
     /// direction (see the [module docs](self)) - a plain field read, not
     /// a guess from a raw number.
@@ -138,8 +156,36 @@ impl Transaction {
     }
 
     /// Find the first field with the given ID, if present.
-    pub fn field(&self, id: FieldId) -> Option<&Field> {
+    pub fn field(&self, id: FieldId) -> Option<&Field<S>> {
         self.fields.field(id)
+    }
+
+    /// Find all fields with the given ID.
+    pub fn fields(&self, id: FieldId) -> impl Iterator<Item = &Field<S>> {
+        self.fields.fields(id)
+    }
+}
+
+impl Transaction<Received> {
+    /// Build a reply to this request transaction, carrying `fields`.
+    pub fn reply(&self, fields: Vec<Field>) -> Transaction {
+        debug_assert_matches!(self.r#type, TransactionType::Request(_));
+        Transaction::assemble(TransactionType::Reply, self.trans, 0, fields)
+    }
+
+    /// Build an error reply to this (request) transaction: the error flag
+    /// set and a [`myField_ErrorText`] (100) field carrying `message`.
+    /// [`myField_ErrorText`] (100) is server-only, only a server ever sends
+    /// one of these.
+    ///
+    /// [`myField_ErrorText`]: crate::FieldId::ErrorText
+    pub fn reply_error(&self, message: impl Into<String>) -> Transaction {
+        Transaction::assemble(
+            TransactionType::Reply,
+            self.trans,
+            1,
+            vec![Field::string(FieldId::ErrorText, message)],
+        )
     }
 
     /// `id`'s field as text, if present.
@@ -153,18 +199,13 @@ impl Transaction {
         self.fields.string_len(id, encoding)
     }
 
-    /// Find all fields with the given ID.
-    pub fn fields(&self, id: FieldId) -> impl Iterator<Item = &Field> {
-        self.fields.fields(id)
-    }
-
     /// The first [`myField_UserNameWithInfo`] (300) field, decoded (`None` if
     /// absent, `Some(Err(_))` if malformed).
     ///
     /// [`myField_UserNameWithInfo`]: crate::FieldId::UserNameWithInfo
     pub fn user_list_entry(&self, encoding: &'static Encoding) -> Option<Result<UserNameWithInfo>> {
         self.field(FieldId::UserNameWithInfo)
-            .map(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding))
+            .map(|f| UserNameWithInfo::decode(f.as_bytes(), encoding))
     }
 
     /// Every [`myField_UserNameWithInfo`] (300) field, decoded; fails on the
@@ -173,7 +214,7 @@ impl Transaction {
     /// [`myField_UserNameWithInfo`]: crate::FieldId::UserNameWithInfo
     pub fn user_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<UserNameWithInfo>> {
         self.fields(FieldId::UserNameWithInfo)
-            .map(|f| UserNameWithInfo::decode(&f.as_bytes(encoding), encoding))
+            .map(|f| UserNameWithInfo::decode(f.as_bytes(), encoding))
             .collect()
     }
 
@@ -203,7 +244,7 @@ impl Transaction {
     /// [`myField_FileNameWithInfo`]: crate::FieldId::FileNameWithInfo
     pub fn file_list_entries(&self, encoding: &'static Encoding) -> Result<Vec<FileNameWithInfo>> {
         self.fields(FieldId::FileNameWithInfo)
-            .map(|f| FileNameWithInfo::decode(&f.as_bytes(encoding), encoding))
+            .map(|f| FileNameWithInfo::decode(f.as_bytes(), encoding))
             .collect()
     }
 
@@ -214,7 +255,7 @@ impl Transaction {
     /// [`myField_FileNewPath`]: crate::FieldId::FileNewPath
     pub fn file_path(&self, id: FieldId, encoding: &'static Encoding) -> Option<Result<HlPath>> {
         self.field(id)
-            .map(|f| HlPath::decode(&f.as_bytes(encoding), encoding))
+            .map(|f| HlPath::decode(f.as_bytes(), encoding))
     }
 
     /// The [`myField_UserLogin`] (105) field, deobfuscated, if present.
@@ -303,9 +344,9 @@ impl Transaction {
     /// The [`myField_NewsArtData`] (333) field's raw bytes, if present.
     ///
     /// [`myField_NewsArtData`]: crate::FieldId::NewsArtData
-    pub fn news_article_data(&self, encoding: &'static Encoding) -> Option<Vec<u8>> {
+    pub fn news_article_data(&self) -> Option<Vec<u8>> {
         self.field(FieldId::NewsArtData)
-            .map(|f| f.as_bytes(encoding).into_owned())
+            .map(|f| f.as_bytes().to_vec())
     }
 
     /// The [`myField_UserAccess`] (110) field, if present.
@@ -322,30 +363,6 @@ impl Transaction {
     /// [`myField_Vers`]: crate::FieldId::Vers
     pub fn client_version(&self) -> Option<u16> {
         self.field(FieldId::Vers).and_then(Field::as_u16)
-    }
-
-    /// Encode the full transaction: 20-byte fixed prefix, then
-    /// [`FieldList::encode`]'s output as the body.
-    ///
-    /// Fails if `fields.len()` or any field's data exceeds a `u16`
-    /// (65535), reachable with attacker-controlled input.
-    pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
-        let body = FieldList::encode(&self.fields, encoding)?;
-        let len = u32::try_from(body.len()).map_err(|_| ProtoError::TooLong {
-            what: "fields len",
-            len: body.len(),
-        })?;
-
-        Ok(
-            VecWriter::with_capacity(TransactionHeader::LEN + body.len())
-                .u32(self.r#type.as_u32())
-                .u32(self.trans)
-                .u32(self.flag)
-                .u32(len)
-                .u32(len)
-                .bytes(&body)
-                .finish(),
-        )
     }
 
     /// Decode a complete, single-part transaction (prefix + body) from
@@ -386,7 +403,7 @@ impl Transaction {
     }
 }
 
-impl fmt::Debug for Transaction {
+impl<S: fmt::Debug> fmt::Debug for Transaction<S> {
     /// Looks each field's name up via [`crate::field::FieldId`].
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut out = f.debug_struct("Transaction");
@@ -402,7 +419,7 @@ impl fmt::Debug for Transaction {
             &self
                 .fields
                 .iter()
-                .map(|field| (field.id, field.id.original_name(), &field.value))
+                .map(|field| (field.id, field.id.original_name(), field))
                 .collect::<Vec<_>>(),
         )
         .finish()
@@ -498,7 +515,8 @@ mod tests {
 
     #[test]
     fn reply_carries_task_reply_sentinel_not_zero() {
-        let request = Transaction::request(Opcode::KeepConnectionAlive, 42, vec![]);
+        let request = Transaction::request(Opcode::KeepConnectionAlive, 42, vec![])
+            .received(text_encoding::DEFAULT);
         let tx = request.reply(vec![]);
         assert_eq!(tx.r#type(), TransactionType::Reply);
         assert!(tx.is_reply());
@@ -507,13 +525,16 @@ mod tests {
     #[test]
     fn error_reply_shape() {
         let encoding = text_encoding::DEFAULT;
-        let request = Transaction::request(Opcode::KeepConnectionAlive, 42, vec![]);
+        let request =
+            Transaction::request(Opcode::KeepConnectionAlive, 42, vec![]).received(encoding);
         let tx = request.reply_error("nope");
         assert_eq!(tx.trans, 42);
         assert!(tx.is_error());
         assert!(tx.is_reply());
         assert_eq!(
-            tx.field(FieldId::ErrorText).unwrap().as_string(encoding),
+            tx.received(encoding)
+                .string(FieldId::ErrorText, encoding)
+                .unwrap(),
             "nope"
         );
     }
@@ -565,7 +586,7 @@ mod tests {
         assert!(request_debug.contains("myField_FileNewName"));
         assert!(!request_debug.contains("(unrecognized field id)"));
 
-        let reply = request.reply_error("boom");
+        let reply = request.received(text_encoding::DEFAULT).reply_error("boom");
         let reply_debug = format!("{reply:?}");
         assert!(reply_debug.contains("myField_ErrorText"));
         assert!(!reply_debug.contains("(unrecognized field id)"));
