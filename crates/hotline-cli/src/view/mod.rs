@@ -690,8 +690,8 @@ impl View {
 
     fn confirm_key(&mut self, conflict: Conflict, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Char('r') => conflict.action(Start::Resume),
-            KeyCode::Char('o') if conflict.can_replace() => conflict.action(Start::Replace),
+            KeyCode::Char('r') => Action::retry(conflict, Start::Resume),
+            KeyCode::Char('o') if conflict.can_replace() => Action::retry(conflict, Start::Replace),
             KeyCode::Esc => Action::None,
             _ => {
                 self.modal = Some(Modal::Confirm(conflict));
@@ -1709,13 +1709,13 @@ mod tests {
         };
         assert_eq!(
             view.handle_key(key(KeyCode::Char('o')), &users(), &files()),
-            conflict.clone().action(Start::Replace)
+            Action::retry(conflict.clone(), Start::Replace)
         );
 
         view.modal = Some(Modal::ask(conflict.clone()));
         assert_eq!(
             view.handle_key(key(KeyCode::Char('r')), &users(), &files()),
-            conflict.action(Start::Resume)
+            Action::retry(conflict, Start::Resume)
         );
         assert_eq!(view.modal, None);
     }

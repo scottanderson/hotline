@@ -1,7 +1,7 @@
 use hotline_client::{Ban, ClientUserInfo, UserAccount};
 
 use crate::file_edit::FileEdit;
-use crate::transfer::Start;
+use crate::transfer::{Conflict, Start};
 
 /// What the caller must do after one key press or mouse click.
 #[derive(Debug, PartialEq, Eq)]
@@ -126,4 +126,25 @@ pub enum Action {
     AskDeleteAccount(usize),
     /// Delete the account with this login.
     DeleteAccount(Box<str>),
+}
+
+impl Action {
+    /// The transfer that `conflict` stopped, run with `start`.
+    pub fn retry(conflict: Conflict, start: Start) -> Self {
+        match conflict {
+            Conflict::LocalFileExists { name, save_as }
+            | Conflict::PartialDownload { name, save_as } => Self::DownloadFile {
+                name,
+                save_as,
+                start,
+            },
+            Conflict::LocalFolderExists { name } => Self::DownloadFolder { name, start },
+            Conflict::PartialUpload { local } | Conflict::RemoteFolderExists { local } => {
+                Self::Upload {
+                    path: local.into(),
+                    start,
+                }
+            }
+        }
+    }
 }

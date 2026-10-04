@@ -1,7 +1,5 @@
 //! The choices a transfer asks for before it starts.
 
-use crate::view::Action;
-
 /// How a transfer treats a copy that is already there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
@@ -46,23 +44,5 @@ impl Conflict {
             self,
             Self::PartialDownload { .. } | Self::LocalFolderExists { .. }
         )
-    }
-
-    /// The transfer to run with `start`.
-    pub fn action(self, start: Start) -> Action {
-        match self {
-            Self::LocalFileExists { name, save_as } | Self::PartialDownload { name, save_as } => {
-                Action::DownloadFile {
-                    name,
-                    save_as,
-                    start,
-                }
-            }
-            Self::LocalFolderExists { name } => Action::DownloadFolder { name, start },
-            Self::PartialUpload { local } | Self::RemoteFolderExists { local } => Action::Upload {
-                path: local.into(),
-                start,
-            },
-        }
     }
 }
