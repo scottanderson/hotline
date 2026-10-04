@@ -1410,35 +1410,38 @@ impl SharedState {
     ) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
         if self.accounts.get(&login).await.is_some() {
-            Err("that login is taken")?;
+            Err(format!(
+                "Cannot create account \"{login}\" because there is already an account with that login."
+            ))?;
         }
         self.accounts.put(login, account).await
     }
 
-    /// Save `account` over `old_login`, under `login`. `Err` if `old_login`
-    /// is gone, or if a rename's `login` is taken. A rename deletes
-    /// `old_login` after it saves `login`.
+    /// Save `edit` of the account at `old_login` under `login`, and return
+    /// the saved account. `Err` if `old_login` is gone, or if a rename's
+    /// `login` is taken. A rename deletes `old_login` after it saves `login`.
     pub async fn replace_account(
         &self,
         old_login: &str,
         login: String,
-        account: Account,
-    ) -> Result<(), Cow<'static, str>> {
+        edit: impl FnOnce(Account) -> Account,
+    ) -> Result<Account, Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
-        if self.accounts.get(old_login).await.is_none() {
-            Err("no such account")?;
-        }
-        let renamed = !old_login.eq_ignore_ascii_case(&login);
+        let Some(existing) = self.accounts.get(old_login).await else {
+            Err(format!("No account with login \"{old_login}\"."))?
+        };
+        let renamed = old_login != login;
         if renamed && self.accounts.get(&login).await.is_some() {
             Err("that login is taken")?;
         }
-        self.accounts.put(login, account).await?;
+        let account = edit(existing);
+        self.accounts.put(login, account.clone()).await?;
         if renamed {
             if let Err(error) = self.accounts.delete(old_login).await {
                 tracing::warn!(%error, old_login, "could not delete a renamed account's old login");
             }
         }
-        Ok(())
+        Ok(account)
     }
 
     /// The active ban on `ip`, if any; see [`crate::BanProvider::is_banned`].
@@ -1780,7 +1783,7 @@ mod tests {
     async fn replace_account_refuses_a_deleted_login_and_a_taken_rename() {
         let state = SharedState::default();
         assert!(state
-            .replace_account("bob", "bob".to_string(), Account::guest())
+            .replace_account("bob", "bob".to_string(), |_| Account::guest())
             .await
             .is_err());
         assert!(state.account("bob").await.is_none());
@@ -1794,13 +1797,13 @@ mod tests {
             .await
             .unwrap();
         assert!(state
-            .replace_account("bob", "amy".to_string(), Account::guest())
+            .replace_account("bob", "amy".to_string(), |_| Account::guest())
             .await
             .is_err());
         assert!(state.account("bob").await.is_some());
 
         state
-            .replace_account("bob", "bobby".to_string(), Account::guest())
+            .replace_account("bob", "bobby".to_string(), |_| Account::guest())
             .await
             .unwrap();
         assert!(state.account("bob").await.is_none());

@@ -571,20 +571,20 @@ async fn download_file_of_a_missing_file_is_a_server_error() {
 async fn accounts_are_created_read_changed_and_deleted_with_each_opcode_set() {
     let addr = start_server().await;
     let (admin, _admin_events) = join_as(addr, "admin", "admin", "root").await;
-    let guest = UserAccount {
-        name: "Guest".into(),
-        login: "guest".into(),
+    let carol = UserAccount {
+        name: "Carol".into(),
+        login: "carol".into(),
         password: Password::New("pw".into()),
         access: Access::READ_CHAT,
     };
 
-    admin.new_user(&guest).await.unwrap();
-    let read = admin.get_user("guest").await.unwrap();
+    admin.new_user(&carol).await.unwrap();
+    let read = admin.get_user("carol").await.unwrap();
     assert_eq!(
         read,
         UserAccount {
             password: Password::Unchanged,
-            ..guest.clone()
+            ..carol.clone()
         }
     );
     let changed = UserAccount {
@@ -592,7 +592,7 @@ async fn accounts_are_created_read_changed_and_deleted_with_each_opcode_set() {
         ..read
     };
     admin.set_user(&changed).await.unwrap();
-    assert_eq!(admin.get_user("guest").await.unwrap(), changed);
+    assert_eq!(admin.get_user("carol").await.unwrap(), changed);
 
     let renamed = UserAccount {
         login: "visitor".into(),
@@ -601,21 +601,21 @@ async fn accounts_are_created_read_changed_and_deleted_with_each_opcode_set() {
     };
     admin
         .set_user_list(&[AccountChange::Save {
-            old_login: Some("guest".into()),
+            old_login: Some("carol".into()),
             account: renamed.clone(),
         }])
         .await
         .unwrap();
     let accounts = admin.get_user_list().await.unwrap();
     assert!(accounts.contains(&renamed));
-    assert!(!accounts.iter().any(|a| &*a.login == "guest"));
+    assert!(!accounts.iter().any(|a| &*a.login == "carol"));
 
     admin
         .set_user_list(&[AccountChange::Delete("visitor".into())])
         .await
         .unwrap();
-    admin.new_user(&guest).await.unwrap();
-    admin.delete_user("guest").await.unwrap();
+    admin.new_user(&carol).await.unwrap();
+    admin.delete_user("carol").await.unwrap();
     let logins: Vec<_> = admin
         .get_user_list()
         .await
@@ -623,7 +623,7 @@ async fn accounts_are_created_read_changed_and_deleted_with_each_opcode_set() {
         .into_iter()
         .map(|a| a.login)
         .collect();
-    assert_eq!(logins, ["admin".into()]);
+    assert_eq!(logins, ["admin".into(), "guest".into()]);
 }
 
 #[tokio::test]

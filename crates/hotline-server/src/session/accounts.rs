@@ -4,6 +4,7 @@ use std::borrow::Cow;
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
+use hotline_proto::text_encoding::Encoding;
 use hotline_proto::FieldId;
 use hotline_proto::{Field, FieldList, Transaction};
 
@@ -25,8 +26,27 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
-        self.on_new_or_set_user(tx, AccountAction::Create, state)
-            .await
+        let encoding = self.encoding();
+        let Some(login) = tx.login(encoding) else {
+            return vec![tx.reply_error("missing login")];
+        };
+        let login = login.to_lowercase();
+        let access = tx.access().unwrap_or_else(Access::empty);
+        if !self.access.contains(access - Access::NO_AGREEMENT) {
+            return vec![tx.reply_error("Cannot create account with more access than yourself.")];
+        }
+        let account = Account {
+            password: tx.password(encoding).unwrap_or_default().into(),
+            name: tx.name(encoding).unwrap_or_default().into(),
+            access,
+            access_extra: AccessExtra::default(),
+        };
+        if let Err(reason) = state.create_account(login.clone(), account).await {
+            return vec![tx.reply_error(reason)];
+        }
+        self.record_account_change(AccountAction::Create, login, state)
+            .await;
+        vec![tx.reply(vec![])]
     }
 
     /// [`myTran_DeleteUser`] (351)
@@ -129,75 +149,47 @@ impl Session {
         if let Err(reason) = self.access.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
-        self.on_new_or_set_user(tx, AccountAction::Modify, state)
-            .await
-    }
-
-    /// Implementation for
-    /// [`myTran_NewUser`] (350) and
-    /// [`myTran_SetUser`] (353).
-    ///
-    /// [`myTran_NewUser`]: hotline_proto::Opcode::NewUser
-    /// [`myTran_SetUser`]: hotline_proto::Opcode::SetUser
-    pub(super) async fn on_new_or_set_user(
-        &self,
-        tx: &Transaction,
-        action: AccountAction,
-        state: &SharedState,
-    ) -> Vec<Transaction> {
         let encoding = self.encoding();
         let Some(login) = tx.login(encoding) else {
             return vec![tx.reply_error("missing login")];
         };
         let login = login.to_lowercase();
-        let existing = state.account(&login).await;
-        // Absent PASSWORD clears it; raw byte 0x00 means unchanged.
-        let password = match tx.field(FieldId::UserPassword) {
-            Some(field) if field.as_bytes(encoding).as_ref() == [0u8] => existing
-                .as_ref()
-                .map(|a| a.password.clone())
-                .unwrap_or_default(),
-            Some(field) => field.as_deobfuscated_string(encoding).into(),
-            None => Box::default(),
+        let password = Self::new_password(tx.field(FieldId::UserPassword), encoding);
+        let name = tx.name(encoding);
+        let access = tx.access();
+        let edit = |existing: Account| Account {
+            password: password.unwrap_or(existing.password),
+            name: name.map_or(existing.name, Into::into),
+            access: access.unwrap_or(existing.access),
+            access_extra: existing.access_extra,
         };
-        let name = tx
-            .name(encoding)
-            .or_else(|| existing.as_ref().map(|a| a.name.to_string()))
-            .unwrap_or_default();
-        // No wire field for this; unset on create means the default.
-        let access_extra = existing
-            .as_ref()
-            .map(|a| a.access_extra)
-            .unwrap_or_else(AccessExtra::default);
-        let access = tx
-            .access()
-            .or_else(|| existing.map(|a| a.access))
-            .unwrap_or_else(Access::empty);
+        let account = match state.replace_account(&login, login.clone(), edit).await {
+            Ok(account) => account,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        state
+            .push_access_update(AccessUpdate {
+                login: login.as_str().into(),
+                renamed_to: None,
+                access: account.access,
+                name: (!account.name.is_empty()).then_some(account.name),
+            })
+            .await;
+        self.record_account_change(AccountAction::Modify, login, state)
+            .await;
+        vec![tx.reply(vec![])]
+    }
 
-        let account = Account {
-            password,
-            name: name.as_str().into(),
-            access,
-            access_extra,
-        };
-
-        let result = state.put_account(login.clone(), account).await;
-        let reply = match result {
-            Ok(()) => {
-                state
-                    .push_access_update(AccessUpdate {
-                        login: login.as_str().into(),
-                        renamed_to: None,
-                        access,
-                        name: (!name.is_empty()).then(|| name.into()),
-                    })
-                    .await;
-                self.record_account_change(action, login, state).await;
-                tx.reply(vec![])
-            }
-            Err(reason) => tx.reply_error(format!("could not save account ({reason})")),
-        };
-        vec![reply]
+    /// The new password in a [`myField_UserPassword`] (106) field, or `None`
+    /// for the single byte 0, which keeps the old one. No field clears it.
+    ///
+    /// [`myField_UserPassword`]: hotline_proto::FieldId::UserPassword
+    fn new_password(field: Option<&Field>, encoding: &'static Encoding) -> Option<Box<str>> {
+        match field {
+            Some(f) if f.as_bytes(encoding).as_ref() == [0u8] => None,
+            Some(f) => Some(f.as_deobfuscated_string(encoding).into()),
+            None => Some(Box::default()),
+        }
     }
 
     /// The password field as sent back for [`myTran_GetUser`] (352)
@@ -343,19 +335,7 @@ impl Session {
             };
         }
 
-        let password = match record.field(FieldId::UserPassword) {
-            Some(f) if f.as_bytes(encoding).as_ref() == [0u8] => {
-                let Some(old_login) = &old_login else {
-                    return Ok(false);
-                };
-                match state.account(old_login).await {
-                    Some(existing) => existing.password,
-                    None => return Ok(false),
-                }
-            }
-            Some(f) => as_deobfuscated_string(f).into(),
-            None => Box::default(),
-        };
+        let password = Self::new_password(record.field(FieldId::UserPassword), encoding);
         let access = record
             .field(FieldId::UserAccess)
             .and_then(Field::as_u64)
@@ -365,22 +345,15 @@ impl Session {
         if let Some(old_login) = old_login {
             // Modify (and rename, if the login changed).
             self.access.require(Access::MODIFY_USER)?;
-            let existing = state.account(&old_login).await;
-            let renamed = !old_login.eq_ignore_ascii_case(&login);
-            let access_extra = existing
-                .map(|a| a.access_extra)
-                .unwrap_or_else(AccessExtra::default);
-            let account = Account {
-                password,
+            let renamed = old_login != login;
+            let edit = |existing: Account| Account {
+                password: password.unwrap_or(existing.password),
                 name: name.as_str().into(),
                 access,
-                access_extra,
+                access_extra: existing.access_extra,
             };
-            return match state
-                .replace_account(&old_login, login.clone(), account)
-                .await
-            {
-                Ok(()) => {
+            return match state.replace_account(&old_login, login.clone(), edit).await {
+                Ok(_) => {
                     state
                         .push_access_update(AccessUpdate {
                             login: old_login.as_str().into(),
@@ -427,6 +400,9 @@ impl Session {
         if !self.access.contains(access - Access::NO_AGREEMENT) {
             Err("Cannot create account with more access than yourself.")?;
         }
+        let Some(password) = password else {
+            return Ok(false);
+        };
         let account = Account {
             password,
             name: name.into(),
@@ -512,6 +488,71 @@ mod tests {
 
         assert!(state.account("bob").await.is_some());
         assert!(state.account("Bob").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn new_user_refuses_a_taken_login() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+        state
+            .put_account("bob".to_string(), Account::guest())
+            .await
+            .unwrap();
+
+        let create = Transaction::request(
+            Opcode::NewUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::u64(FieldId::UserAccess, Access::all().bits()),
+            ],
+        );
+        let replies = session.on_new_user(&create, &state).await;
+        assert_eq!(
+            replies[0].string(FieldId::ErrorText, encoding).unwrap(),
+            "Cannot create account \"bob\" because there is already an account with that login."
+        );
+        assert_eq!(state.account("bob").await.unwrap(), Account::guest());
+    }
+
+    #[tokio::test]
+    async fn new_user_cannot_create_with_more_access_than_self() {
+        let session = test_session("Admin", Access::CREATE_USER);
+        let state = SharedState::default();
+
+        let create = Transaction::request(
+            Opcode::NewUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::u64(FieldId::UserAccess, Access::all().bits()),
+            ],
+        );
+        assert!(session.on_new_user(&create, &state).await[0].is_error());
+        assert!(state.account("bob").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_user_refuses_a_missing_login() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Admin", Access::all());
+        let state = SharedState::default();
+
+        let modify = Transaction::request(
+            Opcode::SetUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::string(FieldId::UserName, "Bob"),
+            ],
+        );
+        let replies = session.on_set_user(&modify, &state).await;
+        assert_eq!(
+            replies[0].string(FieldId::ErrorText, encoding).unwrap(),
+            "No account with login \"bob\"."
+        );
+        assert!(state.account("bob").await.is_none());
     }
 
     #[tokio::test]
