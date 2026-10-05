@@ -8,6 +8,7 @@ use crate::console::{ChatCommandDispatcher, DefaultChatCommands};
 use crate::file::{FileProvider, InMemoryFileProvider};
 use crate::flood::{FloodPolicy, NoFloodPolicy};
 use crate::news::{FlatNewsProvider, InMemoryNewsProvider, ThreadedNewsProvider};
+use crate::policy::{OpenlinePolicy, ServerPolicy};
 
 /// The pluggable backends [`crate::Server`]/[`crate::SharedState`] run on,
 /// each supplied by the embedding application.
@@ -30,9 +31,12 @@ pub struct Providers {
     pub commands: Arc<dyn ChatCommandDispatcher>,
     /// See [`ActivityLog`].
     pub activity: Arc<dyn ActivityLog>,
+    /// See [`ServerPolicy`].
+    pub policy: Arc<dyn ServerPolicy>,
 }
 
-/// In-memory storage, no flood policy, no banner, and no activity log.
+/// In-memory storage, no flood policy, no banner, no activity log, and
+/// openline's behavior.
 /// Classic and threaded news share one provider.
 impl Default for Providers {
     fn default() -> Self {
@@ -47,6 +51,7 @@ impl Default for Providers {
             banner: Arc::new(NoBanner),
             commands: Arc::new(DefaultChatCommands),
             activity: Arc::new(NoActivityLog),
+            policy: Arc::new(OpenlinePolicy),
         }
     }
 }

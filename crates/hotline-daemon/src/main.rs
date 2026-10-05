@@ -7,6 +7,7 @@ mod banner;
 mod bans;
 mod file;
 mod news;
+mod policy;
 mod tracker;
 
 use std::num::NonZeroUsize;
@@ -27,6 +28,7 @@ use banner::FileBannerProvider;
 use bans::FileBanProvider;
 use file::DiskFileProvider;
 use news::{import_openline_news, FileFlatNewsProvider, FileThreadedNewsProvider};
+use policy::HlsPolicy;
 use tracker::{run_beacon, TrackerTarget};
 
 #[tokio::main]
@@ -143,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
             banner,
             commands,
             activity: activity.clone(),
+            policy: Arc::new(HlsPolicy),
         },
     );
 

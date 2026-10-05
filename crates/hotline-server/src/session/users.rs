@@ -1,6 +1,8 @@
 //! Handlers that act on another connected user: listing, info,
 //! kick, private messages, and broadcast.
 
+use std::borrow::Cow;
+
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::UserNameWithInfo;
@@ -10,6 +12,7 @@ use hotline_proto::{text_encoding, Field, Received, Transaction};
 use crate::account::AccessExtra;
 use crate::ban::BanRecord;
 use crate::flood::FloodEvent;
+use crate::policy::Silent;
 use crate::state::{SharedState, TransferProgress, TransferSection, UserEntry};
 
 use super::connection::{KickBan, MsgOption, Session};
@@ -204,6 +207,23 @@ impl Session {
         vec![tx.reply(vec![])]
     }
 
+    /// The [`myField_Data`] (101) text of a private message or broadcast.
+    /// A missing field is empty text, unless the policy sends an error.
+    ///
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
+    fn message_data(
+        tx: &Transaction<Received>,
+        state: &SharedState,
+    ) -> Result<String, Cow<'static, str>> {
+        match tx.string(FieldId::Data) {
+            Some(data) => Ok(data),
+            None => state
+                .policy()
+                .error(Silent::MessageWithoutData)
+                .map_or(Ok(String::new()), Err),
+        }
+    }
+
     /// The repeat and message count checks for a private message or broadcast.
     async fn message_flood_banned(&self, tx: &Transaction<Received>, state: &SharedState) -> bool {
         self.flood_banned(FloodEvent::Text(self.data_bytes(tx)), state)
@@ -233,8 +253,9 @@ impl Session {
         let Some(target_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
-        let Some(message) = tx.string(FieldId::Data) else {
-            return vec![tx.reply_error("missing message")];
+        let message = match Self::message_data(tx, state) {
+            Ok(message) => message,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let options = tx
             .field(FieldId::Options)
@@ -337,8 +358,9 @@ impl Session {
         if self.message_flood_banned(tx, state).await {
             return vec![tx.reply(vec![])];
         }
-        let Some(message) = tx.string(FieldId::Data) else {
-            return vec![tx.reply_error("missing message")];
+        let message = match Self::message_data(tx, state) {
+            Ok(message) => message,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let message = text_encoding::cut(self.encoding(), &message, MAX_MESSAGE);
         if message.is_empty() {
@@ -1164,6 +1186,36 @@ mod tests {
             .await;
         assert!(!replies.last().unwrap().is_error());
         assert!(target_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn send_instant_msg_and_user_broadcast_without_data_follow_the_policy() {
+        struct Refuse;
+        impl crate::ServerPolicy for Refuse {
+            fn error(&self, _case: crate::Silent) -> Option<std::borrow::Cow<'static, str>> {
+                Some("refused".into())
+            }
+        }
+        let session = test_session("Alice", Access::all());
+        let pm = request(
+            Opcode::SendInstantMsg,
+            1,
+            vec![Field::u16(FieldId::UserID, 42)],
+        );
+        let broadcast = request(Opcode::UserBroadcast, 2, vec![]);
+
+        let state = SharedState::default();
+        let mut target_rx = state.register_recipient(42).await;
+        state.insert_user(test_user(42, "Bob")).await;
+        let replies = session.on_send_instant_msg(&pm, &state).await;
+        assert!(!replies.last().unwrap().is_error());
+        assert!(!session.on_user_broadcast(&broadcast, &state).await[0].is_error());
+        assert!(target_rx.try_recv().is_err());
+
+        let state = state_with_policy(Refuse);
+        state.insert_user(test_user(42, "Bob")).await;
+        assert!(session.on_send_instant_msg(&pm, &state).await[0].is_error());
+        assert!(session.on_user_broadcast(&broadcast, &state).await[0].is_error());
     }
 
     #[tokio::test]

@@ -28,6 +28,7 @@ mod error;
 mod file;
 mod flood;
 mod news;
+mod policy;
 mod providers;
 mod server;
 mod session;
@@ -49,6 +50,7 @@ pub use news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle,
     NewsCategory, NewsItemKind, NewsListKind, ThreadedNewsProvider, HLNZ_MAGIC,
 };
+pub use policy::{OpenlinePolicy, ServerPolicy, Silent};
 pub use providers::Providers;
 pub use server::{
     Server, ServerConfig, DEFAULT_LOGIN_TIMEOUT, DEFAULT_MAX_CONNECTIONS,

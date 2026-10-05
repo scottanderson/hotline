@@ -5,6 +5,11 @@ below, in priority order.
 
 ## Known deliberate divergences from openline
 
+Where openline sends no error and goes on, `ServerPolicy::error` can
+send one. By default it sends none, as openline does. `hls` sends the
+errors in `HlsPolicy`. A divergence below that names a `Silent` case
+works this way.
+
 - **`GETLIST` visibility timing.** Openline makes a raw TCP connection
   visible to `GETLIST` immediately at accept, before `Login` even arrives
   (blank name/icon until set). This server only becomes visible at `Login`
@@ -135,9 +140,10 @@ below, in priority order.
 - **A failed comment write stops a rename.** openline's
   `ProcessTran_SetFileInfo` ignores a failed comment write and still
   renames. `hls` replies with the error and does not rename.
-- **A private message with no `myField_Data` (101) is an error.**
-  openline's `ProcessTran_SendInstantMsg` sends nothing and replies
-  with success. `hls` replies with an error.
+- **A message with no `myField_Data` (101) is an error.** openline's
+  `ProcessTran_SendInstantMsg` and `ProcessTran_UserBroadcast` handle
+  it as an empty message and reply with success. `hls` replies with an
+  error (`Silent::MessageWithoutData`).
 - **A number field that does not fit is missing.** openline's
   `UFieldData::GetInteger` reads the first 4 bytes of a longer field,
   and a 16-bit value keeps the low 16 bits of a larger number. `hls`
@@ -1156,6 +1162,17 @@ one-shared-room model.
      openline's `ProcessTran_Agreed`. A `myTran_Login` (107) with a name
      and an icon joins at once and gets no banner, as in openline's
      `ProcessTran_Login`.
+
+152. `ServerPolicy` holds the error replies that a server may send where
+     openline sends none. `ServerPolicy::error` takes a `Silent` case and
+     returns the error reply or `None`. `None` goes on as openline does.
+     `Providers::policy` takes it, and `OpenlinePolicy` is the default.
+     `hls` passes `HlsPolicy`. The first case,
+     `Silent::MessageWithoutData`, covers a `myTran_SendInstantMsg` (108)
+     or `myTran_UserBroadcast` (355) with no `myField_Data` (101). By
+     default it is handled as an empty message, as in openline.
+     `HlsPolicy` replies with an error.
+
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

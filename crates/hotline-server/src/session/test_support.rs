@@ -99,6 +99,14 @@ pub(super) fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> A
     }
 }
 
+/// State with `policy`'s behavior choices.
+pub(super) fn state_with_policy(policy: impl crate::ServerPolicy + 'static) -> SharedState {
+    SharedState::new(Providers {
+        policy: std::sync::Arc::new(policy),
+        ..Providers::default()
+    })
+}
+
 pub(super) fn state_with_banner(
     banner: std::sync::Arc<dyn crate::banner::BannerProvider>,
 ) -> SharedState {

@@ -35,6 +35,7 @@ use crate::news::{
     body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
     ThreadedNewsProvider,
 };
+use crate::policy::ServerPolicy;
 use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
@@ -96,6 +97,8 @@ pub struct SharedState {
     commands: Arc<dyn ChatCommandDispatcher>,
     /// Activity reports; see [`crate::ActivityLog`].
     activity: Arc<dyn ActivityLog>,
+    /// Behavior choices; see [`crate::ServerPolicy`].
+    policy: Arc<dyn ServerPolicy>,
 }
 
 impl Default for SharedState {
@@ -127,7 +130,13 @@ impl SharedState {
             download_queue: Arc::new(DownloadQueue::default()),
             commands: providers.commands,
             activity: providers.activity,
+            policy: providers.policy,
         }
+    }
+
+    /// The server's behavior choices.
+    pub(crate) fn policy(&self) -> &dyn ServerPolicy {
+        &*self.policy
     }
 
     /// Report `entry` to the activity log.
