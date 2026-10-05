@@ -1490,6 +1490,12 @@ impl SharedState {
         self.accounts.get(login).await
     }
 
+    /// The stored account for `login`, which `Err` names.
+    pub async fn require_account(&self, login: &str) -> Result<Account, Cow<'static, str>> {
+        let account = self.account(login).await;
+        Ok(account.ok_or_else(|| format!("Cannot read account \u{201c}{login}\u{201d}."))?)
+    }
+
     /// Create or overwrite an account.
     pub async fn put_account(
         &self,

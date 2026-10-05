@@ -1207,6 +1207,14 @@ one-shared-room model.
      its option. Servers on retro-os.live drop a `myTran_Agreed` (121)
      without `myField_Options`.
 
+157. `myTran_Agreed` (121) reads the session's account again, as
+     openline's `ProcessTran_Agreed` does. When it is gone, the reply is
+     "Cannot read account “login”." with no disconnect. Otherwise the
+     session takes the account's access and name. `myTran_Login` (107)
+     keeps the login only after the password matches, as openline does.
+     A client can no longer join with 121 and no login, and a session
+     whose account was deleted before its agreement cannot join.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

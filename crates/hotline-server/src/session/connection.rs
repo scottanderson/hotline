@@ -507,11 +507,12 @@ impl Session {
             .unwrap_or("guest");
         let password = password.as_deref().unwrap_or_default();
 
-        self.login = login.to_lowercase().into();
-        let account = state.account(&self.login).await;
+        let login = login.to_lowercase();
+        let account = state.account(&login).await;
         self.client_version = tx.client_version();
         self.access = match account {
             Some(account) if &*account.password == password => {
+                self.login = login.into();
                 self.account_name = account.name.clone();
                 if !account.name.is_empty() {
                     self.name = account.name;
@@ -588,7 +589,8 @@ impl Session {
     }
 
     /// Complete login after the client accepts the agreement,
-    /// [`myTran_Agreed`] (121).
+    /// [`myTran_Agreed`] (121), with the account read again. A missing
+    /// account gets an error reply but no disconnect.
     ///
     /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
     async fn on_agreed(
@@ -596,6 +598,13 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
+        let account = match state.require_account(&self.login).await {
+            Ok(account) => account,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        self.account_name = account.name;
+        self.access = account.access;
+        self.access_extra = account.access_extra;
         let icon = tx.icon().unwrap_or(0);
         self.take_user_name(tx.name().as_deref(), true);
         self.take_options(tx);
@@ -1142,6 +1151,7 @@ mod tests {
     #[tokio::test]
     async fn agreed_records_the_connect() {
         let mut session = test_session("guest1", Access::default());
+        session.login = "guest".into();
         let (state, log) = state_recording_activity(Default::default());
         let agreed = request(Opcode::Agreed, 1, vec![]);
         session.on_agreed(&agreed, &state).await;
@@ -1281,6 +1291,40 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a DisconnectMsg push");
         assert_eq!(kick.r#type(), TransactionType::Push(Opcode::DisconnectMsg));
+        assert!(session.login.is_empty());
+    }
+
+    #[tokio::test]
+    async fn agreed_without_a_stored_account_is_refused_without_a_kick() {
+        for login in ["", "gone"] {
+            let mut session = test_session("guest1", Access::all());
+            session.state = SessionState::Agreement;
+            session.login = login.into();
+            let state = SharedState::default();
+            let mut own = state.register_recipient(session.user_id).await;
+            let mut bystander = state.register_recipient(2).await;
+
+            let agreed = request(
+                Opcode::Agreed,
+                1,
+                vec![
+                    Field::string(FieldId::UserName, "Alice"),
+                    Field::u16(FieldId::UserIconID, 42),
+                ],
+            );
+            let replies = session.on_agreed(&agreed, &state).await;
+
+            assert_eq!(replies.len(), 1);
+            assert_eq!(
+                replies[0]
+                    .received(text_encoding::DEFAULT)
+                    .string(FieldId::ErrorText),
+                Some(format!("Cannot read account \u{201c}{login}\u{201d}."))
+            );
+            assert!(matches!(session.state, SessionState::Agreement));
+            assert!(bystander.try_recv().is_err());
+            assert!(own.try_recv().is_err());
+        }
     }
 
     #[tokio::test]
@@ -1812,6 +1856,7 @@ mod tests {
     async fn agreed_selfinfo_carries_the_joiners_own_user_list_entry() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
+        session.login = "guest".into();
         let state = SharedState::default();
 
         let agreed = request(
@@ -1852,9 +1897,22 @@ mod tests {
 
     #[tokio::test]
     async fn agreed_without_any_name_takes_the_account_name() {
-        let mut session = test_session("guest1", Access::default() - Access::ANY_NAME);
-        session.account_name = "Guest".into();
+        let mut session = test_session("guest1", Access::ANY_NAME);
+        session.login = "alice".into();
+        session.account_name = "Stale".into();
         let state = SharedState::default();
+        state
+            .put_account(
+                "alice".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: Box::default(),
+                    name: "Guest".into(),
+                    access: Access::default() - Access::ANY_NAME,
+                },
+            )
+            .await
+            .unwrap();
 
         let agreed = agreed_as("Mallory", UserChangeOptions::empty());
         session.on_agreed(&agreed, &state).await;
@@ -1865,6 +1923,7 @@ mod tests {
     #[tokio::test]
     async fn agreed_with_any_name_cleans_and_cuts_the_name() {
         let mut session = test_session("guest1", Access::ANY_NAME);
+        session.login = "guest".into();
         let state = SharedState::default();
 
         let long = format!("a\rb{}", "c".repeat(40));
@@ -1882,6 +1941,7 @@ mod tests {
     #[tokio::test]
     async fn agreed_reads_the_refusal_options() {
         let mut session = test_session("guest1", Access::default());
+        session.login = "guest".into();
         let state = SharedState::default();
 
         let agreed = agreed_as("Alice", UserChangeOptions::REFUSE_PM);
@@ -1910,9 +1970,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agreed_selfinfo_sends_the_session_real_access_bitmap() {
-        let mut session = test_session("guest1", Access::DOWNLOAD_FILE);
+    async fn agreed_selfinfo_sends_the_access_read_again() {
+        let mut session = test_session("guest1", Access::all());
+        session.login = "alice".into();
         let state = SharedState::default();
+        state
+            .put_account(
+                "alice".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: Box::default(),
+                    name: "Alice".into(),
+                    access: Access::DOWNLOAD_FILE,
+                },
+            )
+            .await
+            .unwrap();
 
         let agreed = request(
             Opcode::Agreed,
