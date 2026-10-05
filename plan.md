@@ -94,11 +94,6 @@ below, in priority order.
   and `ProcessTran_SetChatSubject` send no reply, and its client does
   not wait for one. `hls` replies, with an error when the request
   fails. `hlc` sends both without waiting and shows an error reply.
-- **No HTTP tunnel listeners.** openline also listens on the base port
-  plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`,
-  `UHttpTransport.cp`). Only openline's own client uses the tunnel.
-  `HLProtocol.md` does not document it, mhxd does not implement it, and
-  no client is at hand to test against, so `hls` does not support it.
 - **The file name rule maps more.** openline's
   `UFileSys::ValidateFileName` differs by platform, and so does
   `validate_file_name`. On Mac OS X, openline only cuts the length.
@@ -122,6 +117,24 @@ below, in priority order.
   the client sent `myField_Vers` (160), and `Online:` with the minutes
   and seconds since login. It shows an empty account name as `(none)`
   and an empty login as `(guest)`, where openline shows an empty value.
+- **An empty news article adds nothing.** openline's
+  `ProcessTran_PostNewsArt` adds the article before it checks the
+  `myField_NewsArtData` (333) body, so it keeps an article with no
+  text and then replies with an error. `hls` checks the body first and
+  adds nothing.
+- **Account fields have no length limit.** openline's
+  `SMyUserDataFile` keeps 64 bytes of a name and 32 bytes of a login
+  and a password, and `ProcessTran_NewUser`, `ProcessTran_SetUser`, and
+  `ProcessTran_SetUserList` cut each field to fit. `hls` keeps any
+  length.
+- **`myTran_SetUser` (353) keeps a field that the request leaves
+  out.** openline's `ProcessTran_SetUser` clears the record, so a
+  missing `myField_UserName` (102) or `myField_UserAccess` (110) gives
+  an empty name or no access. `hls` keeps the old value. openline's
+  client always sends both fields.
+- **A failed comment write stops a rename.** openline's
+  `ProcessTran_SetFileInfo` ignores a failed comment write and still
+  renames. `hls` replies with the error and does not rename.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -142,9 +155,10 @@ one-shared-room model.
    `GetClientRootFolder` and `GetClientRootNewsFolder` use
    `Users/<login>/Files` and `Users/<login>/News` when the folder
    exists, and the shared folder when it does not. hls gives every
-   account the same root. A fix needs a per-account root in
-   `FileProvider` and the news providers, and a place for these folders
-   in the `hls` data directory.
+   account the same root. Decided: port openline's per-account roots.
+   The work needs a per-account root in `FileProvider` and the news
+   providers, and a place for these folders in the `hls` data
+   directory.
 2. **Decide the notice opcode and the close after a refusal.** openline
    sends `myTran_ServerMsg` (104) to a client that a kick bans, to a
    client whose account is deleted, and to a client at an address that
@@ -153,22 +167,12 @@ one-shared-room model.
    login, openline sends only the error reply and waits 30 seconds for
    the client to close. hls closes at once. The user decides which
    behavior a real client needs.
-3. **Account fields have no length limit.** openline's
-   `SMyUserDataFile` keeps 64 bytes of a name and 32 bytes of a login
-   and a password. `ProcessTran_NewUser`, `ProcessTran_SetUser`, and
-   `ProcessTran_SetUserList` cut each field to fit. hls keeps any
-   length. A fix must cut the login and the password in the same way
-   at login, or a user with a long password cannot log in.
-4. **`myTran_SetUser` (353) keeps a field that the request leaves
-   out.** openline's `ProcessTran_SetUser` clears the record, so a
-   missing `myField_UserName` (102) or `myField_UserAccess` (110) gives
-   an empty name or no access. hls keeps the old value. openline's
-   client always sends both fields.
-5. **Decide whether a failed comment write stops a rename.**
-   openline's `ProcessTran_SetFileInfo` ignores a failed comment write
-   and still renames. hls replies with the error and does not rename.
-   A port would drop that error reply, so the user decides.
-6. **The login timeout does not restart on a transaction.** openline's
+3. **No HTTP tunnel listeners.** openline also listens on the base
+   port plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`,
+   `UHttpTransport.cp`). Only openline's own client uses the tunnel.
+   `HLProtocol.md` does not document it, mhxd does not implement it,
+   and no client is at hand to test against. Revisit this gap later.
+4. **The login timeout does not restart on a transaction.** openline's
    `ProcessClients` closes a client that has not logged in 60 seconds
    after its last transaction. hls closes it 60 seconds after accept.
    The fixed deadline stopped keep-alives from holding a connection
@@ -1100,10 +1104,7 @@ one-shared-room model.
      privileges can no longer learn which logins exist from the notices.
 
 142. `myTran_PostNewsArt` (410) with an empty `myField_NewsArtData`
-     (333) is an error, as in openline's `ProcessTran_PostNewsArt`. One
-     part differs on purpose: openline adds the article before it checks
-     the body, and so keeps an article with no text. hls checks the body
-     first and adds nothing.
+     (333) is an error, as in openline's `ProcessTran_PostNewsArt`.
 
 143. The `myField_AutomaticResponse` (215) text is cut to 127 bytes, as
      openline's `SetClientUserInfo` reads it into its 128-byte
