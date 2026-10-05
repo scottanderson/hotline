@@ -77,7 +77,13 @@ async fn join_as(
     let (client, mut events) = HotlineClient::connect(addr).await.unwrap();
     client.login(login, password).await.unwrap();
     next_push(&mut events, Opcode::ShowAgreement).await;
-    client.agree(nick, 0).await.unwrap();
+    client
+        .agree(&ClientUserInfo {
+            name: nick.into(),
+            ..ClientUserInfo::default()
+        })
+        .await
+        .unwrap();
     (client, events)
 }
 
@@ -109,7 +115,13 @@ async fn a_server_in_utf8_counts_a_nick_in_characters() {
         client.encoding().set(utf8);
         client.login("guest", "").await.unwrap();
         next_push(&mut events, Opcode::ShowAgreement).await;
-        client.agree(nick, 0).await.unwrap();
+        client
+            .agree(&ClientUserInfo {
+                name: nick.into(),
+                ..ClientUserInfo::default()
+            })
+            .await
+            .unwrap();
         clients.push((client, events));
     }
 

@@ -111,7 +111,7 @@ impl ClientSession {
     ///
     /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
     pub async fn accept_agreement(&mut self, client: &HotlineClient) {
-        if let Err(e) = client.agree(&self.nick, self.icon).await {
+        if let Err(e) = client.agree(&self.user_info()).await {
             self.push(format!("failed to complete login: {e}"), LineKind::Error);
         }
         match client.get_user_name_list().await {

@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
-use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
+use hotline_proto::types::{self, FileNameWithInfo, HlPath, UserNameWithInfo};
 use hotline_proto::{
     ClientHandshake, Field, FieldId, HtxfHeader, Opcode, Received, ServerHandshake, Transaction,
 };
@@ -211,15 +211,8 @@ impl HotlineClient {
     /// Accept the server's agreement, completing login, [`myTran_Agreed`] (121).
     ///
     /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
-    pub async fn agree(&self, nick: &str, icon: u16) -> Result<()> {
-        self.request(
-            Opcode::Agreed,
-            vec![
-                Field::string(FieldId::UserName, nick),
-                Field::u16(FieldId::UserIconID, icon),
-            ],
-        )
-        .await?;
+    pub async fn agree(&self, info: &ClientUserInfo) -> Result<()> {
+        self.request(Opcode::Agreed, info.fields()).await?;
         Ok(())
     }
 
@@ -428,18 +421,7 @@ impl HotlineClient {
     ///
     /// [`myTran_SetClientUserInfo`]: hotline_proto::Opcode::SetClientUserInfo
     pub async fn set_client_user_info(&self, info: &ClientUserInfo) -> Result<()> {
-        let mut fields = vec![
-            Field::string(FieldId::UserName, &*info.name),
-            Field::u16(FieldId::UserIconID, info.icon),
-            Field::u16(FieldId::Options, info.options.bits()),
-        ];
-        if info.options.contains(UserChangeOptions::AUTO_RESPONSE) {
-            fields.push(Field::string(
-                FieldId::AutomaticResponse,
-                &*info.automatic_response,
-            ));
-        }
-        self.send_without_reply(Opcode::SetClientUserInfo, fields)
+        self.send_without_reply(Opcode::SetClientUserInfo, info.fields())
             .await
     }
 

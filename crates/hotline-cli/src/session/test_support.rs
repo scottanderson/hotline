@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use hotline_client::HotlineClient;
+use hotline_client::{ClientUserInfo, HotlineClient};
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::{text_encoding, Field, Opcode, Received, Transaction};
 use hotline_server::{Providers, Server, ServerConfig};
@@ -70,6 +70,12 @@ pub async fn join_admin(
     let (client, mut events) = HotlineClient::connect(addr).await.unwrap();
     client.login("admin", "admin").await.unwrap();
     next_push(&mut events, Opcode::ShowAgreement).await;
-    client.agree(nick, 0).await.unwrap();
+    client
+        .agree(&ClientUserInfo {
+            name: nick.into(),
+            ..ClientUserInfo::default()
+        })
+        .await
+        .unwrap();
     (client, events)
 }

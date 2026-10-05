@@ -1200,6 +1200,13 @@ one-shared-room model.
      `InMemoryFileProvider::set_comment_writes_fail` makes a comment
      write fail for tests.
 
+156. `HotlineClient::agree` takes a `ClientUserInfo` and sends the same
+     fields as `myTran_SetClientUserInfo` (304), as openline's
+     `GetClientUserInfo` does: the name, the icon, `myField_Options`
+     (113) even when it is 0, and `myField_AutomaticResponse` (215) with
+     its option. Servers on retro-os.live drop a `myTran_Agreed` (121)
+     without `myField_Options`.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
