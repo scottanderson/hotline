@@ -400,7 +400,8 @@ impl Session {
             .unwrap_or_default()
     }
 
-    /// Opcodes valid before login completes.
+    /// Opcodes valid before login completes. Any other opcode disconnects
+    /// the client.
     async fn handle_agreement(
         &mut self,
         opcode: Opcode,
@@ -411,10 +412,10 @@ impl Session {
         match opcode {
             /* 107 */ Opcode::Login => self.on_login(tx, state, config).await,
             /* 121 */ Opcode::Agreed => self.on_agreed(tx, state).await,
-            /* 500 */ Opcode::KeepConnectionAlive => vec![tx.reply(vec![])],
             other => {
-                tracing::debug!(?other, "opcode not allowed before login completes");
-                vec![tx.reply_error("please finish logging in first")]
+                tracing::debug!(?other, "opcode before login completes; disconnecting");
+                state.disconnect(self.user_id).await;
+                vec![]
             }
         }
     }
@@ -1376,6 +1377,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_agreement_disconnects_on_any_other_opcode() {
+        for opcode in [Opcode::GetUserNameList, Opcode::KeepConnectionAlive] {
+            let mut session = test_session("guest1", Access::default());
+            session.state = SessionState::Agreement;
+            let state = SharedState::default();
+            let config = ServerConfig::default();
+            let mut rx = state.register_recipient(session.user_id).await;
+
+            let tx = request(opcode, 1, vec![]);
+            assert!(session.handle(&tx, &state, &config).await.is_empty());
+            assert!(matches!(rx.try_recv(), Ok(RecipientMessage::Disconnect)));
+        }
+    }
+
+    #[tokio::test]
     async fn login_without_name_defers_join_until_agreed() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
@@ -1741,39 +1757,6 @@ mod tests {
         assert!(!replies
             .iter()
             .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement)),);
-    }
-
-    #[tokio::test]
-    async fn opcodes_other_than_login_agreed_ping_are_rejected_before_joining() {
-        let mut session = Session {
-            user_id: 1,
-            name: "guest1".into(),
-            real_name: Box::default(),
-            login: Box::default(),
-            account_name: Box::default(),
-            access: Access::empty(),
-            access_extra: AccessExtra::default(),
-            client_version: None,
-            state: SessionState::Agreement,
-            is_away: false,
-            refuses_pm: false,
-            refuses_chat: false,
-            automatic_response: None,
-            remote_addr: "127.0.0.1:0".parse().unwrap(),
-            connected_at: Instant::now(),
-            encoding: EncodingHandle::default(),
-        };
-        let state = SharedState::default();
-        let config = ServerConfig::default();
-
-        let request = request(
-            Opcode::ChatSend,
-            1,
-            vec![Field::string(FieldId::Data, "hi")],
-        );
-        let replies = session.handle(&request, &state, &config).await;
-        assert_eq!(replies.len(), 1);
-        assert!(replies[0].is_error());
     }
 
     #[tokio::test]
@@ -2183,30 +2166,5 @@ mod tests {
         assert!(finished.unwrap().unwrap().is_ok());
         let mut byte = [0u8; 1];
         assert_eq!(client.read(&mut byte).await.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn keep_alives_do_not_extend_the_login_timeout() {
-        let (server, mut client, state) = run_with_short_login_timeout().await;
-        client
-            .write_all(&ClientHandshake::default().encode())
-            .await
-            .unwrap();
-        let mut reply = [0u8; ServerHandshake::LEN];
-        client.read_exact(&mut reply).await.unwrap();
-
-        let keep_alive = Transaction::request(Opcode::KeepConnectionAlive, 1, vec![])
-            .encode(hotline_proto::text_encoding::DEFAULT)
-            .unwrap();
-        let pinger = tokio::spawn(async move {
-            while client.write_all(&keep_alive).await.is_ok() {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        });
-        let finished = tokio::time::timeout(Duration::from_secs(5), server).await;
-        pinger.abort();
-
-        assert!(finished.unwrap().unwrap().is_ok());
-        assert_eq!(state.connection_count().await, 0);
     }
 }

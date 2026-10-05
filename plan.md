@@ -54,10 +54,7 @@ below, in priority order.
   closes a client that has not logged in 60 seconds after its last
   transaction. This server closes it 60 seconds after accept, like
   mhxd's `login_timeout` (10 seconds there), and activity does not
-  extend it. openline disconnects on any pre-login opcode except
-  `myTran_Login` (107) and `myTran_Agreed` (121), but this server
-  answers `myTran_KeepConnectionAlive` (500) before login, so a
-  resetting timer would let keep-alives hold a connection forever.
+  extend it.
 - **Flood bans differ from openline in small ways.** A flood ban goes
   through `BanProvider`, so `hls` keeps it in `bans.json` across a
   restart; openline keeps at most 32 in memory. The repeated-text check
@@ -170,6 +167,13 @@ one-shared-room model.
    openline's `ProcessTran_SetFileInfo` ignores a failed comment write
    and still renames. hls replies with the error and does not rename.
    A port would drop that error reply, so the user decides.
+6. **The login timeout does not restart on a transaction.** openline's
+   `ProcessClients` closes a client that has not logged in 60 seconds
+   after its last transaction. hls closes it 60 seconds after accept.
+   The fixed deadline stopped keep-alives from holding a connection
+   open, but a keep-alive before login now disconnects. Only
+   `myTran_Login` (107) and `myTran_Agreed` (121) can restart
+   openline's timer, so a port is now safe.
 
 ## Resolved
 
@@ -1125,6 +1129,10 @@ one-shared-room model.
 148. `myTran_LeaveChat` (116) with chat ID 0 does nothing, as openline's
      `GetChatByID` finds no room for ID 0 in `ProcessTran_LeaveChat`.
      The sender stays in the main room, and no one gets a notice.
+
+149. Before login, an opcode other than `myTran_Login` (107) and
+     `myTran_Agreed` (121) disconnects the client, as openline's
+     `ProcessClients` does.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
