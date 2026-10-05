@@ -120,10 +120,11 @@ works this way.
   Delete matches openline: it shows nothing.
 - **`myTran_GetClientInfoText` (303) shows more.** openline's
   `ProcessTran_GetClientInfoText` sends `Nickname:`, `Name:`,
-  `Account:`, and `Address:`. `hls` also sends `Icon:`, `Version:` when
-  the client sent `myField_Vers` (160), and `Online:` with the minutes
-  and seconds since login. It shows an empty account name as `(none)`
-  and an empty login as `(guest)`, where openline shows an empty value.
+  `Account:`, and `Address:` with the IP address only. `hls` also sends
+  `Icon:`, `Version:` when the client sent `myField_Vers` (160), and
+  `Online:` with the minutes and seconds since login. It adds the port
+  to `Address:`. It shows an empty account name as `(none)` and an
+  empty login as `(guest)`, where openline shows an empty value.
 - **An empty news article adds nothing.** openline's
   `ProcessTran_PostNewsArt` adds the article before it checks the
   `myField_NewsArtData` (333) body, so it keeps an article with no
@@ -132,8 +133,9 @@ works this way.
 - **Account fields have no length limit.** openline's
   `SMyUserDataFile` keeps 64 bytes of a name and 32 bytes of a login
   and a password, and `ProcessTran_NewUser`, `ProcessTran_SetUser`, and
-  `ProcessTran_SetUserList` cut each field to fit. `hls` keeps any
-  length.
+  `ProcessTran_SetUserList` cut each field to fit.
+  `ProcessTran_SetUserList` also keeps 31 bytes of a record's old
+  login. `hls` keeps any length.
 - **`myTran_SetUser` (353) keeps a field that the request leaves
   out.** openline's `ProcessTran_SetUser` clears the record, so a
   missing `myField_UserName` (102) or `myField_UserAccess` (110) gives
@@ -188,10 +190,15 @@ one-shared-room model.
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-4. **A server cannot choose openline's behavior where `hls` differs.**
-   Decided: add a policy trait that a server using the crate
-   implements, with one method for each divergence above. The design
-   is not approved yet.
+4. **Some divergences have no policy.** `ServerPolicy` covers each
+   divergence above that names a `Silent` case. Two divergences are
+   still open:
+   - A number field that does not fit. Most of these reads are in
+     `hotline-proto`, which has no policy. A method needs a design
+     decision first.
+   - A rename onto a taken login. openline writes the record over the
+     other account. The user decides whether the crate default copies
+     this.
 5. **Chat rooms and online users have no trait.** `SharedState` keeps
    them in memory. Put them behind traits, like the storage providers.
 6. **The login timeout does not restart on a transaction.** openline's
