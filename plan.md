@@ -135,6 +135,13 @@ below, in priority order.
 - **A failed comment write stops a rename.** openline's
   `ProcessTran_SetFileInfo` ignores a failed comment write and still
   renames. `hls` replies with the error and does not rename.
+- **A private message with no `myField_Data` (101) is an error.**
+  openline's `ProcessTran_SendInstantMsg` sends nothing and replies
+  with success. `hls` replies with an error.
+- **A number field that does not fit is missing.** openline's
+  `UFieldData::GetInteger` reads the first 4 bytes of a longer field,
+  and a 16-bit value keeps the low 16 bits of a larger number. `hls`
+  handles either field as missing.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -172,7 +179,13 @@ one-shared-room model.
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-4. **The login timeout does not restart on a transaction.** openline's
+4. **A server cannot choose openline's behavior where `hls` differs.**
+   Decided: add a policy trait that a server using the crate
+   implements, with one method for each divergence above. The design
+   is not approved yet.
+5. **Chat rooms and online users have no trait.** `SharedState` keeps
+   them in memory. Put them behind traits, like the storage providers.
+6. **The login timeout does not restart on a transaction.** openline's
    `ProcessClients` closes a client that has not logged in 60 seconds
    after its last transaction. hls closes it 60 seconds after accept.
    The fixed deadline stopped keep-alives from holding a connection
@@ -1060,10 +1073,7 @@ one-shared-room model.
      openline's `ProcessTran_SendInstantMsg` and
      `ProcessTran_UserBroadcast` do. A private message with option 2 or
      3 sends "<name> does not accept private messages." or "private
-     chats." in place of its text. An empty quote is left out. One case
-     differs on purpose: a
-     request with no `myField_Data` (101) still gets the "missing
-     message" error, where openline replies with success.
+     chats." in place of its text. An empty quote is left out.
 
 135. `myTran_SetFileInfo` (207) sets the `myField_FileComment` (210)
      before the rename, as openline's `ProcessTran_SetFileInfo` does. A
