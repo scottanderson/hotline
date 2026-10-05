@@ -823,7 +823,8 @@ impl SharedState {
     }
 
     /// Set a file or folder's comment, after checking the matching
-    /// privilege and drop box visibility.
+    /// privilege and drop box visibility. A failed write is an error only
+    /// when the policy stops on it.
     pub async fn set_file_comment(
         &self,
         requester: FileRequester<'_>,
@@ -844,11 +845,13 @@ impl SharedState {
             Access::SET_FILE_COMMENT
         };
         access.require(required)?;
-        self.files
-            .set_comment(requester, dir, name, comment)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
+        let Err(error) = self.files.set_comment(requester, dir, name, comment).await else {
+            return Ok(());
+        };
+        tracing::debug!(%error, name, "comment write failed");
+        self.policy
+            .error(Silent::CommentWrite { error })
+            .map_or(Ok(()), Err)
     }
 
     /// The policy's error for a source in a drop box that `access` cannot

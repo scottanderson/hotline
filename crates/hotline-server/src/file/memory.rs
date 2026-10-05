@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -65,6 +66,7 @@ pub struct InMemoryFileProvider {
     root: Arc<Mutex<Dir>>,
     comments: Mutex<HashMap<(Vec<String>, String), String>>,
     free_space: Mutex<Option<u64>>,
+    comment_writes_fail: AtomicBool,
 }
 
 impl InMemoryFileProvider {
@@ -81,6 +83,11 @@ impl InMemoryFileProvider {
     /// Set the bytes that [`FileProvider::free_space`] reports.
     pub fn set_free_space(&self, bytes: Option<u64>) {
         *self.free_space.lock().unwrap() = bytes;
+    }
+
+    /// Make [`FileProvider::set_comment`] fail when `fail` is true.
+    pub fn set_comment_writes_fail(&self, fail: bool) {
+        self.comment_writes_fail.store(fail, Ordering::Relaxed);
     }
 }
 
@@ -377,6 +384,9 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
         comment: &str,
     ) -> io::Result<()> {
+        if self.comment_writes_fail.load(Ordering::Relaxed) {
+            return Err(io::Error::other("comment write failed"));
+        }
         let mut comments = self.comments.lock().unwrap();
         let key = (dir.components.clone(), name.to_string());
         if comment.is_empty() {

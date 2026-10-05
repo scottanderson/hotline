@@ -13,6 +13,7 @@ impl ServerPolicy for HlsPolicy {
         match case {
             Silent::MessageWithoutData => Some("missing message".into()),
             Silent::ChatRequest { reason } | Silent::DropBoxSource { reason } => Some(reason),
+            Silent::CommentWrite { error } => Some(error.to_string().into()),
             _ => None,
         }
     }

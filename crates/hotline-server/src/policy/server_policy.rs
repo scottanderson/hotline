@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::io;
 
 /// A case where openline sends no error and goes on.
 #[derive(Debug)]
@@ -30,6 +31,14 @@ pub enum Silent {
     DropBoxSource {
         /// The missing privilege.
         reason: Cow<'static, str>,
+    },
+    /// The comment write in [`myTran_SetFileInfo`] (207) failed. openline
+    /// still renames.
+    ///
+    /// [`myTran_SetFileInfo`]: hotline_proto::Opcode::SetFileInfo
+    CommentWrite {
+        /// The write error.
+        error: io::Error,
     },
 }
 

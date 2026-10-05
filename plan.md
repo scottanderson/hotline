@@ -141,7 +141,8 @@ works this way.
   client always sends both fields.
 - **A failed comment write stops a rename.** openline's
   `ProcessTran_SetFileInfo` ignores a failed comment write and still
-  renames. `hls` replies with the error and does not rename.
+  renames. `hls` replies with the error and does not rename
+  (`Silent::CommentWrite`).
 - **A message with no `myField_Data` (101) is an error.** openline's
   `ProcessTran_SendInstantMsg` and `ProcessTran_UserBroadcast` handle
   it as an empty message and reply with success. `hls` replies with an
@@ -1184,6 +1185,13 @@ one-shared-room model.
      `myTran_MakeFileAlias` (209) source in a drop box that the user
      cannot view. By default the server does not check, as in openline.
      `HlsPolicy` refuses it.
+
+155. `Silent::CommentWrite` covers a failed comment write in
+     `myTran_SetFileInfo` (207). By default the server ignores the
+     failure and renames, as in openline. `HlsPolicy` replies with the
+     error and stops the rename.
+     `InMemoryFileProvider::set_comment_writes_fail` makes a comment
+     write fail for tests.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

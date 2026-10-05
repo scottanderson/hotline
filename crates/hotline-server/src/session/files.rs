@@ -2609,6 +2609,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_file_info_renames_after_a_failed_comment_write_only_by_policy() {
+        struct StopOnCommentError;
+        impl crate::ServerPolicy for StopOnCommentError {
+            fn error(&self, _case: crate::Silent) -> Option<std::borrow::Cow<'static, str>> {
+                Some("refused".into())
+            }
+        }
+        let session = test_session("Alice", Access::all());
+        let setinfo = request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileNewName, "b.txt"),
+                Field::string(FieldId::FileComment, "a note"),
+            ],
+        );
+        let files = || {
+            let files = crate::file::InMemoryFileProvider::default();
+            files.seed(&HlPath::default(), "a.txt", *b"hi");
+            files.set_comment_writes_fail(true);
+            files
+        };
+
+        for (state, renamed) in [
+            (state_with_files(files()), true),
+            (
+                state_with_files_and_policy(files(), StopOnCommentError),
+                false,
+            ),
+        ] {
+            let [reply] = session
+                .on_set_file_info(&setinfo, &state)
+                .await
+                .try_into()
+                .unwrap();
+            assert_eq!(reply.is_error(), !renamed);
+            let requester = FileRequester { login: "" };
+            assert_eq!(
+                state
+                    .file_exists(requester, &HlPath::default(), "b.txt")
+                    .await,
+                renamed
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn set_file_info_renames_to_the_validated_name() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");
