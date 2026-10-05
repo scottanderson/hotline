@@ -12,6 +12,7 @@ impl ServerPolicy for HlsPolicy {
     fn error(&self, case: Silent) -> Option<Cow<'static, str>> {
         match case {
             Silent::MessageWithoutData => Some("missing message".into()),
+            Silent::ChatRequest { reason } => Some(reason),
             _ => None,
         }
     }

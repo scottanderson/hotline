@@ -12,6 +12,15 @@ pub enum Silent {
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
     /// [`myField_Data`]: hotline_proto::FieldId::Data
     MessageWithoutData,
+    /// [`myTran_InviteToChat`] (113) or [`myTran_SetChatSubject`] (120)
+    /// failed. openline sends no reply.
+    ///
+    /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
+    /// [`myTran_SetChatSubject`]: hotline_proto::Opcode::SetChatSubject
+    ChatRequest {
+        /// Why the request failed.
+        reason: Cow<'static, str>,
+    },
 }
 
 /// The error replies that a server sends where openline sends none.

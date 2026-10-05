@@ -1386,6 +1386,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_joined_sends_chat_request_errors_only_by_policy() {
+        struct Replies;
+        impl crate::ServerPolicy for Replies {
+            fn error(&self, _case: crate::Silent) -> Option<std::borrow::Cow<'static, str>> {
+                Some("refused".into())
+            }
+        }
+        let mut session = test_session("Alice", Access::default());
+        let config = ServerConfig::default();
+        let requests = [
+            request(Opcode::InviteToChat, 1, vec![]),
+            request(Opcode::SetChatSubject, 2, vec![]),
+        ];
+
+        let state = SharedState::default();
+        for request in &requests {
+            assert!(session.handle(request, &state, &config).await.is_empty());
+        }
+        let state = state_with_policy(Replies);
+        for request in &requests {
+            assert!(session.handle(request, &state, &config).await[0].is_error());
+        }
+    }
+
+    #[tokio::test]
     async fn login_without_name_defers_join_until_agreed() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());

@@ -1,5 +1,7 @@
 //! Chat relay, console commands, and private chat rooms.
 
+use std::borrow::Cow;
+
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding;
@@ -10,6 +12,7 @@ use hotline_proto::{Field, Received, Transaction};
 use crate::account::AccessExtra;
 use crate::console::{ChatCommandActor, ConsoleReply};
 use crate::flood::{FloodEvent, MAX_CHAT_LINE};
+use crate::policy::Silent;
 use crate::server::ServerConfig;
 use crate::state::SharedState;
 
@@ -206,7 +209,7 @@ impl Session {
     }
 
     /// [`myTran_InviteToChat`] (113): invite each listed user to a room this
-    /// session belongs to. The reply is an error only when no user is invited.
+    /// session belongs to.
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     pub(super) async fn on_invite_to_chat(
@@ -214,12 +217,20 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
+        chat_request_replies(tx, self.try_invite_to_chat(tx, state).await, state)
+    }
+
+    /// The work of [`Self::on_invite_to_chat`]. `Ok` has the refusal
+    /// bounces. `Err` only when no user is invited.
+    async fn try_invite_to_chat(
+        &self,
+        tx: &Transaction<Received>,
+        state: &SharedState,
+    ) -> Result<Vec<Transaction>, Cow<'static, str>> {
         if self.flood_banned(FloodEvent::Message, state).await {
-            return vec![];
+            return Ok(vec![]);
         }
-        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
-            return vec![tx.reply_error(reason)];
-        }
+        self.access_extra.require(AccessExtra::CHAT_PRIVATE)?;
         let chat_id = tx
             .field(FieldId::ChatID)
             .and_then(Field::as_u32)
@@ -230,7 +241,7 @@ impl Session {
             .filter(|&id| id != 0)
             .collect();
         if chat_id == 0 || target_ids.is_empty() {
-            return vec![tx.reply_error("missing chat id or user id")];
+            Err("missing chat id or user id")?;
         }
 
         let mut replies = Vec::new();
@@ -266,10 +277,9 @@ impl Session {
             }
         }
         if let Some(reason) = refusal.filter(|_| !invited) {
-            return vec![tx.reply_error(reason)];
+            Err(reason)?;
         }
-        replies.push(tx.reply(vec![]));
-        replies
+        Ok(replies)
     }
 
     /// [`myTran_JoinChat`] (115): join a room, accepting an invitation or
@@ -411,27 +421,32 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
-            return vec![tx.reply_error(reason)];
-        }
-        let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
-            return vec![tx.reply_error("missing chat id")];
-        };
+        chat_request_replies(tx, self.try_set_chat_subject(tx, state).await, state)
+    }
+
+    /// The work of [`Self::on_set_chat_subject`].
+    async fn try_set_chat_subject(
+        &self,
+        tx: &Transaction<Received>,
+        state: &SharedState,
+    ) -> Result<Vec<Transaction>, Cow<'static, str>> {
+        self.access_extra.require(AccessExtra::CHAT_PRIVATE)?;
+        let chat_id = tx
+            .field(FieldId::ChatID)
+            .and_then(Field::as_u32)
+            .ok_or("missing chat id")?;
         let subject = tx.string(FieldId::ChatSubject).map(|subject| {
             text_encoding::cut(self.encoding(), &subject, MAX_CHAT_SUBJECT).to_string()
         });
         let password = tx.string(FieldId::UserPassword);
         if subject.is_none() && password.is_none() {
-            return vec![tx.reply_error("missing subject or password")];
+            Err("missing subject or password")?;
         }
 
         let is_global = chat_id == 0;
-        if let Err(reason) = state
+        state
             .authorize_chat_subject_change(chat_id, self.user_id, is_global, self.access_extra)
-            .await
-        {
-            return vec![tx.reply_error(reason)];
-        }
+            .await?;
 
         if let Some(subject) = subject {
             state.set_chat_subject(chat_id, subject.clone()).await;
@@ -453,7 +468,7 @@ impl Session {
             )
             .await;
         }
-        vec![tx.reply(vec![])]
+        Ok(vec![])
     }
 
     /// Send a [`myTran_NotifyChatSubject`] (119) push carrying one changed
@@ -480,6 +495,23 @@ impl Session {
             }
         }
     }
+}
+
+/// The replies to a chat request: none for the request itself on success,
+/// and only the policy's error on failure.
+fn chat_request_replies(
+    tx: &Transaction<Received>,
+    result: Result<Vec<Transaction>, Cow<'static, str>>,
+    state: &SharedState,
+) -> Vec<Transaction> {
+    result.unwrap_or_else(|reason| {
+        state
+            .policy()
+            .error(Silent::ChatRequest { reason })
+            .map(|error| tx.reply_error(error))
+            .into_iter()
+            .collect()
+    })
 }
 
 #[cfg(test)]
@@ -975,7 +1007,7 @@ mod tests {
                 Field::u16(FieldId::UserID, 2),
             ],
         );
-        assert!(session.on_invite_to_chat(&invite, &state).await[0].is_error());
+        assert!(session.try_invite_to_chat(&invite, &state).await.is_err());
 
         let join = request(Opcode::JoinChat, 1, vec![Field::u32(FieldId::ChatID, 1)]);
         assert!(session.on_join_chat(&join, &state).await.is_error());
@@ -998,7 +1030,10 @@ mod tests {
                 Field::string(FieldId::ChatSubject, "Topic"),
             ],
         );
-        assert!(session.on_set_chat_subject(&subject, &state).await[0].is_error());
+        assert!(session
+            .try_set_chat_subject(&subject, &state)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -1348,8 +1383,8 @@ mod tests {
                 Field::string(FieldId::ChatSubject, "Nope"),
             ],
         );
-        let replies = outsider.on_set_chat_subject(&request, &state).await;
-        assert!(replies[0].is_error());
+        let replies = outsider.try_set_chat_subject(&request, &state).await;
+        assert!(replies.is_err());
         assert_eq!(&*state.chat_room(chat_id).await.unwrap().subject, "");
     }
 
@@ -1369,8 +1404,8 @@ mod tests {
                 Field::string(FieldId::UserPassword, "hunter2"),
             ],
         );
-        let replies = member.on_set_chat_subject(&request, &state).await;
-        assert!(!replies[0].is_error());
+        let replies = member.try_set_chat_subject(&request, &state).await;
+        assert!(replies.is_ok());
         assert_eq!(
             &*state.chat_room(chat_id).await.unwrap().password,
             "hunter2"
@@ -1401,8 +1436,8 @@ mod tests {
                 Field::string(FieldId::ChatSubject, "s".repeat(300)),
             ],
         );
-        let replies = member.on_set_chat_subject(&request, &state).await;
-        assert!(!replies[0].is_error());
+        let replies = member.try_set_chat_subject(&request, &state).await;
+        assert!(replies.is_ok());
         assert_eq!(
             state.chat_room(chat_id).await.unwrap().subject.len(),
             MAX_CHAT_SUBJECT
@@ -1422,8 +1457,8 @@ mod tests {
                 Field::string(FieldId::ChatSubject, "Nope"),
             ],
         );
-        let replies = guest.on_set_chat_subject(&request, &state).await;
-        assert!(replies[0].is_error());
+        let replies = guest.try_set_chat_subject(&request, &state).await;
+        assert!(replies.is_err());
         assert_eq!(&*state.chat_room(0).await.unwrap().subject, "");
     }
 
@@ -1443,8 +1478,8 @@ mod tests {
                 Field::string(FieldId::ChatSubject, "Welcome"),
             ],
         );
-        let replies = admin.on_set_chat_subject(&request, &state).await;
-        assert!(!replies[0].is_error());
+        let replies = admin.try_set_chat_subject(&request, &state).await;
+        assert!(replies.is_ok());
         assert_eq!(&*state.chat_room(0).await.unwrap().subject, "Welcome");
 
         let notify = rx
@@ -1494,9 +1529,9 @@ mod tests {
                 Field::u16(FieldId::UserID, 3),
             ],
         );
-        let replies = alice.on_invite_to_chat(&invite, &state).await;
+        let replies = alice.try_invite_to_chat(&invite, &state).await;
 
-        assert!(!replies.last().unwrap().is_error());
+        assert!(replies.is_ok());
         for rx in [&mut bob_rx, &mut carol_rx] {
             let push = rx
                 .try_recv()
@@ -1521,9 +1556,9 @@ mod tests {
                 Field::u16(FieldId::UserID, 2),
             ],
         );
-        let reply = alice.on_invite_to_chat(&invite, &state).await;
+        let reply = alice.try_invite_to_chat(&invite, &state).await;
 
-        assert!(reply[0].is_error());
+        assert!(reply.is_err());
     }
 
     #[tokio::test]
@@ -1537,7 +1572,10 @@ mod tests {
             1,
             vec![Field::u32(FieldId::ChatID, chat_id)],
         );
-        assert!(alice.on_invite_to_chat(&missing_uid, &state).await[0].is_error());
+        assert!(alice
+            .try_invite_to_chat(&missing_uid, &state)
+            .await
+            .is_err());
 
         let zero_chat_id = request(
             Opcode::InviteToChat,
@@ -1547,7 +1585,10 @@ mod tests {
                 Field::u16(FieldId::UserID, 2),
             ],
         );
-        assert!(alice.on_invite_to_chat(&zero_chat_id, &state).await[0].is_error());
+        assert!(alice
+            .try_invite_to_chat(&zero_chat_id, &state)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -1583,9 +1624,9 @@ mod tests {
                 Field::u16(FieldId::UserID, 2),
             ],
         );
-        let reply = alice.on_invite_to_chat(&invite, &state).await;
+        let reply = alice.try_invite_to_chat(&invite, &state).await;
 
-        assert!(reply[0].is_error());
+        assert!(reply.is_err());
     }
 
     #[tokio::test]
@@ -1621,9 +1662,9 @@ mod tests {
                 Field::u16(FieldId::UserID, 2),
             ],
         );
-        let reply = alice.on_invite_to_chat(&invite, &state).await;
+        let reply = alice.try_invite_to_chat(&invite, &state).await;
 
-        assert!(reply[0].is_error());
+        assert!(reply.is_err());
     }
 
     #[tokio::test]
@@ -1648,9 +1689,9 @@ mod tests {
                 Field::u16(FieldId::UserID, 2),
             ],
         );
-        let replies = alice.on_invite_to_chat(&invite, &state).await;
+        let replies = alice.try_invite_to_chat(&invite, &state).await.unwrap();
 
-        assert_eq!(replies.len(), 2);
+        assert_eq!(replies.len(), 1);
         assert_eq!(
             replies[0].received(encoding).string(FieldId::Data).unwrap(),
             "Bob does not accept private chats."
@@ -1663,7 +1704,6 @@ mod tests {
                 .as_u16(),
             Some(MsgOption::RefuseChat.into())
         );
-        assert!(!replies[1].is_error());
         assert!(
             bob_rx.try_recv().is_err(),
             "a refusing target must not receive the invite"

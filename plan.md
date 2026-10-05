@@ -94,11 +94,12 @@ works this way.
   UTF-8, and converts each one to the connection's encoding on the
   wire. A `myTran_GetMsgs` (101) reply that is too long is cut at a
   whole character; openline cuts at a byte.
-- **`hls` replies to `myTran_InviteToChat` (113) and
-  `myTran_SetChatSubject` (120).** openline's `ProcessTran_InviteToChat`
-  and `ProcessTran_SetChatSubject` send no reply, and its client does
-  not wait for one. `hls` replies, with an error when the request
-  fails. `hlc` sends both without waiting and shows an error reply.
+- **`hls` replies with an error to a failed `myTran_InviteToChat` (113)
+  or `myTran_SetChatSubject` (120).** openline's
+  `ProcessTran_InviteToChat` and `ProcessTran_SetChatSubject` send no
+  reply, and its client does not wait for one. `hls` sends no reply on
+  success. On a failure, it sends the error (`Silent::ChatRequest`).
+  `hlc` sends both without waiting and shows an error reply.
 - **The file name rule maps more.** openline's
   `UFileSys::ValidateFileName` differs by platform, and so does
   `validate_file_name`. On Mac OS X, openline only cuts the length.
@@ -1173,6 +1174,10 @@ one-shared-room model.
      default it is handled as an empty message, as in openline.
      `HlsPolicy` replies with an error.
 
+153. A successful `myTran_InviteToChat` (113) or `myTran_SetChatSubject`
+     (120) gets no reply, as in openline. `Silent::ChatRequest` covers a
+     failed one. By default it gets no reply either. `HlsPolicy` replies
+     with the error.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
