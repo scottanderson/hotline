@@ -35,7 +35,7 @@ use crate::news::{
     body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
     ThreadedNewsProvider,
 };
-use crate::policy::ServerPolicy;
+use crate::policy::{ServerPolicy, Silent};
 use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
@@ -761,8 +761,8 @@ impl SharedState {
     }
 
     /// Move a file or folder into another directory, keeping its name,
-    /// after checking drop box visibility of the source and the matching
-    /// privilege.
+    /// after checking the matching privilege and the policy's drop box
+    /// check.
     pub async fn move_file(
         &self,
         requester: FileRequester<'_>,
@@ -771,7 +771,7 @@ impl SharedState {
         to_dir: &HlPath,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
-        dropbox_access(dir, Some(name), access)?;
+        self.drop_box_source(dir, name, access)?;
         let info = self
             .files
             .info(requester, dir, name)
@@ -791,8 +791,7 @@ impl SharedState {
     }
 
     /// Create an alias at `link_dir`/`link_name` pointing at
-    /// `target_dir`/`target_name`, after checking drop box visibility of
-    /// the target.
+    /// `target_dir`/`target_name`, after the policy's drop box check.
     pub async fn symlink_file(
         &self,
         requester: FileRequester<'_>,
@@ -802,7 +801,7 @@ impl SharedState {
         link_name: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
-        dropbox_access(target_dir, Some(target_name), access)?;
+        self.drop_box_source(target_dir, target_name, access)?;
         self.files
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await
@@ -850,6 +849,22 @@ impl SharedState {
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// The policy's error for a source in a drop box that `access` cannot
+    /// view.
+    fn drop_box_source(
+        &self,
+        dir: &HlPath,
+        name: &str,
+        access: Access,
+    ) -> Result<(), Cow<'static, str>> {
+        let Err(reason) = dropbox_access(dir, Some(name), access) else {
+            return Ok(());
+        };
+        self.policy
+            .error(Silent::DropBoxSource { reason })
+            .map_or(Ok(()), Err)
     }
 
     /// Register a pending transfer, returning the reference number to

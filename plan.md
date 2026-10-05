@@ -116,7 +116,8 @@ works this way.
   and `ProcessTran_MakeFileAlias` check no drop box. A user who guessed
   a name could move a file out of a drop box, or alias it, and then
   download it. `hls` refuses both without `VIEW_DROP_BOXES` when the
-  source is in a drop box. Delete matches openline: it shows nothing.
+  source is in a drop box (`Silent::DropBoxSource`).
+  Delete matches openline: it shows nothing.
 - **`myTran_GetClientInfoText` (303) shows more.** openline's
   `ProcessTran_GetClientInfoText` sends `Nickname:`, `Name:`,
   `Account:`, and `Address:`. `hls` also sends `Icon:`, `Version:` when
@@ -1178,6 +1179,11 @@ one-shared-room model.
      (120) gets no reply, as in openline. `Silent::ChatRequest` covers a
      failed one. By default it gets no reply either. `HlsPolicy` replies
      with the error.
+
+154. `Silent::DropBoxSource` covers a `myTran_MoveFile` (208) or
+     `myTran_MakeFileAlias` (209) source in a drop box that the user
+     cannot view. By default the server does not check, as in openline.
+     `HlsPolicy` refuses it.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
