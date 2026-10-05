@@ -121,6 +121,12 @@ below, in priority order.
   `ProcessTran_Agreed` sends it. After such a login, openline handles a
   later `myTran_Agreed` (121) as a logged-in transaction, so the client
   never gets a banner. `hls` sends the banner after the agreement push.
+- **`myTran_GetClientInfoText` (303) shows more.** openline's
+  `ProcessTran_GetClientInfoText` sends `Nickname:`, `Name:`,
+  `Account:`, and `Address:`. `hls` also sends `Icon:`, `Version:` when
+  the client sent `myField_Vers` (160), and `Online:` with the minutes
+  and seconds since login. It shows an empty account name as `(none)`
+  and an empty login as `(guest)`, where openline shows an empty value.
 
 ## Openline vs. mhxd divergences (resolved)
 
