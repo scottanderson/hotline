@@ -1,5 +1,7 @@
 use std::net::IpAddr;
 
+use hotline_proto::htxf::HtxfType;
+
 use crate::state::{FileTransfer, FolderTransfer};
 
 /// Which way a pending `HTXF` transfer moves file bytes.
@@ -58,4 +60,18 @@ pub struct PendingTransfer {
     pub client_ip: IpAddr,
     /// The session that asked for this transfer.
     pub user_id: u16,
+}
+
+impl PendingTransfer {
+    /// Whether an `HTXF` header of `transfer_type` finds this transfer.
+    pub(crate) fn accepts(&self, transfer_type: HtxfType) -> bool {
+        match (&self.kind, self.direction) {
+            (TransferKind::Banner, _) => transfer_type == HtxfType::Banner,
+            (TransferKind::Folder(_), _) => transfer_type == HtxfType::Folder,
+            (TransferKind::File(_), TransferDirection::Get) => {
+                !matches!(transfer_type, HtxfType::Folder | HtxfType::Banner)
+            }
+            (TransferKind::File(_), TransferDirection::Put) => transfer_type != HtxfType::Folder,
+        }
+    }
 }

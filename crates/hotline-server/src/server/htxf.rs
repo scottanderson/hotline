@@ -67,8 +67,11 @@ async fn handle_htxf_connection(
     let header = HtxfHeader::decode(&header_buf)?;
 
     let reference = TransferRef(header.reference);
-    let Some(transfer) = state.take_transfer(reference).await else {
-        tracing::warn!(%peer, reference = header.reference, "htxf: no pending transfer for reference");
+    let Some(transfer) = state
+        .take_htxf_transfer(reference, header.transfer_type)
+        .await
+    else {
+        tracing::warn!(%peer, reference = header.reference, transfer_type = ?header.transfer_type, "htxf: no pending transfer of this type for reference");
         return Ok(());
     };
     if transfer.client_ip != peer.ip() {
@@ -742,6 +745,48 @@ mod tests {
             })
             .await;
         assert_eq!(state.admit_download(second, 2).await, 0);
+    }
+
+    #[tokio::test]
+    async fn htxf_connection_of_the_wrong_type_is_closed_and_the_transfer_stays() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let reference = state
+            .register_transfer(a_txt_transfer(TransferDirection::Get, 1))
+            .await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server_stream, peer) = listener.accept().await.unwrap();
+        let header = HtxfHeader {
+            reference: reference.0,
+            len: 0,
+            transfer_type: HtxfType::Folder,
+        };
+        client.write_all(&header.encode()).await.unwrap();
+
+        handle_htxf_connection(server_stream, peer, &state)
+            .await
+            .unwrap();
+
+        let mut byte = [0u8; 1];
+        assert_eq!(client.read(&mut byte).await.unwrap(), 0);
+        assert!(state.take_transfer(reference).await.is_some());
+    }
+
+    #[test]
+    fn htxf_types_find_transfers_as_openline_does() {
+        let get = a_txt_transfer(TransferDirection::Get, 1);
+        let put = a_txt_transfer(TransferDirection::Put, 1);
+        let banner = PendingTransfer {
+            kind: TransferKind::Banner,
+            ..get.clone()
+        };
+        assert!(get.accepts(HtxfType::File) && get.accepts(HtxfType::Unknown(7)));
+        assert!(!get.accepts(HtxfType::Folder) && !get.accepts(HtxfType::Banner));
+        assert!(put.accepts(HtxfType::File) && put.accepts(HtxfType::Banner));
+        assert!(!put.accepts(HtxfType::Folder));
+        assert!(banner.accepts(HtxfType::Banner) && !banner.accepts(HtxfType::File));
     }
 
     /// A transfer of `a.txt` in the root folder, from loopback.

@@ -1134,6 +1134,12 @@ one-shared-room model.
      `myTran_Agreed` (121) disconnects the client, as openline's
      `ProcessClients` does.
 
+150. An `HTXF` connection whose type does not fit its transfer closes,
+     and the transfer stays pending, as in openline's
+     `ProcessTransferEstab`. A download takes type 2 for a banner, 1 for
+     a folder, and any other type for a file. An upload takes 1 for a
+     folder and any other type for a file.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.

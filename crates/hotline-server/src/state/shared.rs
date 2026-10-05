@@ -10,6 +10,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::htxf::HtxfType;
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding::Encoding;
 use hotline_proto::types::{
@@ -878,6 +879,20 @@ impl SharedState {
     /// is still waiting. Consumes it: a reference is only good once.
     pub async fn take_transfer(&self, reference: TransferRef) -> Option<PendingTransfer> {
         self.transfers.write().await.remove(&reference)
+    }
+
+    /// Like [`Self::take_transfer`], but only if an `HTXF` header of
+    /// `transfer_type` finds the transfer. Otherwise the transfer stays.
+    pub(crate) async fn take_htxf_transfer(
+        &self,
+        reference: TransferRef,
+        transfer_type: HtxfType,
+    ) -> Option<PendingTransfer> {
+        let mut transfers = self.transfers.write().await;
+        transfers
+            .get(&reference)
+            .filter(|transfer| transfer.accepts(transfer_type))?;
+        transfers.remove(&reference)
     }
 
     /// Track `reference`'s progress until the guard drops. `None` for a banner.
