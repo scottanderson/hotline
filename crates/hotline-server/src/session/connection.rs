@@ -563,12 +563,6 @@ impl Session {
             ));
         }
 
-        if joined {
-            if let Some(banner) = self.banner_push(state).await {
-                replies.push(banner);
-            }
-        }
-
         replies
     }
 
@@ -1525,7 +1519,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_push_carries_image_banner_type_with_no_url() {
+    async fn agreed_push_carries_image_banner_type_with_no_url() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
         let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
@@ -1534,16 +1528,17 @@ mod tests {
         }));
         let config = ServerConfig::default();
 
-        let login = request(
-            Opcode::Login,
-            1,
+        let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
+        session.on_login(&login, &state, &config).await;
+        let agreed = request(
+            Opcode::Agreed,
+            2,
             vec![
-                Field::u16(FieldId::Vers, 151),
                 Field::string(FieldId::UserName, "Alice"),
                 Field::u16(FieldId::UserIconID, 42),
             ],
         );
-        let replies = session.on_login(&login, &state, &config).await;
+        let replies = session.on_agreed(&agreed, &state).await;
 
         let banner = replies
             .iter()
@@ -1561,7 +1556,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_push_carries_url_banner_type_and_url() {
+    async fn agreed_push_carries_url_banner_type_and_url() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
         let state = state_with_banner(std::sync::Arc::new(crate::banner::UrlBannerProvider::new(
@@ -1569,16 +1564,17 @@ mod tests {
         )));
         let config = ServerConfig::default();
 
-        let login = request(
-            Opcode::Login,
-            1,
+        let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
+        session.on_login(&login, &state, &config).await;
+        let agreed = request(
+            Opcode::Agreed,
+            2,
             vec![
-                Field::u16(FieldId::Vers, 151),
                 Field::string(FieldId::UserName, "Alice"),
                 Field::u16(FieldId::UserIconID, 42),
             ],
         );
-        let replies = session.on_login(&login, &state, &config).await;
+        let replies = session.on_agreed(&agreed, &state).await;
 
         let banner = replies
             .iter()
@@ -1599,7 +1595,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_push_omitted_below_client_version_151() {
+    async fn agreed_push_omitted_below_client_version_151() {
         let mut session = test_session("guest1", Access::default());
         let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
             format: *b"JPEG",
@@ -1607,16 +1603,17 @@ mod tests {
         }));
         let config = ServerConfig::default();
 
-        let login = request(
-            Opcode::Login,
-            1,
+        let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 150)]);
+        session.on_login(&login, &state, &config).await;
+        let agreed = request(
+            Opcode::Agreed,
+            2,
             vec![
-                Field::u16(FieldId::Vers, 150),
                 Field::string(FieldId::UserName, "Alice"),
                 Field::u16(FieldId::UserIconID, 42),
             ],
         );
-        let replies = session.on_login(&login, &state, &config).await;
+        let replies = session.on_agreed(&agreed, &state).await;
 
         assert!(!replies
             .iter()
@@ -1624,9 +1621,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_push_omitted_when_no_banner_configured() {
+    async fn agreed_push_omitted_when_no_banner_configured() {
         let mut session = test_session("guest1", Access::default());
         let state = SharedState::default();
+        let config = ServerConfig::default();
+
+        let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
+        session.on_login(&login, &state, &config).await;
+        let agreed = request(
+            Opcode::Agreed,
+            2,
+            vec![
+                Field::string(FieldId::UserName, "Alice"),
+                Field::u16(FieldId::UserIconID, 42),
+            ],
+        );
+        let replies = session.on_agreed(&agreed, &state).await;
+
+        assert!(!replies
+            .iter()
+            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner)));
+    }
+
+    #[tokio::test]
+    async fn login_with_a_name_and_icon_sends_no_banner() {
+        let mut session = test_session("guest1", Access::default());
+        let state = state_with_banner(std::sync::Arc::new(TestImageBanner {
+            format: *b"JPEG",
+            bytes: b"hi".to_vec(),
+        }));
         let config = ServerConfig::default();
 
         let login = request(
@@ -1640,6 +1663,7 @@ mod tests {
         );
         let replies = session.on_login(&login, &state, &config).await;
 
+        assert!(matches!(session.state, SessionState::Joined));
         assert!(!replies
             .iter()
             .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner)));

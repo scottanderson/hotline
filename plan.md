@@ -116,11 +116,6 @@ below, in priority order.
   a name could move a file out of a drop box, or alias it, and then
   download it. `hls` refuses both without `VIEW_DROP_BOXES` when the
   source is in a drop box. Delete matches openline: it shows nothing.
-- **A login with a name and an icon gets the banner.** openline's
-  `ProcessTran_Login` sends no `myTran_ServerBanner` (122), and only
-  `ProcessTran_Agreed` sends it. After such a login, openline handles a
-  later `myTran_Agreed` (121) as a logged-in transaction, so the client
-  never gets a banner. `hls` sends the banner after the agreement push.
 - **`myTran_GetClientInfoText` (303) shows more.** openline's
   `ProcessTran_GetClientInfoText` sends `Nickname:`, `Name:`,
   `Account:`, and `Address:`. `hls` also sends `Icon:`, `Version:` when
@@ -1145,6 +1140,11 @@ one-shared-room model.
      `ProcessTransferEstab`. A download takes type 2 for a banner, 1 for
      a folder, and any other type for a file. An upload takes 1 for a
      folder and any other type for a file.
+
+151. Only `myTran_Agreed` (121) sends `myTran_ServerBanner` (122), as in
+     openline's `ProcessTran_Agreed`. A `myTran_Login` (107) with a name
+     and an icon joins at once and gets no banner, as in openline's
+     `ProcessTran_Login`.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
