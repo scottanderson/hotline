@@ -92,6 +92,8 @@ impl FolderReceiver {
         let mut size = [0u8; 4];
         stream.read_exact(&mut size).await?;
         let mut flat = stream.take(u64::from(u32::from_be_bytes(size)));
-        read_flat_file(&mut flat, out).await
+        let received =
+            read_flat_file(&mut flat, out, &mut tokio::io::sink(), self.encoding).await?;
+        Ok(received.data_len)
     }
 }

@@ -383,6 +383,33 @@ async fn download_file_receives_the_data_fork() {
 }
 
 #[tokio::test]
+async fn receive_forks_returns_the_data_fork_and_info() {
+    let files = InMemoryFileProvider::default();
+    files.seed(&HlPath::new(["Games"]), "doom.wad", *b"IWAD data");
+    let providers = Providers {
+        files: Arc::new(files),
+        ..Providers::default()
+    };
+    let addr = start_server_with(providers).await;
+    let (alice, _alice_events) = join(addr, "alice").await;
+
+    let download = alice
+        .download_file(&HlPath::new(["Games"]), "doom.wad", 0)
+        .await
+        .unwrap();
+    let (mut data, mut rsrc) = (Vec::new(), Vec::new());
+    let received = timeout(WAIT, download.receive_forks(&mut data, &mut rsrc))
+        .await
+        .expect("download finishes")
+        .unwrap();
+
+    assert_eq!(data, b"IWAD data");
+    assert!(rsrc.is_empty());
+    assert_eq!((received.data_len, received.rsrc_len), (9, 0));
+    assert_eq!(received.info.unwrap().name, "doom.wad");
+}
+
+#[tokio::test]
 async fn download_file_from_an_offset_receives_the_rest() {
     let files = InMemoryFileProvider::default();
     files.seed(&HlPath::default(), "doom.wad", *b"IWAD data");

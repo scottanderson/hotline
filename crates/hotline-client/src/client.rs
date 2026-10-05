@@ -497,6 +497,7 @@ impl HotlineClient {
             waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
             reference: reference(&reply)?,
             transfer_addr: self.transfer_addr()?,
+            encoding: self.encoding.get(),
         })
     }
 

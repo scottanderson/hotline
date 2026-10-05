@@ -2,6 +2,8 @@
 
 use std::net::SocketAddr;
 
+use hotline_proto::htxf::FlatFileInfo;
+use hotline_proto::text_encoding::Encoding;
 use hotline_proto::{HtxfHeader, HtxfType};
 use tokio::io::AsyncWrite;
 
@@ -21,6 +23,20 @@ pub struct FileDownload {
     pub(crate) reference: u32,
     /// The server's `HTXF` address, one port above the transaction port.
     pub(crate) transfer_addr: SocketAddr,
+    /// The connection's text encoding, for the `INFO` fork's name and comment.
+    pub(crate) encoding: &'static Encoding,
+}
+
+/// What [`FileDownload::receive_forks`] read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReceivedFile {
+    /// The `INFO` fork: type, creator, dates, name and comment. `None`
+    /// when the server sent no `INFO` fork.
+    pub info: Option<FlatFileInfo>,
+    /// Bytes written from the `DATA` fork.
+    pub data_len: u64,
+    /// Bytes written from the `MACR` (resource) fork.
+    pub rsrc_len: u64,
 }
 
 impl FileDownload {
@@ -33,12 +49,25 @@ impl FileDownload {
     /// Returns the number of bytes written. A queued download waits on the
     /// open connection until the server starts it.
     pub async fn receive<W: AsyncWrite + Unpin>(self, out: &mut W) -> Result<u64> {
+        let received = self.receive_forks(out, &mut tokio::io::sink()).await?;
+        Ok(received.data_len)
+    }
+
+    /// Like [`FileDownload::receive`], but also keeps the rest of the
+    /// file: the resource fork goes to `rsrc`, and the `INFO` fork's
+    /// type, creator, dates and comment come back in [`ReceivedFile`].
+    /// Mac files often need these to open.
+    pub async fn receive_forks<D, F>(self, data: &mut D, rsrc: &mut F) -> Result<ReceivedFile>
+    where
+        D: AsyncWrite + Unpin,
+        F: AsyncWrite + Unpin,
+    {
         let header = HtxfHeader {
             reference: self.reference,
             len: 0,
             transfer_type: HtxfType::File,
         };
         let mut stream = open_transfer(self.transfer_addr, header).await?;
-        read_flat_file(&mut stream, out).await
+        read_flat_file(&mut stream, data, rsrc, self.encoding).await
     }
 }

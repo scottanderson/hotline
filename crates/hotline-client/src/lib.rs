@@ -51,7 +51,7 @@ pub use client::{HotlineClient, REQUEST_TIMEOUT};
 pub use client_info_text::ClientInfoText;
 pub use client_user_info::ClientUserInfo;
 pub use error::{ClientError, Result};
-pub use file_download::FileDownload;
+pub use file_download::{FileDownload, ReceivedFile};
 pub use file_upload::FileUpload;
 pub use files::FileInfo;
 pub use folder_download::FolderDownload;
