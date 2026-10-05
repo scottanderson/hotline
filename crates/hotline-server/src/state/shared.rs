@@ -484,7 +484,8 @@ impl SharedState {
     /// Whether `requester` may start (or resume) a [`myTran_UploadFile`] (203)
     /// upload of `name` under `dir`. `dir` must exist, and must be under an
     /// "Upload"/"Drop Box" folder unless `upload_anywhere`. A finished file
-    /// already at `name` rejects the request. A new upload of `size` bytes
+    /// already at `name` rejects the request, and so does a partial upload
+    /// for a new upload. A new upload of `size` bytes
     /// needs `UPLOAD_SPACE_MARGIN` more bytes free. With `resume` true, an
     /// in-progress upload is also required, and its current size is returned
     /// as the resume offset (`0` otherwise).
@@ -506,12 +507,11 @@ impl SharedState {
         if self.files.exists(requester, dir, name).await {
             Err("file already exists.")?;
         }
+        let partial = self.files.partial_upload_size(requester, dir, name).await;
         if resume {
-            Ok(self
-                .files
-                .partial_upload_size(requester, dir, name)
-                .await
-                .ok_or("file or folder not found.")?)
+            Ok(partial.ok_or("file or folder not found.")?)
+        } else if partial.is_some() {
+            Err("file already exists.")?
         } else {
             self.require_free_space(requester, dir, "file", name, size)
                 .await?;

@@ -2016,6 +2016,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_file_rejects_a_new_upload_over_a_partial_upload() {
+        let files = crate::file::InMemoryFileProvider::default();
+        let partial = crate::file::partial_upload_name("a.txt");
+        files.seed(&HlPath::default(), &partial, *b"hello");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = request(
+            Opcode::UploadFile,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
+        assert!(
+            state
+                .file_exists(FileRequester { login: "" }, &HlPath::default(), &partial)
+                .await
+        );
+    }
+
+    #[tokio::test]
     async fn upload_file_resumes_into_a_partial_upload() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(

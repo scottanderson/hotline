@@ -1215,6 +1215,12 @@ one-shared-room model.
      A client can no longer join with 121 and no login, and a session
      whose account was deleted before its agreement cannot join.
 
+158. A new `myTran_UploadFile` (203) is refused when a partial upload of
+     the name exists, as openline's `ProcessTran_UploadFile` refuses it
+     with `UFS::New` and `fsOption_NilIfExists`. A second upload can no
+     longer truncate an upload in progress or waiting to resume, also in
+     a drop box.
+
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks
 current status and open work.
