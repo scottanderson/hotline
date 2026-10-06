@@ -69,7 +69,11 @@ impl FolderReceiver {
         out: &mut W,
         offset: u32,
     ) -> Result<u64> {
-        let resume_data = types::encode_resume_data(offset);
+        let resume_data = types::ResumeData {
+            data: offset,
+            resource: 0,
+        }
+        .encode();
         let request = VecWriter::new()
             .u16(FolderAction::ResumeFile.into())
             .u16(resume_data.len() as u16)

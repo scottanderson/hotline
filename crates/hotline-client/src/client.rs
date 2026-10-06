@@ -487,7 +487,12 @@ impl HotlineClient {
         if offset > 0 {
             fields.push(Field::bytes(
                 FieldId::FileResumeData,
-                types::encode_resume_data(offset).to_vec(),
+                types::ResumeData {
+                    data: offset,
+                    resource: 0,
+                }
+                .encode()
+                .to_vec(),
             ));
         }
         let reply = self.request(Opcode::DownloadFile, fields).await?;
@@ -563,7 +568,9 @@ impl HotlineClient {
             let field = reply
                 .field(FieldId::FileResumeData)
                 .ok_or(ClientError::MissingField(FieldId::FileResumeData))?;
-            types::decode_resume_data(field.as_bytes())?.min(file_size)
+            types::ResumeData::decode(field.as_bytes())?
+                .data
+                .min(file_size)
         } else {
             0
         };

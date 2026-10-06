@@ -3,8 +3,8 @@
 use hotline_proto::htxf::{decode_flat_file_prefix, FolderItemHeader};
 use hotline_proto::text_encoding::DEFAULT;
 use hotline_proto::types::{
-    decode_resume_data, FileNameWithInfo, HlDate, HlPath, NewsArticleListData,
-    NewsCategoryListEntry, UserNameWithInfo,
+    FileNameWithInfo, HlDate, HlPath, NewsArticleListData, NewsCategoryListEntry, ResumeData,
+    UserNameWithInfo,
 };
 use hotline_proto::{
     ClientHandshake, Field, FieldList, ForkHeader, HtxfHeader, ServerHandshake, Transaction,
@@ -48,7 +48,7 @@ fn decoders_reject_garbage_without_panicking() {
         let _ = NewsArticleListData::decode(&buf, DEFAULT);
         let _ = NewsCategoryListEntry::decode(&buf, DEFAULT);
         let _ = NewsCategoryListEntry::decode_old(&buf, DEFAULT);
-        let _ = decode_resume_data(&buf);
+        let _ = ResumeData::decode(&buf);
         let _ = decode_flat_file_prefix(&buf);
         let _ = FolderItemHeader::decode_body(&buf, DEFAULT);
         let _ = ForkHeader::decode(&buf);

@@ -170,6 +170,13 @@ works this way.
   sidecar `._name` next to each item, with the comment as UTF-8. When it
   changes a sidecar from another tool, it keeps only the Finder info,
   the comment, and the resource fork.
+- **Resume data without a `DATA` entry is an error.** openline's Mac
+  `ResumeFlatten` resumes the data fork from 0 when the `RFLT` data has
+  no `DATA` entry, and reads entries past the end of a short field.
+  `hls` replies "Resume data is invalid." to both.
+- **A repeated resume entry replaces the earlier one.** openline's Mac
+  `ResumeFlatten` seeks a fork to its last `RFLT` entry, but reduces the
+  fork's size by each entry. `hls` uses the last entry for both.
 
 ## Openline vs. mhxd divergences (resolved)
 

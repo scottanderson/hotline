@@ -156,8 +156,8 @@ impl Session {
             (0, data_size)
         } else {
             let resume_offset = match tx.field(FieldId::FileResumeData) {
-                Some(field) => match types::decode_resume_data(field.as_bytes()) {
-                    Ok(already_have) => (already_have as u64).min(data_size),
+                Some(field) => match types::ResumeData::decode(field.as_bytes()) {
+                    Ok(resume) => u64::from(resume.data).min(data_size),
                     Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
                 },
                 None => 0,
@@ -312,7 +312,12 @@ impl Session {
         if resume {
             fields.push(Field::bytes(
                 FieldId::FileResumeData,
-                types::encode_resume_data(resume_offset as u32).to_vec(),
+                types::ResumeData {
+                    data: resume_offset as u32,
+                    resource: 0,
+                }
+                .encode()
+                .to_vec(),
             ));
         }
         self.record_activity(Activity::Upload { name: name.into() }, state)
@@ -1072,7 +1077,15 @@ mod tests {
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
-                Field::bytes(FieldId::FileResumeData, types::encode_resume_data(6)),
+                Field::bytes(
+                    FieldId::FileResumeData,
+                    types::ResumeData {
+                        data: 6,
+                        resource: 0,
+                    }
+                    .encode()
+                    .to_vec(),
+                ),
             ],
         );
         let [reply] = session
@@ -1117,7 +1130,15 @@ mod tests {
             1,
             vec![
                 Field::string(FieldId::FileName, "a.txt"),
-                Field::bytes(FieldId::FileResumeData, types::encode_resume_data(999)),
+                Field::bytes(
+                    FieldId::FileResumeData,
+                    types::ResumeData {
+                        data: 999,
+                        resource: 0,
+                    }
+                    .encode()
+                    .to_vec(),
+                ),
             ],
         );
         let [reply] = session
@@ -2141,7 +2162,9 @@ mod tests {
             .unwrap();
 
         let resume_field = reply.field(FieldId::FileResumeData).unwrap();
-        let already_have = types::decode_resume_data(resume_field.as_bytes()).unwrap();
+        let already_have = types::ResumeData::decode(resume_field.as_bytes())
+            .unwrap()
+            .data;
         assert_eq!(already_have, 5);
 
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
@@ -2242,7 +2265,9 @@ mod tests {
         assert!(!reply.is_error());
         let reply = reply.received(text_encoding::DEFAULT);
         let resume_field = reply.field(FieldId::FileResumeData).unwrap();
-        let already_have = types::decode_resume_data(resume_field.as_bytes()).unwrap();
+        let already_have = types::ResumeData::decode(resume_field.as_bytes())
+            .unwrap()
+            .data;
         assert_eq!(already_have, 5);
 
         state

@@ -3,7 +3,7 @@
 use std::io;
 
 use hotline_proto::htxf::{FolderAction, FolderItemHeader, FLAT_FILE_HEADER_LEN};
-use hotline_proto::types::decode_resume_data;
+use hotline_proto::types::ResumeData;
 use hotline_proto::Encoding;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -70,7 +70,7 @@ impl FolderSender {
                 self.stream.read_exact(&mut len).await?;
                 let mut buf = vec![0u8; usize::from(u16::from_be_bytes(len))];
                 self.stream.read_exact(&mut buf).await?;
-                Ok(Some(u64::from(decode_resume_data(&buf)?)))
+                Ok(Some(u64::from(ResumeData::decode(&buf)?.data)))
             }
             other => Err(unexpected(other)),
         }

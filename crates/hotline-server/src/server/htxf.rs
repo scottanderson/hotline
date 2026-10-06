@@ -379,7 +379,7 @@ async fn send_folder(
                     continue;
                 };
                 let resume_offset = if action == FolderAction::ResumeFile {
-                    u64::from(read_resume_data(stream).await?).min(item.size)
+                    u64::from(read_resume_data(stream).await?.data).min(item.size)
                 } else {
                     0
                 };
@@ -469,7 +469,11 @@ async fn receive_folder_item(
         return Ok(false);
     };
     if resume_offset > 0 {
-        let resume_data = types::encode_resume_data(resume_offset as u32);
+        let resume_data = types::ResumeData {
+            data: resume_offset as u32,
+            resource: 0,
+        }
+        .encode();
         write_folder_action(stream, FolderAction::ResumeFile).await?;
         stream
             .write_all(&(resume_data.len() as u16).to_be_bytes())
@@ -536,9 +540,9 @@ async fn write_folder_action(
 
 /// A `ResumeFile` action's `size(2) | resume data`, as the byte count the
 /// client already has.
-async fn read_resume_data(stream: &mut (impl AsyncRead + Unpin)) -> Result<u32> {
+async fn read_resume_data(stream: &mut (impl AsyncRead + Unpin)) -> Result<types::ResumeData> {
     let buf = read_u16_prefixed(stream).await?;
-    Ok(types::decode_resume_data(&buf)?)
+    Ok(types::ResumeData::decode(&buf)?)
 }
 
 /// Read a `len(2)` prefix, then that many bytes.
@@ -1197,7 +1201,11 @@ mod tests {
 
         send_action(&mut client, FolderAction::NextFile).await;
         read_item_header(&mut client).await;
-        let resume_data = types::encode_resume_data(2);
+        let resume_data = types::ResumeData {
+            data: 2,
+            resource: 0,
+        }
+        .encode();
         send_action(&mut client, FolderAction::ResumeFile).await;
         client
             .write_all(&(resume_data.len() as u16).to_be_bytes())
@@ -1254,7 +1262,7 @@ mod tests {
         assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
         send_item_header(&mut client, false, &["a.txt"]).await;
         assert_eq!(read_action(&mut client).await, FolderAction::ResumeFile);
-        assert_eq!(read_resume_data(&mut client).await.unwrap(), 6);
+        assert_eq!(read_resume_data(&mut client).await.unwrap().data, 6);
         send_sized_flat_file(&mut client, b"world").await;
 
         server.await.unwrap();
