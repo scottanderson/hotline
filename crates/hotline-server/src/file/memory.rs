@@ -7,14 +7,14 @@ use async_trait::async_trait;
 
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 
-use crate::file::writer::MemWriter;
+use crate::file::writer::{ForkWriter, MemWriter};
 use crate::file::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, Dir, FileProvider,
     FileRequester, FinderInfo, Node,
 };
 
 /// Per-item metadata, keyed by the item's directory and name.
-type ItemMap<V> = HashMap<(Vec<String>, String), V>;
+pub(crate) type ItemMap<V> = HashMap<(Vec<String>, String), V>;
 
 /// Move every value keyed under `old_dir`/`old_name` to `new_dir`/
 /// `new_name`: the entry itself, plus (if it's a folder) every descendant
@@ -78,6 +78,7 @@ pub struct InMemoryFileProvider {
     root: Arc<Mutex<Dir>>,
     comments: Mutex<ItemMap<String>>,
     finder_infos: Mutex<ItemMap<FinderInfo>>,
+    resource_forks: Arc<Mutex<ItemMap<Vec<u8>>>>,
     free_space: Mutex<Option<u64>>,
     comment_writes_fail: AtomicBool,
 }
@@ -91,6 +92,12 @@ impl InMemoryFileProvider {
             .make_dirs(&dir.components)
             .expect("the seed path runs through a file");
         d.entries.insert(name.to_string(), Node::File(data.into()));
+    }
+
+    /// Set the resource fork of `dir`/`name` to `data`. For tests/fixtures.
+    pub fn seed_resource_fork(&self, dir: &HlPath, name: &str, data: impl Into<Vec<u8>>) {
+        let key = (dir.components.clone(), name.to_string());
+        self.resource_forks.lock().unwrap().insert(key, data.into());
     }
 
     /// Set the bytes that [`FileProvider::free_space`] reports.
@@ -187,6 +194,10 @@ impl FileProvider for InMemoryFileProvider {
         d.entries
             .insert(partial_name.clone(), Node::File(Vec::new()));
         drop(root);
+        self.resource_forks
+            .lock()
+            .unwrap()
+            .remove(&(dir.components.clone(), partial_name.clone()));
         Ok(Box::new(MemWriter::appending(
             self.root.clone(),
             dir.components.clone(),
@@ -293,6 +304,62 @@ impl FileProvider for InMemoryFileProvider {
         Ok(())
     }
 
+    async fn resource_fork_size(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> u64 {
+        let key = (dir.components.clone(), name.to_string());
+        self.resource_forks
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map_or(0, |fork| fork.len() as u64)
+    }
+
+    async fn open_resource_read(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> io::Result<BoxedReader> {
+        let key = (dir.components.clone(), name.to_string());
+        let fork = self
+            .resource_forks
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map(|fork| fork.get(at as usize..).unwrap_or_default().to_vec())
+            .unwrap_or_default();
+        Ok(Box::new(io::Cursor::new(fork)))
+    }
+
+    async fn open_resource_write(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> io::Result<BoxedWriter> {
+        let partial_name = partial_upload_name(name);
+        if !self.exists(requester, dir, &partial_name).await {
+            return Err(not_found());
+        }
+        let key = (dir.components.clone(), partial_name);
+        self.resource_forks
+            .lock()
+            .unwrap()
+            .entry(key.clone())
+            .or_default()
+            .resize(at as usize, 0);
+        Ok(Box::new(ForkWriter::appending(
+            self.resource_forks.clone(),
+            key,
+        )))
+    }
+
     async fn delete(
         &self,
         _requester: FileRequester<'_>,
@@ -306,6 +373,11 @@ impl FileProvider for InMemoryFileProvider {
         drop_under(&mut self.comments.lock().unwrap(), &dir.components, name);
         drop_under(
             &mut self.finder_infos.lock().unwrap(),
+            &dir.components,
+            name,
+        );
+        drop_under(
+            &mut self.resource_forks.lock().unwrap(),
             &dir.components,
             name,
         );
@@ -356,6 +428,13 @@ impl FileProvider for InMemoryFileProvider {
             &dir.components,
             new_name,
         );
+        rekey(
+            &mut self.resource_forks.lock().unwrap(),
+            &dir.components,
+            old_name,
+            &dir.components,
+            new_name,
+        );
         Ok(())
     }
 
@@ -401,6 +480,13 @@ impl FileProvider for InMemoryFileProvider {
         );
         rekey(
             &mut self.finder_infos.lock().unwrap(),
+            &dir.components,
+            name,
+            &to_dir.components,
+            name,
+        );
+        rekey(
+            &mut self.resource_forks.lock().unwrap(),
             &dir.components,
             name,
             &to_dir.components,
@@ -622,6 +708,50 @@ mod tests {
             .unwrap();
         assert_eq!(&*entries[0].name, "b.txt");
         assert_ne!(entries[0].file_type, PARTIAL_TYPE);
+    }
+
+    #[tokio::test]
+    async fn create_write_drops_a_stale_resource_fork() {
+        let provider = InMemoryFileProvider::default();
+        let root = HlPath::default();
+        provider.seed(&root, &partial_upload_name("b.txt"), *b"old");
+        provider.seed_resource_fork(&root, &partial_upload_name("b.txt"), *b"rsrc");
+        provider
+            .create_write(requester(), &root, "b.txt")
+            .await
+            .unwrap();
+        let partial = partial_upload_name("b.txt");
+        assert_eq!(
+            provider
+                .resource_fork_size(requester(), &root, &partial)
+                .await,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn open_resource_write_appends_from_the_offset_and_follows_the_upload() {
+        let provider = InMemoryFileProvider::default();
+        let root = HlPath::default();
+        provider.seed(&root, &partial_upload_name("b.txt"), *b"");
+        provider.seed_resource_fork(&root, &partial_upload_name("b.txt"), *b"rsXX");
+        let mut writer = provider
+            .open_resource_write(requester(), &root, "b.txt", 2)
+            .await
+            .unwrap();
+        writer.write_all(b"rc").await.unwrap();
+        provider
+            .finish_upload(requester(), &root, "b.txt")
+            .await
+            .unwrap();
+
+        let mut reader = provider
+            .open_resource_read(requester(), &root, "b.txt", 1)
+            .await
+            .unwrap();
+        let mut fork = Vec::new();
+        reader.read_to_end(&mut fork).await.unwrap();
+        assert_eq!(fork, b"src");
     }
 
     #[tokio::test]

@@ -48,6 +48,16 @@ pub const FLAT_FILE_HEADER_LEN: usize = flat_file_header_len(INFO_DATA_LEN);
 /// header, an `INFO` fork with `info` as its data, and the `DATA` fork
 /// header for `data_size` bytes.
 pub fn flat_file_header(info: &[u8], data_size: u32) -> Vec<u8> {
+    flat_header(2, info, data_size)
+}
+
+/// [`flat_file_header`] with a fork count of 3. The `MACR` fork follows
+/// the data.
+pub fn flat_file_header_with_resource(info: &[u8], data_size: u32) -> Vec<u8> {
+    flat_header(3, info, data_size)
+}
+
+fn flat_header(fork_count: u16, info: &[u8], data_size: u32) -> Vec<u8> {
     let info_header = ForkHeader {
         fork_type: *b"INFO",
         data_size: info.len() as u32,
@@ -60,7 +70,7 @@ pub fn flat_file_header(info: &[u8], data_size: u32) -> Vec<u8> {
         .bytes(b"FILP")
         .u16(1) // version
         .bytes(&[0; 16]) // reserved
-        .u16(2) // fork count
+        .u16(fork_count)
         .bytes(&info_header.encode())
         .bytes(info)
         .bytes(&data_header.encode())
@@ -130,6 +140,14 @@ mod tests {
         assert_eq!(header.len(), flat_file_header_len(4));
         assert_eq!(u32::from_be_bytes(header[36..40].try_into().unwrap()), 4);
         assert_eq!(&header[40..44], b"info");
+        assert_eq!(&header[44..48], b"DATA");
+    }
+
+    #[test]
+    fn flat_file_header_with_resource_has_three_forks() {
+        let header = flat_file_header_with_resource(b"info", 5);
+        assert_eq!(header.len(), flat_file_header_len(4));
+        assert_eq!(u16::from_be_bytes([header[22], header[23]]), 3);
         assert_eq!(&header[44..48], b"DATA");
     }
 

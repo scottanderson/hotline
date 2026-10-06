@@ -545,6 +545,8 @@ mod tests {
                 raw: false,
                 encoding: hotline_proto::text_encoding::DEFAULT,
                 info: Vec::new(),
+                resource_size: 0,
+                resource_offset: 0,
             }),
             direction,
             size,

@@ -28,8 +28,8 @@ use crate::console::fields::{
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::file::{
-    BoxedReader, BoxedWriter, FileProvider, FileRequester, FinderInfo, FolderItem, ItemTimes,
-    PARTIAL_TYPE,
+    partial_upload_name, BoxedReader, BoxedWriter, FileProvider, FileRequester, FinderInfo,
+    FolderItem, ItemTimes, PARTIAL_TYPE,
 };
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
@@ -658,6 +658,64 @@ impl SharedState {
         at: u64,
     ) -> std::io::Result<BoxedWriter> {
         self.files.open_write_resume(requester, dir, name, at).await
+    }
+
+    /// The byte length of the resource fork of `dir`/`name`.
+    pub async fn resource_fork_size(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> u64 {
+        self.files.resource_fork_size(requester, dir, name).await
+    }
+
+    /// The byte length of the resource fork of `name`'s in-progress upload.
+    /// 0 if there is no in-progress upload.
+    pub async fn partial_resource_fork_size(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> u64 {
+        if self
+            .files
+            .partial_upload_size(requester, dir, name)
+            .await
+            .is_none()
+        {
+            return 0;
+        }
+        self.files
+            .resource_fork_size(requester, dir, &partial_upload_name(name))
+            .await
+    }
+
+    /// Open the resource fork of `dir`/`name` for reading from `at` onward.
+    pub async fn open_resource_for_read(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> std::io::Result<BoxedReader> {
+        self.files
+            .open_resource_read(requester, dir, name, at)
+            .await
+    }
+
+    /// Open the resource fork of `name`'s in-progress upload for writing
+    /// from `at` onward.
+    pub async fn open_resource_for_write(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> std::io::Result<BoxedWriter> {
+        self.files
+            .open_resource_write(requester, dir, name, at)
+            .await
     }
 
     /// One file or folder's listing metadata. `Err` if missing or
@@ -1703,6 +1761,8 @@ mod tests {
                 raw: false,
                 encoding: hotline_proto::text_encoding::DEFAULT,
                 info: Vec::new(),
+                resource_size: 0,
+                resource_offset: 0,
             }),
             direction: TransferDirection::Put,
             size: 1000,
@@ -1741,6 +1801,8 @@ mod tests {
                 raw: false,
                 encoding: hotline_proto::text_encoding::DEFAULT,
                 info: Vec::new(),
+                resource_size: 0,
+                resource_offset: 0,
             }),
             direction: TransferDirection::Get,
             size: 1000,
@@ -2078,6 +2140,8 @@ mod tests {
                 raw: false,
                 encoding: hotline_proto::text_encoding::DEFAULT,
                 info: Vec::new(),
+                resource_size: 0,
+                resource_offset: 0,
             }),
             direction: TransferDirection::Get,
             size: 0,
@@ -2109,6 +2173,8 @@ mod tests {
                     raw: false,
                     encoding: hotline_proto::text_encoding::DEFAULT,
                     info: Vec::new(),
+                    resource_size: 0,
+                    resource_offset: 0,
                 }),
                 direction: TransferDirection::Put,
                 size: 0,
@@ -2139,6 +2205,8 @@ mod tests {
                 raw: false,
                 encoding: hotline_proto::text_encoding::DEFAULT,
                 info: Vec::new(),
+                resource_size: 0,
+                resource_offset: 0,
             }),
             direction: TransferDirection::Get,
             size: 0,
@@ -2182,6 +2250,8 @@ mod tests {
                 raw: false,
                 encoding: hotline_proto::text_encoding::DEFAULT,
                 info: Vec::new(),
+                resource_size: 0,
+                resource_offset: 0,
             }),
             direction: TransferDirection::Get,
             size: 0,

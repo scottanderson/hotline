@@ -11,7 +11,7 @@ use hotline_proto::htxf::{
     self, FlatFileInfo, FolderAction, FolderItemHeader, ForkHeader, HtxfHeader,
 };
 use hotline_proto::text_encoding::Encoding;
-use hotline_proto::types::{self, HlPath};
+use hotline_proto::types::{HlPath, ResumeData};
 
 use crate::error::Result;
 use crate::file::{validate_file_name, FileRequester};
@@ -203,10 +203,10 @@ async fn drain_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<()> {
 }
 
 /// Send a [`myTran_DownloadFile`] (202) download: the flattened-file-object
-/// header with `file.info`, then the file's raw bytes. `file.raw` sends the
-/// raw bytes alone, with no header, like [`send_banner`].
-/// `transfer.resume_offset` skips that many leading bytes of the data fork,
-/// reducing the header's declared size to match, for a client resuming an
+/// header with `file.info`, the file's raw bytes, then its resource fork.
+/// `file.raw` sends the raw bytes alone, with no header, like
+/// [`send_banner`]. `transfer.resume_offset` and `file.resource_offset` skip
+/// that many leading bytes of each fork, for a client resuming an
 /// interrupted download.
 ///
 /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
@@ -217,7 +217,12 @@ async fn send_file(
     state: &SharedState,
 ) -> Result<()> {
     let FileTransfer {
-        target, raw, info, ..
+        target,
+        raw,
+        info,
+        resource_size,
+        resource_offset,
+        ..
     } = file;
     let TransferTarget { dir, name, .. } = target;
     let requester = target.requester();
@@ -225,29 +230,50 @@ async fn send_file(
     if *raw {
         tokio::io::copy(&mut reader, stream).await?;
     } else {
-        send_flat_file(stream, reader, info, transfer.size, transfer.resume_offset).await?;
+        let resource = state
+            .open_resource_for_read(requester, dir, name, *resource_offset)
+            .await?;
+        let data = (reader, transfer.size, transfer.resume_offset);
+        send_flat_file(
+            stream,
+            data,
+            info,
+            resource,
+            resource_size - resource_offset,
+        )
+        .await?;
     }
     drain_stream(stream).await
 }
 
-/// Write a flattened file object with `info` as its `INFO` fork data, for
-/// `reader`'s `size` bytes, skipping the first `resume_offset` of them.
+/// Write a flattened file object: `info` as its `INFO` fork data, the
+/// `data` reader's `size` bytes after its first `resume_offset`, then
+/// `resource_len` bytes of `resource` as its `MACR` fork. A fork shorter
+/// than its size is an error.
 async fn send_flat_file(
     stream: &mut (impl AsyncWrite + Unpin),
-    mut reader: impl AsyncRead + Unpin,
+    (mut reader, size, resume_offset): (impl AsyncRead + Unpin, u64, u64),
     info: &[u8],
-    size: u64,
-    resume_offset: u64,
+    mut resource: impl AsyncRead + Unpin,
+    resource_len: u64,
 ) -> Result<()> {
     let remaining = size - resume_offset;
     stream
-        .write_all(&htxf::flat_file_header(info, remaining as u32))
+        .write_all(&htxf::flat_file_header_with_resource(
+            info,
+            remaining as u32,
+        ))
         .await?;
     if resume_offset > 0 {
         skip_bytes(&mut reader, resume_offset).await?;
     }
-    tokio::io::copy(&mut reader.take(remaining), stream).await?;
-    Ok(())
+    copy_fork(&mut reader, remaining, stream).await?;
+    let resource_header = ForkHeader {
+        fork_type: *b"MACR",
+        data_size: resource_len as u32,
+    };
+    stream.write_all(&resource_header.encode()).await?;
+    copy_fork(&mut resource, resource_len, stream).await
 }
 
 /// Discard the first `n` bytes read from `reader`, for starting a resumed
@@ -263,10 +289,9 @@ async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result
 }
 
 /// Receive a [`myTran_UploadFile`] (203) upload: parse the client's
-/// flattened-file-object framing, writing the `DATA` fork's bytes to storage
-/// and discarding any other fork (e.g. a resource fork this server doesn't
-/// keep). `transfer.resume_offset > 0` seeks the destination to that offset
-/// instead of creating it fresh. Renames the upload to its real name (see
+/// flattened-file-object framing with [`receive_flat_file`]. A resumed
+/// upload writes each fork from its resume offset instead of creating the
+/// file fresh. Renames the upload to its real name (see
 /// [`SharedState::finish_upload`]) on success, then stores its `INFO` fork
 /// (see [`SharedState::apply_info_fork`]); an error leaves it under its
 /// working name for a later resume.
@@ -280,14 +305,21 @@ async fn receive_file(
 ) -> Result<()> {
     let TransferTarget { dir, name, .. } = &file.target;
     let requester = file.target.requester();
-    let mut out = if transfer.resume_offset > 0 {
+    let mut out = if transfer.resume_offset > 0 || file.resource_offset > 0 {
         state
             .resume_file_for_write(requester, dir, name, transfer.resume_offset)
             .await?
     } else {
         state.create_file_for_write(requester, dir, name).await?
     };
-    let info = receive_flat_file(stream, &mut out, file.encoding).await?;
+    let resource = ResourceSink {
+        state,
+        requester,
+        dir,
+        name,
+        at: file.resource_offset,
+    };
+    let info = receive_flat_file(stream, &mut out, file.encoding, resource).await?;
     out.shutdown().await?;
     state.finish_upload(requester, dir, name).await?;
     if let Some(info) = info {
@@ -296,12 +328,24 @@ async fn receive_file(
     Ok(())
 }
 
-/// Read one flattened file object, writing its `DATA` fork to `out` and
-/// discarding any other fork. Returns its `INFO` fork, if it has one.
+/// Where an upload's `MACR` fork goes: the resource fork of `name`'s
+/// in-progress upload, from `at` onward.
+struct ResourceSink<'a> {
+    state: &'a SharedState,
+    requester: FileRequester<'a>,
+    dir: &'a HlPath,
+    name: &'a str,
+    at: u64,
+}
+
+/// Read one flattened file object. Writes its `DATA` fork to `out` and its
+/// `MACR` fork to `resource`, and discards any other fork. Returns its
+/// `INFO` fork, if it has one.
 async fn receive_flat_file(
     stream: &mut (impl AsyncRead + Unpin),
     out: &mut (impl AsyncWrite + Unpin),
     encoding: &'static Encoding,
+    resource: ResourceSink<'_>,
 ) -> Result<Option<FlatFileInfo>> {
     let mut prefix = [0u8; htxf::FLAT_FILE_PREFIX_LEN];
     stream.read_exact(&mut prefix).await?;
@@ -315,11 +359,20 @@ async fn receive_flat_file(
 
         let mut remaining = fork_header.data_size as u64;
         if &fork_header.fork_type == b"DATA" {
-            let mut limited = stream.take(remaining);
-            let copied = tokio::io::copy(&mut limited, out).await?;
-            if copied != remaining {
-                return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
-            }
+            copy_fork(stream, remaining, out).await?;
+        } else if &fork_header.fork_type == b"MACR" {
+            let ResourceSink {
+                state,
+                requester,
+                dir,
+                name,
+                at,
+            } = resource;
+            let mut writer = state
+                .open_resource_for_write(requester, dir, name, at)
+                .await?;
+            copy_fork(stream, remaining, &mut writer).await?;
+            writer.shutdown().await?;
         } else {
             if &fork_header.fork_type == b"INFO" {
                 let mut data = vec![0u8; remaining.min(FlatFileInfo::MAX_LEN as u64) as usize];
@@ -336,6 +389,19 @@ async fn receive_flat_file(
         }
     }
     Ok(info)
+}
+
+/// Copy exactly `len` bytes of `stream` to `out`.
+async fn copy_fork(
+    stream: &mut (impl AsyncRead + Unpin),
+    len: u64,
+    out: &mut (impl AsyncWrite + Unpin),
+) -> Result<()> {
+    let copied = tokio::io::copy(&mut stream.take(len), out).await?;
+    if copied != len {
+        return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
+    }
+    Ok(())
 }
 
 /// Send a [`myTran_DownloadFldr`] (210) download: the next item's
@@ -378,19 +444,27 @@ async fn send_folder(
                 let Some(item) = pending_file.take() else {
                     continue;
                 };
-                let resume_offset = if action == FolderAction::ResumeFile {
-                    u64::from(read_resume_data(stream).await?.data).min(item.size)
+                let resume = if action == FolderAction::ResumeFile {
+                    read_resume_data(stream).await?
                 } else {
-                    0
+                    ResumeData::default()
                 };
                 let (dir, name) = split_item_path(&root, &item.path)
                     .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
                 let reader = state.open_file_for_read(requester, &dir, name).await?;
                 let info = state.info_fork(requester, &dir, name, encoding).await;
-                let header_len = htxf::flat_file_header_len(info.len()) as u64;
-                let flat_size = header_len + item.size - resume_offset;
+                let resource_size = state.resource_fork_size(requester, &dir, name).await;
+                let resume_offset = u64::from(resume.data).min(item.size);
+                let resource_offset = u64::from(resume.resource).min(resource_size);
+                let resource = state
+                    .open_resource_for_read(requester, &dir, name, resource_offset)
+                    .await?;
+                let header_len = (htxf::flat_file_header_len(info.len()) + ForkHeader::LEN) as u64;
+                let resource_len = resource_size - resource_offset;
+                let flat_size = header_len + item.size - resume_offset + resource_len;
                 stream.write_all(&(flat_size as u32).to_be_bytes()).await?;
-                send_flat_file(stream, reader, &info, item.size, resume_offset).await?;
+                let data = (reader, item.size, resume_offset);
+                send_flat_file(stream, data, &info, resource, resource_len).await?;
             }
             _ => {}
         }
@@ -458,7 +532,9 @@ async fn receive_folder_item(
     else {
         return Ok(false);
     };
-    let opened = if resume_offset > 0 {
+    let resource_offset = state.partial_resource_fork_size(requester, dir, name).await;
+    let resume = resume_offset > 0 || resource_offset > 0;
+    let opened = if resume {
         state
             .resume_file_for_write(requester, dir, name, resume_offset)
             .await
@@ -468,10 +544,10 @@ async fn receive_folder_item(
     let Ok(mut out) = opened else {
         return Ok(false);
     };
-    if resume_offset > 0 {
-        let resume_data = types::ResumeData {
+    if resume {
+        let resume_data = ResumeData {
             data: resume_offset as u32,
-            resource: 0,
+            resource: resource_offset as u32,
         }
         .encode();
         write_folder_action(stream, FolderAction::ResumeFile).await?;
@@ -484,7 +560,14 @@ async fn receive_folder_item(
     }
     let mut flat_size = [0u8; 4];
     stream.read_exact(&mut flat_size).await?;
-    let info = receive_flat_file(stream, &mut out, encoding).await?;
+    let resource = ResourceSink {
+        state,
+        requester,
+        dir,
+        name,
+        at: resource_offset,
+    };
+    let info = receive_flat_file(stream, &mut out, encoding, resource).await?;
     out.shutdown().await?;
     state.finish_upload(requester, dir, name).await?;
     if let Some(info) = info {
@@ -538,11 +621,10 @@ async fn write_folder_action(
     Ok(())
 }
 
-/// A `ResumeFile` action's `size(2) | resume data`, as the byte count the
-/// client already has.
-async fn read_resume_data(stream: &mut (impl AsyncRead + Unpin)) -> Result<types::ResumeData> {
+/// A `ResumeFile` action's `size(2) | resume data`.
+async fn read_resume_data(stream: &mut (impl AsyncRead + Unpin)) -> Result<ResumeData> {
     let buf = read_u16_prefixed(stream).await?;
-    Ok(types::ResumeData::decode(&buf)?)
+    Ok(ResumeData::decode(&buf)?)
 }
 
 /// Read a `len(2)` prefix, then that many bytes.
@@ -624,6 +706,8 @@ mod tests {
             raw: false,
             encoding: text_encoding::DEFAULT,
             info: Vec::new(),
+            resource_size: 0,
+            resource_offset: 0,
         };
         let transfer = PendingTransfer {
             kind: TransferKind::File(file.clone()),
@@ -672,6 +756,8 @@ mod tests {
             raw: false,
             encoding: text_encoding::DEFAULT,
             info: Vec::new(),
+            resource_size: 0,
+            resource_offset: 0,
         };
         let transfer = PendingTransfer {
             kind: TransferKind::File(file.clone()),
@@ -713,6 +799,46 @@ mod tests {
         assert_eq!(stored.comment, "a note");
     }
 
+    #[tokio::test]
+    async fn an_upload_stores_its_resource_fork() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let file = FileTransfer {
+            target: TransferTarget {
+                login: "alice".into(),
+                dir: HlPath::default(),
+                name: "a.txt".into(),
+            },
+            raw: false,
+            encoding: text_encoding::DEFAULT,
+            info: Vec::new(),
+            resource_size: 0,
+            resource_offset: 0,
+        };
+        let transfer = PendingTransfer {
+            kind: TransferKind::File(file.clone()),
+            direction: TransferDirection::Put,
+            size: 5,
+            resume_offset: 0,
+            client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
+        };
+        let flat = flat_file_with_resource(b"hello", b"rsrc");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut server_stream, _) = listener.accept().await.unwrap();
+        client.write_all(&flat).await.unwrap();
+        drop(client);
+        receive_file(&mut server_stream, &file, &transfer, &state)
+            .await
+            .unwrap();
+
+        assert_eq!(read_file(&state, &[], "a.txt").await, b"hello");
+        assert_eq!(read_resource_fork(&state, &[], "a.txt").await, b"rsrc");
+    }
+
     /// `resume_file_for_write` seeks to `resume_offset` before the
     /// client's bytes land, so a longer working file from an earlier
     /// attempt doesn't leave stale bytes past what the client resends.
@@ -731,6 +857,8 @@ mod tests {
             raw: false,
             encoding: text_encoding::DEFAULT,
             info: Vec::new(),
+            resource_size: 0,
+            resource_offset: 0,
         };
         let transfer = PendingTransfer {
             kind: TransferKind::File(file.clone()),
@@ -790,6 +918,8 @@ mod tests {
                     raw: true,
                     encoding: text_encoding::DEFAULT,
                     info: Vec::new(),
+                    resource_size: 0,
+                    resource_offset: 0,
                 }),
                 direction: TransferDirection::Get,
                 size: 5,
@@ -828,6 +958,8 @@ mod tests {
                     raw: true,
                     encoding: text_encoding::DEFAULT,
                     info: Vec::new(),
+                    resource_size: 0,
+                    resource_offset: 0,
                 }),
                 direction: TransferDirection::Get,
                 size: 5,
@@ -866,6 +998,17 @@ mod tests {
         assert!(state.take_transfer(reference).await.is_some());
     }
 
+    #[tokio::test]
+    async fn send_flat_file_fails_on_a_short_fork() {
+        let mut out = Vec::new();
+        let short_data = send_flat_file(&mut out, (&b"hey"[..], 5, 0), b"", &b""[..], 0).await;
+        assert!(short_data.is_err());
+        let mut out = Vec::new();
+        let short_resource =
+            send_flat_file(&mut out, (&b"hello"[..], 5, 0), b"", &b"rs"[..], 4).await;
+        assert!(short_resource.is_err());
+    }
+
     #[test]
     fn htxf_types_find_transfers_as_openline_does() {
         let get = a_txt_transfer(TransferDirection::Get, 1);
@@ -893,6 +1036,8 @@ mod tests {
                 raw: direction == TransferDirection::Get,
                 encoding: text_encoding::DEFAULT,
                 info: Vec::new(),
+                resource_size: 0,
+                resource_offset: 0,
             }),
             direction,
             size: 11,
@@ -1101,11 +1246,26 @@ mod tests {
     /// A file's `size(4)` then its flattened object, returning the object's
     /// `DATA` fork bytes.
     async fn read_sized_flat_file(client: &mut TcpStream) -> Vec<u8> {
+        read_sized_flat_file_forks(client).await.0
+    }
+
+    /// A file's `size(4)` then its flattened object, returning the object's
+    /// `DATA` and `MACR` fork bytes.
+    async fn read_sized_flat_file_forks(client: &mut TcpStream) -> (Vec<u8>, Vec<u8>) {
         let mut size = [0u8; 4];
         client.read_exact(&mut size).await.unwrap();
         let mut flat = vec![0u8; u32::from_be_bytes(size) as usize];
         client.read_exact(&mut flat).await.unwrap();
-        flat.split_off(flat_header_len(&flat))
+        let header_len = flat_header_len(&flat);
+        let data_header = ForkHeader::decode(&flat[header_len - ForkHeader::LEN..]).unwrap();
+        assert_eq!(&data_header.fork_type, b"DATA");
+        let mut data = flat.split_off(header_len);
+        let mut resource = data.split_off(data_header.data_size as usize);
+        let resource_header = ForkHeader::decode(&resource).unwrap();
+        assert_eq!(&resource_header.fork_type, b"MACR");
+        let resource = resource.split_off(ForkHeader::LEN);
+        assert_eq!(resource.len(), resource_header.data_size as usize);
+        (data, resource)
     }
 
     /// The header length of the flattened object `flat`, from its `INFO`
@@ -1133,6 +1293,32 @@ mod tests {
             .await
             .unwrap();
         client.write_all(&flat).await.unwrap();
+    }
+
+    /// A flattened object with `data` and a `MACR` fork of `resource`.
+    fn flat_file_with_resource(data: &[u8], resource: &[u8]) -> Vec<u8> {
+        let info = htxf::empty_info();
+        let mut flat = htxf::flat_file_header_with_resource(&info, data.len() as u32);
+        flat.extend_from_slice(data);
+        let resource_header = ForkHeader {
+            fork_type: *b"MACR",
+            data_size: resource.len() as u32,
+        };
+        flat.extend_from_slice(&resource_header.encode());
+        flat.extend_from_slice(resource);
+        flat
+    }
+
+    async fn read_resource_fork(state: &SharedState, dir: &[&str], name: &str) -> Vec<u8> {
+        let requester = FileRequester { login: "alice" };
+        let dir = HlPath::new(dir.iter().copied());
+        let mut reader = state
+            .open_resource_for_read(requester, &dir, name, 0)
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.unwrap();
+        buf
     }
 
     async fn read_file(state: &SharedState, dir: &[&str], name: &str) -> Vec<u8> {
@@ -1201,7 +1387,7 @@ mod tests {
 
         send_action(&mut client, FolderAction::NextFile).await;
         read_item_header(&mut client).await;
-        let resume_data = types::ResumeData {
+        let resume_data = ResumeData {
             data: 2,
             resource: 0,
         }
@@ -1216,6 +1402,75 @@ mod tests {
 
         drop(client);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn folder_download_sends_and_resumes_the_resource_fork() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
+        files.seed_resource_fork(&HlPath::new(["Top"]), "a.txt", *b"rsrc");
+        let state = state_with_files(files);
+        let requester = FileRequester { login: "alice" };
+        let items = state
+            .walk_folder(requester, &HlPath::default(), "Top", Access::all())
+            .await
+            .unwrap();
+        let folder = folder_transfer("Top", items, 1);
+        let (mut client, server) =
+            start_folder_transfer(&state, folder, TransferDirection::Get).await;
+
+        send_action(&mut client, FolderAction::NextFile).await;
+        read_item_header(&mut client).await;
+        let resume_data = ResumeData {
+            data: 2,
+            resource: 1,
+        }
+        .encode();
+        send_action(&mut client, FolderAction::ResumeFile).await;
+        client
+            .write_all(&(resume_data.len() as u16).to_be_bytes())
+            .await
+            .unwrap();
+        client.write_all(&resume_data).await.unwrap();
+        let (data, resource) = read_sized_flat_file_forks(&mut client).await;
+        assert_eq!(data, b"llo");
+        assert_eq!(resource, b"src");
+
+        drop(client);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn folder_upload_resumes_both_forks() {
+        let files = InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Top"]), "a.txt.hpf", *b"hello ");
+        files.seed_resource_fork(&HlPath::new(["Top"]), "a.txt.hpf", *b"rs");
+        let state = state_with_files(files);
+        let folder = folder_transfer("Top", Vec::new(), 1);
+        let (mut client, server) =
+            start_folder_transfer(&state, folder, TransferDirection::Put).await;
+
+        assert_eq!(read_action(&mut client).await, FolderAction::NextFile);
+        send_item_header(&mut client, false, &["a.txt"]).await;
+        assert_eq!(read_action(&mut client).await, FolderAction::ResumeFile);
+        let resume = read_resume_data(&mut client).await.unwrap();
+        assert_eq!(
+            resume,
+            ResumeData {
+                data: 6,
+                resource: 2
+            }
+        );
+        let flat = flat_file_with_resource(b"world", b"rc");
+        client
+            .write_all(&(flat.len() as u32).to_be_bytes())
+            .await
+            .unwrap();
+        client.write_all(&flat).await.unwrap();
+
+        server.await.unwrap();
+        assert_eq!(read_file(&state, &["Top"], "a.txt").await, b"hello world");
+        assert_eq!(read_resource_fork(&state, &["Top"], "a.txt").await, b"rsrc");
     }
 
     /// Every item counts toward the declared total, a skipped one too.

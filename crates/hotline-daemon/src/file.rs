@@ -2,11 +2,12 @@
 //! every login. `hotline-server` deliberately doesn't own file storage
 //! (see its module docs); this is the concrete backend `hls` plugs in.
 //!
-//! Each item's Finder info and comment are in its AppleDouble sidecar
-//! (see [`apple_double`]), which listings hide.
+//! Each item's Finder info, comment, and resource fork are in its
+//! AppleDouble sidecar (see [`apple_double`]), which listings hide.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
@@ -22,7 +23,7 @@ use crate::apple_double::{self, Sidecar};
 pub struct DiskFileProvider {
     root: PathBuf,
     /// Held while a sidecar changes or moves.
-    sidecars: Mutex<()>,
+    sidecars: Arc<Mutex<()>>,
 }
 
 impl DiskFileProvider {
@@ -32,7 +33,7 @@ impl DiskFileProvider {
         tokio::fs::create_dir_all(&root).await?;
         Ok(Self {
             root,
-            sidecars: Mutex::new(()),
+            sidecars: Arc::default(),
         })
     }
 
@@ -217,7 +218,10 @@ impl FileProvider for DiskFileProvider {
         let path = self
             .resolve_file(dir, &partial_upload_name(name))
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        Ok(Box::new(tokio::fs::File::create(path).await?))
+        let file = tokio::fs::File::create(&path).await?;
+        let _sidecars = self.sidecars.lock().await;
+        apple_double::remove(&apple_double::path_of(&path)).await?;
+        Ok(Box::new(file))
     }
 
     async fn open_write_resume(
@@ -245,6 +249,62 @@ impl FileProvider for DiskFileProvider {
         file.set_len(at).await?;
         file.seek(io::SeekFrom::Start(at)).await?;
         Ok(Box::new(file))
+    }
+
+    async fn finish_upload(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> io::Result<()> {
+        self.rename(requester, dir, &partial_upload_name(name), name)
+            .await
+    }
+
+    async fn resource_fork_size(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> u64 {
+        let Some(path) = self.resolve_file(dir, name) else {
+            return 0;
+        };
+        apple_double::read(&apple_double::path_of(&path))
+            .await
+            .map_or(0, |sidecar| sidecar.resource_fork_len())
+    }
+
+    async fn open_resource_read(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> io::Result<BoxedReader> {
+        let path = self
+            .resolve_file(dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        apple_double::open_resource_read(&apple_double::path_of(&path), at).await
+    }
+
+    async fn open_resource_write(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        at: u64,
+    ) -> io::Result<BoxedWriter> {
+        let path = self
+            .resolve_file(dir, &partial_upload_name(name))
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        tokio::fs::symlink_metadata(&path).await?;
+        let _sidecars = self.sidecars.lock().await;
+        let sidecar_path = apple_double::path_of(&path);
+        let writer =
+            apple_double::open_resource_write(&sidecar_path, at, Arc::clone(&self.sidecars))
+                .await?;
+        Ok(Box::new(writer))
     }
 
     async fn info(
@@ -806,6 +866,83 @@ mod tests {
         let mut buf = Vec::new();
         reader.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf, b"hello");
+    }
+
+    #[tokio::test]
+    async fn an_uploaded_resource_fork_follows_the_file() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
+        let root = HlPath::default();
+        let mut writer = provider
+            .create_write(requester(), &root, "a.txt")
+            .await
+            .unwrap();
+        writer.write_all(b"hello").await.unwrap();
+        writer.shutdown().await.unwrap();
+        let mut writer = provider
+            .open_resource_write(requester(), &root, "a.txt", 0)
+            .await
+            .unwrap();
+        writer.write_all(b"rsrc").await.unwrap();
+        writer.shutdown().await.unwrap();
+        let partial = partial_upload_name("a.txt");
+        assert_eq!(
+            provider
+                .resource_fork_size(requester(), &root, &partial)
+                .await,
+            4
+        );
+        provider
+            .finish_upload(requester(), &root, "a.txt")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .resource_fork_size(requester(), &root, "a.txt")
+                .await,
+            4
+        );
+        let mut reader = provider
+            .open_resource_read(requester(), &root, "a.txt", 0)
+            .await
+            .unwrap();
+        let mut fork = Vec::new();
+        reader.read_to_end(&mut fork).await.unwrap();
+        assert_eq!(fork, b"rsrc");
+    }
+
+    #[tokio::test]
+    async fn create_write_drops_a_stale_resource_fork() {
+        use tokio::io::AsyncWriteExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
+        let root = HlPath::default();
+        provider
+            .create_write(requester(), &root, "a.txt")
+            .await
+            .unwrap();
+        let mut writer = provider
+            .open_resource_write(requester(), &root, "a.txt", 0)
+            .await
+            .unwrap();
+        writer.write_all(b"rsrc").await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        provider
+            .create_write(requester(), &root, "a.txt")
+            .await
+            .unwrap();
+        let partial = partial_upload_name("a.txt");
+        assert_eq!(
+            provider
+                .resource_fork_size(requester(), &root, &partial)
+                .await,
+            0
+        );
     }
 
     #[tokio::test]

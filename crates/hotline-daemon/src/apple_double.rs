@@ -3,13 +3,18 @@
 //! fork.
 
 use std::ffi::OsString;
+use std::future::Future;
 use std::io::{self, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 
 use hotline_proto::wire::{PacketReader, PacketWriter, VecWriter};
-use hotline_server::{FinderInfo, SIDECAR_PREFIX};
+use hotline_server::{BoxedReader, FinderInfo, SIDECAR_PREFIX};
 use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::Mutex;
 
 const MAGIC: u32 = 0x0005_1607;
 const VERSION: u32 = 0x0002_0000;
@@ -19,6 +24,9 @@ const FINDER_INFO_ID: u32 = 9;
 
 /// Where a written sidecar's resource fork starts.
 pub const RESOURCE_FORK_OFFSET: u64 = 4096;
+
+/// Where [`write_file`] puts the resource fork's entry, the third.
+const RESOURCE_FORK_ENTRY_OFFSET: u64 = (Header::LEN + 2 * Entry::LEN) as u64;
 
 /// The longest comment a written sidecar holds, in bytes.
 const MAX_COMMENT_LEN: usize =
@@ -146,6 +154,11 @@ impl Sidecar {
         self.finder_info.info = info;
     }
 
+    /// The byte length of the resource fork.
+    pub const fn resource_fork_len(&self) -> u64 {
+        self.resource_fork.len
+    }
+
     fn is_empty(&self) -> bool {
         self.finder_info == FinderInfoEntry::default()
             && self.comment.is_empty()
@@ -186,7 +199,8 @@ pub async fn read(path: &Path) -> io::Result<Sidecar> {
 
     let mut sidecar = Sidecar::default();
     for entry in table.as_chunks().0.iter().copied().map(Entry::decode) {
-        let (offset, len) = (u64::from(entry.offset), u64::from(entry.len));
+        let offset = u64::from(entry.offset);
+        let len = u64::from(entry.len);
         if offset + len > file_len {
             continue;
         }
@@ -216,6 +230,101 @@ pub async fn write(path: &Path, sidecar: &Sidecar) -> io::Result<()> {
     if sidecar.is_empty() {
         return remove(path).await;
     }
+    write_file(path, sidecar).await.map(drop)
+}
+
+/// Open the resource fork of the sidecar at `path` for reading from `at`
+/// onward. Empty if there is no fork.
+pub async fn open_resource_read(path: &Path, at: u64) -> io::Result<BoxedReader> {
+    let Span { offset, len } = read(path).await?.resource_fork;
+    if at >= len {
+        return Ok(Box::new(tokio::io::empty()));
+    }
+    let mut file = File::open(path).await?;
+    file.seek(SeekFrom::Start(offset + at)).await?;
+    Ok(Box::new(file.take(len - at)))
+}
+
+/// Open the resource fork of the sidecar at `path` for writing from `at`
+/// onward. Creates the sidecar if missing, and cuts the fork to `at`.
+/// Call with `sidecars` held.
+pub async fn open_resource_write(
+    path: &Path,
+    at: u64,
+    sidecars: Arc<Mutex<()>>,
+) -> io::Result<ResourceForkWriter> {
+    let mut sidecar = read(path).await?;
+    sidecar.resource_fork.len = sidecar.resource_fork.len.min(at);
+    let mut file = write_file(path, &sidecar).await?;
+    file.set_len(RESOURCE_FORK_OFFSET + at).await?;
+    file.seek(SeekFrom::Start(RESOURCE_FORK_OFFSET + at))
+        .await?;
+    Ok(ResourceForkWriter {
+        file: Some(file),
+        len: at,
+        sidecars,
+        closing: None,
+    })
+}
+
+/// Writes a resource fork from [`open_resource_write`]. Shutdown writes
+/// the fork's length into the sidecar's entry table, with `sidecars` held.
+pub struct ResourceForkWriter {
+    file: Option<File>,
+    len: u64,
+    sidecars: Arc<Mutex<()>>,
+    closing: Option<Pin<Box<dyn Future<Output = io::Result<()>> + Send>>>,
+}
+
+impl ResourceForkWriter {
+    fn file(&mut self) -> io::Result<&mut File> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("resource fork writer is closed"))
+    }
+}
+
+impl AsyncWrite for ResourceForkWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let written = ready!(Pin::new(self.file()?).poll_write(cx, buf))?;
+        self.len += written as u64;
+        Poll::Ready(Ok(written))
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(self.file()?).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.closing.is_none() {
+            let mut file = self
+                .file
+                .take()
+                .ok_or_else(|| io::Error::other("resource fork writer is closed"))?;
+            let entry = Entry {
+                id: RESOURCE_FORK_ID,
+                offset: RESOURCE_FORK_OFFSET as u32,
+                len: self.len as u32,
+            };
+            let sidecars = Arc::clone(&self.sidecars);
+            self.closing = Some(Box::pin(async move {
+                let _sidecars = sidecars.lock().await;
+                file.seek(SeekFrom::Start(RESOURCE_FORK_ENTRY_OFFSET))
+                    .await?;
+                file.write_all(&entry.encode()).await?;
+                file.shutdown().await
+            }));
+        }
+        self.closing.as_mut().expect("set above").as_mut().poll(cx)
+    }
+}
+
+/// Write `sidecar` to `path` like [`write()`], also when it is empty.
+async fn write_file(path: &Path, sidecar: &Sidecar) -> io::Result<File> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -273,7 +382,8 @@ pub async fn write(path: &Path, sidecar: &Sidecar) -> io::Result<()> {
         file.write_all(&fork).await?;
     }
     file.flush().await?;
-    file.set_len(RESOURCE_FORK_OFFSET + fork_len).await
+    file.set_len(RESOURCE_FORK_OFFSET + fork_len).await?;
+    Ok(file)
 }
 
 /// Remove the sidecar at `path`, if there is one.
@@ -387,6 +497,47 @@ mod tests {
         );
         let bytes = tokio::fs::read(&path).await.unwrap();
         assert_eq!(&bytes[RESOURCE_FORK_OFFSET as usize..], b"rsrc!");
+    }
+
+    #[tokio::test]
+    async fn a_written_resource_fork_reads_back_and_keeps_the_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("._a");
+        let sidecar = Sidecar {
+            comment: "a note".into(),
+            ..Sidecar::default()
+        };
+        write(&path, &sidecar).await.unwrap();
+
+        let mut file = open_resource_write(&path, 0, Arc::default()).await.unwrap();
+        file.write_all(b"rsrc").await.unwrap();
+        file.shutdown().await.unwrap();
+        assert_eq!(read(&path).await.unwrap().resource_fork_len(), 4);
+
+        let mut file = open_resource_write(&path, 2, Arc::default()).await.unwrap();
+        file.write_all(b"RC!").await.unwrap();
+        file.shutdown().await.unwrap();
+        let read_back = read(&path).await.unwrap();
+        assert_eq!(read_back.comment, "a note");
+        assert_eq!(read_back.resource_fork_len(), 5);
+
+        let mut fork = Vec::new();
+        let mut reader = open_resource_read(&path, 1).await.unwrap();
+        reader.read_to_end(&mut fork).await.unwrap();
+        assert_eq!(fork, b"sRC!");
+    }
+
+    #[tokio::test]
+    async fn a_resource_fork_keeps_its_length_until_the_writer_closes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("._a");
+
+        let mut file = open_resource_write(&path, 0, Arc::default()).await.unwrap();
+        file.write_all(b"rsrc").await.unwrap();
+        file.flush().await.unwrap();
+        assert_eq!(read(&path).await.unwrap().resource_fork_len(), 0);
+        file.shutdown().await.unwrap();
+        assert_eq!(read(&path).await.unwrap().resource_fork_len(), 4);
     }
 
     #[tokio::test]

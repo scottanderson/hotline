@@ -164,12 +164,13 @@ works this way.
   Mac `_FSSetFlatFileInfo` copies as many bytes as the comment size
   says, from a zeroed 592-byte buffer, so a short fork gives zero bytes
   or bytes past the buffer. `hls` copies only the bytes it received.
-- **Finder info and comments are in AppleDouble files.** openline's Mac
-  build keeps them in the HFS catalog and the Desktop database, and its
-  Windows build keeps neither. `DiskFileProvider` keeps them in the
-  sidecar `._name` next to each item, with the comment as UTF-8. When it
-  changes a sidecar from another tool, it keeps only the Finder info,
-  the comment, and the resource fork.
+- **Finder info, comments, and resource forks are in AppleDouble
+  files.** openline's Mac build keeps them in the HFS catalog, the
+  Desktop database, and the resource fork, and its Windows build keeps
+  none of them. `DiskFileProvider` keeps them in the sidecar `._name`
+  next to each item, with the comment as UTF-8. When it changes a
+  sidecar from another tool, it keeps only the Finder info, the comment,
+  and the resource fork.
 - **Resume data without a `DATA` entry is an error.** openline's Mac
   `ResumeFlatten` resumes the data fork from 0 when the `RFLT` data has
   no `DATA` entry, and reads entries past the end of a short field.
@@ -1258,6 +1259,17 @@ one-shared-room model.
      `set_finder_info` keep the Finder info. `hls` keeps it and the
      comment in each item's AppleDouble sidecar in place of
      `comments.json`, and `--comments-file` is gone.
+
+161. A download sends three forks, `INFO`, `DATA`, and `MACR`, as
+     openline's Mac `StartFlatten` does, and `MACR` carries the resource
+     fork. Resume data reduces each fork, as openline's Mac
+     `ResumeFlatten` does. An upload writes its `MACR` fork to the
+     resource fork, and a resumed upload reports the size of both forks,
+     as openline's Mac `ResumeUnflatten` does. This replaces entry 6,
+     which discarded the `MACR` fork. `FileProvider` gets
+     `resource_fork_size`, `open_resource_read`, and
+     `open_resource_write`, and `DiskFileProvider` keeps the fork in the
+     AppleDouble sidecar.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

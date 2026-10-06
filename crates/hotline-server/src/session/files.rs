@@ -6,7 +6,7 @@ use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::htxf;
 use hotline_proto::types::{self, HlDate, HlPath};
 use hotline_proto::FieldId;
-use hotline_proto::{Field, Received, Transaction};
+use hotline_proto::{Field, ForkHeader, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::Activity;
@@ -110,10 +110,10 @@ impl Session {
 
     /// [`myTran_DownloadFile`] (202): start a download. Allocates a transfer
     /// reference and tells the client the total byte count (flattened-object
-    /// overhead plus the file's own bytes) to expect on the data connection. A
-    /// client resuming an interrupted download sends
-    /// [`myField_FileResumeData`] (203) with the byte count it already has; that
-    /// portion of the data fork is skipped, though the flattened-object header
+    /// overhead plus the data and resource forks) to expect on the data
+    /// connection. A client resuming an interrupted download sends
+    /// [`myField_FileResumeData`] (203) with the byte count of each fork it
+    /// already has; those bytes are skipped, though the flattened-object header
     /// is always resent. A raw request for an empty file gets only a zero
     /// [`myField_TransferSize`] (108).
     ///
@@ -152,19 +152,26 @@ impl Session {
                 .info_fork(requester, &dir, &name, self.encoding())
                 .await
         };
-        let (resume_offset, total_size) = if raw {
-            (0, data_size)
+        let resource_size = if raw {
+            0
         } else {
-            let resume_offset = match tx.field(FieldId::FileResumeData) {
-                Some(field) => match types::ResumeData::decode(field.as_bytes()) {
-                    Ok(resume) => u64::from(resume.data).min(data_size),
-                    Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
-                },
-                None => 0,
-            };
-            let remaining = data_size - resume_offset;
-            let header_len = htxf::flat_file_header_len(info.len()) as u64;
-            (resume_offset, remaining + header_len)
+            state.resource_fork_size(requester, &dir, &name).await
+        };
+        let (resume_offset, resource_offset) = match tx.field(FieldId::FileResumeData) {
+            Some(field) if !raw => match types::ResumeData::decode(field.as_bytes()) {
+                Ok(resume) => (
+                    u64::from(resume.data).min(data_size),
+                    u64::from(resume.resource).min(resource_size),
+                ),
+                Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
+            },
+            _ => (0, 0),
+        };
+        let total_size = if raw {
+            data_size
+        } else {
+            let header_len = htxf::flat_file_header_len(info.len()) + ForkHeader::LEN;
+            header_len as u64 + data_size - resume_offset + resource_size - resource_offset
         };
         let kind = TransferKind::File(FileTransfer {
             target: TransferTarget {
@@ -175,6 +182,8 @@ impl Session {
             raw,
             encoding: self.encoding(),
             info,
+            resource_size,
+            resource_offset,
         });
         let mut fields = vec![
             Field::u32(FieldId::TransferSize, total_size as u32),
@@ -252,7 +261,7 @@ impl Session {
     /// upload anywhere. [`myField_FileXferOptions`] (204) == 1 resumes an
     /// interrupted upload instead of rejecting an existing file at the
     /// destination; the reply then also carries [`myField_FileResumeData`] (203)
-    /// telling the client how many bytes to skip.
+    /// telling the client how many bytes of each fork to skip.
     ///
     /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
     /// [`myField_FileXferOptions`]: hotline_proto::FieldId::FileXferOptions
@@ -287,6 +296,13 @@ impl Session {
             Ok(offset) => offset,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let resource_offset = if resume {
+            state
+                .partial_resource_fork_size(requester, &dir, &name)
+                .await
+        } else {
+            0
+        };
 
         let reference = state
             .register_transfer(PendingTransfer {
@@ -299,6 +315,8 @@ impl Session {
                     raw: false,
                     encoding: self.encoding(),
                     info: Vec::new(),
+                    resource_size: 0,
+                    resource_offset,
                 }),
                 direction: TransferDirection::Put,
                 size: size as u64,
@@ -314,7 +332,7 @@ impl Session {
                 FieldId::FileResumeData,
                 types::ResumeData {
                     data: resume_offset as u32,
-                    resource: 0,
+                    resource: resource_offset as u32,
                 }
                 .encode()
                 .to_vec(),
@@ -782,8 +800,9 @@ mod tests {
         })
     }
 
-    /// The flattened file header length of `a.txt` with no comment.
-    const A_TXT_HEADER_LEN: u32 = (htxf::FLAT_FILE_HEADER_LEN + "a.txt".len()) as u32;
+    /// The bytes of a download of `a.txt` with no comment, other than its forks.
+    const A_TXT_HEADER_LEN: u32 =
+        (htxf::FLAT_FILE_HEADER_LEN + "a.txt".len() + ForkHeader::LEN) as u32;
 
     fn state_with_files_and_policy(
         files: crate::file::InMemoryFileProvider,
@@ -1116,6 +1135,46 @@ mod tests {
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
         assert_eq!(transfer.size, 11);
         assert_eq!(transfer.resume_offset, 6);
+    }
+
+    #[tokio::test]
+    async fn download_file_counts_and_resumes_the_resource_fork() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello world");
+        files.seed_resource_fork(&HlPath::default(), "a.txt", *b"rsrc");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let resume = types::ResumeData {
+            data: 6,
+            resource: 1,
+        };
+        let get = request(
+            Opcode::DownloadFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::bytes(FieldId::FileResumeData, resume.encode().to_vec()),
+            ],
+        );
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        let reply = reply.received(text_encoding::DEFAULT);
+        let total_size = reply.field(FieldId::TransferSize).and_then(Field::as_u32);
+        assert_eq!(total_size, Some(5 + A_TXT_HEADER_LEN + 3));
+        let reference = reply.field(FieldId::RefNum).and_then(Field::as_u32);
+        let transfer = state
+            .take_transfer(TransferRef(reference.unwrap()))
+            .await
+            .unwrap();
+        let TransferKind::File(file) = transfer.kind else {
+            panic!("not a file transfer");
+        };
+        assert_eq!((file.resource_size, file.resource_offset), (4, 1));
     }
 
     #[tokio::test]
@@ -2193,6 +2252,48 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(reply.is_error());
+    }
+
+    #[tokio::test]
+    async fn upload_file_resume_reports_the_resource_fork_size() {
+        let files = crate::file::InMemoryFileProvider::default();
+        let partial = crate::file::partial_upload_name("a.txt");
+        files.seed(&HlPath::default(), &partial, *b"hello");
+        files.seed_resource_fork(&HlPath::default(), &partial, *b"rs");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let put = request(
+            Opcode::UploadFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::u16(FieldId::FileXferOptions, 1),
+            ],
+        );
+        let [reply] = session
+            .on_upload_file(&put, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let reply = reply.received(text_encoding::DEFAULT);
+        let resume_field = reply.field(FieldId::FileResumeData).unwrap();
+        assert_eq!(
+            types::ResumeData::decode(resume_field.as_bytes()).unwrap(),
+            types::ResumeData {
+                data: 5,
+                resource: 2
+            }
+        );
+        let reference = reply.field(FieldId::RefNum).and_then(Field::as_u32);
+        let transfer = state
+            .take_transfer(TransferRef(reference.unwrap()))
+            .await
+            .unwrap();
+        let TransferKind::File(file) = transfer.kind else {
+            panic!("not a file transfer");
+        };
+        assert_eq!(file.resource_offset, 2);
     }
 
     #[tokio::test]

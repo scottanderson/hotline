@@ -162,8 +162,8 @@ cargo run -p hotline-cli -- --host 127.0.0.1 --port 5500 --login guest --nick Ru
 | `bans.json`     | address bans                     | `--ban-file`        |
 | `tracker-id`    | the ID that trackers list you by | `--tracker-id-file` |
 
-The Finder info and the comment of `files/a.txt` are in its AppleDouble
-file, `files/._a.txt`. Clients do not see these files.
+The Finder info, the comment, and the resource fork of `files/a.txt` are
+in its AppleDouble file, `files/._a.txt`. Clients do not see these files.
 
 Text in these files is UTF-8. On the wire, text uses Mac OS Roman by
 default. `--encoding utf-8` changes the wire encoding of every

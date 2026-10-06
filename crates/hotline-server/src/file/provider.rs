@@ -202,6 +202,40 @@ pub trait FileProvider: Send + Sync {
         Ok(())
     }
 
+    /// The byte length of the resource fork of `dir`/`name`. Keeps no
+    /// resource forks by default.
+    async fn resource_fork_size(
+        &self,
+        _requester: FileRequester<'_>,
+        _dir: &HlPath,
+        _name: &str,
+    ) -> u64 {
+        0
+    }
+
+    /// Open the resource fork of `dir`/`name` for reading from `at` onward.
+    async fn open_resource_read(
+        &self,
+        _requester: FileRequester<'_>,
+        _dir: &HlPath,
+        _name: &str,
+        _at: u64,
+    ) -> io::Result<BoxedReader> {
+        Ok(Box::new(tokio::io::empty()))
+    }
+
+    /// Open the resource fork of `name`'s in-progress upload for writing
+    /// from `at` onward. Truncates anything past `at`.
+    async fn open_resource_write(
+        &self,
+        _requester: FileRequester<'_>,
+        _dir: &HlPath,
+        _name: &str,
+        _at: u64,
+    ) -> io::Result<BoxedWriter> {
+        Ok(Box::new(tokio::io::sink()))
+    }
+
     /// The bytes free on the disk that holds `dir`. `None` when unknown.
     async fn free_space(&self, _requester: FileRequester<'_>, _dir: &HlPath) -> Option<u64> {
         None
