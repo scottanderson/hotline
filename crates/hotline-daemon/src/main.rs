@@ -2,6 +2,7 @@
 
 mod accounts;
 mod activity;
+mod apple_double;
 mod args;
 mod banner;
 mod bans;
@@ -78,12 +79,12 @@ async fn main() -> anyhow::Result<()> {
     }
     let accounts = Arc::new(accounts);
     let files = Arc::new(
-        DiskFileProvider::open(args.files_dir.clone(), args.comments_file.clone())
+        DiskFileProvider::open(args.files_dir.clone())
             .await
             .with_context(|| {
                 format!(
-                    "failed to open the file store (--files-dir {}, --comments-file {})",
-                    args.files_dir, args.comments_file
+                    "failed to open the file store (--files-dir {})",
+                    args.files_dir
                 )
             })?,
     );

@@ -164,6 +164,12 @@ works this way.
   Mac `_FSSetFlatFileInfo` copies as many bytes as the comment size
   says, from a zeroed 592-byte buffer, so a short fork gives zero bytes
   or bytes past the buffer. `hls` copies only the bytes it received.
+- **Finder info and comments are in AppleDouble files.** openline's Mac
+  build keeps them in the HFS catalog and the Desktop database, and its
+  Windows build keeps neither. `DiskFileProvider` keeps them in the
+  sidecar `._name` next to each item, with the comment as UTF-8. When it
+  changes a sidecar from another tool, it keeps only the Finder info,
+  the comment, and the resource fork.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -1242,7 +1248,9 @@ one-shared-room model.
      type, the creator, the Finder flags without the inited and alias
      flags, and a comment that is not empty, as openline's Mac
      `_FSSetFlatFileInfo` does. `FileProvider::finder_info` and
-     `set_finder_info` keep the Finder info.
+     `set_finder_info` keep the Finder info. `hls` keeps it and the
+     comment in each item's AppleDouble sidecar in place of
+     `comments.json`, and `--comments-file` is gone.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

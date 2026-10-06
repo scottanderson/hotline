@@ -2,12 +2,9 @@
 //! every login. `hotline-server` deliberately doesn't own file storage
 //! (see its module docs); this is the concrete backend `hls` plugs in.
 //!
-//! File and folder comments aren't native filesystem metadata, so they
-//! persist as a single JSON file elsewhere on disk (not under the served
-//! root, so it never shows up in a client's own file listing), mapping
-//! each path to its comment.
+//! Each item's Finder info and comment are in its AppleDouble sidecar
+//! (see [`apple_double`]), which listings hide.
 
-use std::collections::HashMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -15,102 +12,47 @@ use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 use hotline_server::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
-    FileRequester, ItemTimes, SIDECAR_PREFIX,
+    FileRequester, FinderInfo, ItemTimes, SIDECAR_PREFIX,
 };
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
+
+use crate::apple_double::{self, Sidecar};
 
 /// Serves one directory on disk, the same for every login.
 pub struct DiskFileProvider {
     root: PathBuf,
-    comments_path: PathBuf,
-    comments: RwLock<HashMap<String, String>>,
+    /// Held while a sidecar changes or moves.
+    sidecars: Mutex<()>,
 }
 
 impl DiskFileProvider {
-    /// Open (creating if missing) `root` to serve, with comments persisted
-    /// to `comments_file` (also created if missing), a path outside `root`.
-    pub async fn open(
-        root: impl Into<PathBuf>,
-        comments_file: impl Into<PathBuf>,
-    ) -> io::Result<Self> {
+    /// Open (creating if missing) `root` to serve.
+    pub async fn open(root: impl Into<PathBuf>) -> io::Result<Self> {
         let root = root.into();
         tokio::fs::create_dir_all(&root).await?;
-        let comments_path = comments_file.into();
-        let comments = match tokio::fs::read(&comments_path).await {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => HashMap::new(),
-            Err(e) => return Err(e),
-        };
         Ok(Self {
             root,
-            comments_path,
-            comments: RwLock::new(comments),
+            sidecars: Mutex::new(()),
         })
     }
 
-    /// The key a comment is stored under: `dir`'s components joined with
-    /// `name`, so folder and file comments share one flat map.
-    fn comment_key(dir: &HlPath, name: &str) -> String {
-        let mut parts = dir.components.clone();
-        parts.push(name.to_string());
-        parts.join("/")
-    }
-
-    /// Move every comment keyed under `old_key` to `new_key`: the entry
-    /// itself, plus every descendant comment whose key has `old_key` as a
-    /// path prefix (a renamed/moved folder's contents), then persists the
-    /// updated map to disk.
-    async fn rekey_comments(&self, old_key: &str, new_key: &str) -> io::Result<()> {
-        let mut comments = self.comments.write().await;
-        let old_prefix = format!("{old_key}/");
-        let matches: Vec<_> = comments
-            .keys()
-            .filter(|key| *key == old_key || key.starts_with(&old_prefix))
-            .cloned()
-            .collect();
-        if matches.is_empty() {
-            return Ok(());
-        }
-        for key in matches {
-            let comment = comments.remove(&key).unwrap();
-            let rekeyed = match key.strip_prefix(&old_prefix) {
-                Some(rest) => format!("{new_key}/{rest}"),
-                None => new_key.to_string(),
-            };
-            comments.insert(rekeyed, comment);
-        }
-        self.write_comments(&comments).await
-    }
-
-    /// Drop the comment on `key` and on every key under it whose entry is
-    /// gone from disk, then persist the updated map.
-    async fn drop_comments(&self, key: &str) -> io::Result<()> {
-        let mut comments = self.comments.write().await;
-        let prefix = format!("{key}/");
-        let mut gone = Vec::new();
-        for k in comments
-            .keys()
-            .filter(|k| *k == key || k.starts_with(&prefix))
-        {
-            let path = k.split('/').fold(self.root.clone(), |path, c| path.join(c));
-            if tokio::fs::symlink_metadata(&path).await.is_err() {
-                gone.push(k.clone());
-            }
-        }
-        if gone.is_empty() {
-            return Ok(());
-        }
-        for k in &gone {
-            comments.remove(k);
-        }
-        self.write_comments(&comments).await
-    }
-
-    async fn write_comments(&self, comments: &HashMap<String, String>) -> io::Result<()> {
-        let bytes = serde_json::to_vec_pretty(comments)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        tokio::fs::write(&self.comments_path, bytes).await
+    /// Change the sidecar of `dir`/`name` with `change`. `NotFound` if the
+    /// item does not exist.
+    async fn update_sidecar(
+        &self,
+        dir: &HlPath,
+        name: &str,
+        change: impl FnOnce(&mut Sidecar),
+    ) -> io::Result<()> {
+        let path = self
+            .resolve_file(dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        tokio::fs::symlink_metadata(&path).await?;
+        let sidecar_path = apple_double::path_of(&path);
+        let _sidecars = self.sidecars.lock().await;
+        let mut sidecar = apple_double::read(&sidecar_path).await?;
+        change(&mut sidecar);
+        apple_double::write(&sidecar_path, &sidecar).await
     }
 
     /// Resolve a directory path under `root`. `None` when a component is
@@ -147,6 +89,23 @@ fn is_plain_name(name: &str) -> bool {
         && !(cfg!(windows) && name.contains(':'))
         && matches!(components.next(), Some(Component::Normal(_)))
         && components.next().is_none()
+}
+
+/// The stored Finder info of the item at `path`, zero when it has none.
+async fn stored_finder_info(path: &Path) -> FinderInfo {
+    let sidecar_path = apple_double::path_of(path);
+    let sidecar = apple_double::read(&sidecar_path).await;
+    sidecar.unwrap_or_default().finder_info()
+}
+
+/// The type and creator of the file `name`: the stored ones, or those for
+/// `name` when the stored type is zero.
+fn file_type_and_creator(stored: FinderInfo, name: &str) -> ([u8; 4], [u8; 4]) {
+    if stored.file_type == [0; 4] {
+        type_and_creator_for_name(name)
+    } else {
+        (stored.file_type, stored.creator)
+    }
 }
 
 /// The name of `entry` if a listing shows it: UTF-8 and not a sidecar.
@@ -199,7 +158,8 @@ impl FileProvider for DiskFileProvider {
                     name: name.into(),
                 }
             } else {
-                let (file_type, creator) = type_and_creator_for_name(&name);
+                let stored = stored_finder_info(&entry.path()).await;
+                let (file_type, creator) = file_type_and_creator(stored, &name);
                 FileNameWithInfo {
                     file_type,
                     creator,
@@ -303,13 +263,46 @@ impl FileProvider for DiskFileProvider {
                 name: name.into(),
             });
         }
-        let (file_type, creator) = type_and_creator_for_name(name);
+        let stored = stored_finder_info(&path).await;
+        let (file_type, creator) = file_type_and_creator(stored, name);
         Some(FileNameWithInfo {
             file_type,
             creator,
             size: metadata.len() as u32,
             name: name.into(),
         })
+    }
+
+    async fn finder_info(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<FinderInfo> {
+        let path = self.resolve_file(dir, name)?;
+        let metadata = tokio::fs::metadata(&path).await.ok()?;
+        let stored = stored_finder_info(&path).await;
+        let (file_type, creator) = if metadata.is_dir() {
+            (*b"fldr", *b"\0\0\0\0")
+        } else {
+            file_type_and_creator(stored, name)
+        };
+        Some(FinderInfo {
+            file_type,
+            creator,
+            flags: stored.flags,
+        })
+    }
+
+    async fn set_finder_info(
+        &self,
+        _requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        info: FinderInfo,
+    ) -> io::Result<()> {
+        self.update_sidecar(dir, name, |sidecar| sidecar.set_finder_info(info))
+            .await
     }
 
     #[cfg(unix)]
@@ -345,15 +338,16 @@ impl FileProvider for DiskFileProvider {
         let path = self
             .resolve_file(dir, name)
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        let removed = if is_dir {
-            tokio::fs::remove_dir_all(&path).await
+        let _sidecars = self.sidecars.lock().await;
+        if is_dir {
+            tokio::fs::remove_dir_all(&path).await?;
         } else {
-            tokio::fs::remove_file(&path).await
-        };
-        if let Err(error) = self.drop_comments(&Self::comment_key(dir, name)).await {
-            tracing::warn!(%error, name, "could not drop the comments of a deleted entry");
+            tokio::fs::remove_file(&path).await?;
         }
-        removed
+        if let Err(error) = apple_double::remove(&apple_double::path_of(&path)).await {
+            tracing::debug!(%error, name, "could not remove the sidecar of a deleted entry");
+        }
+        Ok(())
     }
 
     async fn mkdir(
@@ -384,10 +378,11 @@ impl FileProvider for DiskFileProvider {
         if tokio::fs::metadata(&new_path).await.is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        tokio::fs::rename(old_path, new_path).await?;
-        self.rekey_comments(
-            &Self::comment_key(dir, old_name),
-            &Self::comment_key(dir, new_name),
+        let _sidecars = self.sidecars.lock().await;
+        tokio::fs::rename(&old_path, &new_path).await?;
+        apple_double::rename(
+            &apple_double::path_of(&old_path),
+            &apple_double::path_of(&new_path),
         )
         .await
     }
@@ -408,10 +403,11 @@ impl FileProvider for DiskFileProvider {
         if tokio::fs::metadata(&new_path).await.is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        tokio::fs::rename(old_path, new_path).await?;
-        self.rekey_comments(
-            &Self::comment_key(dir, name),
-            &Self::comment_key(to_dir, name),
+        let _sidecars = self.sidecars.lock().await;
+        tokio::fs::rename(&old_path, &new_path).await?;
+        apple_double::rename(
+            &apple_double::path_of(&old_path),
+            &apple_double::path_of(&new_path),
         )
         .await
     }
@@ -447,11 +443,10 @@ impl FileProvider for DiskFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> Option<String> {
-        self.comments
-            .read()
-            .await
-            .get(&Self::comment_key(dir, name))
-            .cloned()
+        let path = self.resolve_file(dir, name)?;
+        let sidecar = apple_double::read(&apple_double::path_of(&path)).await;
+        let comment = sidecar.ok()?.comment;
+        (!comment.is_empty()).then_some(comment)
     }
 
     async fn set_comment(
@@ -461,14 +456,8 @@ impl FileProvider for DiskFileProvider {
         name: &str,
         comment: &str,
     ) -> io::Result<()> {
-        let key = Self::comment_key(dir, name);
-        let mut comments = self.comments.write().await;
-        if comment.is_empty() {
-            comments.remove(&key);
-        } else {
-            comments.insert(key, comment.to_string());
-        }
-        self.write_comments(&comments).await
+        self.update_sidecar(dir, name, |sidecar| sidecar.comment = comment.into())
+            .await
     }
 }
 
@@ -484,9 +473,7 @@ mod tests {
     #[tokio::test]
     async fn free_space_reads_the_disk_and_is_none_for_a_bad_path() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         assert!(provider
             .free_space(requester(), &HlPath::default())
@@ -506,9 +493,7 @@ mod tests {
         tokio::fs::write(dir.path().join("a.txt"), b"hi")
             .await
             .unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         let times = provider
             .times(requester(), &HlPath::default(), "a.txt")
@@ -541,9 +526,7 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let mut entries = provider
             .list(requester(), &HlPath::default())
             .await
@@ -568,9 +551,7 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let root = HlPath::default();
         let entries = provider.list(requester(), &root).await.unwrap();
         let names: Vec<_> = entries.iter().map(|e| &*e.name).collect();
@@ -600,9 +581,7 @@ mod tests {
             .unwrap();
         tokio::fs::write(top.join("b.txt"), b"bb").await.unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let items = provider
             .walk(requester(), &HlPath::default(), "Top")
             .await
@@ -629,9 +608,7 @@ mod tests {
         tokio::fs::create_dir(&top).await.unwrap();
         tokio::fs::symlink(&top, top.join("loop")).await.unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let items = provider
             .walk(requester(), &HlPath::default(), "Top")
             .await
@@ -652,9 +629,7 @@ mod tests {
             .unwrap();
         tokio::fs::symlink(&other, top.join("alias")).await.unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let items = provider
             .walk(requester(), &HlPath::default(), "Top")
             .await
@@ -683,9 +658,7 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let items = provider
             .walk(requester(), &HlPath::default(), "Top")
             .await
@@ -709,9 +682,7 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let entries = provider
             .list(requester(), &HlPath::default())
             .await
@@ -734,9 +705,7 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let entries = provider
             .list(requester(), &HlPath::default())
             .await
@@ -759,9 +728,7 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         provider
             .delete(requester(), &HlPath::default(), "alias", true)
             .await
@@ -780,9 +747,7 @@ mod tests {
         tokio::fs::write(&target, b"hi").await.unwrap();
         tokio::fs::symlink(&target, top.join("link")).await.unwrap();
 
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         let items = provider
             .walk(requester(), &HlPath::default(), "Top")
             .await
@@ -794,9 +759,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_traversal_out_of_the_root() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         assert!(provider.resolve_file(&HlPath::new([".."]), "etc").is_none());
         assert!(provider.resolve_file(&HlPath::default(), "..").is_none());
@@ -811,9 +774,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let dir = tempfile::tempdir().unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         let mut writer = provider
             .create_write(requester(), &HlPath::default(), "a.txt")
@@ -852,9 +813,7 @@ mod tests {
         use tokio::io::AsyncWriteExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         let mut writer = provider
             .create_write(requester(), &HlPath::default(), "a.txt")
@@ -883,9 +842,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let dir = tempfile::tempdir().unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         let mut writer = provider
             .create_write(requester(), &HlPath::default(), "a.txt")
@@ -919,9 +876,7 @@ mod tests {
     #[tokio::test]
     async fn open_write_resume_errors_when_the_file_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         assert!(provider
             .open_write_resume(requester(), &HlPath::default(), "missing.txt", 0)
@@ -932,15 +887,11 @@ mod tests {
     #[tokio::test]
     async fn set_comment_round_trips_and_survives_reopening() {
         let dir = tempfile::tempdir().unwrap();
-        let comments_dir = tempfile::tempdir().unwrap();
-        let comments_path = comments_dir.path().join("comments.json");
         tokio::fs::write(dir.path().join("a.txt"), b"hi")
             .await
             .unwrap();
         {
-            let provider = DiskFileProvider::open(dir.path(), &comments_path)
-                .await
-                .unwrap();
+            let provider = DiskFileProvider::open(dir.path()).await.unwrap();
             assert_eq!(
                 provider
                     .comment(requester(), &HlPath::default(), "a.txt")
@@ -959,9 +910,7 @@ mod tests {
             );
         }
 
-        let reopened = DiskFileProvider::open(dir.path(), &comments_path)
-            .await
-            .unwrap();
+        let reopened = DiskFileProvider::open(dir.path()).await.unwrap();
         assert_eq!(
             reopened
                 .comment(requester(), &HlPath::default(), "a.txt")
@@ -984,11 +933,7 @@ mod tests {
     #[tokio::test]
     async fn renaming_a_file_carries_its_comment_to_the_new_name() {
         let dir = tempfile::tempdir().unwrap();
-        let comments_dir = tempfile::tempdir().unwrap();
-        let provider =
-            DiskFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
-                .await
-                .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         tokio::fs::write(dir.path().join("a.txt"), b"hi")
             .await
             .unwrap();
@@ -1019,11 +964,7 @@ mod tests {
     #[tokio::test]
     async fn moving_a_file_carries_its_comment_to_the_new_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let comments_dir = tempfile::tempdir().unwrap();
-        let provider =
-            DiskFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
-                .await
-                .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         tokio::fs::create_dir(dir.path().join("Dest"))
             .await
             .unwrap();
@@ -1056,11 +997,7 @@ mod tests {
     #[tokio::test]
     async fn renaming_a_folder_carries_its_own_and_its_contents_comments() {
         let dir = tempfile::tempdir().unwrap();
-        let comments_dir = tempfile::tempdir().unwrap();
-        let provider =
-            DiskFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
-                .await
-                .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         tokio::fs::create_dir(dir.path().join("Vacation"))
             .await
             .unwrap();
@@ -1103,11 +1040,7 @@ mod tests {
     #[tokio::test]
     async fn deleting_a_folder_drops_its_own_and_its_contents_comments() {
         let dir = tempfile::tempdir().unwrap();
-        let comments_dir = tempfile::tempdir().unwrap();
-        let comments_path = comments_dir.path().join("comments.json");
-        let provider = DiskFileProvider::open(dir.path(), &comments_path)
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         tokio::fs::create_dir(dir.path().join("Vacation"))
             .await
             .unwrap();
@@ -1137,9 +1070,7 @@ mod tests {
             .await
             .unwrap();
 
-        let reopened = DiskFileProvider::open(dir.path(), &comments_path)
-            .await
-            .unwrap();
+        let reopened = DiskFileProvider::open(dir.path()).await.unwrap();
         assert_eq!(
             reopened
                 .comment(requester(), &HlPath::default(), "Vacation")
@@ -1157,11 +1088,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_delete_keeps_the_comment() {
         let dir = tempfile::tempdir().unwrap();
-        let comments_dir = tempfile::tempdir().unwrap();
-        let provider =
-            DiskFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
-                .await
-                .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         tokio::fs::create_dir(dir.path().join("Vacation"))
             .await
             .unwrap();
@@ -1184,13 +1111,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn comments_file_never_appears_in_a_directory_listing() {
+    async fn set_finder_info_sets_the_listed_type() {
         let dir = tempfile::tempdir().unwrap();
-        let comments_dir = tempfile::tempdir().unwrap();
-        let provider =
-            DiskFileProvider::open(dir.path(), comments_dir.path().join("comments.json"))
-                .await
-                .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        let root = HlPath::default();
+        let info = FinderInfo {
+            file_type: *b"APPL",
+            creator: *b"aust",
+            flags: 0x0400,
+        };
+        provider
+            .set_finder_info(requester(), &root, "a.txt", info)
+            .await
+            .unwrap();
+
+        let entries = provider.list(requester(), &root).await.unwrap();
+        assert_eq!(&entries[0].file_type, b"APPL");
+        assert_eq!(&entries[0].creator, b"aust");
+        let stored = provider.finder_info(requester(), &root, "a.txt").await;
+        assert_eq!(stored, Some(info));
+
+        let zero_type = FinderInfo {
+            flags: 0x0400,
+            ..FinderInfo::default()
+        };
+        provider
+            .set_finder_info(requester(), &root, "a.txt", zero_type)
+            .await
+            .unwrap();
+        let info = provider.info(requester(), &root, "a.txt").await.unwrap();
+        assert_eq!(&info.file_type, b"TEXT");
+        assert_eq!(&info.creator, b"ttxt");
+    }
+
+    #[tokio::test]
+    async fn clearing_the_only_comment_removes_the_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        let root = HlPath::default();
+        provider
+            .set_comment(requester(), &root, "a.txt", "a note")
+            .await
+            .unwrap();
+        assert!(dir.path().join("._a.txt").is_file());
+
+        provider
+            .set_comment(requester(), &root, "a.txt", "")
+            .await
+            .unwrap();
+        assert!(!dir.path().join("._a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn set_comment_on_a_missing_item_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
+        let result = provider
+            .set_comment(requester(), &HlPath::default(), "a.txt", "a note")
+            .await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(!dir.path().join("._a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn a_comment_sidecar_never_appears_in_a_directory_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
         tokio::fs::write(dir.path().join("a.txt"), b"hi")
             .await
             .unwrap();
@@ -1213,9 +1205,7 @@ mod tests {
         tokio::fs::write(dir.path().join("keep.txt"), b"hi")
             .await
             .unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         let result = provider
             .delete(requester(), &HlPath::default(), ".", true)
@@ -1234,9 +1224,7 @@ mod tests {
         tokio::fs::create_dir(dir.path().join("actually_a_folder"))
             .await
             .unwrap();
-        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
-            .await
-            .unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
         // Authorized as a file (is_dir = false); must not fall back to
         // deleting the real directory on disk.

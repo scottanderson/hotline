@@ -40,11 +40,6 @@ pub struct Args {
     #[arg(long, default_value = "files")]
     pub files_dir: String,
 
-    /// File to persist file/folder comments to, as JSON (created if
-    /// missing). Put it outside `--files-dir`, or clients see it.
-    #[arg(long, default_value = "comments.json")]
-    pub comments_file: String,
-
     /// File to persist classic (flat) news to, as plain text (created if
     /// missing).
     #[arg(long, default_value = "news.txt")]
