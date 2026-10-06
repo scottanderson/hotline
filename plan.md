@@ -104,14 +104,15 @@ works this way.
   `UFileSys::ValidateFileName` differs by platform, and so does
   `validate_file_name`. On Mac OS X, openline only cuts the length.
   Elsewhere than Windows, `hls` also maps `/` and `\` to `-`, and the
-  names `.` and `..` to dashes, so a name cannot leave its folder. On Windows,
-  openline maps `\ / : * ? " < > |`, control bytes, the bytes 0x81,
-  0x8D to 0x90, 0x9D, and 0x9E, a leading `.`, and each trailing `.` and
-  space to `-`. `hls` maps the C1 control characters U+0080 to U+009F
-  in place of those bytes, and gives a reserved device name such as
-  `CON` a `-`. `hls` cuts a name at 255 UTF-8 bytes, at a character
-  boundary. It also maps the name of a new alias, which openline's
-  `ProcessTran_MakeFileAlias` does not.
+  names `.` and `..` to dashes, so a name cannot leave its folder. It
+  also maps the dot of a leading `._`, which starts an AppleDouble
+  sidecar's name. On Windows, openline maps `\ / : * ? " < > |`, control
+  bytes, the bytes 0x81, 0x8D to 0x90, 0x9D, and 0x9E, a leading `.`,
+  and each trailing `.` and space to `-`. `hls` maps the C1 control
+  characters U+0080 to U+009F in place of those bytes, and gives a
+  reserved device name such as `CON` a `-`. `hls` cuts a name at 255
+  UTF-8 bytes, at a character boundary. It also maps the name of a new
+  alias, which openline's `ProcessTran_MakeFileAlias` does not.
 - **Move and alias check drop boxes.** openline's `ProcessTran_MoveFile`
   and `ProcessTran_MakeFileAlias` check no drop box. A user who guessed
   a name could move a file out of a drop box, or alias it, and then
@@ -1220,6 +1221,10 @@ one-shared-room model.
      with `UFS::New` and `fsOption_NilIfExists`. A second upload can no
      longer truncate an upload in progress or waiting to resume, also in
      a drop box.
+
+159. A new name never starts with `._`, the start of an AppleDouble
+     sidecar's name. `DiskFileProvider` hides each `._` entry from
+     listings and item counts, and refuses it in every lookup.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

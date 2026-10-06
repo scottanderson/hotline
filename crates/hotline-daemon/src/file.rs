@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 use hotline_server::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
-    FileRequester, ItemTimes,
+    FileRequester, ItemTimes, SIDECAR_PREFIX,
 };
 use tokio::sync::RwLock;
 
@@ -138,24 +138,32 @@ impl DiskFileProvider {
     }
 }
 
-/// Whether `name` is one normal path component, with no `:` on Windows.
+/// Whether `name` is one normal path component that is not a sidecar,
+/// with no `:` on Windows.
 fn is_plain_name(name: &str) -> bool {
     let mut components = Path::new(name).components();
     !name.contains(['/', '\\'])
+        && !name.starts_with(SIDECAR_PREFIX)
         && !(cfg!(windows) && name.contains(':'))
         && matches!(components.next(), Some(Component::Normal(_)))
         && components.next().is_none()
 }
 
-/// How many entries with a UTF-8 name the folder at `path` holds. 0 when
-/// it cannot be read.
+/// The name of `entry` if a listing shows it: UTF-8 and not a sidecar.
+fn listed_name(entry: &tokio::fs::DirEntry) -> Option<String> {
+    let name = entry.file_name().into_string().ok()?;
+    (!name.starts_with(SIDECAR_PREFIX)).then_some(name)
+}
+
+/// How many entries a listing of the folder at `path` shows. 0 when it
+/// cannot be read.
 async fn count_entries(path: &Path) -> u32 {
     let Ok(mut read_dir) = tokio::fs::read_dir(path).await else {
         return 0;
     };
     let mut count = 0;
     while let Ok(Some(entry)) = read_dir.next_entry().await {
-        if entry.file_name().to_str().is_some() {
+        if listed_name(&entry).is_some() {
             count += 1;
         }
     }
@@ -173,15 +181,15 @@ impl FileProvider for DiskFileProvider {
         let mut read_dir = tokio::fs::read_dir(&path).await.ok()?;
         let mut entries = Vec::new();
         while let Ok(Some(entry)) = read_dir.next_entry().await {
+            let Some(name) = listed_name(&entry) else {
+                continue;
+            };
             let metadata = match tokio::fs::metadata(entry.path()).await {
                 Ok(metadata) => metadata,
                 Err(_) => match entry.metadata().await {
                     Ok(metadata) => metadata,
                     Err(_) => continue,
                 },
-            };
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
             };
             entries.push(if metadata.is_dir() {
                 FileNameWithInfo {
@@ -551,6 +559,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sidecars_are_hidden_and_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), b"hi")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("._a.txt"), b"sidecar")
+            .await
+            .unwrap();
+
+        let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
+            .await
+            .unwrap();
+        let root = HlPath::default();
+        let entries = provider.list(requester(), &root).await.unwrap();
+        let names: Vec<_> = entries.iter().map(|e| &*e.name).collect();
+        assert_eq!(names, ["a.txt"]);
+        assert!(!provider.exists(requester(), &root, "._a.txt").await);
+        assert!(provider
+            .open_read(requester(), &root, "._a.txt")
+            .await
+            .is_err());
+        assert!(provider
+            .delete(requester(), &root, "._a.txt", false)
+            .await
+            .is_err());
+        assert!(provider
+            .list(requester(), &HlPath::new(["._a.txt"]))
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn walk_lists_a_nested_folder_before_its_contents() {
         let dir = tempfile::tempdir().unwrap();
         let top = dir.path().join("Top");
@@ -665,6 +705,9 @@ mod tests {
         tokio::fs::write(folder.join("a.txt"), b"x").await.unwrap();
         let raw = std::ffi::OsStr::from_bytes(b"\xff.txt");
         tokio::fs::write(folder.join(raw), b"x").await.unwrap();
+        tokio::fs::write(folder.join("._a.txt"), b"x")
+            .await
+            .unwrap();
 
         let provider = DiskFileProvider::open(dir.path(), dir.path().join("comments.json"))
             .await
