@@ -1,7 +1,7 @@
 //! [`ForkHeader`]: one fork's header inside a flattened file object.
 
 use crate::error::{ProtoError, Result};
-use crate::wire::PacketReader;
+use crate::wire::{PacketReader, PacketWriter};
 
 /// One fork's header, read between the `FILP` prefix and its data
 /// (`INFO`, `DATA`, or `MACR`). Compression is always `0` (uncompressed)
@@ -18,6 +18,16 @@ impl ForkHeader {
     /// Wire length in bytes: `fork_type(4) | compression_type(4) |
     /// reserved(4) | data_size(4)`.
     pub const LEN: usize = 16;
+
+    /// Encode one fork header, uncompressed.
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        PacketWriter::new()
+            .bytes(&self.fork_type)
+            .u32(0) // compression type
+            .u32(0) // reserved
+            .u32(self.data_size)
+            .finish()
+    }
 
     /// Decode one fork header.
     pub fn decode(buf: &[u8]) -> Result<Self> {
@@ -44,11 +54,11 @@ impl ForkHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::htxf::{flat_file_header, FLAT_FILE_PREFIX_LEN, INFO_DATA_LEN};
+    use crate::htxf::{empty_info, flat_file_header, FLAT_FILE_PREFIX_LEN, INFO_DATA_LEN};
 
     #[test]
     fn fork_header_round_trips_through_flat_file_header() {
-        let header = flat_file_header(42);
+        let header = flat_file_header(&empty_info(), 42);
         let info = ForkHeader::decode(&header[FLAT_FILE_PREFIX_LEN..]).unwrap();
         assert_eq!(&info.fork_type, b"INFO");
         assert_eq!(info.data_size, INFO_DATA_LEN as u32);

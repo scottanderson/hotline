@@ -234,7 +234,10 @@ async fn send_flat_file(
 ) -> Result<()> {
     let remaining = size - resume_offset;
     stream
-        .write_all(&htxf::flat_file_header(remaining as u32))
+        .write_all(&htxf::flat_file_header(
+            &htxf::empty_info(),
+            remaining as u32,
+        ))
         .await?;
     if resume_offset > 0 {
         skip_bytes(&mut reader, resume_offset).await?;

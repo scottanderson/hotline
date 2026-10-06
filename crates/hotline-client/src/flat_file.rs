@@ -2,7 +2,9 @@
 
 use std::io;
 
-use hotline_proto::htxf::{decode_flat_file_prefix, flat_file_header, FLAT_FILE_PREFIX_LEN};
+use hotline_proto::htxf::{
+    decode_flat_file_prefix, empty_info, flat_file_header, FLAT_FILE_PREFIX_LEN,
+};
 use hotline_proto::ForkHeader;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -46,7 +48,9 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    stream.write_all(&flat_file_header(size)).await?;
+    stream
+        .write_all(&flat_file_header(&empty_info(), size))
+        .await?;
     let size = u64::from(size);
     let sent = tokio::io::copy(&mut data.take(size), stream).await?;
     if sent < size {

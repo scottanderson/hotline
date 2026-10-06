@@ -7,10 +7,12 @@
 //! [`myTran_DownloadFile`]: crate::Opcode::DownloadFile
 //! [`myTran_UploadFile`]: crate::Opcode::UploadFile
 
+mod flat_file_info;
 mod folder;
 mod fork_header;
 mod header;
 
+pub use flat_file_info::FlatFileInfo;
 pub use folder::{FolderAction, FolderItemHeader};
 pub use fork_header::ForkHeader;
 pub use header::{HtxfHeader, HtxfType};
@@ -20,61 +22,57 @@ use crate::wire::{PacketReader, PacketWriter, VecWriter};
 
 pub(crate) const MAGIC: &[u8; 4] = b"HTXF";
 
-/// Byte length of the `INFO` fork's data (platform through comment size,
-/// no name or comment): `4+4+4+4+4+32+8+8+2+2+2`.
-pub(crate) const INFO_DATA_LEN: usize = 74;
+/// Byte length of [`empty_info`]: [`FlatFileInfo::FIXED_LEN`] and a
+/// comment size.
+pub const INFO_DATA_LEN: usize = FlatFileInfo::FIXED_LEN + 2;
 
-/// Fixed byte length of [`flat_file_header`]'s output: `FILP` header
-/// (24 bytes) + `INFO` fork header (16) + `INFO` fork data (74, no name
-/// or comment) + `DATA` fork header (16).
-pub const FLAT_FILE_HEADER_LEN: usize = 24 + 16 + INFO_DATA_LEN + 16;
-
-/// Build the flattened-file-object header written before a file's raw
-/// bytes on a download: a `FILP` container with an `INFO` fork (type and
-/// creator zeroed out, no real Mac file metadata) and a `DATA` fork
-/// header. No resource fork.
-///
-/// `data_size` is the number of raw file bytes that follow this header
-/// on the wire.
-pub fn flat_file_header(data_size: u32) -> [u8; FLAT_FILE_HEADER_LEN] {
+/// The `INFO` fork data of [`FlatFileInfo::default`]: platform `AMAC`,
+/// with no type, creator, name, or comment.
+pub fn empty_info() -> [u8; INFO_DATA_LEN] {
     PacketWriter::new()
-        // Flat file header.
+        .bytes(b"AMAC")
+        .bytes(&[0; INFO_DATA_LEN - 4])
+        .finish()
+}
+
+/// Byte length of [`flat_file_header`]'s output for `info_len` bytes of
+/// `INFO` fork data.
+pub const fn flat_file_header_len(info_len: usize) -> usize {
+    FLAT_FILE_PREFIX_LEN + ForkHeader::LEN + info_len + ForkHeader::LEN
+}
+
+/// Byte length of [`flat_file_header`]'s output with [`empty_info`].
+pub const FLAT_FILE_HEADER_LEN: usize = flat_file_header_len(INFO_DATA_LEN);
+
+/// The bytes before a file's data in a flattened file object: the `FILP`
+/// header, an `INFO` fork with `info` as its data, and the `DATA` fork
+/// header for `data_size` bytes.
+pub fn flat_file_header(info: &[u8], data_size: u32) -> Vec<u8> {
+    let info_header = ForkHeader {
+        fork_type: *b"INFO",
+        data_size: info.len() as u32,
+    };
+    let data_header = ForkHeader {
+        fork_type: *b"DATA",
+        data_size,
+    };
+    VecWriter::with_capacity(flat_file_header_len(info.len()))
         .bytes(b"FILP")
         .u16(1) // version
         .bytes(&[0; 16]) // reserved
         .u16(2) // fork count
-        // INFO fork header.
-        .bytes(b"INFO")
-        .u32(0) // compression type
-        .u32(0) // reserved
-        .u32(INFO_DATA_LEN as u32) // INFO fork data size
-        // INFO fork data.
-        .bytes(b"AMAC") // platform
-        .u32(0) // type signature
-        .u32(0) // creator signature
-        .u32(0) // flags
-        .u32(0) // platform flags
-        .bytes(&[0; 32]) // reserved
-        .u64(0) // create date
-        .u64(0) // modify date
-        .u16(0) // name script
-        .u16(0) // name size (name omitted, matching openline's
-        // placeholder-only INFO fork for a plain file transfer)
-        .u16(0) // comment size (comment omitted)
-        // DATA fork header.
-        .bytes(b"DATA")
-        .u32(0) // compression type
-        .u32(0) // reserved
-        .u32(data_size)
+        .bytes(&info_header.encode())
+        .bytes(info)
+        .bytes(&data_header.encode())
         .finish()
 }
 
-/// Encode a complete flattened file object: [`flat_file_header`] followed
-/// by the raw file bytes.
+/// Encode a complete flattened file object with [`empty_info`]:
+/// [`flat_file_header`] followed by the raw file bytes.
 pub fn encode_flat_file(data: &[u8]) -> Vec<u8> {
-    let mut w = VecWriter::with_capacity(FLAT_FILE_HEADER_LEN + data.len());
-    w = w.bytes(&flat_file_header(data.len() as u32));
-    w.bytes(data).finish()
+    let mut flat = flat_file_header(&empty_info(), data.len() as u32);
+    flat.extend_from_slice(data);
+    flat
 }
 
 /// Byte length of the `FILP` header alone (format, version, reserved,
@@ -117,12 +115,22 @@ mod tests {
 
     #[test]
     fn flat_file_header_has_filp_magic_and_two_forks() {
-        let header = flat_file_header(5);
+        let header = flat_file_header(&empty_info(), 5);
+        assert_eq!(header.len(), FLAT_FILE_HEADER_LEN);
         assert_eq!(&header[0..4], b"FILP");
         assert_eq!(u16::from_be_bytes([header[22], header[23]]), 2);
         assert_eq!(&header[24..28], b"INFO");
         assert_eq!(&header[114..118], b"DATA");
         assert_eq!(u32::from_be_bytes(header[126..130].try_into().unwrap()), 5);
+    }
+
+    #[test]
+    fn flat_file_header_carries_the_info_data() {
+        let header = flat_file_header(b"info", 5);
+        assert_eq!(header.len(), flat_file_header_len(4));
+        assert_eq!(u32::from_be_bytes(header[36..40].try_into().unwrap()), 4);
+        assert_eq!(&header[40..44], b"info");
+        assert_eq!(&header[44..48], b"DATA");
     }
 
     #[test]
@@ -134,13 +142,13 @@ mod tests {
 
     #[test]
     fn decode_flat_file_prefix_reads_back_fork_count() {
-        let header = flat_file_header(5);
+        let header = flat_file_header(&empty_info(), 5);
         assert_eq!(decode_flat_file_prefix(&header).unwrap(), 2);
     }
 
     #[test]
     fn decode_flat_file_prefix_rejects_bad_magic() {
-        let mut header = flat_file_header(0);
+        let mut header = flat_file_header(&empty_info(), 0);
         header[0] = b'X';
         assert!(matches!(
             decode_flat_file_prefix(&header),
