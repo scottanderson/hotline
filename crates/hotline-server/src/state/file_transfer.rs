@@ -1,3 +1,5 @@
+use hotline_proto::text_encoding::Encoding;
+
 use crate::state::TransferTarget;
 
 /// A pending `HTXF` transfer's file identity, from [`crate::FileProvider`],
@@ -12,4 +14,8 @@ pub struct FileTransfer {
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     /// [`myField_FileXferOptions`]: hotline_proto::FieldId::FileXferOptions
     pub raw: bool,
+    /// The control connection's text encoding, for an uploaded `INFO` fork.
+    pub encoding: &'static Encoding,
+    /// Download: the `INFO` fork data. Empty for an upload or a raw download.
+    pub info: Vec<u8>,
 }

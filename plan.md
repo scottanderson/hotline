@@ -154,6 +154,16 @@ works this way.
   `UFieldData::GetInteger` reads the first 4 bytes of a longer field,
   and a 16-bit value keeps the low 16 bits of a larger number. `hls`
   handles either field as missing.
+- **A zero uploaded type reads as the type for the name.** openline's
+  Mac `_FSSetFlatFileInfo` stores the `INFO` fork's type and creator as
+  they are, also a zero type. `hls` stores them too, but a stored zero
+  type reads back as the type and creator for the name's extension,
+  which openline's Windows build gives every file. `hlc` uploads a zero
+  type.
+- **An uploaded comment stops at the end of the `INFO` fork.** openline's
+  Mac `_FSSetFlatFileInfo` copies as many bytes as the comment size
+  says, from a zeroed 592-byte buffer, so a short fork gives zero bytes
+  or bytes past the buffer. `hls` copies only the bytes it received.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -1225,6 +1235,14 @@ one-shared-room model.
 159. A new name never starts with `._`, the start of an AppleDouble
      sidecar's name. `DiskFileProvider` hides each `._` entry from
      listings and item counts, and refuses it in every lookup.
+
+160. A download's `INFO` fork carries the file's type, creator, Finder
+     flags, dates, name, and comment, as openline's Mac
+     `_FSCreateFlatFileInfo` builds it. An upload's `INFO` fork sets the
+     type, the creator, the Finder flags without the inited and alias
+     flags, and a comment that is not empty, as openline's Mac
+     `_FSSetFlatFileInfo` does. `FileProvider::finder_info` and
+     `set_finder_info` keep the Finder info.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

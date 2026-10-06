@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 
-use super::{partial_upload_name, BoxedReader, BoxedWriter, FileRequester, FolderItem, ItemTimes};
+use super::{
+    partial_upload_name, BoxedReader, BoxedWriter, FileRequester, FinderInfo, FolderItem, ItemTimes,
+};
 
 /// Storage backing [`myTran_GetFileNameList`] (200),
 /// [`myTran_DownloadFile`] (202), and [`myTran_UploadFile`] (203).
@@ -171,6 +173,34 @@ pub trait FileProvider: Send + Sync {
         dir: &HlPath,
         name: &str,
     ) -> Option<FileNameWithInfo>;
+
+    /// The Finder info of `dir`/`name`, with the type and creator of
+    /// [`Self::info`]. `None` if it doesn't exist.
+    async fn finder_info(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<FinderInfo> {
+        let info = self.info(requester, dir, name).await?;
+        Some(FinderInfo {
+            file_type: info.file_type,
+            creator: info.creator,
+            flags: 0,
+        })
+    }
+
+    /// Store the Finder info of `dir`/`name`. A stored zero type reads back
+    /// as the type and creator for the name. Does nothing by default.
+    async fn set_finder_info(
+        &self,
+        _requester: FileRequester<'_>,
+        _dir: &HlPath,
+        _name: &str,
+        _info: FinderInfo,
+    ) -> io::Result<()> {
+        Ok(())
+    }
 
     /// The bytes free on the disk that holds `dir`. `None` when unknown.
     async fn free_space(&self, _requester: FileRequester<'_>, _dir: &HlPath) -> Option<u64> {

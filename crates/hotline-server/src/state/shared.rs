@@ -10,12 +10,12 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use hotline_proto::consts::{Access, RequireFlags};
-use hotline_proto::htxf::HtxfType;
+use hotline_proto::htxf::{FlatFileInfo, HtxfType};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding::Encoding;
 use hotline_proto::types::{
-    FileNameWithInfo, HlPath, NewsArticleListData, NewsArticleSummary, NewsCategoryListEntry,
-    NewsFlavor,
+    FileNameWithInfo, HlDate, HlPath, NewsArticleListData, NewsArticleSummary,
+    NewsCategoryListEntry, NewsFlavor,
 };
 use hotline_proto::{Field, FieldId, Transaction};
 
@@ -28,7 +28,8 @@ use crate::console::fields::{
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::file::{
-    BoxedReader, BoxedWriter, FileProvider, FileRequester, FolderItem, ItemTimes, PARTIAL_TYPE,
+    BoxedReader, BoxedWriter, FileProvider, FileRequester, FinderInfo, FolderItem, ItemTimes,
+    PARTIAL_TYPE,
 };
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
@@ -1056,6 +1057,68 @@ impl SharedState {
         self.files.finish_upload(requester, dir, name).await
     }
 
+    /// The `INFO` fork data of the file `dir`/`name`, for a download.
+    pub async fn info_fork(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        encoding: &'static Encoding,
+    ) -> Vec<u8> {
+        let finder_info = self.files.finder_info(requester, dir, name).await;
+        let FinderInfo {
+            file_type,
+            creator,
+            flags,
+        } = finder_info.unwrap_or_default();
+        let times = self.files.times(requester, dir, name).await;
+        let comment = self.files.comment(requester, dir, name).await;
+        FlatFileInfo {
+            file_type,
+            creator,
+            platform_flags: flags.into(),
+            created: times.created.map_or(HlDate::default(), HlDate::from),
+            modified: times.modified.map_or(HlDate::default(), HlDate::from),
+            name: name.into(),
+            comment: comment.unwrap_or_default(),
+            ..FlatFileInfo::default()
+        }
+        .encode(encoding)
+    }
+
+    /// Store an uploaded `INFO` fork on the file `dir`/`name`: its type,
+    /// creator, and flags without the inited and alias flags, and its
+    /// comment when not empty.
+    pub async fn apply_info_fork(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        info: &FlatFileInfo,
+    ) {
+        let finder_info = FinderInfo {
+            file_type: info.file_type,
+            creator: info.creator,
+            flags: info.platform_flags as u16 & !FinderInfo::INITED & !FinderInfo::ALIAS,
+        };
+        let stored = self
+            .files
+            .set_finder_info(requester, dir, name, finder_info)
+            .await;
+        if let Err(error) = stored {
+            tracing::debug!(%error, name, "could not store an upload's Finder info");
+        }
+        if !info.comment.is_empty() {
+            let stored = self
+                .files
+                .set_comment(requester, dir, name, &info.comment)
+                .await;
+            if let Err(error) = stored {
+                tracing::debug!(%error, name, "could not store an upload's comment");
+            }
+        }
+    }
+
     /// The currently configured banner, for the login-time
     /// [`myTran_ServerBanner`] (122) push.
     ///
@@ -1638,6 +1701,8 @@ mod tests {
                     name: "a.txt".into(),
                 },
                 raw: false,
+                encoding: hotline_proto::text_encoding::DEFAULT,
+                info: Vec::new(),
             }),
             direction: TransferDirection::Put,
             size: 1000,
@@ -1674,6 +1739,8 @@ mod tests {
                     name: "a.txt".into(),
                 },
                 raw: false,
+                encoding: hotline_proto::text_encoding::DEFAULT,
+                info: Vec::new(),
             }),
             direction: TransferDirection::Get,
             size: 1000,
@@ -2009,6 +2076,8 @@ mod tests {
                     name: "x".into(),
                 },
                 raw: false,
+                encoding: hotline_proto::text_encoding::DEFAULT,
+                info: Vec::new(),
             }),
             direction: TransferDirection::Get,
             size: 0,
@@ -2038,6 +2107,8 @@ mod tests {
                         name: "x".into(),
                     },
                     raw: false,
+                    encoding: hotline_proto::text_encoding::DEFAULT,
+                    info: Vec::new(),
                 }),
                 direction: TransferDirection::Put,
                 size: 0,
@@ -2066,6 +2137,8 @@ mod tests {
                     name: "x".into(),
                 },
                 raw: false,
+                encoding: hotline_proto::text_encoding::DEFAULT,
+                info: Vec::new(),
             }),
             direction: TransferDirection::Get,
             size: 0,
@@ -2107,6 +2180,8 @@ mod tests {
                     name: "x".into(),
                 },
                 raw: false,
+                encoding: hotline_proto::text_encoding::DEFAULT,
+                info: Vec::new(),
             }),
             direction: TransferDirection::Get,
             size: 0,

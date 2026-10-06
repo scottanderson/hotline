@@ -145,6 +145,13 @@ impl Session {
         if raw && data_size == 0 {
             return vec![tx.reply(vec![Field::u32(FieldId::TransferSize, 0)])];
         }
+        let info = if raw {
+            Vec::new()
+        } else {
+            state
+                .info_fork(requester, &dir, &name, self.encoding())
+                .await
+        };
         let (resume_offset, total_size) = if raw {
             (0, data_size)
         } else {
@@ -156,7 +163,8 @@ impl Session {
                 None => 0,
             };
             let remaining = data_size - resume_offset;
-            (resume_offset, remaining + htxf::FLAT_FILE_HEADER_LEN as u64)
+            let header_len = htxf::flat_file_header_len(info.len()) as u64;
+            (resume_offset, remaining + header_len)
         };
         let kind = TransferKind::File(FileTransfer {
             target: TransferTarget {
@@ -165,6 +173,8 @@ impl Session {
                 name: name.as_str().into(),
             },
             raw,
+            encoding: self.encoding(),
+            info,
         });
         let mut fields = vec![
             Field::u32(FieldId::TransferSize, total_size as u32),
@@ -287,6 +297,8 @@ impl Session {
                         name: name.as_str().into(),
                     },
                     raw: false,
+                    encoding: self.encoding(),
+                    info: Vec::new(),
                 }),
                 direction: TransferDirection::Put,
                 size: size as u64,
@@ -765,6 +777,9 @@ mod tests {
         })
     }
 
+    /// The flattened file header length of `a.txt` with no comment.
+    const A_TXT_HEADER_LEN: u32 = (htxf::FLAT_FILE_HEADER_LEN + "a.txt".len()) as u32;
+
     fn state_with_files_and_policy(
         files: crate::file::InMemoryFileProvider,
         policy: impl crate::ServerPolicy + 'static,
@@ -831,7 +846,7 @@ mod tests {
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
-        assert_eq!(total_size, 5 + htxf::FLAT_FILE_HEADER_LEN as u32);
+        assert_eq!(total_size, 5 + A_TXT_HEADER_LEN);
         let file_size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::FileSize)
@@ -844,6 +859,59 @@ mod tests {
         assert_eq!(transfer.direction, TransferDirection::Get);
         assert_eq!(transfer.size, 5);
         assert_eq!(transfer.resume_offset, 0);
+    }
+
+    #[tokio::test]
+    async fn download_file_sends_the_finder_info_and_the_comment() {
+        use crate::file::FileProvider;
+
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hello");
+        let requester = FileRequester { login: "Alice" };
+        let finder_info = crate::file::FinderInfo {
+            file_type: *b"ttro",
+            creator: *b"ttxt",
+            flags: 0x0400,
+        };
+        files
+            .set_finder_info(requester, &HlPath::default(), "a.txt", finder_info)
+            .await
+            .unwrap();
+        files
+            .set_comment(requester, &HlPath::default(), "a.txt", "a note")
+            .await
+            .unwrap();
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let get = request(
+            Opcode::DownloadFile,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_download_file(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        let reply = reply.received(text_encoding::DEFAULT);
+        let total_size = reply.field(FieldId::TransferSize).and_then(Field::as_u32);
+        assert_eq!(total_size, Some(5 + A_TXT_HEADER_LEN + 6));
+        let reference = reply.field(FieldId::RefNum).and_then(Field::as_u32);
+        let transfer = state
+            .take_transfer(TransferRef(reference.unwrap()))
+            .await
+            .unwrap();
+        let TransferKind::File(file) = transfer.kind else {
+            panic!("expected a file transfer");
+        };
+        let info = htxf::FlatFileInfo::decode(&file.info, text_encoding::DEFAULT);
+        assert_eq!(&info.file_type, b"ttro");
+        assert_eq!(&info.creator, b"ttxt");
+        assert_eq!(info.platform_flags, 0x0400);
+        assert_eq!(info.name, "a.txt");
+        assert_eq!(info.comment, "a note");
     }
 
     #[tokio::test]
@@ -1019,7 +1087,7 @@ mod tests {
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
-        assert_eq!(total_size, 5 + htxf::FLAT_FILE_HEADER_LEN as u32);
+        assert_eq!(total_size, 5 + A_TXT_HEADER_LEN);
         let file_size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::FileSize)
@@ -1064,7 +1132,7 @@ mod tests {
             .field(FieldId::TransferSize)
             .and_then(Field::as_u32)
             .unwrap();
-        assert_eq!(total_size, htxf::FLAT_FILE_HEADER_LEN as u32);
+        assert_eq!(total_size, A_TXT_HEADER_LEN);
     }
 
     #[tokio::test]

@@ -543,6 +543,8 @@ mod tests {
                     name: name.into(),
                 },
                 raw: false,
+                encoding: hotline_proto::text_encoding::DEFAULT,
+                info: Vec::new(),
             }),
             direction,
             size,

@@ -7,7 +7,10 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use hotline_proto::htxf::{self, FolderAction, FolderItemHeader, ForkHeader, HtxfHeader};
+use hotline_proto::htxf::{
+    self, FlatFileInfo, FolderAction, FolderItemHeader, ForkHeader, HtxfHeader,
+};
+use hotline_proto::text_encoding::Encoding;
 use hotline_proto::types::{self, HlPath};
 
 use crate::error::Result;
@@ -200,10 +203,11 @@ async fn drain_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<()> {
 }
 
 /// Send a [`myTran_DownloadFile`] (202) download: the flattened-file-object
-/// header, then the file's raw bytes. `transfer.raw` sends the raw bytes alone,
-/// with no header, like [`send_banner`]. `transfer.resume_offset` skips that
-/// many leading bytes of the data fork, reducing the header's declared size to
-/// match, for a client resuming an interrupted download.
+/// header with `file.info`, then the file's raw bytes. `file.raw` sends the
+/// raw bytes alone, with no header, like [`send_banner`].
+/// `transfer.resume_offset` skips that many leading bytes of the data fork,
+/// reducing the header's declared size to match, for a client resuming an
+/// interrupted download.
 ///
 /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
 async fn send_file(
@@ -212,32 +216,32 @@ async fn send_file(
     transfer: &PendingTransfer,
     state: &SharedState,
 ) -> Result<()> {
-    let FileTransfer { target, raw } = file;
+    let FileTransfer {
+        target, raw, info, ..
+    } = file;
     let TransferTarget { dir, name, .. } = target;
     let requester = target.requester();
     let mut reader = state.open_file_for_read(requester, dir, name).await?;
     if *raw {
         tokio::io::copy(&mut reader, stream).await?;
     } else {
-        send_flat_file(stream, reader, transfer.size, transfer.resume_offset).await?;
+        send_flat_file(stream, reader, info, transfer.size, transfer.resume_offset).await?;
     }
     drain_stream(stream).await
 }
 
-/// Write a flattened file object for `reader`'s `size` bytes, skipping
-/// the first `resume_offset` of them.
+/// Write a flattened file object with `info` as its `INFO` fork data, for
+/// `reader`'s `size` bytes, skipping the first `resume_offset` of them.
 async fn send_flat_file(
     stream: &mut (impl AsyncWrite + Unpin),
     mut reader: impl AsyncRead + Unpin,
+    info: &[u8],
     size: u64,
     resume_offset: u64,
 ) -> Result<()> {
     let remaining = size - resume_offset;
     stream
-        .write_all(&htxf::flat_file_header(
-            &htxf::empty_info(),
-            remaining as u32,
-        ))
+        .write_all(&htxf::flat_file_header(info, remaining as u32))
         .await?;
     if resume_offset > 0 {
         skip_bytes(&mut reader, resume_offset).await?;
@@ -263,7 +267,8 @@ async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result
 /// and discarding any other fork (e.g. a resource fork this server doesn't
 /// keep). `transfer.resume_offset > 0` seeks the destination to that offset
 /// instead of creating it fresh. Renames the upload to its real name (see
-/// [`SharedState::finish_upload`]) on success; an error leaves it under its
+/// [`SharedState::finish_upload`]) on success, then stores its `INFO` fork
+/// (see [`SharedState::apply_info_fork`]); an error leaves it under its
 /// working name for a later resume.
 ///
 /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
@@ -282,22 +287,27 @@ async fn receive_file(
     } else {
         state.create_file_for_write(requester, dir, name).await?
     };
-    receive_flat_file(stream, &mut out).await?;
+    let info = receive_flat_file(stream, &mut out, file.encoding).await?;
     out.shutdown().await?;
     state.finish_upload(requester, dir, name).await?;
+    if let Some(info) = info {
+        state.apply_info_fork(requester, dir, name, &info).await;
+    }
     Ok(())
 }
 
 /// Read one flattened file object, writing its `DATA` fork to `out` and
-/// discarding any other fork.
+/// discarding any other fork. Returns its `INFO` fork, if it has one.
 async fn receive_flat_file(
     stream: &mut (impl AsyncRead + Unpin),
     out: &mut (impl AsyncWrite + Unpin),
-) -> Result<()> {
+    encoding: &'static Encoding,
+) -> Result<Option<FlatFileInfo>> {
     let mut prefix = [0u8; htxf::FLAT_FILE_PREFIX_LEN];
     stream.read_exact(&mut prefix).await?;
     let fork_count = htxf::decode_flat_file_prefix(&prefix)?;
 
+    let mut info = None;
     for _ in 0..fork_count {
         let mut fork_header_buf = [0u8; ForkHeader::LEN];
         stream.read_exact(&mut fork_header_buf).await?;
@@ -311,6 +321,12 @@ async fn receive_flat_file(
                 return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
             }
         } else {
+            if &fork_header.fork_type == b"INFO" {
+                let mut data = vec![0u8; remaining.min(FlatFileInfo::MAX_LEN as u64) as usize];
+                stream.read_exact(&mut data).await?;
+                remaining -= data.len() as u64;
+                info = Some(FlatFileInfo::decode(&data, encoding));
+            }
             let mut discard_buf = [0u8; 4096];
             while remaining > 0 {
                 let n = remaining.min(discard_buf.len() as u64) as usize;
@@ -319,7 +335,7 @@ async fn receive_flat_file(
             }
         }
     }
-    Ok(())
+    Ok(info)
 }
 
 /// Send a [`myTran_DownloadFldr`] (210) download: the next item's
@@ -370,9 +386,11 @@ async fn send_folder(
                 let (dir, name) = split_item_path(&root, &item.path)
                     .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
                 let reader = state.open_file_for_read(requester, &dir, name).await?;
-                let flat_size = htxf::FLAT_FILE_HEADER_LEN as u64 + item.size - resume_offset;
+                let info = state.info_fork(requester, &dir, name, encoding).await;
+                let header_len = htxf::flat_file_header_len(info.len()) as u64;
+                let flat_size = header_len + item.size - resume_offset;
                 stream.write_all(&(flat_size as u32).to_be_bytes()).await?;
-                send_flat_file(stream, reader, item.size, resume_offset).await?;
+                send_flat_file(stream, reader, &info, item.size, resume_offset).await?;
             }
             _ => {}
         }
@@ -406,7 +424,8 @@ async fn receive_folder(
         let received = match FolderItemHeader::decode_body(&body, encoding) {
             Ok(header) => match stored_item_path(&root, &header.path) {
                 Some((dir, name)) => {
-                    receive_folder_item(stream, requester, &dir, &name, header.is_folder, state)
+                    let is_folder = header.is_folder;
+                    receive_folder_item(stream, requester, &dir, &name, is_folder, encoding, state)
                         .await?
                 }
                 None => false,
@@ -430,6 +449,7 @@ async fn receive_folder_item(
     dir: &HlPath,
     name: &str,
     is_folder: bool,
+    encoding: &'static Encoding,
     state: &SharedState,
 ) -> Result<bool> {
     let Some(resume_offset) = state
@@ -460,9 +480,12 @@ async fn receive_folder_item(
     }
     let mut flat_size = [0u8; 4];
     stream.read_exact(&mut flat_size).await?;
-    receive_flat_file(stream, &mut out).await?;
+    let info = receive_flat_file(stream, &mut out, encoding).await?;
     out.shutdown().await?;
     state.finish_upload(requester, dir, name).await?;
+    if let Some(info) = info {
+        state.apply_info_fork(requester, dir, name, &info).await;
+    }
     Ok(true)
 }
 
@@ -595,6 +618,8 @@ mod tests {
                 name: "a.txt".into(),
             },
             raw: false,
+            encoding: text_encoding::DEFAULT,
+            info: Vec::new(),
         };
         let transfer = PendingTransfer {
             kind: TransferKind::File(file.clone()),
@@ -630,6 +655,60 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn an_upload_stores_its_info_fork() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let requester = FileRequester { login: "alice" };
+        let file = FileTransfer {
+            target: TransferTarget {
+                login: "alice".into(),
+                dir: HlPath::default(),
+                name: "a.txt".into(),
+            },
+            raw: false,
+            encoding: text_encoding::DEFAULT,
+            info: Vec::new(),
+        };
+        let transfer = PendingTransfer {
+            kind: TransferKind::File(file.clone()),
+            direction: TransferDirection::Put,
+            size: 5,
+            resume_offset: 0,
+            client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
+        };
+        let info = FlatFileInfo {
+            file_type: *b"TEXT",
+            creator: *b"R*ch",
+            platform_flags: 0x8501,
+            comment: "a note".into(),
+            ..FlatFileInfo::default()
+        };
+        let mut flat = htxf::flat_file_header(&info.encode(text_encoding::DEFAULT), 5);
+        flat.extend_from_slice(b"hello");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut server_stream, _) = listener.accept().await.unwrap();
+        client.write_all(&flat).await.unwrap();
+        drop(client);
+        receive_file(&mut server_stream, &file, &transfer, &state)
+            .await
+            .unwrap();
+
+        let root = HlPath::default();
+        let stored = state
+            .info_fork(requester, &root, "a.txt", text_encoding::DEFAULT)
+            .await;
+        let stored = FlatFileInfo::decode(&stored, text_encoding::DEFAULT);
+        assert_eq!(&stored.file_type, b"TEXT");
+        assert_eq!(&stored.creator, b"R*ch");
+        assert_eq!(stored.platform_flags, 0x0401);
+        assert_eq!(stored.comment, "a note");
+    }
+
     /// `resume_file_for_write` seeks to `resume_offset` before the
     /// client's bytes land, so a longer working file from an earlier
     /// attempt doesn't leave stale bytes past what the client resends.
@@ -646,6 +725,8 @@ mod tests {
                 name: "a.txt".into(),
             },
             raw: false,
+            encoding: text_encoding::DEFAULT,
+            info: Vec::new(),
         };
         let transfer = PendingTransfer {
             kind: TransferKind::File(file.clone()),
@@ -703,6 +784,8 @@ mod tests {
                         name: "a.txt".into(),
                     },
                     raw: true,
+                    encoding: text_encoding::DEFAULT,
+                    info: Vec::new(),
                 }),
                 direction: TransferDirection::Get,
                 size: 5,
@@ -739,6 +822,8 @@ mod tests {
                         name: "a.txt".into(),
                     },
                     raw: true,
+                    encoding: text_encoding::DEFAULT,
+                    info: Vec::new(),
                 }),
                 direction: TransferDirection::Get,
                 size: 5,
@@ -802,6 +887,8 @@ mod tests {
                     name: "a.txt".into(),
                 },
                 raw: direction == TransferDirection::Get,
+                encoding: text_encoding::DEFAULT,
+                info: Vec::new(),
             }),
             direction,
             size: 11,
@@ -1014,7 +1101,14 @@ mod tests {
         client.read_exact(&mut size).await.unwrap();
         let mut flat = vec![0u8; u32::from_be_bytes(size) as usize];
         client.read_exact(&mut flat).await.unwrap();
-        flat.split_off(htxf::FLAT_FILE_HEADER_LEN)
+        flat.split_off(flat_header_len(&flat))
+    }
+
+    /// The header length of the flattened object `flat`, from its `INFO`
+    /// fork size.
+    fn flat_header_len(flat: &[u8]) -> usize {
+        let info = ForkHeader::decode(&flat[htxf::FLAT_FILE_PREFIX_LEN..]).unwrap();
+        htxf::flat_file_header_len(info.data_size as usize)
     }
 
     async fn send_item_header(client: &mut TcpStream, is_folder: bool, path: &[&str]) {

@@ -10,49 +10,61 @@ use hotline_proto::types::{FileNameWithInfo, HlPath};
 use crate::file::writer::MemWriter;
 use crate::file::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, Dir, FileProvider,
-    FileRequester, Node,
+    FileRequester, FinderInfo, Node,
 };
 
-/// Move every comment keyed under `old_dir`/`old_name` to `new_dir`/
+/// Per-item metadata, keyed by the item's directory and name.
+type ItemMap<V> = HashMap<(Vec<String>, String), V>;
+
+/// Move every value keyed under `old_dir`/`old_name` to `new_dir`/
 /// `new_name`: the entry itself, plus (if it's a folder) every descendant
-/// comment, whose key's directory has `old_dir`/`old_name` as a prefix.
-fn rekey_comments(
-    comments: &mut HashMap<(Vec<String>, String), String>,
+/// value, whose key's directory has `old_dir`/`old_name` as a prefix.
+fn rekey<V>(
+    map: &mut ItemMap<V>,
     old_dir: &[String],
     old_name: &str,
     new_dir: &[String],
     new_name: &str,
 ) {
-    if let Some(comment) = comments.remove(&(old_dir.to_vec(), old_name.to_string())) {
-        comments.insert((new_dir.to_vec(), new_name.to_string()), comment);
+    if let Some(value) = map.remove(&(old_dir.to_vec(), old_name.to_string())) {
+        map.insert((new_dir.to_vec(), new_name.to_string()), value);
     }
     let mut old_prefix = old_dir.to_vec();
     old_prefix.push(old_name.to_string());
     let mut new_prefix = new_dir.to_vec();
     new_prefix.push(new_name.to_string());
-    let descendants: Vec<_> = comments
+    let descendants: Vec<_> = map
         .keys()
         .filter(|(dir, _)| dir.starts_with(&old_prefix))
         .cloned()
         .collect();
     for (dir, name) in descendants {
-        let comment = comments.remove(&(dir.clone(), name.clone())).unwrap();
+        let value = map.remove(&(dir.clone(), name.clone())).unwrap();
         let mut rekeyed_dir = new_prefix.clone();
         rekeyed_dir.extend_from_slice(&dir[old_prefix.len()..]);
-        comments.insert((rekeyed_dir, name), comment);
+        map.insert((rekeyed_dir, name), value);
     }
 }
 
-/// Drop the comment on `dir`/`name` and on everything under it.
-fn drop_comments(
-    comments: &mut HashMap<(Vec<String>, String), String>,
-    dir: &[String],
-    name: &str,
-) {
-    comments.remove(&(dir.to_vec(), name.to_string()));
+/// Drop the value on `dir`/`name` and on everything under it.
+fn drop_under<V>(map: &mut ItemMap<V>, dir: &[String], name: &str) {
+    map.remove(&(dir.to_vec(), name.to_string()));
     let mut prefix = dir.to_vec();
     prefix.push(name.to_string());
-    comments.retain(|(d, _), _| !d.starts_with(&prefix));
+    map.retain(|(d, _), _| !d.starts_with(&prefix));
+}
+
+/// The type and creator of the file `dir`/`name`: the stored ones, or
+/// those for `name` when the stored type is zero.
+fn file_type_and_creator(
+    finder_infos: &ItemMap<FinderInfo>,
+    dir: &[String],
+    name: &str,
+) -> ([u8; 4], [u8; 4]) {
+    match finder_infos.get(&(dir.to_vec(), name.to_string())) {
+        Some(info) if info.file_type != [0; 4] => (info.file_type, info.creator),
+        _ => type_and_creator_for_name(name),
+    }
 }
 
 /// A [`FileProvider`] that keeps files in memory only, the same tree for
@@ -64,7 +76,8 @@ fn drop_comments(
 #[derive(Default)]
 pub struct InMemoryFileProvider {
     root: Arc<Mutex<Dir>>,
-    comments: Mutex<HashMap<(Vec<String>, String), String>>,
+    comments: Mutex<ItemMap<String>>,
+    finder_infos: Mutex<ItemMap<FinderInfo>>,
     free_space: Mutex<Option<u64>>,
     comment_writes_fail: AtomicBool,
 }
@@ -100,6 +113,7 @@ impl FileProvider for InMemoryFileProvider {
     ) -> Option<Vec<FileNameWithInfo>> {
         let root = self.root.lock().unwrap();
         let d = root.get_dir(&dir.components)?;
+        let finder_infos = self.finder_infos.lock().unwrap();
         let mut entries: Vec<FileNameWithInfo> = d
             .entries
             .iter()
@@ -107,7 +121,8 @@ impl FileProvider for InMemoryFileProvider {
                 let (file_type, creator, size) = match entry {
                     Node::Dir(d) => (*b"fldr", *b"\0\0\0\0", d.entries.len() as u32),
                     Node::File(f) => {
-                        let (file_type, creator) = type_and_creator_for_name(name);
+                        let (file_type, creator) =
+                            file_type_and_creator(&finder_infos, &dir.components, name);
                         (file_type, creator, f.len() as u32)
                     }
                 };
@@ -229,7 +244,9 @@ impl FileProvider for InMemoryFileProvider {
                 name: name.into(),
             },
             Node::File(data) => {
-                let (file_type, creator) = type_and_creator_for_name(name);
+                let finder_infos = self.finder_infos.lock().unwrap();
+                let (file_type, creator) =
+                    file_type_and_creator(&finder_infos, &dir.components, name);
                 FileNameWithInfo {
                     file_type,
                     creator,
@@ -238,6 +255,42 @@ impl FileProvider for InMemoryFileProvider {
                 }
             }
         })
+    }
+
+    async fn finder_info(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+    ) -> Option<FinderInfo> {
+        let info = self.info(requester, dir, name).await?;
+        let key = (dir.components.clone(), name.to_string());
+        let flags = self
+            .finder_infos
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map_or(0, |stored| stored.flags);
+        Some(FinderInfo {
+            file_type: info.file_type,
+            creator: info.creator,
+            flags,
+        })
+    }
+
+    async fn set_finder_info(
+        &self,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+        name: &str,
+        info: FinderInfo,
+    ) -> io::Result<()> {
+        if !self.exists(requester, dir, name).await {
+            return Err(not_found());
+        }
+        let key = (dir.components.clone(), name.to_string());
+        self.finder_infos.lock().unwrap().insert(key, info);
+        Ok(())
     }
 
     async fn delete(
@@ -250,7 +303,12 @@ impl FileProvider for InMemoryFileProvider {
         let mut root = self.root.lock().unwrap();
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         d.entries.remove(name).ok_or_else(not_found)?;
-        drop_comments(&mut self.comments.lock().unwrap(), &dir.components, name);
+        drop_under(&mut self.comments.lock().unwrap(), &dir.components, name);
+        drop_under(
+            &mut self.finder_infos.lock().unwrap(),
+            &dir.components,
+            name,
+        );
         Ok(())
     }
 
@@ -284,8 +342,15 @@ impl FileProvider for InMemoryFileProvider {
         }
         let entry = d.entries.remove(old_name).ok_or_else(not_found)?;
         d.entries.insert(new_name.to_string(), entry);
-        rekey_comments(
+        rekey(
             &mut self.comments.lock().unwrap(),
+            &dir.components,
+            old_name,
+            &dir.components,
+            new_name,
+        );
+        rekey(
+            &mut self.finder_infos.lock().unwrap(),
             &dir.components,
             old_name,
             &dir.components,
@@ -327,8 +392,15 @@ impl FileProvider for InMemoryFileProvider {
             .ok_or_else(not_found)?
             .entries
             .insert(name.to_string(), entry);
-        rekey_comments(
+        rekey(
             &mut self.comments.lock().unwrap(),
+            &dir.components,
+            name,
+            &to_dir.components,
+            name,
+        );
+        rekey(
+            &mut self.finder_infos.lock().unwrap(),
             &dir.components,
             name,
             &to_dir.components,
