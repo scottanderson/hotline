@@ -184,7 +184,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         return;
     }
 
-    let areas = areas(frame.size(), view.input(), view.hints());
+    let areas = areas(frame.area(), view.input(), view.hints());
     draw_tabs(frame, areas.tabs, view);
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
@@ -210,7 +210,7 @@ fn draw_agreement(frame: &mut Frame, text: &str) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(3)])
-        .split(frame.size());
+        .split(frame.area());
 
     let paragraph = Paragraph::new(text)
         .block(Block::default().borders(Borders::ALL).title("agreement"))
@@ -439,7 +439,7 @@ fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor
     if cursor {
         let last = text.rsplit('\n').next().unwrap_or_default();
         let x = area.x + 1 + last.chars().count() as u16;
-        frame.set_cursor(x.min(area.right().saturating_sub(2)), area.y + rows);
+        frame.set_cursor_position((x.min(area.right().saturating_sub(2)), area.y + rows));
     }
 }
 
@@ -703,7 +703,7 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(70, 10);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw_modal(frame, frame.size(), modal))
+            .draw(|frame| draw_modal(frame, frame.area(), modal))
             .unwrap();
         let buffer = terminal.backend().buffer();
         buffer.content.iter().map(|cell| cell.symbol()).collect()
