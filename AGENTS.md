@@ -102,6 +102,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo test --workspace
 cargo test -p hotline-server <test_name>
+gitlint --commits main..HEAD
 ```
 
 Session tests build their fixtures with `test_session` in
@@ -117,8 +118,8 @@ Session tests build their fixtures with `test_session` in
   `proto`, `server`, `client`, or `daemon`. Add a module path when
   the change stays in one module, such as `server/session`. Use
   `htxf` for a file transfer change that is about more than one
-  crate, `plan` for a change only to `plan.md`, and `agents` for a
-  change only to `AGENTS.md`.
+  crate, `plan` for a change only to `plan.md`, `agents` for a change
+  only to `AGENTS.md`, and `gitlint` for `.gitlint`.
 - Put the reasons in the body. Add `Fixes #N` when a commit closes an
   issue. Put issue references only in commit messages.
 - Stage files by name. Keep the changes the user already staged.

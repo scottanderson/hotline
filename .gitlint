@@ -1,0 +1,12 @@
+[general]
+ignore-merge-commits=false
+regex-style-search=True
+
+[title-match-regex]
+regex=^[a-z0-9/_]+: [a-z0-9`].*
+
+[title-max-length]
+line-length=72
+
+[body-max-line-length]
+line-length=72
