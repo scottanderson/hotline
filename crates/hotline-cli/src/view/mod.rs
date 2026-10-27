@@ -11,9 +11,11 @@ mod tab;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use hotline_client::Ban;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::Rect;
 
 use crate::file_edit::FileEdit;

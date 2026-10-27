@@ -12,13 +12,13 @@ mod view;
 use clap::Parser;
 use std::time::Instant;
 
-use crossterm::event::{
+use futures::StreamExt;
+use ratatui::crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::terminal::supports_keyboard_enhancement;
-use crossterm::ExecutableCommand;
-use futures::StreamExt;
+use ratatui::crossterm::terminal::supports_keyboard_enhancement;
+use ratatui::crossterm::ExecutableCommand;
 use ratatui::DefaultTerminal;
 
 use args::Args;
