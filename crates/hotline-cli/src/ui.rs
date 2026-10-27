@@ -27,6 +27,11 @@ pub struct Areas {
     pub hints: Rect,
 }
 
+/// The columns that `text` takes on screen.
+fn text_width(text: &str) -> usize {
+    Span::raw(text).width()
+}
+
 /// The most lines a text box shows before it scrolls.
 const MAX_INPUT_ROWS: usize = 5;
 
@@ -43,7 +48,7 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
     let mut rows = Vec::new();
     let (mut start, mut used) = (0, 0);
     for (i, (key, action)) in hints.iter().enumerate() {
-        let len = key.chars().count() + action.chars().count() + 3;
+        let len = text_width(key) + text_width(action) + 3;
         if used > 0 && used + len > usize::from(width) {
             rows.push(&hints[start..i]);
             (start, used) = (i, 0);
@@ -114,7 +119,7 @@ fn tab_columns(
 ) -> impl Iterator<Item = (Tab, &str, std::ops::Range<u16>)> {
     labels.iter().scan(tabs.x, |x, (tab, label)| {
         let start = *x;
-        let end = start + label.chars().count() as u16 + 2;
+        let end = start + text_width(label) as u16 + 2;
         *x = end + 1;
         Some((*tab, label.as_str(), start..end))
     })
@@ -439,7 +444,7 @@ fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor
 
     if cursor {
         let last = text.rsplit('\n').next().unwrap_or_default();
-        let x = area.x + 1 + last.chars().count() as u16;
+        let x = area.x + 1 + text_width(last) as u16;
         frame.set_cursor_position((x.min(area.right().saturating_sub(2)), area.y + rows));
     }
 }
@@ -708,6 +713,18 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         buffer.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn draw_text_box_puts_the_cursor_after_a_wide_character() {
+        let backend = ratatui::backend::TestBackend::new(20, 3);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_text_box(frame, frame.area(), Block::bordered(), "\u{4f60}a", true);
+            })
+            .unwrap();
+        terminal.backend_mut().assert_cursor_position((4, 1));
     }
 
     #[test]
