@@ -202,14 +202,15 @@ one-shared-room model.
    The work needs a per-account root in `FileProvider` and the news
    providers, and a place for these folders in the `hls` data
    directory.
-2. **Decide the notice opcode and the close after a refusal.** openline
+2. **The notice opcode and the close after a refusal differ.** openline
    sends `myTran_ServerMsg` (104) to a client that a kick bans, to a
    client whose account is deleted, and to a client at an address that
    gets a permanent ban. It then closes the connection. hls sends
    `myTran_DisconnectMsg` (111) and keeps a drain window. After a failed
    login, openline sends only the error reply and waits 30 seconds for
-   the client to close. hls closes at once. The user decides which
-   behavior a real client needs.
+   the client to close. hls closes at once. Decided: make each a
+   `ServerPolicy` choice, with openline's behavior as the default.
+   `HlsPolicy` keeps the current behavior.
 3. **No HTTP tunnel listeners.** openline also listens on the base
    port plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`,
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
@@ -222,17 +223,88 @@ one-shared-room model.
      `hotline-proto`, which has no policy. A method needs a design
      decision first.
    - A rename onto a taken login. openline writes the record over the
-     other account. The user decides whether the crate default copies
-     this.
+     other account. Decided: make it a `ServerPolicy` choice. The
+     default copies openline, and `HlsPolicy` refuses the rename.
+     openline's `ProcessTran_SetUserList` catches the error from
+     `RenameUser`, which renames the user folder. It then finds the
+     new login in `ExistsUser` and calls `SetUser`. That writes the
+     record over the other account and keeps the old account.
+     `SetOnlineAccount` then changes the sessions of the old login,
+     and the reply is "Error saving list of accounts." This depends on
+     `SetName` failing when the folder name is taken. Confirm that
+     before the port.
 5. **Chat rooms and online users have no trait.** `SharedState` keeps
    them in memory. Put them behind traits, like the storage providers.
-6. **The login timeout does not restart on a transaction.** openline's
-   `ProcessClients` closes a client that has not logged in 60 seconds
-   after its last transaction. hls closes it 60 seconds after accept.
-   The fixed deadline stopped keep-alives from holding a connection
-   open, but a keep-alive before login now disconnects. Only
-   `myTran_Login` (107) and `myTran_Agreed` (121) can restart
-   openline's timer, so a port is now safe.
+6. **A user name keeps some code points that do not print.**
+   `take_user_name` replaces only control characters (`Cc`) with `*`.
+   Decided: keep each printable code point and replace the rest. That
+   also replaces format characters (`Cf`), such as a bidi override or a
+   zero-width space, the line and paragraph separators (`Zl`, `Zp`),
+   and unassigned code points. Rust's standard library has no general
+   category, so use a crate, such as `unicode-general-category`. In
+   MacRoman this keeps all of 0x80 to 0xFF. openline's Mac table
+   replaces 0xFF (`ˇ`) too.
+7. **hlc's threaded news browser shows no dates.** An article row in
+   `NewsItem::label` shows the title and the poster. The
+   `NewsArticleSummary` date is not shown, and `ArticleText` has no
+   date. Show the date in the row and in the open article.
+8. **hlc quits without a question.** `Esc` on the chat input and `^C`
+   quit at once, and the connection closes. Ask the user to confirm
+   before hlc quits.
+9. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+    and Enter cancels one. hlc does not keep its uploads, and it shows
+    no progress. It shows no request that waits for its reply.
+    openline's client keeps each transfer as a task
+    (`CMyDownloadTask`, `CMyUploadTask`). Decided:
+    - A task is each TRTP request that hlc sends and that waits for its
+      reply transaction, of every opcode, such as a file list, a news
+      read, or a user info request. Each file or folder transfer is a
+      task too.
+    - A tasks box under the user list shows each task with its
+      progress. The box shows only while a task is active, and it hides
+      when none is.
+    - Tab moves the focus into the box. The arrow keys select a task,
+      and Enter cancels it.
+    - Ctrl-T replaces Ctrl-K and focuses the box.
+    - A cancelled download that waits in the queue sends
+      `myTran_KillDownload` (214), as now. A cancelled upload closes its
+      transfer connection and sends nothing, as openline's
+      `~CMyUploadTask` does.
+10. **The login timeout does not restart on a transaction.** openline's
+    `ProcessClients` closes a client that has not logged in 60 seconds
+    after its last transaction. hls closes it 60 seconds after accept.
+    The fixed deadline stopped keep-alives from holding a connection
+    open, but a keep-alive before login now disconnects. Only
+    `myTran_Login` (107) and `myTran_Agreed` (121) can restart
+    openline's timer, so a port is now safe.
+11. **The resource fork storage is fixed to AppleDouble.**
+    `DiskFileProvider` calls `apple_double` directly for the Finder
+    info, the comment, and the resource fork. Put the storage behind
+    an interface, in `FileProvider` or in a new provider if necessary.
+    The storage must work on real macOS, on Linux, and on network
+    shares. That can need a choice for each server. Examples are
+    AppleDouble sidecars, `.rsrc` sidecars, the native macOS fork, and
+    no fork storage.
+    The current AppleDouble code also has these problems:
+    - `apple_double::write` keeps three entries and the first 32 bytes
+      of the Finder info entry. macOS keeps extended attributes after
+      the Finder info in a `._` file, so a change from `hls` drops them.
+    - An upload writes the resource fork without the sidecar lock. A
+      comment or Finder info change on the `.hpf` file rewrites the
+      sidecar and cuts the fork under the writer. The closed writer
+      then sets a fork length past the end of the sidecar, and
+      `apple_double::read` drops the whole fork without an error. Fix
+      this first.
+    - `validate_file_name` in `hotline-server` maps a leading `._` for
+      every provider. Let the storage choose the names that it keeps.
+12. **Review findings on the fork transfer break the repo rules.**
+    - `htxf.rs` and `session/files.rs` clamp a resume size with
+      `.min(size)`. openline's `ResumeFlatten` checks
+      `dataResumeSize >= dataHdr.dataSize`, then sets the size to 0 or
+      subtracts. Port that condition with the same terms.
+    - `send_flat_file` takes the data fork as a
+      `(reader, size, resume_offset)` tuple, but the resource fork as
+      two parameters. Give both forks the same shape.
 
 ## Resolved
 
