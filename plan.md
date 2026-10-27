@@ -263,33 +263,26 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-8. **The login timeout does not restart on a transaction.** openline's
-   `ProcessClients` closes a client that has not logged in 60 seconds
-   after its last transaction. hls closes it 60 seconds after accept.
-   The fixed deadline stopped keep-alives from holding a connection
-   open, but a keep-alive before login now disconnects. Only
-   `myTran_Login` (107) and `myTran_Agreed` (121) can restart
-   openline's timer, so a port is now safe.
-9. **The resource fork storage is fixed to AppleDouble.**
-    `DiskFileProvider` calls `apple_double` directly for the Finder
-    info, the comment, and the resource fork. Put the storage behind
-    an interface, in `FileProvider` or in a new provider if necessary.
-    The storage must work on real macOS, on Linux, and on network
-    shares. That can need a choice for each server. Examples are
-    AppleDouble sidecars, `.rsrc` sidecars, the native macOS fork, and
-    no fork storage.
-    The current AppleDouble code also has these problems:
-    - `apple_double::write` keeps three entries and the first 32 bytes
-      of the Finder info entry. macOS keeps extended attributes after
-      the Finder info in a `._` file, so a change from `hls` drops them.
-    - An upload writes the resource fork without the sidecar lock. A
-      comment or Finder info change on the `.hpf` file rewrites the
-      sidecar and cuts the fork under the writer. The closed writer
-      then sets a fork length past the end of the sidecar, and
-      `apple_double::read` drops the whole fork without an error. Fix
-      this first.
-    - `validate_file_name` in `hotline-server` maps a leading `._` for
-      every provider. Let the storage choose the names that it keeps.
+8. **The resource fork storage is fixed to AppleDouble.**
+   `DiskFileProvider` calls `apple_double` directly for the Finder
+   info, the comment, and the resource fork. Put the storage behind
+   an interface, in `FileProvider` or in a new provider if necessary.
+   The storage must work on real macOS, on Linux, and on network
+   shares. That can need a choice for each server. Examples are
+   AppleDouble sidecars, `.rsrc` sidecars, the native macOS fork, and
+   no fork storage.
+   The current AppleDouble code also has these problems:
+   - `apple_double::write` keeps three entries and the first 32 bytes
+     of the Finder info entry. macOS keeps extended attributes after
+     the Finder info in a `._` file, so a change from `hls` drops them.
+   - An upload writes the resource fork without the sidecar lock. A
+     comment or Finder info change on the `.hpf` file rewrites the
+     sidecar and cuts the fork under the writer. The closed writer
+     then sets a fork length past the end of the sidecar, and
+     `apple_double::read` drops the whole fork without an error. Fix
+     this first.
+   - `validate_file_name` in `hotline-server` maps a leading `._` for
+     every provider. Let the storage choose the names that it keeps.
 
 ## Resolved
 

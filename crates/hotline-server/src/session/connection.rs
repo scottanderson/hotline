@@ -249,7 +249,9 @@ impl Session {
                 frame = reader.next() => {
                     let Some(tx) = frame.transpose()? else { break Ok(SessionEnd::Closed) }; // clean EOF
                     state.touch_user(session.user_id).await;
-                    idle_sleep.as_mut().reset(tokio::time::Instant::now() + IDLE_THRESHOLD);
+                    let now = tokio::time::Instant::now();
+                    idle_sleep.as_mut().reset(now + IDLE_THRESHOLD);
+                    login_sleep.as_mut().reset(now + config.login_timeout);
                     if session.is_away {
                         session.set_away(false, state).await;
                     }
@@ -261,7 +263,7 @@ impl Session {
                 () = &mut idle_sleep, if !session.is_away && matches!(session.state, SessionState::Joined) => {
                     session.set_away(true, state).await;
                 }
-                // Activity does not extend the deadline.
+                // Fires after `login_timeout` with no request before the session joins.
                 () = &mut login_sleep, if matches!(session.state, SessionState::Agreement) => {
                     tracing::debug!(user_id = session.user_id, "login timed out");
                     break Ok(SessionEnd::Closed);
@@ -2289,8 +2291,8 @@ mod tests {
         assert!(state.users().await.is_empty());
     }
 
-    /// Runs one session with a short login timeout. Returns its task, a
-    /// client socket, and the state.
+    /// Runs one session with a short login timeout and an agreement.
+    /// Returns its task, a client socket, and the state.
     async fn run_with_short_login_timeout() -> (
         tokio::task::JoinHandle<Result<()>>,
         tokio::net::TcpStream,
@@ -2301,6 +2303,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let config = ServerConfig {
             login_timeout: Duration::from_millis(300),
+            agreement: "Hotline".into(),
             ..ServerConfig::default()
         };
         let server_state = state.clone();
@@ -2310,6 +2313,36 @@ mod tests {
         });
         let client = tokio::net::TcpStream::connect(addr).await.unwrap();
         (server, client, state)
+    }
+
+    #[tokio::test]
+    async fn login_restarts_the_login_timeout() {
+        let (server, mut client, state) = run_with_short_login_timeout().await;
+        let guest = Account {
+            access_extra: AccessExtra::default(),
+            password: "".into(),
+            name: "Guest".into(),
+            access: Access::empty(),
+        };
+        state.put_account("guest".to_string(), guest).await.unwrap();
+        client
+            .write_all(&ClientHandshake::default().encode())
+            .await
+            .unwrap();
+        let mut reply = [0u8; ServerHandshake::LEN];
+        client.read_exact(&mut reply).await.unwrap();
+        let fields = vec![Field::u16(FieldId::Vers, 190)];
+        let login = Transaction::request(Opcode::Login, 1, fields)
+            .encode(text_encoding::DEFAULT)
+            .unwrap();
+        for _ in 0..3 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            client.write_all(&login).await.unwrap();
+        }
+
+        assert!(!server.is_finished());
+        let finished = tokio::time::timeout(Duration::from_secs(5), server).await;
+        assert!(finished.unwrap().unwrap().is_ok());
     }
 
     #[tokio::test]
