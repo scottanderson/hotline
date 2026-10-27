@@ -61,3 +61,19 @@ jobs:
             exit 0
           fi
           gitlint --commits "$range"
+
+  ci-status:
+    name: ci status
+    if: always()
+    needs:
+      - check
+      - msrv
+      - gitlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: check the result of each job
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' >/dev/null
