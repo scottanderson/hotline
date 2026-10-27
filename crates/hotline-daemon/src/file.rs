@@ -17,13 +17,15 @@ use hotline_server::{
 };
 use tokio::sync::Mutex;
 
-use crate::apple_double::{self, Sidecar};
+use crate::apple_double::{self, OpenForks, Sidecar};
 
 /// Serves one directory on disk, the same for every login.
 pub struct DiskFileProvider {
     root: PathBuf,
     /// Held while a sidecar changes or moves.
     sidecars: Arc<Mutex<()>>,
+    /// The sidecars that an upload writes a resource fork into.
+    open_forks: Arc<OpenForks>,
 }
 
 impl DiskFileProvider {
@@ -34,11 +36,13 @@ impl DiskFileProvider {
         Ok(Self {
             root,
             sidecars: Arc::default(),
+            open_forks: Arc::default(),
         })
     }
 
     /// Change the sidecar of `dir`/`name` with `change`. `NotFound` if the
-    /// item does not exist.
+    /// item does not exist, and `ResourceBusy` while an upload writes its
+    /// resource fork.
     async fn update_sidecar(
         &self,
         dir: &HlPath,
@@ -51,6 +55,9 @@ impl DiskFileProvider {
         tokio::fs::symlink_metadata(&path).await?;
         let sidecar_path = apple_double::path_of(&path);
         let _sidecars = self.sidecars.lock().await;
+        if self.open_forks.contains(&sidecar_path) {
+            return Err(io::ErrorKind::ResourceBusy.into());
+        }
         let mut sidecar = apple_double::read(&sidecar_path).await?;
         change(&mut sidecar);
         apple_double::write(&sidecar_path, &sidecar).await
@@ -301,8 +308,12 @@ impl FileProvider for DiskFileProvider {
         tokio::fs::symlink_metadata(&path).await?;
         let _sidecars = self.sidecars.lock().await;
         let sidecar_path = apple_double::path_of(&path);
+        let claim = self
+            .open_forks
+            .claim(&sidecar_path)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::ResourceBusy))?;
         let writer =
-            apple_double::open_resource_write(&sidecar_path, at, Arc::clone(&self.sidecars))
+            apple_double::open_resource_write(&sidecar_path, at, Arc::clone(&self.sidecars), claim)
                 .await?;
         Ok(Box::new(writer))
     }
@@ -912,6 +923,48 @@ mod tests {
         let mut fork = Vec::new();
         reader.read_to_end(&mut fork).await.unwrap();
         assert_eq!(fork, b"rsrc");
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_change_waits_for_the_resource_fork_writer() {
+        use tokio::io::AsyncWriteExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
+        let root = HlPath::default();
+        provider
+            .create_write(requester(), &root, "a.txt")
+            .await
+            .unwrap();
+        let partial = partial_upload_name("a.txt");
+        let mut writer = provider
+            .open_resource_write(requester(), &root, "a.txt", 0)
+            .await
+            .unwrap();
+        writer.write_all(b"rsrc").await.unwrap();
+
+        let busy = provider
+            .set_comment(requester(), &root, &partial, "a note")
+            .await
+            .unwrap_err();
+        assert_eq!(busy.kind(), io::ErrorKind::ResourceBusy);
+        let second = provider
+            .open_resource_write(requester(), &root, "a.txt", 0)
+            .await;
+        assert_eq!(second.err().unwrap().kind(), io::ErrorKind::ResourceBusy);
+
+        writer.shutdown().await.unwrap();
+        drop(writer);
+        provider
+            .set_comment(requester(), &root, &partial, "a note")
+            .await
+            .unwrap();
+        assert_eq!(
+            provider
+                .resource_fork_size(requester(), &root, &partial)
+                .await,
+            4
+        );
     }
 
     #[tokio::test]

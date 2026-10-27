@@ -2,12 +2,13 @@
 //! `dir/._name`. It holds the item's Finder info, comment, and resource
 //! fork.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::{self, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::task::{ready, Context, Poll};
 
 use hotline_proto::wire::{PacketReader, PacketWriter, VecWriter};
@@ -166,6 +167,43 @@ impl Sidecar {
     }
 }
 
+/// The sidecars that have an open [`ResourceForkWriter`].
+#[derive(Debug, Default)]
+pub struct OpenForks(std::sync::Mutex<HashSet<PathBuf>>);
+
+impl OpenForks {
+    /// `true` if the sidecar at `path` has an open fork writer.
+    pub fn contains(&self, path: &Path) -> bool {
+        self.paths().contains(path)
+    }
+
+    /// Mark the sidecar at `path` as open until the claim drops. `None` if
+    /// it is open already.
+    pub fn claim(self: &Arc<Self>, path: &Path) -> Option<ForkClaim> {
+        self.paths().insert(path.to_path_buf()).then(|| ForkClaim {
+            forks: Arc::clone(self),
+            path: path.to_path_buf(),
+        })
+    }
+
+    fn paths(&self) -> std::sync::MutexGuard<'_, HashSet<PathBuf>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A sidecar's mark in [`OpenForks`]. Drop removes it.
+#[derive(Debug)]
+pub struct ForkClaim {
+    forks: Arc<OpenForks>,
+    path: PathBuf,
+}
+
+impl Drop for ForkClaim {
+    fn drop(&mut self) {
+        self.forks.paths().remove(&self.path);
+    }
+}
+
 /// The sidecar path of the item at `item`.
 pub fn path_of(item: &Path) -> PathBuf {
     let mut name = OsString::from(SIDECAR_PREFIX);
@@ -247,11 +285,12 @@ pub async fn open_resource_read(path: &Path, at: u64) -> io::Result<BoxedReader>
 
 /// Open the resource fork of the sidecar at `path` for writing from `at`
 /// onward. Creates the sidecar if missing, and cuts the fork to `at`.
-/// Call with `sidecars` held.
+/// Call with `sidecars` held. The writer keeps `claim` until it drops.
 pub async fn open_resource_write(
     path: &Path,
     at: u64,
     sidecars: Arc<Mutex<()>>,
+    claim: ForkClaim,
 ) -> io::Result<ResourceForkWriter> {
     let mut sidecar = read(path).await?;
     sidecar.resource_fork.len = sidecar.resource_fork.len.min(at);
@@ -264,6 +303,7 @@ pub async fn open_resource_write(
         len: at,
         sidecars,
         closing: None,
+        _claim: claim,
     })
 }
 
@@ -274,6 +314,7 @@ pub struct ResourceForkWriter {
     len: u64,
     sidecars: Arc<Mutex<()>>,
     closing: Option<Pin<Box<dyn Future<Output = io::Result<()>> + Send>>>,
+    _claim: ForkClaim,
 }
 
 impl ResourceForkWriter {
@@ -509,12 +550,16 @@ mod tests {
         };
         write(&path, &sidecar).await.unwrap();
 
-        let mut file = open_resource_write(&path, 0, Arc::default()).await.unwrap();
+        let mut file = open_resource_write(&path, 0, Arc::default(), claim(&path))
+            .await
+            .unwrap();
         file.write_all(b"rsrc").await.unwrap();
         file.shutdown().await.unwrap();
         assert_eq!(read(&path).await.unwrap().resource_fork_len(), 4);
 
-        let mut file = open_resource_write(&path, 2, Arc::default()).await.unwrap();
+        let mut file = open_resource_write(&path, 2, Arc::default(), claim(&path))
+            .await
+            .unwrap();
         file.write_all(b"RC!").await.unwrap();
         file.shutdown().await.unwrap();
         let read_back = read(&path).await.unwrap();
@@ -527,12 +572,18 @@ mod tests {
         assert_eq!(fork, b"sRC!");
     }
 
+    fn claim(path: &Path) -> ForkClaim {
+        Arc::<OpenForks>::default().claim(path).unwrap()
+    }
+
     #[tokio::test]
     async fn a_resource_fork_keeps_its_length_until_the_writer_closes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("._a");
 
-        let mut file = open_resource_write(&path, 0, Arc::default()).await.unwrap();
+        let mut file = open_resource_write(&path, 0, Arc::default(), claim(&path))
+            .await
+            .unwrap();
         file.write_all(b"rsrc").await.unwrap();
         file.flush().await.unwrap();
         assert_eq!(read(&path).await.unwrap().resource_fork_len(), 0);

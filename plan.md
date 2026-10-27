@@ -275,12 +275,6 @@ one-shared-room model.
    - `apple_double::write` keeps three entries and the first 32 bytes
      of the Finder info entry. macOS keeps extended attributes after
      the Finder info in a `._` file, so a change from `hls` drops them.
-   - An upload writes the resource fork without the sidecar lock. A
-     comment or Finder info change on the `.hpf` file rewrites the
-     sidecar and cuts the fork under the writer. The closed writer
-     then sets a fork length past the end of the sidecar, and
-     `apple_double::read` drops the whole fork without an error. Fix
-     this first.
    - `validate_file_name` in `hotline-server` maps a leading `._` for
      every provider. Let the storage choose the names that it keeps.
 
