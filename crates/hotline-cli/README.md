@@ -37,17 +37,16 @@ Use `HLC_PASSWORD` in place of `--password` when other users share the
 host, because they can read a command line.
 
 The line at the bottom of the screen shows the keys that work now.
-Each tab has a main pane and the user list. Tab moves between them,
-and Esc goes back to Chat. On Chat, Esc quits. Ctrl-C quits from
-anywhere.
+The tabs are Chat, News, Files, and Threaded News, then Admin with the
+account privileges, then one for each private chat room. Each tab has
+a number, which the tab bar shows. F1 to F9, or Alt with
+1 to 9, opens a tab. Each tab has a main pane and the user list. Tab
+moves between them, and Esc goes back to Chat. On Chat, Esc asks
+whether to quit. Ctrl-C asks too, from anywhere, and a second Ctrl-C
+quits.
 
 | Key    | Where                | Effect                                          |
 |--------|----------------------|-------------------------------------------------|
-| Ctrl-N | anywhere             | classic news; type a line and Enter to post     |
-| Ctrl-F | anywhere             | the Files tab                                   |
-| Ctrl-B | anywhere             | the Threaded News tab                           |
-| Ctrl-U | anywhere             | the Admin tab, with the account privileges      |
-| Ctrl-R | anywhere             | the next private chat room                      |
 | Ctrl-G | anywhere             | a broadcast, with the broadcast privilege       |
 | Ctrl-O | anywhere             | your name, icon, and options                    |
 | Ctrl-K | anywhere             | cancel a download                               |

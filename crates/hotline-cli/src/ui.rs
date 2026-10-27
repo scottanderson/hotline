@@ -90,7 +90,8 @@ pub fn inner(rect: Rect) -> Rect {
     Block::bordered().inner(rect)
 }
 
-/// Each tab and its label: the fixed tabs, then one for each room.
+/// Each tab and its label: the fixed tabs, then one for each room. Each
+/// of the first nine labels starts with its number, the key of the tab.
 pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
     let fixed = Tab::FIXED
         .iter()
@@ -102,7 +103,15 @@ pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
         .rooms
         .iter()
         .map(|room| (Tab::Room(room.id), room.label()));
-    fixed.chain(admin).chain(rooms).collect()
+    fixed
+        .chain(admin)
+        .chain(rooms)
+        .zip(1..)
+        .map(|((tab, label), n)| match n {
+            1..=9 => (tab, format!("{n} {label}")),
+            _ => (tab, label),
+        })
+        .collect()
 }
 
 /// Each tab in `labels` and the columns its label covers, drawn as ` Chat │ News `.
@@ -171,7 +180,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         return;
     }
 
-    let areas = areas(frame.area(), view.input(), view.hints());
+    let areas = areas(frame.area(), view.input(), &view.hints());
     draw_tabs(frame, areas.tabs, view);
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
@@ -461,7 +470,8 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
 }
 
 fn draw_hints(frame: &mut Frame, area: Rect, view: &View) {
-    let lines: Vec<UiLine> = hint_rows(view.hints(), area.width)
+    let hints = view.hints();
+    let lines: Vec<UiLine> = hint_rows(&hints, area.width)
         .into_iter()
         .map(|row| {
             let spans = row.iter().flat_map(|(key, action)| {

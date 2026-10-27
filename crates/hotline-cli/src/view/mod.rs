@@ -178,23 +178,32 @@ impl View {
         let _ = self.set_tab(Tab::Room(chat_id));
     }
 
-    /// The room tab after the current tab, or the first room tab.
-    fn next_room(&self) -> Option<Tab> {
-        let current = self.tabs.iter().position(|&(tab, _)| tab == self.tab);
-        let mut rooms = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter(|(_, (tab, _))| matches!(tab, Tab::Room(_)));
-        let first = rooms.clone().next();
-        rooms
-            .find(|&(index, _)| current.is_some_and(|c| index > c))
-            .or(first)
-            .map(|(_, &(tab, _))| tab)
+    /// The keys that work now, as `(key, what it does)`.
+    pub fn hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.modal.is_none() && self.focus == Focus::Users {
+            return self.users_hints();
+        }
+        self.focus_hints().to_vec()
     }
 
-    /// The keys that work now, as `(key, what it does)`.
-    pub const fn hints(&self) -> &'static [(&'static str, &'static str)] {
+    /// The keys of the user list.
+    fn users_hints(&self) -> Vec<(&'static str, &'static str)> {
+        let main = match Focus::main(self.tab) {
+            Focus::Files => "files",
+            Focus::NewsList => "news",
+            Focus::Accounts => "accounts",
+            Focus::Input | Focus::Users => "input",
+        };
+        let mut hints = vec![("↑↓", "select"), ("Enter", "message"), ("i", "info")];
+        if self.can_disconnect {
+            hints.push(("k", "disconnect"));
+        }
+        hints.extend([("Tab", main), ("Esc", main)]);
+        hints
+    }
+
+    /// The keys of the modal or the focused area, other than the user list.
+    const fn focus_hints(&self) -> &'static [(&'static str, &'static str)] {
         match (&self.modal, self.focus, self.tab) {
             (Some(Modal::InstantMsg { .. } | Modal::Broadcast { .. }), ..) => {
                 &[("Enter", "send"), ("⇧Enter", "new line"), ("Esc", "cancel")]
@@ -260,21 +269,6 @@ impl View {
                 ("Tab", "users"),
                 ("Esc", "chat"),
             ],
-            (None, Focus::Users, Tab::Admin) if self.can_disconnect => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("k", "disconnect"),
-                ("Tab", "accounts"),
-                ("^U", "chat"),
-            ],
-            (None, Focus::Users, Tab::Admin) => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("Tab", "accounts"),
-                ("^U", "chat"),
-            ],
             (None, Focus::NewsList, _) | (None, Focus::Input, Tab::Threaded) => &[
                 ("↑↓", "select"),
                 ("Enter", "open"),
@@ -285,75 +279,11 @@ impl View {
                 ("c", "new category"),
                 ("Esc", "chat"),
             ],
-            (None, Focus::Users, Tab::Threaded) if self.can_disconnect => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("k", "disconnect"),
-                ("Tab", "news"),
-                ("^B", "chat"),
-            ],
-            (None, Focus::Users, Tab::Threaded) => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("Tab", "news"),
-                ("^B", "chat"),
-            ],
-            (None, Focus::Users, Tab::Chat) if self.can_disconnect => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("k", "disconnect"),
-                ("Tab", "input"),
-                ("^N", "news"),
-                ("^F", "files"),
-            ],
-            (None, Focus::Users, Tab::Chat) => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("Tab", "input"),
-                ("^N", "news"),
-                ("^F", "files"),
-            ],
-            (None, Focus::Users, Tab::News) if self.can_disconnect => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("k", "disconnect"),
-                ("Tab", "input"),
-                ("^N", "chat"),
-            ],
-            (None, Focus::Users, Tab::News) => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("Tab", "input"),
-                ("^N", "chat"),
-            ],
-            (None, Focus::Users, Tab::Files) if self.can_disconnect => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("k", "disconnect"),
-                ("Tab", "files"),
-                ("^F", "chat"),
-            ],
-            (None, Focus::Users, Tab::Files) => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("Tab", "files"),
-                ("^F", "chat"),
-            ],
             (None, Focus::Input, Tab::Chat) if self.can_broadcast => &[
                 ("Enter", "send"),
                 ("⇧Enter", "new line"),
                 ("Tab", "users"),
-                ("^N", "news"),
-                ("^F", "files"),
-                ("^B", "threaded news"),
+                ("F1-F9", "tab"),
                 ("^G", "broadcast"),
                 ("^K", "cancel download"),
                 ("^O", "options"),
@@ -363,9 +293,7 @@ impl View {
                 ("Enter", "send"),
                 ("⇧Enter", "new line"),
                 ("Tab", "users"),
-                ("^N", "news"),
-                ("^F", "files"),
-                ("^B", "threaded news"),
+                ("F1-F9", "tab"),
                 ("^K", "cancel download"),
                 ("^O", "options"),
                 ("Esc", "quit"),
@@ -386,28 +314,12 @@ impl View {
                 ("Tab", "users"),
                 ("Esc", "chat"),
             ],
-            (None, Focus::Users, Tab::Room(_)) if self.can_disconnect => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("k", "disconnect"),
-                ("Tab", "input"),
-                ("Esc", "input"),
-            ],
-            (None, Focus::Users, Tab::Room(_)) => &[
-                ("↑↓", "select"),
-                ("Enter", "message"),
-                ("i", "info"),
-                ("Tab", "input"),
-                ("Esc", "input"),
-            ],
             (None, Focus::Input, Tab::Room(_)) => &[
                 ("Enter", "send"),
                 ("Tab", "users"),
                 ("^A", "invite"),
                 ("^T", "subject"),
                 ("^W", "leave"),
-                ("^R", "next room"),
                 ("Esc", "chat"),
             ],
             (None, Focus::Input, Tab::News) => &[
@@ -415,9 +327,9 @@ impl View {
                 ("⇧Enter", "new line"),
                 ("↑↓", "scroll"),
                 ("Tab", "users"),
-                ("^N", "chat"),
                 ("Esc", "chat"),
             ],
+            (None, Focus::Users, _) => &[],
         }
     }
 
@@ -438,24 +350,13 @@ impl View {
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key, users);
         }
-        if ctrl {
-            let tab = match (key.code, self.tab) {
-                (KeyCode::Char('n'), Tab::News)
-                | (KeyCode::Char('f'), Tab::Files)
-                | (KeyCode::Char('b'), Tab::Threaded)
-                | (KeyCode::Char('u'), Tab::Admin) => Some(Tab::Chat),
-                (KeyCode::Char('u'), _) if self.tabs.iter().any(|&(t, _)| t == Tab::Admin) => {
-                    Some(Tab::Admin)
-                }
-                (KeyCode::Char('n'), _) => Some(Tab::News),
-                (KeyCode::Char('f'), _) => Some(Tab::Files),
-                (KeyCode::Char('b'), _) => Some(Tab::Threaded),
-                (KeyCode::Char('r'), _) => self.next_room(),
-                _ => None,
+        if let Some(number) = tab_number(key) {
+            return match self.tabs.get(number - 1) {
+                Some(&(tab, _)) => self.set_tab(tab),
+                None => Action::None,
             };
-            if let Some(tab) = tab {
-                return self.set_tab(tab);
-            }
+        }
+        if ctrl {
             if key.code == KeyCode::Char('o') {
                 return Action::EditOptions;
             }
@@ -1225,6 +1126,17 @@ pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
     (rect.left()..rect.right()).contains(&x) && (rect.top()..rect.bottom()).contains(&y)
 }
 
+/// The tab number of F1 to F9, or of Alt with 1 to 9.
+fn tab_number(key: KeyEvent) -> Option<usize> {
+    match key.code {
+        KeyCode::F(n @ 1..=9) => Some(usize::from(n)),
+        KeyCode::Char(c @ '1'..='9') if key.modifiers.contains(KeyModifiers::ALT) => {
+            c.to_digit(10).map(|n| n as usize)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1514,7 +1426,7 @@ mod tests {
     #[test]
     fn file_keys_ask_for_text_info_or_a_delete_check() {
         let mut view = View::default();
-        let _ = view.handle_key(ctrl('f'), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::F(3)), &users(), &files());
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         assert_eq!(
             view.handle_key(key(KeyCode::Char('m')), &users(), &files()),
@@ -1569,10 +1481,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_n_opens_the_news_tab_and_fetches_the_news() {
+    fn f2_opens_the_news_tab_and_fetches_the_news() {
         let mut view = View::default();
-        let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
-        assert_eq!(view.handle_key(ctrl_n, &users(), &files()), Action::GetMsgs);
+        let f2 = key(KeyCode::F(2));
+        assert_eq!(view.handle_key(f2, &users(), &files()), Action::GetMsgs);
         assert_eq!(view.tab, Tab::News);
 
         type_text(&mut view, "hello");
@@ -1580,7 +1492,10 @@ mod tests {
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::OldPostNews("hello".into())
         );
-        assert_eq!(view.handle_key(ctrl_n, &users(), &files()), Action::None);
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::None
+        );
         assert_eq!(view.tab, Tab::Chat);
     }
 
@@ -1616,13 +1531,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_f_opens_the_files_tab_and_walks_the_folders() {
+    fn f3_opens_the_files_tab_and_walks_the_folders() {
         let mut view = View::default();
-        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        assert_eq!(
-            view.handle_key(ctrl_f, &users(), &files()),
-            Action::ListFiles
-        );
+        let f3 = key(KeyCode::F(3));
+        assert_eq!(view.handle_key(f3, &users(), &files()), Action::ListFiles);
         assert_eq!((view.tab, view.focus), (Tab::Files, Focus::Files));
 
         assert_eq!(
@@ -1643,15 +1555,18 @@ mod tests {
             Action::ParentFolder
         );
 
-        assert_eq!(view.handle_key(ctrl_f, &users(), &files()), Action::None);
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::None
+        );
         assert_eq!((view.tab, view.focus), (Tab::Chat, Focus::Input));
     }
 
     #[test]
     fn tab_from_the_user_list_returns_to_the_file_list() {
         let mut view = View::default();
-        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        let _ = view.handle_key(ctrl_f, &users(), &files());
+        let f3 = key(KeyCode::F(3));
+        let _ = view.handle_key(f3, &users(), &files());
         let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
         assert_eq!(view.focus, Focus::Users);
         let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
@@ -1661,8 +1576,8 @@ mod tests {
     #[test]
     fn a_double_click_on_a_folder_opens_it() {
         let mut view = View::default();
-        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        let _ = view.handle_key(ctrl_f, &users(), &files());
+        let f3 = key(KeyCode::F(3));
+        let _ = view.handle_key(f3, &users(), &files());
         let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[]);
         let inner = ui::inner(areas.body);
         let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
@@ -1683,8 +1598,8 @@ mod tests {
     #[test]
     fn d_on_the_file_list_downloads_a_folder_or_a_file() {
         let mut view = View::default();
-        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        let _ = view.handle_key(ctrl_f, &users(), &files());
+        let f3 = key(KeyCode::F(3));
+        let _ = view.handle_key(f3, &users(), &files());
         assert_eq!(
             view.handle_key(key(KeyCode::Char('d')), &users(), &files()),
             Action::DownloadFolder {
@@ -1706,8 +1621,8 @@ mod tests {
     #[test]
     fn u_on_the_file_list_asks_for_a_file_to_upload() {
         let mut view = View::default();
-        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        let _ = view.handle_key(ctrl_f, &users(), &files());
+        let f3 = key(KeyCode::F(3));
+        let _ = view.handle_key(f3, &users(), &files());
         let _ = view.handle_key(key(KeyCode::Char('u')), &users(), &files());
         assert_eq!(
             view.modal,
@@ -1782,14 +1697,15 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_r_steps_through_the_room_tabs() {
+    fn a_tab_number_picks_its_tab() {
         let mut view = view_with_rooms();
-        let _ = view.handle_key(ctrl('r'), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::F(5)), &users(), &files());
         assert_eq!(view.tab, Tab::Room(7));
-        let _ = view.handle_key(ctrl('r'), &users(), &files());
+        let alt_6 = KeyEvent::new(KeyCode::Char('6'), KeyModifiers::ALT);
+        let _ = view.handle_key(alt_6, &users(), &files());
         assert_eq!(view.tab, Tab::Room(9));
-        let _ = view.handle_key(ctrl('r'), &users(), &files());
-        assert_eq!(view.tab, Tab::Room(7));
+        let _ = view.handle_key(key(KeyCode::F(9)), &users(), &files());
+        assert_eq!(view.tab, Tab::Room(9));
     }
 
     #[test]
@@ -1952,10 +1868,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_b_opens_threaded_news_and_walks_its_items() {
+    fn f4_opens_threaded_news_and_walks_its_items() {
         let mut view = View::default();
         assert_eq!(
-            view.handle_key(ctrl('b'), &users(), &files()),
+            view.handle_key(key(KeyCode::F(4)), &users(), &files()),
             Action::ListThreadedNews
         );
         assert_eq!((view.tab, view.focus), (Tab::Threaded, Focus::NewsList));
@@ -1983,7 +1899,10 @@ mod tests {
             view.handle_key(key(KeyCode::Backspace), &users(), &files()),
             Action::ParentNews
         );
-        assert_eq!(view.handle_key(ctrl('b'), &users(), &files()), Action::None);
+        assert_eq!(
+            view.handle_key(key(KeyCode::F(1)), &users(), &files()),
+            Action::None
+        );
         assert_eq!(view.tab, Tab::Chat);
     }
 
@@ -2019,7 +1938,7 @@ mod tests {
     #[test]
     fn a_new_category_takes_its_name_and_a_delete_takes_y() {
         let mut view = View::default();
-        let _ = view.handle_key(ctrl('b'), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::F(4)), &users(), &files());
         let _ = view.handle_key(key(KeyCode::Char('c')), &users(), &files());
         type_text(&mut view, "Gen");
         assert_eq!(
@@ -2041,16 +1960,19 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_u_opens_the_admin_tab_only_when_it_is_shown() {
+    fn f5_opens_the_admin_tab_only_when_it_is_shown() {
         let mut view = View::default();
-        assert_eq!(view.handle_key(ctrl('u'), &users(), &files()), Action::None);
+        assert_eq!(
+            view.handle_key(key(KeyCode::F(5)), &users(), &files()),
+            Action::None
+        );
         assert_eq!(view.tab, Tab::Chat);
 
         let mut tabs = view.tabs.clone();
         tabs.push((Tab::Admin, Tab::ADMIN_LABEL.to_string()));
         view.set_tabs(tabs);
         assert_eq!(
-            view.handle_key(ctrl('u'), &users(), &files()),
+            view.handle_key(key(KeyCode::F(5)), &users(), &files()),
             Action::ListAccounts
         );
         assert_eq!((view.tab, view.focus), (Tab::Admin, Focus::Accounts));
