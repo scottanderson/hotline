@@ -5,10 +5,10 @@
 //! [`myTran_DownloadFldr`]: crate::Opcode::DownloadFldr
 //! [`myTran_UploadFldr`]: crate::Opcode::UploadFldr
 
-use crate::error::{ProtoError, Result};
+use crate::error::Result;
 use crate::text_encoding::Encoding;
 use crate::types::HlPath;
-use crate::wire::{PacketReader, VecWriter};
+use crate::wire::{PacketReader, SliceReader, VecWriter};
 use num_enum::{FromPrimitive, IntoPrimitive};
 
 /// Action a folder transfer's receiver sends to control what the sender
@@ -61,13 +61,7 @@ impl FolderItemHeader {
     /// Decode `is_folder(2) | path` from `body`, the bytes already read
     /// past the wire form's own leading `size` field.
     pub fn decode_body(body: &[u8], encoding: &'static Encoding) -> Result<Self> {
-        if body.len() < Self::LEN {
-            return Err(ProtoError::UnexpectedEof {
-                needed: Self::LEN,
-                available: body.len(),
-            });
-        }
-        let flag: [u8; Self::LEN] = body[..Self::LEN].try_into().unwrap();
+        let flag: [u8; Self::LEN] = SliceReader::new(body).array()?;
         let mut r = PacketReader::new(flag);
         let is_folder = r.u16() & 1 != 0;
         r.finish();

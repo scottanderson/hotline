@@ -18,7 +18,7 @@ pub use fork_header::ForkHeader;
 pub use header::{HtxfHeader, HtxfType};
 
 use crate::error::Result;
-use crate::wire::{PacketReader, PacketWriter, VecWriter};
+use crate::wire::{PacketReader, PacketWriter, SliceReader, VecWriter};
 
 pub(crate) const MAGIC: &[u8; 4] = b"HTXF";
 
@@ -96,13 +96,7 @@ pub const FLAT_FILE_PREFIX_LEN: usize = 24;
 pub fn decode_flat_file_prefix(buf: &[u8]) -> Result<u16> {
     use crate::error::ProtoError;
 
-    if buf.len() < FLAT_FILE_PREFIX_LEN {
-        return Err(ProtoError::UnexpectedEof {
-            needed: FLAT_FILE_PREFIX_LEN,
-            available: buf.len(),
-        });
-    }
-    let prefix: [u8; FLAT_FILE_PREFIX_LEN] = buf[..FLAT_FILE_PREFIX_LEN].try_into().unwrap();
+    let prefix: [u8; FLAT_FILE_PREFIX_LEN] = SliceReader::new(buf).array()?;
     let mut r = PacketReader::new(prefix);
     let magic = r.take::<4>();
     let _version = r.u16();

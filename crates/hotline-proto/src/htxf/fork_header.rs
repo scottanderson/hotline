@@ -1,7 +1,7 @@
 //! [`ForkHeader`]: one fork's header inside a flattened file object.
 
-use crate::error::{ProtoError, Result};
-use crate::wire::{PacketReader, PacketWriter};
+use crate::error::Result;
+use crate::wire::{PacketReader, PacketWriter, SliceReader};
 
 /// One fork's header, read between the `FILP` prefix and its data
 /// (`INFO`, `DATA`, or `MACR`). Compression is always `0` (uncompressed)
@@ -31,13 +31,7 @@ impl ForkHeader {
 
     /// Decode one fork header.
     pub fn decode(buf: &[u8]) -> Result<Self> {
-        if buf.len() < Self::LEN {
-            return Err(ProtoError::UnexpectedEof {
-                needed: Self::LEN,
-                available: buf.len(),
-            });
-        }
-        let buf: [u8; Self::LEN] = buf[..Self::LEN].try_into().unwrap();
+        let buf: [u8; Self::LEN] = SliceReader::new(buf).array()?;
         let mut r = PacketReader::new(buf);
         let fork_type = r.take::<4>();
         let _compression_type = r.u32();
