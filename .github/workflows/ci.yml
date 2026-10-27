@@ -32,3 +32,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+
+  gitlint:
+    name: commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: pipx install 'gitlint-core[trusted-deps]==0.19.1'
+      - name: gitlint the new commits
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            range="$BASE..$HEAD"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..$SHA"
+          else
+            range="origin/main..$SHA"
+          fi
+          if [ -z "$(git rev-list "$range")" ]; then
+            echo "no new commits in $range"
+            exit 0
+          fi
+          gitlint --commits "$range"
