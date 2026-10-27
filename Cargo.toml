@@ -16,7 +16,6 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/scottanderson/hotline"
 rust-version = "1.96"
-readme = "README.md"
 keywords = ["hotline", "trtp", "chat", "bbs", "protocol"]
 
 [workspace.lints.rust]

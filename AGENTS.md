@@ -2,7 +2,9 @@
 
 A Rust client, server, and tracker for the Hotline protocols.
 
-- `README.md`: the crate layout, the design, and how to run `hls`
+- `README.md`: the crates, their status, and how to build them
+- `crates/*/README.md`: how to use each crate, and its design. The
+  `hotline-daemon` README tells how to run `hls`.
 - `plan.md`: open work and known differences from openline
 - `HLProtocol.md`: the protocol reference
 

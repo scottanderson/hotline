@@ -28,3 +28,7 @@ pub use opcode::{Opcode, TransactionType};
 pub use text_encoding::Encoding;
 pub use transaction::{Transaction, TransactionHeader};
 pub use wire::{PStringTooLong, PacketWriter, VecWriter};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

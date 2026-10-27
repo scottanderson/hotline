@@ -61,3 +61,7 @@ pub use folder_upload::FolderUpload;
 pub use joined_chat::JoinedChat;
 pub use login_result::LoginResult;
 pub use news::{NewsArticle, TEXT_PLAIN};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -11,3 +11,7 @@
 mod transaction_codec;
 
 pub use transaction_codec::{CodecError, TransactionCodec};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

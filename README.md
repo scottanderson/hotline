@@ -1,108 +1,24 @@
 # Hotline
 
-A Rust workspace implementing the [Hotline](https://en.wikipedia.org/wiki/Hotline_Communications)
-client/server wire protocol (`TRTP`).
+A Rust workspace for the [Hotline] protocol (`TRTP`): a client, a
+server, and the tracker protocol.
 
-## Layout
+[Hotline]: https://en.wikipedia.org/wiki/Hotline_Communications
 
-Client and server share transaction framing, field encoding, and the
-login/chat/file/news transaction vocabulary. Only the behavior differs,
-so the wire format lives in one crate with zero I/O opinions, and the
-client/server crates each build an async (Tokio) session layer on top of
-it. Framing a `Transaction` over a socket is itself shared behavior, so
-it lives in its own crate rather than being duplicated in both.
+## Crates
 
-```
-Cargo.toml                               # workspace manifest
-crates/
-├── hotline-proto/                       # wire format only, no I/O, no async
-│   ├── wire/                            # PacketWriter/PacketReader: builder-style fixed-buffer cursors
-│   ├── numbers.rs                       # signed int encoding (EncodedInt, no heap allocation)
-│   ├── field/                           # Field { id, data } + FieldList, FieldId (one type, both directions)
-│   ├── opcode.rs                        # Opcode (one type, both directions) + TransactionType
-│   ├── transaction/                     # Transaction + TransactionHeader
-│   ├── types/                           # HlDate, HlPath, FileNameWithInfo, UserNameWithInfo,
-│   │                                    # UserFlags, UserChangeOptions, and the news list types
-│   ├── consts/                          # Access (64-bit myField_UserAccess bitmap) + RequireFlags
-│   ├── handshake/                       # ClientHandshake / ServerHandshake (the TRTP handshake)
-│   ├── htxf/                            # HtxfHeader (file transfer handshake) + flat file object framing
-│   ├── text_encoding.rs                 # per-connection wire text encoding (Mac Roman by default)
-│   └── error.rs                         # ProtoError
-│
-├── hotline-codec/                       # tokio_util Decoder/Encoder for Transaction
-│
-├── hotline-client/                      # async client session (Tokio): connect, handshake,
-│                                        # login, request/reply matching, a broadcast stream
-│                                        # for server pushes, and file and folder transfers
-│
-├── hotline-server/                      # async server framework (Tokio)
-│   ├── server/                          # listener, spawns one Session per connection,
-│   │                                    # plus the second (HTXF) listener for file transfer
-│   ├── session/                         # per-connection handshake + transaction dispatch
-│   ├── state/                           # SharedState: cross-session user table, chat rooms,
-│   │                                    # and the channels sessions use to reach each other
-│   ├── account/                         # Account + AccountProvider trait; storage itself is
-│   │                                    # supplied by the embedding application, not owned here
-│   ├── file/                            # FileProvider trait, same plug-in shape as AccountProvider
-│   ├── news/                            # FlatNewsProvider/ThreadedNewsProvider: bundles, categories, threads
-│   └── activity/, ban/, banner/,        # further pluggable providers (activity logs,
-│       console/, flood/                 # bans, server banner, console commands, flood control)
-│
-├── hotline-tracker/                     # HTRK tracker protocol (client query + server beacon)
-│
-├── hotline-cli/                         # `hlc`, terminal client binary (ratatui) using hotline-client
-│
-└── hotline-daemon/                      # `hls`, server binary using hotline-server
-```
+| Crate                                         | Contents                                         |
+|-----------------------------------------------|--------------------------------------------------|
+| [`hotline-proto`](crates/hotline-proto)       | the wire format, with no I/O and no async        |
+| [`hotline-codec`](crates/hotline-codec)       | a Tokio codec that frames transactions           |
+| [`hotline-client`](crates/hotline-client)     | an async client session                          |
+| [`hotline-server`](crates/hotline-server)     | an async server, with storage behind traits      |
+| [`hotline-tracker`](crates/hotline-tracker)   | the `HTRK` tracker protocol                      |
+| [`hotline-cli`](crates/hotline-cli)           | `hlc`, a terminal client                         |
+| [`hotline-daemon`](crates/hotline-daemon)     | `hls`, a server with its data on disk            |
 
-`hotline-proto` has no `tokio` dependency: it only turns bytes into
-`Transaction`/`Field` values and back, so it can be unit tested without a
-socket and reused by non-async consumers (a packet-capture dissector, a
-fuzzer, ...).
-
-### `FieldId` and `Opcode`
-
-`HLProtocol.md` numbers both fields and opcodes with one flat list each
-(`myField_*`, `myTran_*`), with no client/server split. A tag-by-tag
-audit against it found no case where the same numeric value means
-something structurally different depending on direction. So `FieldId`
-and `Opcode` each cover both directions as one type.
-`TransactionType::Request` and `TransactionType::Push` carry the
-direction, because a raw wire value alone does not say whether it came
-from a client or a server. Both types' `Debug` impls print the original
-constant name.
-
-### `Transaction` / `TransactionHeader`
-
-`Transaction` holds `r#type`, `trans`, `flag`, and `fields`; it doesn't
-store `len`/`len2`, since `encode()` recomputes them from `fields` every
-time. The field count isn't stored either, it's always `fields.len()`.
-Streaming decode needs `len2` before fields are readable, so
-`TransactionHeader` is a separate, smaller type holding just the raw
-20-byte prefix; it turns into a full `Transaction` once the body bytes
-are in hand.
-
-### `hotline-codec`
-
-`TransactionCodec` implements `tokio_util::codec::{Decoder, Encoder}` for
-`Transaction`, used via `tokio_util::codec::Framed` in both the client
-and server. A connection is a `Stream<Item = Result<Transaction, _>>`
-and a `Sink<Transaction>`. So `reader.next().await` and
-`writer.send(tx).await` handle TCP fragmentation without a hand-rolled
-read loop.
-
-### Server session/state split
-
-`Session` holds per-connection data (the socket's assigned user ID,
-current name, granted access privileges, away status) and does the
-actual request handling. `SharedState` holds everything visible across
-connections: the connected user table, chat rooms, and the channels
-sessions use to reach each other. Account storage, file storage, news
-storage, bans, the server banner, console commands, flood control, and
-activity logs are each behind their own small trait (`AccountProvider`,
-`FileProvider`, `FlatNewsProvider`, ...); the embedding application bundles its concrete
-backends into a `Providers` struct and passes that to `Server::new`, so
-`hotline-server` itself never owns any of that data directly.
+Each crate's README tells how to use it. `HLProtocol.md` is the
+protocol reference.
 
 ## Status
 
@@ -149,156 +65,6 @@ cargo run -p hotline-daemon -- --port 5500
 cargo run -p hotline-cli -- --host 127.0.0.1 --port 5500 --login guest --nick RustHL
 ```
 
-## Running `hls`
+## License
 
-`hls` keeps its data in the current directory by default:
-
-| Path            | Contents                         | Flag                |
-|-----------------|----------------------------------|---------------------|
-| `accounts/`     | one JSON file for each account   | `--accounts-dir`    |
-| `files/`        | the files clients see            | `--files-dir`       |
-| `news.txt`      | classic news                     | `--news-file`       |
-| `news.json`     | threaded news                    | `--news-tree-file`  |
-| `bans.json`     | address bans                     | `--ban-file`        |
-| `tracker-id`    | the ID that trackers list you by | `--tracker-id-file` |
-
-The Finder info, the comment, and the resource fork of `files/a.txt` are
-in its AppleDouble file, `files/._a.txt`. Clients do not see these files.
-
-Text in these files is UTF-8. On the wire, text uses Mac OS Roman by
-default. `--encoding utf-8` changes the wire encoding of every
-connection. It takes a WHATWG label, such as `shift_jis`. Every client
-must use the same encoding, for example `hlc --encoding utf-8`.
-
-`hls --import-news <folder>` reads the threaded news of an openline
-server: its `News` folder. It writes the tree to `--news-tree-file`,
-then exits. It does not overwrite a file that exists. The text in the
-folder uses `--encoding`.
-
-Clients connect on `--port` (5500 by default). File transfers use the
-next port, so open both in your firewall.
-
-### First run
-
-When the accounts directory is empty, `hls` creates two accounts:
-
-* `guest`, with no password and basic access.
-* `admin`, with full access and a random password.
-
-`hls` prints the admin password once, on the first run:
-
-```text
-created account "admin" with password "3f9c0a7b12e45d68" in accounts
-```
-
-Record it, because `hls` does not print it again. Log in as `admin` to
-change it, or to add accounts. Account files keep passwords as plain
-text. On Unix, `hls` makes a new accounts directory and each account
-file readable only by the user that runs it.
-
-### Limits
-
-| Flag                            | Default | Effect                                               |
-|---------------------------------|---------|------------------------------------------------------|
-| `--max-connections`             | 500     | open connections in total (0 means no limit)         |
-| `--max-connections-per-address` | 5       | open connections from one address (0 means no limit) |
-| `--max-downloads`               | 100     | downloads at the same time, before others queue      |
-| `--max-downloads-per-client`    | 10      | downloads for one user, before others queue          |
-
-A client that does not log in within 60 seconds is disconnected. A
-client that floods the server is banned for 30 minutes. This includes
-too many transactions, messages, chat bytes, name changes, repeated
-lines, or connections.
-
-### Activity logs
-
-Each log is off until you give it a file:
-
-```sh
-hls --download-log downloads.log --upload-log uploads.log \
-    --connect-log connects.log --account-log accounts.log
-```
-
-Each line has tab-separated columns, like openline's logs. The first
-line of each file names the columns.
-
-### Console commands
-
-`--console-prefix /` lets users type commands in chat. Without it, all
-chat goes to the room.
-
-| Command                                  | Effect                               |
-|------------------------------------------|--------------------------------------|
-| `/users`                                 | lists connected users                |
-| `/access <uid\|nick> [FIELD=0\|1 ...]`   | shows or changes a user's privileges |
-| `/0wn <uid\|nick> icon=<n> name=<text>`  | changes a user's icon or name        |
-| `/unban <address>`                       | removes an address ban               |
-
-`/unban` needs the privilege to disconnect users. The others need the
-matching server-only account flag.
-
-### Trackers and banner
-
-`--tracker host[:port]` registers the server with a tracker. Repeat it
-for more than one tracker. `--banner` takes an image file, or an
-`http://` or `https://` URL.
-
-## Using `hlc`
-
-```sh
-HLC_PASSWORD=secret hlc --host example.com --login alice --nick Alice
-```
-
-| Flag             | Default     | Effect                                         |
-|------------------|-------------|------------------------------------------------|
-| `--host`         | `127.0.0.1` | the server                                     |
-| `--port`         | 5500        | the server's port                              |
-| `--login`        | (guest)     | the account login                              |
-| `--password`     | (none)      | the password, also read from `HLC_PASSWORD`    |
-| `--nick`         | `RustHL`    | the name in the user list                      |
-| `--icon`         | 0           | the icon ID                                    |
-| `--download-dir` | `.`         | the folder that downloads go to                |
-| `--encoding`     | `macintosh` | the text encoding, the same as the server's    |
-| `--tracker`      |             | list a tracker's servers and exit, no login    |
-
-Use `HLC_PASSWORD` in place of `--password` when other users share the
-host, because they can read a command line.
-
-The line at the bottom of the screen shows the keys that work now.
-Each tab has a main pane and the user list. Tab moves between them,
-and Esc goes back to Chat. On Chat, Esc quits. Ctrl-C quits from
-anywhere.
-
-| Key    | Where                | Effect                                          |
-|--------|----------------------|-------------------------------------------------|
-| Ctrl-N | anywhere             | classic news; type a line and Enter to post     |
-| Ctrl-F | anywhere             | the Files tab                                   |
-| Ctrl-B | anywhere             | the Threaded News tab                           |
-| Ctrl-U | anywhere             | the Admin tab, with the account privileges      |
-| Ctrl-R | anywhere             | the next private chat room                      |
-| Ctrl-G | anywhere             | a broadcast, with the broadcast privilege       |
-| Ctrl-O | anywhere             | your name, icon, and options                    |
-| Ctrl-K | anywhere             | cancel a download                               |
-| ⇧Enter | a text box           | a new line (also Alt-Enter or Ctrl-J)           |
-| Enter  | user list            | send a private message                          |
-| `i`    | user list            | the user's info                                 |
-| `k`    | user list            | disconnect the user, with the privilege         |
-| Ctrl-A | a room               | invite a user                                   |
-| Ctrl-T | a room               | set the subject                                 |
-| Ctrl-W | a room               | leave the room                                  |
-
-A right click on a user opens a menu that also starts a private chat.
-
-On the Files tab, Enter opens a folder or downloads a file, and
-Backspace goes up. `d` downloads, `u` uploads a local file or folder,
-`n` creates a folder, `x` deletes, `i` shows info, `r` renames, `c`
-sets the comment, `m` moves, and `a` makes an alias. A download goes
-to `name.hpf` first. If one is there, `hlc` asks whether to resume it.
-
-On the Threaded News tab, Enter opens a bundle, a category, or an
-article, and Backspace goes up. `p` posts, `r` replies to the open
-article, `x` deletes, and `b` and `c` create a bundle or a category.
-
-On the Admin tab, Enter edits an account, `n` creates one, `o` opens
-one by login, and `x` deletes one. In the account form, Space turns
-the selected privilege on or off.
+MIT or Apache-2.0, at your option.
