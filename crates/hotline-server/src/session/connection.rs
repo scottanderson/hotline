@@ -507,7 +507,8 @@ impl Session {
             .unwrap_or("guest");
         let password = password.as_deref().unwrap_or_default();
 
-        let login = login.to_lowercase();
+        // A `\r` becomes `-`, so a store does not read it as a path.
+        let login = login.to_lowercase().replace('\r', "-");
         let account = state.account(&login).await;
         self.client_version = tx.client_version();
         self.access = match account {
@@ -1188,6 +1189,38 @@ mod tests {
 
         assert_eq!(session.access, Access::BROADCAST);
         assert_eq!(&*session.name, "Alice");
+    }
+
+    #[tokio::test]
+    async fn login_changes_each_cr_to_a_dash() {
+        let mut session = test_session("guest1", Access::empty());
+        let state = SharedState::default();
+        let config = ServerConfig::default();
+        state
+            .put_account(
+                "a-b".to_string(),
+                Account {
+                    access_extra: AccessExtra::default(),
+                    password: "hunter2".into(),
+                    name: "AB".into(),
+                    access: Access::BROADCAST,
+                },
+            )
+            .await
+            .unwrap();
+
+        let login = request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "A\rB"),
+                Field::obfuscated_string(FieldId::UserPassword, "hunter2"),
+            ],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert_eq!(session.access, Access::BROADCAST);
+        assert_eq!(&*session.login, "a-b");
     }
 
     #[tokio::test]
