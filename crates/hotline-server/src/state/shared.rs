@@ -276,6 +276,14 @@ impl SharedState {
         }
     }
 
+    /// Disconnect one connected user with a notice of `reason`. A no-op if
+    /// that user is not connected.
+    pub async fn kick(&self, target_user_id: u16, reason: &str) {
+        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
+            let _ = sender.try_send(RecipientMessage::Kick(reason.into()));
+        }
+    }
+
     /// Disconnect exactly one connected user with no wire-visible notice.
     /// A no-op if that user isn't connected.
     pub async fn disconnect(&self, target_user_id: u16) {

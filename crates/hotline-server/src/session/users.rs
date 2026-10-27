@@ -190,17 +190,7 @@ impl Session {
         };
 
         match notice {
-            Some(reason) => {
-                state
-                    .send_to(
-                        target_id,
-                        Transaction::push(
-                            Opcode::DisconnectMsg,
-                            vec![Field::string(FieldId::Data, reason)],
-                        ),
-                    )
-                    .await;
-            }
+            Some(reason) => state.kick(target_id, reason).await,
             None => state.disconnect(target_id).await,
         }
 
@@ -676,7 +666,6 @@ mod tests {
 
     #[tokio::test]
     async fn kick_with_permanent_ban_option_bans_the_target_address() {
-        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target = test_user(2, "Bob");
@@ -703,24 +692,18 @@ mod tests {
             .expect("expected a permanent ban");
         assert_eq!(ban.note, "x".repeat(MAX_BAN_NOTE));
 
-        let notice = target_rx
+        let kick = target_rx
             .try_recv()
             .ok()
-            .and_then(RecipientMessage::into_push)
-            .expect("expected a DisconnectMsg push notifying the target of the ban");
+            .and_then(RecipientMessage::into_kick);
         assert_eq!(
-            notice.received(encoding).string(FieldId::Data).unwrap(),
-            "You are permanently banned on this server."
-        );
-        assert_eq!(
-            notice.r#type(),
-            TransactionType::Push(Opcode::DisconnectMsg)
+            kick.as_deref(),
+            Some("You are permanently banned on this server.")
         );
     }
 
     #[tokio::test]
     async fn kick_with_temporary_ban_option_sends_the_temporary_ban_notice() {
-        let encoding = text_encoding::DEFAULT;
         let mut session = test_session("Alice", Access::all());
         let state = SharedState::default();
         let mut target = test_user(2, "Bob");
@@ -746,14 +729,13 @@ mod tests {
             .expect("expected a temporary ban");
         assert!(ban.until.is_some());
 
-        let notice = target_rx
+        let kick = target_rx
             .try_recv()
             .ok()
-            .and_then(RecipientMessage::into_push)
-            .expect("expected a DisconnectMsg push notifying the target of the ban");
+            .and_then(RecipientMessage::into_kick);
         assert_eq!(
-            notice.received(encoding).string(FieldId::Data).unwrap(),
-            "You are temporarily banned on this server."
+            kick.as_deref(),
+            Some("You are temporarily banned on this server.")
         );
     }
 

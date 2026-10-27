@@ -94,15 +94,9 @@ impl Session {
     pub(super) async fn disconnect_account_sessions(login: &str, state: &SharedState) {
         for target in state.user_ids_for_login(login).await {
             state
-                .send_to(
+                .kick(
                     target,
-                    Transaction::push(
-                        Opcode::DisconnectMsg,
-                        vec![Field::string(
-                            FieldId::Data,
-                            "You are logged in with an account which was deleted.",
-                        )],
-                    ),
+                    "You are logged in with an account which was deleted.",
                 )
                 .await;
         }
@@ -1414,12 +1408,11 @@ mod tests {
         assert!(!replies[0].is_error());
         assert!(state.account("bob").await.is_none());
 
-        let kick = rx
-            .try_recv()
-            .ok()
-            .and_then(RecipientMessage::into_push)
-            .expect("expected a DisconnectMsg push");
-        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::DisconnectMsg));
+        let kick = rx.try_recv().ok().and_then(RecipientMessage::into_kick);
+        assert_eq!(
+            kick.as_deref(),
+            Some("You are logged in with an account which was deleted.")
+        );
     }
 
     #[tokio::test]

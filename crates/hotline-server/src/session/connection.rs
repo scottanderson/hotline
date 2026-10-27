@@ -81,11 +81,12 @@ impl From<u16> for KickBan {
 /// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
 pub(super) const MAX_FLAT_NEWS_LEN: usize = u16::MAX as usize;
 
-/// How long a kicked client may drain its [`myTran_DisconnectMsg`] (111)
-/// notice. openline closes at once.
-///
-/// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
+/// How long a kicked session reads and discards after it closes its
+/// write side.
 const KICK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long a session waits for the client to close after a failed login.
+const LOGIN_FAILED_WAIT: Duration = Duration::from_secs(30);
 
 /// The longest [`myField_AutomaticResponse`] (215) kept, in bytes.
 ///
@@ -106,6 +107,8 @@ pub(super) enum SessionState {
     Agreement,
     /// Login has completed.
     Joined,
+    /// Login failed. The session reads no request until it closes.
+    LoginFailed,
 }
 
 /// The write half of a session's framed connection.
@@ -118,7 +121,8 @@ type SessionReader = SplitStream<Framed<TcpStream, TransactionCodec>>;
 enum SessionEnd {
     /// Close the connection at once.
     Closed,
-    /// Drain the reader for [`KICK_DRAIN_TIMEOUT`] before closing.
+    /// The write side is closed. Drain the reader for
+    /// [`KICK_DRAIN_TIMEOUT`] before closing.
     Kicked,
 }
 
@@ -223,7 +227,7 @@ impl Session {
         // Runs on every exit from `dispatch`, including an early `?`.
         Self::leave_server(&session, &state).await;
         if let Ok(SessionEnd::Kicked) = outcome {
-            // Give the client a bounded chance to read the notice.
+            // Read the client's unsent requests so the close does not reset the connection.
             drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
         }
         outcome.map(|_| ())
@@ -250,6 +254,9 @@ impl Session {
                 // Traffic from this client.
                 frame = reader.next() => {
                     let Some(tx) = frame.transpose()? else { break Ok(SessionEnd::Closed) }; // clean EOF
+                    if matches!(session.state, SessionState::LoginFailed) {
+                        continue;
+                    }
                     state.touch_user(session.user_id).await;
                     let now = tokio::time::Instant::now();
                     idle_sleep.as_mut().reset(now + IDLE_THRESHOLD);
@@ -260,13 +267,16 @@ impl Session {
                     for reply in session.handle(&tx, state, config).await {
                         writer.send(reply).await?;
                     }
+                    if matches!(session.state, SessionState::LoginFailed) {
+                        login_sleep.as_mut().reset(now + LOGIN_FAILED_WAIT);
+                    }
                 }
                 // Fires after IDLE_THRESHOLD with no request from this client.
                 () = &mut idle_sleep, if !session.is_away && matches!(session.state, SessionState::Joined) => {
                     session.set_away(true, state).await;
                 }
-                // Fires after `login_timeout` with no request before the session joins.
-                () = &mut login_sleep, if matches!(session.state, SessionState::Agreement) => {
+                // Fires after `login_timeout` with no request before the session joins, or after `LOGIN_FAILED_WAIT`.
+                () = &mut login_sleep, if matches!(session.state, SessionState::Agreement | SessionState::LoginFailed) => {
                     tracing::debug!(user_id = session.user_id, "login timed out");
                     break Ok(SessionEnd::Closed);
                 }
@@ -274,13 +284,8 @@ impl Session {
                 msg = rx.recv() => {
                     match msg {
                         Some(RecipientMessage::Push(tx)) => {
-                            let opcode = tx.r#type();
-                            let is_kick = opcode == TransactionType::Push(Opcode::DisconnectMsg);
-                            if session.may_receive(opcode) {
+                            if session.may_receive(tx.r#type()) {
                                 writer.send(tx).await?;
-                            }
-                            if is_kick {
-                                break Ok(SessionEnd::Kicked);
                             }
                         }
                         Some(RecipientMessage::Broadcast(tx)) => {
@@ -295,6 +300,12 @@ impl Session {
                             session.apply_console_update(update, state).await;
                         }
                         Some(RecipientMessage::Disconnect) => break Ok(SessionEnd::Closed),
+                        Some(RecipientMessage::Kick(reason)) => {
+                            let data = vec![Field::string(FieldId::Data, &*reason)];
+                            writer.send(Transaction::push(Opcode::ServerMsg, data)).await?;
+                            writer.close().await?;
+                            break Ok(SessionEnd::Kicked);
+                        }
                         None => break Ok(SessionEnd::Closed),
                     }
                 }
@@ -378,6 +389,7 @@ impl Session {
         match self.state {
             SessionState::Agreement => self.handle_agreement(opcode, tx, state, config).await,
             SessionState::Joined => self.handle_joined(opcode, tx, state, config).await,
+            SessionState::LoginFailed => vec![],
         }
     }
 
@@ -499,7 +511,7 @@ impl Session {
         config: &ServerConfig,
     ) -> Vec<Transaction> {
         if let Err(reason) = state.require_not_banned(self.remote_addr.ip()).await {
-            return self.reject_login(tx, state, reason).await;
+            return self.reject_login(tx, reason);
         }
         let login = tx.login();
         let password = tx.password();
@@ -525,7 +537,7 @@ impl Session {
                 self.access_extra = account.access_extra;
                 account.access
             }
-            _ => return self.reject_login(tx, state, "Incorrect login.").await,
+            _ => return self.reject_login(tx, "Incorrect login."),
         };
 
         let fields = vec![
@@ -572,30 +584,15 @@ impl Session {
         replies
     }
 
-    /// Reply with `reason`, then disconnect: an unknown login or wrong
-    /// password drops the connection rather than leaving it stuck
-    /// unauthenticated.
-    async fn reject_login(
-        &self,
-        tx: &Transaction<Received>,
-        state: &SharedState,
-        reason: &str,
-    ) -> Vec<Transaction> {
-        state
-            .send_to(
-                self.user_id,
-                Transaction::push(
-                    Opcode::DisconnectMsg,
-                    vec![Field::string(FieldId::Data, reason)],
-                ),
-            )
-            .await;
+    /// Reply with `reason`. The login then fails.
+    fn reject_login(&mut self, tx: &Transaction<Received>, reason: &str) -> Vec<Transaction> {
+        self.state = SessionState::LoginFailed;
         vec![tx.reply_error(reason)]
     }
 
     /// Complete login after the client accepts the agreement,
     /// [`myTran_Agreed`] (121), with the account read again. A missing
-    /// account gets an error reply but no disconnect.
+    /// account gets an error reply, and the login then fails.
     ///
     /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
     async fn on_agreed(
@@ -605,7 +602,10 @@ impl Session {
     ) -> Vec<Transaction> {
         let account = match state.require_account(&self.login).await {
             Ok(account) => account,
-            Err(reason) => return vec![tx.reply_error(reason)],
+            Err(reason) => {
+                self.state = SessionState::LoginFailed;
+                return vec![tx.reply_error(reason)];
+            }
         };
         self.account_name = account.name;
         self.access = account.access;
@@ -1302,7 +1302,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_with_wrong_password_is_rejected_and_disconnected() {
+    async fn login_with_wrong_password_fails_the_login() {
         let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -1336,17 +1336,13 @@ mod tests {
                 .string(FieldId::ErrorText),
             Some("Incorrect login.".to_string())
         );
-        let kick = rx
-            .try_recv()
-            .ok()
-            .and_then(RecipientMessage::into_push)
-            .expect("expected a DisconnectMsg push");
-        assert_eq!(kick.r#type(), TransactionType::Push(Opcode::DisconnectMsg));
+        assert!(matches!(session.state, SessionState::LoginFailed));
+        assert!(rx.try_recv().is_err());
         assert!(session.login.is_empty());
     }
 
     #[tokio::test]
-    async fn agreed_without_a_stored_account_is_refused_without_a_kick() {
+    async fn agreed_without_a_stored_account_fails_the_login() {
         for login in ["", "gone"] {
             let mut session = test_session("guest1", Access::all());
             session.state = SessionState::Agreement;
@@ -1372,7 +1368,7 @@ mod tests {
                     .string(FieldId::ErrorText),
                 Some(format!("Cannot read account \u{201c}{login}\u{201d}."))
             );
-            assert!(matches!(session.state, SessionState::Agreement));
+            assert!(matches!(session.state, SessionState::LoginFailed));
             assert!(bystander.try_recv().is_err());
             assert!(own.try_recv().is_err());
         }
@@ -1410,7 +1406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_with_unknown_account_is_rejected_and_disconnected() {
+    async fn login_with_unknown_account_fails_the_login() {
         let mut session = test_session("guest1", Access::empty());
         let state = SharedState::default();
         let config = ServerConfig::default();
@@ -1429,7 +1425,8 @@ mod tests {
                 .string(FieldId::ErrorText),
             Some("Incorrect login.".to_string())
         );
-        assert!(rx.try_recv().is_ok());
+        assert!(matches!(session.state, SessionState::LoginFailed));
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1444,7 +1441,8 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(replies[0].is_error());
-        assert!(rx.try_recv().is_ok());
+        assert!(matches!(session.state, SessionState::LoginFailed));
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -2286,7 +2284,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn drain_with_timeout_gives_up_on_a_stuck_stream() {
-        // Stands in for a client that never drains its kick notice.
+        // Stands in for a client that never closes after a kick.
         let stuck = futures::stream::pending::<()>();
         drain_with_timeout(stuck, KICK_DRAIN_TIMEOUT).await;
     }
@@ -2375,6 +2373,69 @@ mod tests {
         assert!(!server.is_finished());
         let finished = tokio::time::timeout(Duration::from_secs(5), server).await;
         assert!(finished.unwrap().unwrap().is_ok());
+    }
+
+    /// Runs one session on `state`, and does the handshake. Returns its
+    /// task and a framed client.
+    async fn run_session(
+        state: SharedState,
+    ) -> (
+        tokio::task::JoinHandle<Result<()>>,
+        Framed<TcpStream, TransactionCodec>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            Session::run(stream, state, ServerConfig::default()).await
+        });
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        client
+            .write_all(&ClientHandshake::default().encode())
+            .await
+            .unwrap();
+        let mut reply = [0u8; ServerHandshake::LEN];
+        client.read_exact(&mut reply).await.unwrap();
+        let codec = TransactionCodec::for_client(EncodingHandle::default());
+        (server, Framed::new(client, codec))
+    }
+
+    /// A [`myTran_Login`] (107) with a login that has no account.
+    ///
+    /// [`myTran_Login`]: hotline_proto::Opcode::Login
+    fn unknown_login() -> Transaction {
+        let fields = vec![Field::obfuscated_string(FieldId::UserLogin, "nobody")];
+        Transaction::request(Opcode::Login, 1, fields)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn login_failed_reads_no_request_and_closes_after_the_wait() {
+        let (server, mut client) = run_session(SharedState::default()).await;
+
+        client.send(unknown_login()).await.unwrap();
+        assert!(client.next().await.unwrap().unwrap().is_error());
+        client.send(unknown_login()).await.unwrap();
+
+        let finished = tokio::time::timeout(2 * LOGIN_FAILED_WAIT, server).await;
+        assert!(finished.unwrap().unwrap().is_ok());
+        assert!(client.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn kick_sends_a_server_msg_and_closes() {
+        let state = SharedState::default();
+        let (server, mut client) = run_session(state.clone()).await;
+        while state.connection_count().await == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        state.kick(1, "Go away.").await;
+
+        let notice = client.next().await.unwrap().unwrap();
+        assert_eq!(notice.r#type(), TransactionType::Push(Opcode::ServerMsg));
+        assert_eq!(notice.string(FieldId::Data).as_deref(), Some("Go away."));
+        assert!(client.next().await.is_none());
+        assert!(server.await.unwrap().is_ok());
     }
 
     #[tokio::test]

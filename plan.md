@@ -202,21 +202,12 @@ one-shared-room model.
    The work needs a per-account root in `FileProvider` and the news
    providers, and a place for these folders in the `hls` data
    directory.
-2. **The notice opcode and the close after a refusal differ.** openline
-   sends `myTran_ServerMsg` (104) to a client that a kick bans, to a
-   client whose account is deleted, and to a client at an address that
-   gets a permanent ban. It then closes the connection. hls sends
-   `myTran_DisconnectMsg` (111) and keeps a drain window. After a failed
-   login, openline sends only the error reply and waits 30 seconds for
-   the client to close. hls closes at once. Decided: make each a
-   `ServerPolicy` choice, with openline's behavior as the default.
-   `HlsPolicy` keeps the current behavior.
-3. **No HTTP tunnel listeners.** openline also listens on the base
+2. **No HTTP tunnel listeners.** openline also listens on the base
    port plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`,
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-4. **Some divergences have no policy.** `ServerPolicy` covers each
+3. **Some divergences have no policy.** `ServerPolicy` covers each
    divergence above that names a `Silent` case. Two divergences are
    still open:
    - A number field that does not fit. Most of these reads are in
@@ -233,9 +224,9 @@ one-shared-room model.
      and the reply is "Error saving list of accounts." This depends on
      `SetName` failing when the folder name is taken. Confirm that
      before the port.
-5. **Chat rooms and online users have no trait.** `SharedState` keeps
+4. **Chat rooms and online users have no trait.** `SharedState` keeps
    them in memory. Put them behind traits, like the storage providers.
-6. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+5. **hlc has no task list.** Ctrl-K lists only the downloads that run,
    and Enter cancels one. hlc does not keep its uploads, and it shows
    no progress. It shows no request that waits for its reply.
    openline's client keeps each transfer as a task
@@ -254,7 +245,7 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-7. **The resource fork storage is fixed to AppleDouble.**
+6. **The resource fork storage is fixed to AppleDouble.**
    `DiskFileProvider` calls `apple_double` directly for the Finder
    info, the comment, and the resource fork. Put the storage behind
    an interface, in `FileProvider` or in a new provider if necessary.

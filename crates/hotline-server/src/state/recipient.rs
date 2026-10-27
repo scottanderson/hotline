@@ -15,6 +15,8 @@ pub enum RecipientMessage {
     Console(ConsoleUpdate),
     /// Close this connection with no wire-visible notice.
     Disconnect,
+    /// Close this connection with a notice of this reason.
+    Kick(Box<str>),
 }
 
 impl RecipientMessage {
@@ -38,6 +40,14 @@ impl RecipientMessage {
     pub(crate) fn into_console_update(self) -> Option<ConsoleUpdate> {
         match self {
             Self::Console(update) => Some(update),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_kick(self) -> Option<Box<str>> {
+        match self {
+            Self::Kick(reason) => Some(reason),
             _ => None,
         }
     }

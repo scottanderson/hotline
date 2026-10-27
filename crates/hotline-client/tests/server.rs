@@ -160,7 +160,7 @@ async fn disconnect_user_with_a_ban_tells_the_user_why() {
         .await
         .unwrap();
 
-    let msg = next_push(&mut bob_events, Opcode::DisconnectMsg).await;
+    let msg = next_push(&mut bob_events, Opcode::ServerMsg).await;
     assert_eq!(
         msg.string(FieldId::Data).as_deref(),
         Some("You are temporarily banned on this server.")

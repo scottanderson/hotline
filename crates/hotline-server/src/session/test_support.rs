@@ -94,7 +94,9 @@ pub(super) fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> A
                 ));
             }
             RecipientMessage::Console(_) => panic!("unexpected console update"),
-            RecipientMessage::Disconnect => panic!("unexpected disconnect"),
+            RecipientMessage::Disconnect | RecipientMessage::Kick(_) => {
+                panic!("unexpected disconnect")
+            }
         }
     }
 }
