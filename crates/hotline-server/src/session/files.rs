@@ -3,7 +3,7 @@
 use std::time::SystemTime;
 
 use hotline_proto::consts::{Access, RequireFlags};
-use hotline_proto::htxf;
+use hotline_proto::htxf::{self, ResumedFork};
 use hotline_proto::types::{self, HlDate, HlPath};
 use hotline_proto::FieldId;
 use hotline_proto::{Field, ForkHeader, Received, Transaction};
@@ -157,21 +157,24 @@ impl Session {
         } else {
             state.resource_fork_size(requester, &dir, &name).await
         };
-        let (resume_offset, resource_offset) = match tx.field(FieldId::FileResumeData) {
+        let (data, resource) = match tx.field(FieldId::FileResumeData) {
             Some(field) if !raw => match types::ResumeData::decode(field.as_bytes()) {
                 Ok(resume) => (
-                    u64::from(resume.data).min(data_size),
-                    u64::from(resume.resource).min(resource_size),
+                    ResumedFork::new(data_size, resume.data.into()),
+                    ResumedFork::new(resource_size, resume.resource.into()),
                 ),
                 Err(_) => return vec![tx.reply_error("Resume data is invalid.")],
             },
-            _ => (0, 0),
+            _ => (
+                ResumedFork::whole(data_size),
+                ResumedFork::whole(resource_size),
+            ),
         };
         let total_size = if raw {
             data_size
         } else {
             let header_len = htxf::flat_file_header_len(info.len()) + ForkHeader::LEN;
-            header_len as u64 + data_size - resume_offset + resource_size - resource_offset
+            header_len as u64 + data.len + resource.len
         };
         let kind = TransferKind::File(FileTransfer {
             target: TransferTarget {
@@ -183,14 +186,14 @@ impl Session {
             encoding: self.encoding(),
             info,
             resource_size,
-            resource_offset,
+            resource_offset: resource.offset,
         });
         let mut fields = vec![
             Field::u32(FieldId::TransferSize, total_size as u32),
             Field::u32(FieldId::FileSize, data_size as u32),
         ];
         fields.extend(
-            self.register_download(kind, data_size, resume_offset, state)
+            self.register_download(kind, data_size, data.offset, state)
                 .await,
         );
         self.record_activity(Activity::Download { name: name.into() }, state)

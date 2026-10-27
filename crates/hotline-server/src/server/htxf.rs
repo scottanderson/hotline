@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use hotline_proto::htxf::{
-    self, FlatFileInfo, FolderAction, FolderItemHeader, ForkHeader, HtxfHeader,
+    self, FlatFileInfo, FolderAction, FolderItemHeader, ForkHeader, HtxfHeader, ResumedFork,
 };
 use hotline_proto::text_encoding::Encoding;
 use hotline_proto::types::{HlPath, ResumeData};
@@ -230,44 +230,42 @@ async fn send_file(
     if *raw {
         tokio::io::copy(&mut reader, stream).await?;
     } else {
-        let resource = state
-            .open_resource_for_read(requester, dir, name, *resource_offset)
+        let data = ResumedFork {
+            offset: transfer.resume_offset,
+            len: transfer.size - transfer.resume_offset,
+        };
+        let resource = ResumedFork {
+            offset: *resource_offset,
+            len: resource_size - resource_offset,
+        };
+        skip_bytes(&mut reader, data.offset).await?;
+        let resource_reader = state
+            .open_resource_for_read(requester, dir, name, resource.offset)
             .await?;
-        let data = (reader, transfer.size, transfer.resume_offset);
         send_flat_file(
             stream,
-            data,
             info,
-            resource,
-            resource_size - resource_offset,
+            (reader, data.len),
+            (resource_reader, resource.len),
         )
         .await?;
     }
     drain_stream(stream).await
 }
 
-/// Write a flattened file object: `info` as its `INFO` fork data, the
-/// `data` reader's `size` bytes after its first `resume_offset`, then
-/// `resource_len` bytes of `resource` as its `MACR` fork. A fork shorter
-/// than its size is an error.
+/// Write a flattened file object: `info` as its `INFO` fork data, then
+/// `len` bytes of each fork from its reader. A fork shorter than its
+/// `len` is an error.
 async fn send_flat_file(
     stream: &mut (impl AsyncWrite + Unpin),
-    (mut reader, size, resume_offset): (impl AsyncRead + Unpin, u64, u64),
     info: &[u8],
-    mut resource: impl AsyncRead + Unpin,
-    resource_len: u64,
+    (mut data, data_len): (impl AsyncRead + Unpin, u64),
+    (mut resource, resource_len): (impl AsyncRead + Unpin, u64),
 ) -> Result<()> {
-    let remaining = size - resume_offset;
     stream
-        .write_all(&htxf::flat_file_header_with_resource(
-            info,
-            remaining as u32,
-        ))
+        .write_all(&htxf::flat_file_header_with_resource(info, data_len as u32))
         .await?;
-    if resume_offset > 0 {
-        skip_bytes(&mut reader, resume_offset).await?;
-    }
-    copy_fork(&mut reader, remaining, stream).await?;
+    copy_fork(&mut data, data_len, stream).await?;
     let resource_header = ForkHeader {
         fork_type: *b"MACR",
         data_size: resource_len as u32,
@@ -451,20 +449,25 @@ async fn send_folder(
                 };
                 let (dir, name) = split_item_path(&root, &item.path)
                     .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-                let reader = state.open_file_for_read(requester, &dir, name).await?;
+                let mut reader = state.open_file_for_read(requester, &dir, name).await?;
                 let info = state.info_fork(requester, &dir, name, encoding).await;
                 let resource_size = state.resource_fork_size(requester, &dir, name).await;
-                let resume_offset = u64::from(resume.data).min(item.size);
-                let resource_offset = u64::from(resume.resource).min(resource_size);
-                let resource = state
-                    .open_resource_for_read(requester, &dir, name, resource_offset)
+                let data = ResumedFork::new(item.size, resume.data.into());
+                let resource = ResumedFork::new(resource_size, resume.resource.into());
+                skip_bytes(&mut reader, data.offset).await?;
+                let resource_reader = state
+                    .open_resource_for_read(requester, &dir, name, resource.offset)
                     .await?;
                 let header_len = (htxf::flat_file_header_len(info.len()) + ForkHeader::LEN) as u64;
-                let resource_len = resource_size - resource_offset;
-                let flat_size = header_len + item.size - resume_offset + resource_len;
+                let flat_size = header_len + data.len + resource.len;
                 stream.write_all(&(flat_size as u32).to_be_bytes()).await?;
-                let data = (reader, item.size, resume_offset);
-                send_flat_file(stream, data, &info, resource, resource_len).await?;
+                send_flat_file(
+                    stream,
+                    &info,
+                    (reader, data.len),
+                    (resource_reader, resource.len),
+                )
+                .await?;
             }
             _ => {}
         }
@@ -1001,11 +1004,11 @@ mod tests {
     #[tokio::test]
     async fn send_flat_file_fails_on_a_short_fork() {
         let mut out = Vec::new();
-        let short_data = send_flat_file(&mut out, (&b"hey"[..], 5, 0), b"", &b""[..], 0).await;
+        let short_data = send_flat_file(&mut out, b"", (&b"hey"[..], 5), (&b""[..], 0)).await;
         assert!(short_data.is_err());
         let mut out = Vec::new();
         let short_resource =
-            send_flat_file(&mut out, (&b"hello"[..], 5, 0), b"", &b"rs"[..], 4).await;
+            send_flat_file(&mut out, b"", (&b"hello"[..], 5), (&b"rs"[..], 4)).await;
         assert!(short_resource.is_err());
     }
 

@@ -35,6 +35,32 @@ pub fn empty_info() -> [u8; INFO_DATA_LEN] {
         .finish()
 }
 
+/// The part of one fork that a resumed download sends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResumedFork {
+    /// The bytes that the client has, which the download skips.
+    pub offset: u64,
+    /// The bytes that the download sends.
+    pub len: u64,
+}
+
+impl ResumedFork {
+    /// The rest of a `size`-byte fork after the client's `resume` bytes.
+    /// A `resume` at or past `size` sends nothing.
+    pub fn new(size: u64, resume: u64) -> Self {
+        let offset = resume.min(size);
+        Self {
+            offset,
+            len: size - offset,
+        }
+    }
+
+    /// All of a `size`-byte fork.
+    pub fn whole(size: u64) -> Self {
+        Self::new(size, 0)
+    }
+}
+
 /// Byte length of [`flat_file_header`]'s output for `info_len` bytes of
 /// `INFO` fork data.
 pub const fn flat_file_header_len(info_len: usize) -> usize {
@@ -166,5 +192,12 @@ mod tests {
             decode_flat_file_prefix(&header),
             Err(ProtoError::BadMagic { .. })
         ));
+    }
+
+    #[test]
+    fn resumed_fork_sends_nothing_at_or_past_the_end() {
+        assert_eq!(ResumedFork::new(10, 4), ResumedFork { offset: 4, len: 6 });
+        assert_eq!(ResumedFork::new(10, 10), ResumedFork { offset: 10, len: 0 });
+        assert_eq!(ResumedFork::new(10, 12), ResumedFork { offset: 10, len: 0 });
     }
 }

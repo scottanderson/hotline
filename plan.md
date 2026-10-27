@@ -290,14 +290,6 @@ one-shared-room model.
       this first.
     - `validate_file_name` in `hotline-server` maps a leading `._` for
       every provider. Let the storage choose the names that it keeps.
-10. **Review findings on the fork transfer break the repo rules.**
-    - `htxf.rs` and `session/files.rs` clamp a resume size with
-      `.min(size)`. openline's `ResumeFlatten` checks
-      `dataResumeSize >= dataHdr.dataSize`, then sets the size to 0 or
-      subtracts. Port that condition with the same terms.
-    - `send_flat_file` takes the data fork as a
-      `(reader, size, resume_offset)` tuple, but the resource fork as
-      two parameters. Give both forks the same shape.
 
 ## Resolved
 
