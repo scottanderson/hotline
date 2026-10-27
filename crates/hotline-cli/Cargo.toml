@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 hotline-client = { workspace = true }
-hotline-proto = { workspace = true }
+hotline-proto = { workspace = true, features = ["chrono"] }
 hotline-tracker = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
@@ -24,6 +24,8 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+sys-locale = { workspace = true }
+chrono = { workspace = true, features = ["unstable-locales"] }
 
 [dev-dependencies]
 hotline-server = { workspace = true }

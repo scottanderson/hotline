@@ -3,6 +3,7 @@
 mod args;
 mod file_edit;
 mod line;
+mod locale;
 mod session;
 mod tracker;
 mod transfer;
@@ -34,6 +35,7 @@ use view::{AccountForm, Action, Modal, OptionsForm, View};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    hotline_proto::types::HlDate::set_locale(locale::user_locale());
 
     if let Some(address) = &args.tracker {
         let list = tracker::query(address, hotline_proto::text_encoding::DEFAULT).await?;

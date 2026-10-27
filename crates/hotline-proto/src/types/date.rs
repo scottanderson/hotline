@@ -1,5 +1,8 @@
 //! [`HlDate`]: a Hotline date field.
 
+use std::fmt;
+#[cfg(feature = "chrono")]
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use crate::wire::{PacketReader, PacketWriter};
@@ -94,9 +97,86 @@ impl HlDate {
     }
 }
 
+/// The locale of [`HlDate`]'s `Display`, from [`HlDate::set_locale`].
+#[cfg(feature = "chrono")]
+static LOCALE: OnceLock<chrono::Locale> = OnceLock::new();
+
+#[cfg(feature = "chrono")]
+impl HlDate {
+    /// Show each date in `locale`. Only the first call has an effect.
+    pub fn set_locale(locale: chrono::Locale) {
+        let _ = LOCALE.set(locale);
+    }
+
+    /// The date and time, in no time zone. Out of range gives the Unix
+    /// epoch.
+    pub fn to_naive(&self) -> chrono::NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(self.year.into(), 1, 1)
+            .and_then(|jan1| jan1.and_hms_opt(0, 0, 0))
+            .and_then(|start| {
+                start.checked_add_signed(chrono::TimeDelta::seconds(self.seconds.into()))
+            })
+            .unwrap_or_default()
+    }
+
+    /// The date and time as `locale` writes them, with `%x %X`.
+    pub fn localized(&self, locale: chrono::Locale) -> impl fmt::Display {
+        self.to_naive().and_utc().format_localized("%x %X", locale)
+    }
+}
+
+/// The date and time as the server sent them. With the `chrono` feature,
+/// in the locale of [`HlDate::set_locale`], else as `YYYY-MM-DD HH:MM:SS`.
+impl fmt::Display for HlDate {
+    #[cfg(feature = "chrono")]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let locale = LOCALE.get().copied().unwrap_or(chrono::Locale::POSIX);
+        write!(f, "{}", self.localized(locale))
+    }
+
+    #[cfg(not(feature = "chrono"))]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let days = days_from_civil(self.year.into(), 1, 1) + i64::from(self.seconds / 86400);
+        let (year, month, day) = civil_from_days(days);
+        let time = self.seconds % 86400;
+        let (hour, minute, second) = (time / 3600, time / 60 % 60, time % 60);
+        write!(
+            f,
+            "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LEAP_DAY: HlDate = HlDate {
+        year: 2024,
+        milliseconds: 0,
+        seconds: 59 * 86400 + 13 * 3600 + 5 * 60 + 7,
+    };
+
+    #[cfg(not(feature = "chrono"))]
+    #[test]
+    fn display_writes_the_date_and_time() {
+        assert_eq!(LEAP_DAY.to_string(), "2024-02-29 13:05:07");
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn to_naive_adds_the_seconds_to_the_start_of_the_year() {
+        assert_eq!(LEAP_DAY.to_naive().to_string(), "2024-02-29 13:05:07");
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn localized_follows_the_locale() {
+        let us = LEAP_DAY.localized(chrono::Locale::en_US).to_string();
+        assert_eq!(us, "02/29/2024 01:05:07 PM");
+        let de = LEAP_DAY.localized(chrono::Locale::de_DE).to_string();
+        assert_eq!(de, "29.02.2024 13:05:07");
+    }
 
     #[test]
     fn days_from_civil_round_trips_through_civil_from_days() {

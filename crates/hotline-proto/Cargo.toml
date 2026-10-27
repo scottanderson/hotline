@@ -16,6 +16,11 @@ thiserror = { workspace = true }
 num_enum = { workspace = true }
 encoding_rs = { workspace = true }
 arc-swap = { workspace = true }
+chrono = { workspace = true, optional = true, features = ["unstable-locales"] }
+
+[features]
+## `HlDate` conversion to chrono, and dates shown in a locale.
+chrono = ["dep:chrono"]
 
 [lints]
 workspace = true
