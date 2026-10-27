@@ -32,9 +32,10 @@ pub enum LineKind {
 /// The number of newest lines that a scrollback keeps when it trims.
 pub const MAX_LINES: usize = 5000;
 
-/// Append `line` to `lines`. Past 1.25 times [`MAX_LINES`], keep only the newest [`MAX_LINES`].
+/// Append `line` to `lines`, one row for each `\r`-separated part.
+/// Past 1.25 times [`MAX_LINES`], keep only the newest [`MAX_LINES`].
 pub fn push_line(lines: &mut Vec<Line>, line: Line) {
-    lines.push(line);
+    lines.extend(line.text.split('\r').map(|part| Line::new(part, line.kind)));
     if lines.len() > MAX_LINES + MAX_LINES / 4 {
         lines.drain(..lines.len() - MAX_LINES);
     }
@@ -62,5 +63,14 @@ mod tests {
             &*lines.last().unwrap().text,
             (MAX_LINES * 2 - 1).to_string()
         );
+    }
+
+    #[test]
+    fn push_line_gives_each_cr_part_its_own_row() {
+        let mut lines = Vec::new();
+        push_line(&mut lines, Line::error("one\rtwo"));
+        let texts: Vec<_> = lines.iter().map(|line| &*line.text).collect();
+        assert_eq!(texts, ["one", "two"]);
+        assert!(lines.iter().all(|line| line.kind == LineKind::Error));
     }
 }

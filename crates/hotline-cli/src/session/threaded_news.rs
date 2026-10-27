@@ -6,7 +6,7 @@ use hotline_client::{HotlineClient, TEXT_PLAIN};
 use hotline_proto::text_encoding;
 use hotline_proto::types::{NewsArticleSummary, NewsCategoryListEntry};
 
-use super::{wire_text, ClientSession};
+use super::ClientSession;
 use crate::line::LineKind;
 
 /// One row of the Threaded News tab.
@@ -188,7 +188,12 @@ impl ClientSession {
         text: &str,
     ) {
         let posted = client
-            .post_news_art(&self.threaded_path, parent_id, title, &wire_text(text))
+            .post_news_art(
+                &self.threaded_path,
+                parent_id,
+                title,
+                &text_encoding::to_wire_lines(text),
+            )
             .await;
         match posted {
             Ok(()) => self.list_threaded_news(client).await,

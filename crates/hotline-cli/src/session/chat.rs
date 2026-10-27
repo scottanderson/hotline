@@ -1,9 +1,10 @@
 //! Private chat rooms.
 
 use hotline_client::{HotlineClient, JoinedChat};
+use hotline_proto::text_encoding;
 use hotline_proto::{Field, FieldId, Received, Transaction};
 
-use super::{display_text, wire_text, ChatInvite, ChatRoom, ClientSession};
+use super::{display_text, ChatInvite, ChatRoom, ClientSession};
 use crate::line::LineKind;
 
 /// The most invitations that wait for an answer.
@@ -201,7 +202,10 @@ impl ClientSession {
 
     /// Send `line` to the room `chat_id`.
     pub async fn send_room_chat(&mut self, client: &HotlineClient, chat_id: u32, line: &str) {
-        if let Err(e) = client.send_room_chat(chat_id, &wire_text(line)).await {
+        if let Err(e) = client
+            .send_room_chat(chat_id, &text_encoding::to_wire_lines(line))
+            .await
+        {
             if let Some(room) = self.room_mut(chat_id) {
                 room.push(format!("failed to send: {e}"), LineKind::Error);
             }

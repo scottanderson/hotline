@@ -1,6 +1,7 @@
 //! Rendering, and the screen areas that mouse clicks hit.
 
 use hotline_client::FileInfo;
+use hotline_proto::text_encoding;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -212,7 +213,7 @@ fn draw_agreement(frame: &mut Frame, text: &str) {
         .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(frame.area());
 
-    let paragraph = Paragraph::new(text)
+    let paragraph = Paragraph::new(text_encoding::from_wire_lines(text))
         .block(Block::default().borders(Borders::ALL).title("agreement"))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, rows[0]);
@@ -263,7 +264,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, lines: &[Line], title: &str) {
 
 fn draw_news(frame: &mut Frame, area: Rect, session: &ClientSession, scroll: u16) {
     let text = match &session.news {
-        Some(news) => news.replace('\r', "\n"),
+        Some(news) => text_encoding::from_wire_lines(news),
         None => "loading news".to_string(),
     };
     let paragraph = Paragraph::new(text)
@@ -375,7 +376,7 @@ fn file_info_lines(info: &FileInfo) -> Vec<String> {
     let size = format!("size:    {} ({} bytes)", size_text(info.size), info.size);
     let kind = info.type_text.iter().map(|t| format!("type:    {t}"));
     let creator = info.creator_text.iter().map(|c| format!("creator: {c}"));
-    let comment = format!("comment: {}", info.comment.replace('\r', "\n"));
+    let comment = format!("comment: {}", text_encoding::from_wire_lines(&info.comment));
     std::iter::once(size)
         .chain(kind)
         .chain(creator)
@@ -574,7 +575,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             draw_list_modal(frame, area, block, items, *selected);
         }
         Modal::Article(article) => {
-            let text = article.text.replace('\r', "\n");
+            let text = text_encoding::from_wire_lines(&article.text);
             let title = format!("{} ({})", article.title, article.poster);
             draw_text_modal(frame, screen, 76, title, text);
         }
@@ -633,7 +634,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             draw_question(frame, screen, "delete?", format!("Delete {name}?"));
         }
         Modal::Info(info) => {
-            let text = info.text.replace('\r', "\n");
+            let text = text_encoding::from_wire_lines(&info.text);
             draw_text_modal(frame, screen, 70, format!("info for {}", info.name), text);
         }
     }
@@ -707,6 +708,18 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         buffer.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn draw_agreement_shows_each_line() {
+        let backend = ratatui::backend::TestBackend::new(20, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_agreement(frame, "one\rtwo"))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| (1..4).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        assert_eq!((row(1), row(2)), ("one".into(), "two".into()));
     }
 
     #[test]

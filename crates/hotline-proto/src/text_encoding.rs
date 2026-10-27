@@ -126,9 +126,29 @@ pub fn encode_truncated(encoding: &'static Encoding, s: &str, max: usize) -> Vec
     out
 }
 
+/// `s` with each CRLF or LF as `\r`, the Hotline line separator.
+pub fn to_wire_lines(s: &str) -> String {
+    s.replace("\r\n", "\r").replace('\n', "\r")
+}
+
+/// `s` with each `\r` as `\n`.
+pub fn from_wire_lines(s: &str) -> String {
+    s.replace('\r', "\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_wire_lines_ends_each_line_with_cr() {
+        assert_eq!(to_wire_lines("a\r\nb\nc\rd"), "a\rb\rc\rd");
+    }
+
+    #[test]
+    fn from_wire_lines_ends_each_line_with_lf() {
+        assert_eq!(from_wire_lines("a\rb"), "a\nb");
+    }
 
     #[test]
     fn cut_keeps_whole_characters_within_the_encoded_limit() {

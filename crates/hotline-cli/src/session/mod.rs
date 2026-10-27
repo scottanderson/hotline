@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use hotline_client::{Ban, ClientInfoText, ClientUserInfo, HotlineClient, UserAccount};
 use hotline_proto::opcode::{Opcode, TransactionType};
-use hotline_proto::text_encoding::EncodingHandle;
+use hotline_proto::text_encoding::{to_wire_lines, EncodingHandle};
 use hotline_proto::types::{FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Received, Transaction};
@@ -140,13 +140,6 @@ impl ClientSession {
         }
     }
 
-    /// Push one line for each `\r` in `text`.
-    fn push_lines(&mut self, text: &str, kind: LineKind) {
-        for line in text.split('\r') {
-            self.push(line, kind);
-        }
-    }
-
     /// Apply one server-initiated transaction (chat relay, user list
     /// change, permission denial, ...) to the session state.
     pub fn apply_server_event(&mut self, tx: &Transaction<Received>) -> EventOutcome {
@@ -204,13 +197,13 @@ impl ClientSession {
             // permission-denied or admin broadcast notice
             // doesn't.
             (Some(from), Some(text)) => {
-                self.push_lines(
-                    &format!("[PM] {from}: {}", display_text(&text)),
+                self.push(
+                    format!("[PM] {from}: {}", display_text(&text)),
                     LineKind::Chat,
                 );
             }
             (None, Some(text)) => {
-                self.push_lines(&display_text(&text), LineKind::Error);
+                self.push(display_text(&text), LineKind::Error);
             }
             _ => {}
         }
@@ -236,7 +229,7 @@ impl ClientSession {
             return;
         }
         if let Some(text) = tx.string(FieldId::Data) {
-            self.push_lines(&display_text(&text), LineKind::Chat);
+            self.push(display_text(&text), LineKind::Chat);
         }
     }
 
@@ -353,8 +346,8 @@ impl ClientSession {
             Some(name) => format!(" from {name}"),
             None => String::new(),
         };
-        self.push_lines(
-            &format!("[Administrator Message{from}] {}", display_text(&text)),
+        self.push(
+            format!("[Administrator Message{from}] {}", display_text(&text)),
             LineKind::Chat,
         );
     }
@@ -368,7 +361,7 @@ impl ClientSession {
     ///
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
     pub async fn user_broadcast(&mut self, client: &HotlineClient, text: &str) {
-        if let Err(e) = client.user_broadcast(&wire_text(text)).await {
+        if let Err(e) = client.user_broadcast(&to_wire_lines(text)).await {
             self.push(format!("failed to broadcast: {e}"), LineKind::Error);
         }
     }
@@ -376,7 +369,7 @@ impl ClientSession {
     /// Send `line` as chat, reporting a failed send as a local error line
     /// (a transport error may never come back as a server push).
     pub async fn send_chat(&mut self, client: &HotlineClient, line: &str) {
-        if let Err(e) = client.send_chat(&wire_text(line)).await {
+        if let Err(e) = client.send_chat(&to_wire_lines(line)).await {
             self.push(format!("failed to send: {e}"), LineKind::Error);
         }
     }
@@ -436,7 +429,7 @@ impl ClientSession {
     }
 
     pub async fn old_post_news(&mut self, client: &HotlineClient, text: &str) {
-        if let Err(e) = client.old_post_news(&wire_text(text)).await {
+        if let Err(e) = client.old_post_news(&to_wire_lines(text)).await {
             self.push(format!("failed to post news: {e}"), LineKind::Error);
         }
     }
@@ -489,20 +482,15 @@ impl ClientSession {
     }
 
     pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {
-        let text = wire_text(text);
+        let text = to_wire_lines(text);
         match client.send_instant_msg(user_id, &text).await {
             Ok(()) => {
                 let to = self.user_name(user_id);
-                self.push_lines(&format!("[PM to {to}] {text}"), LineKind::Chat);
+                self.push(format!("[PM to {to}] {text}"), LineKind::Chat);
             }
             Err(e) => self.push(format!("failed to send: {e}"), LineKind::Error),
         }
     }
-}
-
-/// `text` with each line break as `\r`, the Hotline line separator.
-fn wire_text(text: &str) -> String {
-    text.replace('\n', "\r")
 }
 
 /// Strip a leading `\r`/`\n` some servers prepend to chat/status text;
@@ -661,11 +649,6 @@ mod tests {
         let change = test_support::next_push(&mut events, Opcode::NotifyChangeUser).await;
         let user = change.user_entry().unwrap();
         assert_eq!((&*user.name, user.icon), ("you", 3));
-    }
-
-    #[test]
-    fn wire_text_ends_each_line_with_cr() {
-        assert_eq!(wire_text("one\ntwo"), "one\rtwo");
     }
 
     #[test]
