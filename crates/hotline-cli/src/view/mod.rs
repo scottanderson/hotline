@@ -1222,7 +1222,7 @@ pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
 mod tests {
     use super::*;
     use hotline_client::{ClientUserInfo, Password, UserAccount};
-    use hotline_proto::types::{UserChangeOptions, UserFlags};
+    use hotline_proto::types::{HlDate, UserChangeOptions, UserFlags};
     use hotline_proto::Access;
 
     use crate::session::{ArticleText, ChatInvite};
@@ -1960,6 +1960,7 @@ mod tests {
                 id: 4,
                 title: "Hello".into(),
                 poster: "Alice".into(),
+                date: HlDate::default(),
                 text: "hi".into(),
             })),
             ..View::default()

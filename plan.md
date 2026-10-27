@@ -244,40 +244,36 @@ one-shared-room model.
    category, so use a crate, such as `unicode-general-category`. In
    MacRoman this keeps all of 0x80 to 0xFF. openline's Mac table
    replaces 0xFF (`ˇ`) too.
-7. **hlc's threaded news browser shows no dates.** An article row in
-   `NewsItem::label` shows the title and the poster. The
-   `NewsArticleSummary` date is not shown, and `ArticleText` has no
-   date. Show the date in the row and in the open article.
-8. **hlc quits without a question.** `Esc` on the chat input and `^C`
+7. **hlc quits without a question.** `Esc` on the chat input and `^C`
    quit at once, and the connection closes. Ask the user to confirm
    before hlc quits.
-9. **hlc has no task list.** Ctrl-K lists only the downloads that run,
-    and Enter cancels one. hlc does not keep its uploads, and it shows
-    no progress. It shows no request that waits for its reply.
-    openline's client keeps each transfer as a task
-    (`CMyDownloadTask`, `CMyUploadTask`). Decided:
-    - A task is each TRTP request that hlc sends and that waits for its
-      reply transaction, of every opcode, such as a file list, a news
-      read, or a user info request. Each file or folder transfer is a
-      task too.
-    - A tasks box under the user list shows each task with its
-      progress. The box shows only while a task is active, and it hides
-      when none is.
-    - Tab moves the focus into the box. The arrow keys select a task,
-      and Enter cancels it.
-    - Ctrl-T replaces Ctrl-K and focuses the box.
-    - A cancelled download that waits in the queue sends
-      `myTran_KillDownload` (214), as now. A cancelled upload closes its
-      transfer connection and sends nothing, as openline's
-      `~CMyUploadTask` does.
-10. **The login timeout does not restart on a transaction.** openline's
+8. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+   and Enter cancels one. hlc does not keep its uploads, and it shows
+   no progress. It shows no request that waits for its reply.
+   openline's client keeps each transfer as a task
+   (`CMyDownloadTask`, `CMyUploadTask`). Decided:
+   - A task is each TRTP request that hlc sends and that waits for its
+     reply transaction, of every opcode, such as a file list, a news
+     read, or a user info request. Each file or folder transfer is a
+     task too.
+   - A tasks box under the user list shows each task with its
+     progress. The box shows only while a task is active, and it hides
+     when none is.
+   - Tab moves the focus into the box. The arrow keys select a task,
+     and Enter cancels it.
+   - Ctrl-T replaces Ctrl-K and focuses the box.
+   - A cancelled download that waits in the queue sends
+     `myTran_KillDownload` (214), as now. A cancelled upload closes its
+     transfer connection and sends nothing, as openline's
+     `~CMyUploadTask` does.
+9. **The login timeout does not restart on a transaction.** openline's
     `ProcessClients` closes a client that has not logged in 60 seconds
     after its last transaction. hls closes it 60 seconds after accept.
     The fixed deadline stopped keep-alives from holding a connection
     open, but a keep-alive before login now disconnects. Only
     `myTran_Login` (107) and `myTran_Agreed` (121) can restart
     openline's timer, so a port is now safe.
-11. **The resource fork storage is fixed to AppleDouble.**
+10. **The resource fork storage is fixed to AppleDouble.**
     `DiskFileProvider` calls `apple_double` directly for the Finder
     info, the comment, and the resource fork. Put the storage behind
     an interface, in `FileProvider` or in a new provider if necessary.
@@ -297,7 +293,7 @@ one-shared-room model.
       this first.
     - `validate_file_name` in `hotline-server` maps a leading `._` for
       every provider. Let the storage choose the names that it keeps.
-12. **Review findings on the fork transfer break the repo rules.**
+11. **Review findings on the fork transfer break the repo rules.**
     - `htxf.rs` and `session/files.rs` clamp a resume size with
       `.min(size)`. openline's `ResumeFlatten` checks
       `dataResumeSize >= dataHdr.dataSize`, then sets the size to 0 or

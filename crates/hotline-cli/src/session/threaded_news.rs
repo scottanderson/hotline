@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use hotline_client::{HotlineClient, TEXT_PLAIN};
 use hotline_proto::text_encoding;
-use hotline_proto::types::{NewsArticleSummary, NewsCategoryListEntry};
+use hotline_proto::types::{HlDate, NewsArticleSummary, NewsCategoryListEntry};
 
 use super::ClientSession;
 use crate::line::LineKind;
@@ -66,7 +66,15 @@ pub struct ArticleText {
     pub id: u32,
     pub title: Box<str>,
     pub poster: Box<str>,
+    pub date: HlDate,
     pub text: String,
+}
+
+impl ArticleText {
+    /// The heading of the open article: the title, the poster and the date.
+    pub fn heading(&self) -> String {
+        format!("{} ({}, {})", self.title, self.poster, self.date)
+    }
 }
 
 /// `articles` in listing order, each with its depth in its thread.
@@ -151,6 +159,7 @@ impl ClientSession {
                         id: summary.id,
                         title: article.title,
                         poster: article.poster,
+                        date: article.date.unwrap_or(summary.date),
                         text: text_encoding::decode(self.encoding.get(), &article.data),
                     }),
                     Err(e) => {
@@ -239,7 +248,7 @@ impl ClientSession {
 
 #[cfg(test)]
 mod tests {
-    use hotline_proto::types::{HlDate, HlPath};
+    use hotline_proto::types::HlPath;
 
     use super::*;
     use crate::session::test_support;
@@ -258,6 +267,23 @@ mod tests {
             poster: "al".into(),
             flavors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn article_heading_shows_the_poster_and_the_date() {
+        let article = ArticleText {
+            id: 1,
+            title: "Hi".into(),
+            poster: "al".into(),
+            date: HlDate {
+                year: 2024,
+                milliseconds: 0,
+                seconds: 0,
+            },
+            text: String::new(),
+        };
+        let date = article.date.to_string();
+        assert_eq!(article.heading(), format!("Hi (al, {date})"));
     }
 
     #[test]

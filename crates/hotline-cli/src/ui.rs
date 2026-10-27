@@ -554,8 +554,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         }
         Modal::Article(article) => {
             let text = text_encoding::from_wire_lines(&article.text);
-            let title = format!("{} ({})", article.title, article.poster);
-            draw_text_modal(frame, screen, 76, title, text);
+            draw_text_modal(frame, screen, 76, article.heading(), text);
         }
         Modal::Post {
             parent_id,
