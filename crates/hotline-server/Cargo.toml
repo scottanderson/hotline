@@ -26,6 +26,7 @@ num_enum = { workspace = true }
 uuid = { workspace = true }
 arc-swap = { workspace = true }
 chrono = { workspace = true }
+unicode-general-category = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

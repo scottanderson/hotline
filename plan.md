@@ -235,16 +235,7 @@ one-shared-room model.
      before the port.
 5. **Chat rooms and online users have no trait.** `SharedState` keeps
    them in memory. Put them behind traits, like the storage providers.
-6. **A user name keeps some code points that do not print.**
-   `take_user_name` replaces only control characters (`Cc`) with `*`.
-   Decided: keep each printable code point and replace the rest. That
-   also replaces format characters (`Cf`), such as a bidi override or a
-   zero-width space, the line and paragraph separators (`Zl`, `Zp`),
-   and unassigned code points. Rust's standard library has no general
-   category, so use a crate, such as `unicode-general-category`. In
-   MacRoman this keeps all of 0x80 to 0xFF. openline's Mac table
-   replaces 0xFF (`ˇ`) too.
-7. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+6. **hlc has no task list.** Ctrl-K lists only the downloads that run,
    and Enter cancels one. hlc does not keep its uploads, and it shows
    no progress. It shows no request that waits for its reply.
    openline's client keeps each transfer as a task
@@ -263,7 +254,7 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-8. **The resource fork storage is fixed to AppleDouble.**
+7. **The resource fork storage is fixed to AppleDouble.**
    `DiskFileProvider` calls `apple_double` directly for the Finder
    info, the comment, and the resource fork. Put the storage behind
    an interface, in `FileProvider` or in a new provider if necessary.

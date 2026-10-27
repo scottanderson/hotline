@@ -3,6 +3,8 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use unicode_general_category::{get_general_category, GeneralCategory};
+
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, Stream, StreamExt};
 use num_enum::{FromPrimitive, IntoPrimitive};
@@ -702,14 +704,15 @@ impl Session {
         Vec::new()
     }
 
-    /// Sets the user name from the name the client `sent`. With
-    /// `ANY_NAME` the user gets the sent name. Without it, the user gets
-    /// the account's name `at_login`, and keeps the name after login.
+    /// Sets the user name from the name the client `sent`, with `*` for
+    /// each code point that does not print. With `ANY_NAME` the user gets
+    /// the sent name. Without it, the user gets the account's name
+    /// `at_login`, and keeps the name after login.
     fn take_user_name(&mut self, sent: Option<&str>, at_login: bool) {
         let sent: String = sent
             .unwrap_or_default()
             .chars()
-            .map(|c| if c.is_control() { '*' } else { c })
+            .map(|c| if prints(c) { c } else { '*' })
             .collect();
         self.real_name = user_name(&sent, self.encoding());
         if self.access.contains(Access::ANY_NAME) {
@@ -895,6 +898,19 @@ impl Session {
         flags.set(UserFlags::REFUSES_CHAT, self.refuses_chat);
         flags
     }
+}
+
+/// `false` for a control or format character, a line or paragraph
+/// separator, and an unassigned code point.
+fn prints(c: char) -> bool {
+    !matches!(
+        get_general_category(c),
+        GeneralCategory::Control
+            | GeneralCategory::Format
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+            | GeneralCategory::Unassigned
+    )
 }
 
 /// `name` cut to 31 bytes in `encoding`, or `***` if it is empty.
@@ -1971,6 +1987,22 @@ mod tests {
             .on_agreed(&agreed_as("", UserChangeOptions::empty()), &state)
             .await;
         assert_eq!(&*session.name, "***");
+    }
+
+    #[tokio::test]
+    async fn agreed_replaces_each_code_point_that_does_not_print() {
+        let mut session = test_session("guest1", Access::ANY_NAME);
+        session.login = "guest".into();
+        let state = SharedState::default();
+
+        let utf8 = Encoding::for_label(b"utf-8").unwrap();
+        session.encoding.set(utf8);
+        let sent = "a\u{202e}b\u{200b}c\u{2028}d\u{2029}e\u{378}f\u{f8ff}";
+        let fields = vec![Field::string(FieldId::UserName, sent)];
+        let agreed = Transaction::request(Opcode::Agreed, 1, fields).received(utf8);
+        session.on_agreed(&agreed, &state).await;
+
+        assert_eq!(&*session.name, "a*b*c*d*e*f\u{f8ff}");
     }
 
     #[tokio::test]
