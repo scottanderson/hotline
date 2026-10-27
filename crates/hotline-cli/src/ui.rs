@@ -12,8 +12,7 @@ use ratatui::Frame;
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode};
 use crate::view::{
-    contains, privileges, AccountForm, Focus, ListCursor, MenuItem, Modal, OptionsForm, Tab, View,
-    OPTIONS,
+    contains, privileges, AccountForm, Focus, MenuItem, Modal, OptionsForm, Tab, View, OPTIONS,
 };
 
 /// Where each part of the main screen is drawn.
@@ -272,26 +271,22 @@ fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
     draw_list(frame, area, block, items, &mut view.files);
 }
 
-/// Draw `items` in `block` with the selection and scroll position of `cursor`.
+/// Draw `items` in `block` with the selection and scroll position of
+/// `state`. The first row is selected when none is.
 fn draw_list(
     frame: &mut Frame,
     area: Rect,
     block: Block,
     items: Vec<ListItem>,
-    cursor: &mut ListCursor,
+    state: &mut ListState,
 ) {
-    let selected = items
-        .len()
-        .checked_sub(1)
-        .map(|last| cursor.selected.min(last));
+    if state.selected().is_none() {
+        state.select_first();
+    }
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-    let mut state = ListState::default()
-        .with_offset(cursor.offset)
-        .with_selected(selected);
-    frame.render_stateful_widget(list, area, &mut state);
-    cursor.offset = state.offset();
+    frame.render_stateful_widget(list, area, state);
 }
 
 fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {

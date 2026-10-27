@@ -19,6 +19,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::crossterm::ExecutableCommand;
+use ratatui::widgets::ListState;
 use ratatui::DefaultTerminal;
 
 use args::Args;
@@ -28,7 +29,7 @@ use hotline_proto::types::HlPath;
 use line::Line;
 use session::{ClientSession, EventOutcome, Mode, KEEP_ALIVE};
 use tokio::sync::mpsc;
-use view::{AccountForm, Action, ListCursor, Modal, OptionsForm, View};
+use view::{AccountForm, Action, Modal, OptionsForm, View};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -309,19 +310,19 @@ async fn perform(
         }
         Action::ListThreadedNews => {
             session.list_threaded_news(client).await;
-            view.news = ListCursor::default();
+            view.news = ListState::default().with_selected(Some(0));
         }
         Action::OpenNewsItem(index) => {
             let path = session.threaded_path.clone();
             if let Some(article) = session.open_news_item(client, index).await {
                 view.modal = Some(Modal::Article(article));
             } else if session.threaded_path != path {
-                view.news = ListCursor::default();
+                view.news = ListState::default().with_selected(Some(0));
             }
         }
         Action::ParentNews => {
             session.parent_news(client).await;
-            view.news = ListCursor::default();
+            view.news = ListState::default().with_selected(Some(0));
         }
         Action::NewPost => {
             if session.can_post() {
@@ -351,7 +352,7 @@ async fn perform(
         }
         Action::ListAccounts => {
             session.list_accounts(client).await;
-            view.accounts = ListCursor::default();
+            view.accounts = ListState::default().with_selected(Some(0));
         }
         Action::EditAccount(index) => {
             let account = session.accounts.as_ref().and_then(|a| a.get(index));
@@ -382,6 +383,6 @@ async fn list_files(
     path: HlPath,
 ) {
     if session.get_file_name_list(client, path).await {
-        view.files = ListCursor::default();
+        view.files = ListState::default().with_selected(Some(0));
     }
 }
