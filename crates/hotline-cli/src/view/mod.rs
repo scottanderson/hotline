@@ -249,6 +249,7 @@ impl View {
                 ("Enter", "save"),
                 ("Esc", "cancel"),
             ],
+            (Some(Modal::Quit), ..) => &[("y", "quit"), ("Esc", "cancel")],
             (Some(Modal::OpenAccount { .. }), ..) => &[("Enter", "open"), ("Esc", "cancel")],
             (None, Focus::Accounts, _) | (None, Focus::Input, Tab::Admin) => &[
                 ("↑↓", "select"),
@@ -428,7 +429,11 @@ impl View {
     ) -> Action {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('c') {
-            return Action::Quit;
+            if self.modal == Some(Modal::Quit) {
+                return Action::Quit;
+            }
+            self.modal = Some(Modal::Quit);
+            return Action::None;
         }
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key, users);
@@ -526,6 +531,7 @@ impl View {
                     text: std::mem::take(input),
                 };
             }
+            (Modal::Quit, KeyCode::Char('y')) => return Action::Quit,
             (Modal::DeleteNews { index, .. }, KeyCode::Char('y')) => {
                 return Action::DeleteNewsItem(*index);
             }
@@ -756,7 +762,7 @@ impl View {
                 input.push(c);
             }
             (KeyCode::Tab, _) => self.focus = Focus::Users,
-            (KeyCode::Esc, Tab::Chat) => return Action::Quit,
+            (KeyCode::Esc, Tab::Chat) => self.modal = Some(Modal::Quit),
             (KeyCode::Esc, _) => return self.set_tab(Tab::Chat),
             (KeyCode::Up, Tab::News) => self.scroll_news(-1),
             (KeyCode::Down, Tab::News) => self.scroll_news(1),
@@ -969,6 +975,7 @@ impl View {
                 | Modal::Post { .. }
                 | Modal::NewsName { .. }
                 | Modal::DeleteNews { .. }
+                | Modal::Quit
                 | Modal::Account(_)
                 | Modal::Options(_)
                 | Modal::OpenAccount { .. }
@@ -1915,6 +1922,33 @@ mod tests {
                 start: Start::Ask,
             }
         );
+    }
+
+    #[test]
+    fn esc_on_the_chat_input_asks_before_it_quits() {
+        let mut view = View::default();
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.modal, Some(Modal::Quit));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.modal, None);
+        let _ = view.handle_key(key(KeyCode::Esc), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('y')), &users(), &files()),
+            Action::Quit
+        );
+    }
+
+    #[test]
+    fn ctrl_c_twice_quits() {
+        let mut view = View::default();
+        assert_eq!(view.handle_key(ctrl('c'), &users(), &files()), Action::None);
+        assert_eq!(view.handle_key(ctrl('c'), &users(), &files()), Action::Quit);
     }
 
     #[test]

@@ -39,6 +39,8 @@ pub enum Modal {
         name: Box<str>,
         input: String,
     },
+    /// A check before `hlc` closes the connection and quits.
+    Quit,
     /// A check before the file or folder `name` is deleted.
     DeleteFile { name: Box<str> },
     /// The info of a file or folder.

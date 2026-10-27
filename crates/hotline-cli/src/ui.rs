@@ -614,6 +614,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         Modal::NewsName { kind, input } => {
             draw_input_modal(frame, screen, format!("new {}", kind.label()), input);
         }
+        Modal::Quit => draw_question(frame, screen, "quit?", "Disconnect and quit hlc?"),
         Modal::DeleteNews { name, .. } => {
             draw_question(frame, screen, "delete?", format!("Delete {name}?"));
         }

@@ -244,10 +244,7 @@ one-shared-room model.
    category, so use a crate, such as `unicode-general-category`. In
    MacRoman this keeps all of 0x80 to 0xFF. openline's Mac table
    replaces 0xFF (`ˇ`) too.
-7. **hlc quits without a question.** `Esc` on the chat input and `^C`
-   quit at once, and the connection closes. Ask the user to confirm
-   before hlc quits.
-8. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+7. **hlc has no task list.** Ctrl-K lists only the downloads that run,
    and Enter cancels one. hlc does not keep its uploads, and it shows
    no progress. It shows no request that waits for its reply.
    openline's client keeps each transfer as a task
@@ -266,14 +263,14 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-9. **The login timeout does not restart on a transaction.** openline's
-    `ProcessClients` closes a client that has not logged in 60 seconds
-    after its last transaction. hls closes it 60 seconds after accept.
-    The fixed deadline stopped keep-alives from holding a connection
-    open, but a keep-alive before login now disconnects. Only
-    `myTran_Login` (107) and `myTran_Agreed` (121) can restart
-    openline's timer, so a port is now safe.
-10. **The resource fork storage is fixed to AppleDouble.**
+8. **The login timeout does not restart on a transaction.** openline's
+   `ProcessClients` closes a client that has not logged in 60 seconds
+   after its last transaction. hls closes it 60 seconds after accept.
+   The fixed deadline stopped keep-alives from holding a connection
+   open, but a keep-alive before login now disconnects. Only
+   `myTran_Login` (107) and `myTran_Agreed` (121) can restart
+   openline's timer, so a port is now safe.
+9. **The resource fork storage is fixed to AppleDouble.**
     `DiskFileProvider` calls `apple_double` directly for the Finder
     info, the comment, and the resource fork. Put the storage behind
     an interface, in `FileProvider` or in a new provider if necessary.
@@ -293,7 +290,7 @@ one-shared-room model.
       this first.
     - `validate_file_name` in `hotline-server` maps a leading `._` for
       every provider. Let the storage choose the names that it keeps.
-11. **Review findings on the fork transfer break the repo rules.**
+10. **Review findings on the fork transfer break the repo rules.**
     - `htxf.rs` and `session/files.rs` clamp a resume size with
       `.min(size)`. openline's `ResumeFlatten` checks
       `dataResumeSize >= dataHdr.dataSize`, then sets the size to 0 or
