@@ -91,8 +91,8 @@ impl FlatFileInfo {
         let _flags = r.u32();
         let platform_flags = r.u32();
         let _reserved = r.take::<32>();
-        let created = HlDate::decode(&r.take::<{ HlDate::LEN }>()).expect("8 bytes");
-        let modified = HlDate::decode(&r.take::<{ HlDate::LEN }>()).expect("8 bytes");
+        let created = HlDate::decode(r.take());
+        let modified = HlDate::decode(r.take());
         let _name_script = r.u16();
         let name_size = r.u16() as usize;
         r.finish();

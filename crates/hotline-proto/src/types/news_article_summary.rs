@@ -58,7 +58,7 @@ impl NewsArticleSummary {
     /// Read one summary from `r`.
     pub(crate) fn read(r: &mut SliceReader<'_, WithEncoding>) -> Result<Self> {
         let id = r.u32()?;
-        let date = HlDate::decode(r.bytes(HlDate::LEN)?)?;
+        let date = HlDate::decode(r.array()?);
         let parent_id = r.u32()?;
         let flags = r.u32()?;
         let flavor_count = r.u16()?;

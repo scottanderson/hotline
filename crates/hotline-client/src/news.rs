@@ -117,7 +117,10 @@ impl HotlineClient {
             poster: text(FieldId::NewsArtPoster),
             date: reply
                 .field(FieldId::NewsArtDate)
-                .and_then(|f| HlDate::decode(f.as_bytes()).ok()),
+                .map(Field::as_bytes)
+                .and_then(<[u8]>::first_chunk)
+                .copied()
+                .map(HlDate::decode),
             prev_id: article_id(FieldId::NewsArtPrevArt),
             next_id: article_id(FieldId::NewsArtNextArt),
             parent_id: article_id(FieldId::NewsArtParentArt),

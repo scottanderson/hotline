@@ -84,7 +84,7 @@ struct ItemBlock {
 impl ItemBlock {
     pub const LEN: usize = 228;
 
-    fn decode(buf: [u8; Self::LEN]) -> Self {
+    const fn decode(buf: [u8; Self::LEN]) -> Self {
         let mut r = PacketReader::new(buf);
         let first_flavor = r.u32();
         let _size = r.u32();
@@ -94,7 +94,7 @@ impl ItemBlock {
         let next_article = r.u32();
         let _parent = r.u32();
         let first_child = r.u32();
-        let date = HlDate::decode(&r.take::<{ HlDate::LEN }>()).expect("8 bytes");
+        let date = HlDate::decode(r.take());
         let flags = r.u32();
         let title = r.take();
         let poster = r.take();

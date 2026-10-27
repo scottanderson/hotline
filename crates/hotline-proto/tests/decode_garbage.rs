@@ -3,7 +3,7 @@
 use hotline_proto::htxf::{decode_flat_file_prefix, FolderItemHeader};
 use hotline_proto::text_encoding::DEFAULT;
 use hotline_proto::types::{
-    FileNameWithInfo, HlDate, HlPath, NewsArticleListData, NewsCategoryListEntry, ResumeData,
+    FileNameWithInfo, HlPath, NewsArticleListData, NewsCategoryListEntry, ResumeData,
     UserNameWithInfo,
 };
 use hotline_proto::{
@@ -42,7 +42,6 @@ fn decoders_reject_garbage_without_panicking() {
     for _ in 0..200_000 {
         let buf = rng.buffer();
         let _ = HlPath::decode(&buf, DEFAULT);
-        let _ = HlDate::decode(&buf);
         let _ = FileNameWithInfo::decode(&buf, DEFAULT);
         let _ = UserNameWithInfo::decode(&buf, DEFAULT);
         let _ = NewsArticleListData::decode(&buf, DEFAULT);

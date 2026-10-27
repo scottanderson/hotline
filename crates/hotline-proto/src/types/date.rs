@@ -2,7 +2,6 @@
 
 use std::time::SystemTime;
 
-use crate::error::{ProtoError, Result};
 use crate::wire::{PacketReader, PacketWriter};
 
 /// A Hotline date: `year(2) | milliseconds(2) | seconds-since-midnight(4)`.
@@ -82,26 +81,16 @@ impl HlDate {
             .finish()
     }
 
-    /// Decode from an 8-byte buffer.
-    pub fn decode(buf: &[u8]) -> Result<Self> {
-        let buf: [u8; Self::LEN] = buf
-            .get(..Self::LEN)
-            .map(TryInto::try_into)
-            .and_then(std::result::Result::ok)
-            .ok_or(ProtoError::UnexpectedEof {
-                needed: Self::LEN,
-                available: buf.len(),
-            })?;
+    /// Decode from the 8-byte wire representation.
+    pub const fn decode(buf: [u8; Self::LEN]) -> Self {
         let mut r = PacketReader::new(buf);
-        let year = r.u16();
-        let milliseconds = r.u16();
-        let seconds = r.u32();
+        let date = Self {
+            year: r.u16(),
+            milliseconds: r.u16(),
+            seconds: r.u32(),
+        };
         r.finish();
-        Ok(Self {
-            year,
-            milliseconds,
-            seconds,
-        })
+        date
     }
 }
 
