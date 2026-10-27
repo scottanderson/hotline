@@ -55,6 +55,14 @@ voice. This applies to replies, comments, docs, and commit messages.
 - The server codec numbers every push. A reply echoes the `trans` of
   its request.
 - Put each handler in the `session/` file for its area.
+- Check a privilege at the top of its handler, not in the
+  `Session::dispatch` `select!` loop.
+- Make a new privilege bit part of a `bitflags!` type, not a lone
+  `bool`.
+- Prefer named concrete helpers to one generic helper with a trait
+  parameter.
+- Prefer a method chain, and pass an associated function directly, as
+  in `.map(Field::encode)`, when the chain stays easy to read.
 - A handler gets its validation from a `SharedState` call. The call
   returns `Result<T, &'static str>`, or `Result<T, Cow<'static, str>>`
   when the error has formatted text. The handler replies with
