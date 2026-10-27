@@ -54,7 +54,7 @@ pub fn decode_reply_header(buf: &[u8]) -> Result<u16> {
         })?;
 
     let mut reader = PacketReader::new(prefix);
-    let magic = reader.take::<4>();
+    let magic = reader.take();
     let version = reader.u16();
     reader.finish();
 

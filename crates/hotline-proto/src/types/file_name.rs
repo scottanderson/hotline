@@ -51,8 +51,8 @@ impl FileNameWithInfo {
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
         let fixed: [u8; Self::LEN] = SliceReader::new(buf).array()?;
         let mut r = PacketReader::new(fixed);
-        let file_type = r.take::<4>();
-        let creator = r.take::<4>();
+        let file_type = r.take();
+        let creator = r.take();
         let size = r.u32();
         let _reserved = r.u32();
         let _name_script = r.u16();

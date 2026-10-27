@@ -98,7 +98,7 @@ pub fn decode_flat_file_prefix(buf: &[u8]) -> Result<u16> {
 
     let prefix: [u8; FLAT_FILE_PREFIX_LEN] = SliceReader::new(buf).array()?;
     let mut r = PacketReader::new(prefix);
-    let magic = r.take::<4>();
+    let magic = r.take();
     let _version = r.u16();
     let _reserved = r.take::<16>();
     let fork_count = r.u16();

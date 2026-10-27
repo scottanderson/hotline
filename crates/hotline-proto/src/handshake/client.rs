@@ -52,8 +52,8 @@ impl ClientHandshake {
                 available: buf.len(),
             })?;
         let mut r = PacketReader::new(buf);
-        let protocol = r.take::<4>();
-        let sub_protocol = r.take::<4>();
+        let protocol = r.take();
+        let sub_protocol = r.take();
         let version = r.u16();
         let sub_version = r.u16();
         r.finish();

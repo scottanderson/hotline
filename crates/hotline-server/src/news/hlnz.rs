@@ -35,7 +35,7 @@ impl Header {
 
     fn decode(buf: [u8; Self::LEN]) -> Result<Self, &'static str> {
         let mut r = PacketReader::new(buf);
-        if &r.take::<4>() != HLNZ_MAGIC {
+        if &r.take() != HLNZ_MAGIC {
             return Err("not an HLNZ news file");
         }
         if r.u32() != VERSION {

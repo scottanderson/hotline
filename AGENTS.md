@@ -67,6 +67,9 @@ voice. This applies to replies, comments, docs, and commit messages.
   `PacketReader`. Write it with `PacketWriter`, or `VecWriter` for a
   variable size.
 - Convert opcodes with `Opcode::from(v)` and `u32::from(opcode)`.
+- Let the compiler infer a const generic when its use fixes the
+  value, as in `HlDate::decode(r.take())`. Name it only when nothing
+  else does, as in a `take` that skips bytes.
 - In a trait impl, write associated types as `Self::Item`.
 - Derive `serde` on the domain type. Give one field a custom format
   with a `#[serde(with = "module")]` module, like `news/iso_date.rs`.

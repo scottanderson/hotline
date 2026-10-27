@@ -17,22 +17,22 @@ impl<const N: usize> PacketReader<N> {
 
     /// Read a big-endian `u8`.
     pub const fn u8(&mut self) -> u8 {
-        u8::from_be_bytes(self.take::<1>())
+        u8::from_be_bytes(self.take())
     }
 
     /// Read a big-endian `u16`.
     pub const fn u16(&mut self) -> u16 {
-        u16::from_be_bytes(self.take::<2>())
+        u16::from_be_bytes(self.take())
     }
 
     /// Read a big-endian `u32`.
     pub const fn u32(&mut self) -> u32 {
-        u32::from_be_bytes(self.take::<4>())
+        u32::from_be_bytes(self.take())
     }
 
     /// Read a big-endian `u64`.
     pub const fn u64(&mut self) -> u64 {
-        u64::from_be_bytes(self.take::<8>())
+        u64::from_be_bytes(self.take())
     }
 
     /// Read exactly `L` raw bytes.

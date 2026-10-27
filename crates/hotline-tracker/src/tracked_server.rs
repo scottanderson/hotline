@@ -51,7 +51,7 @@ impl TrackedServer {
                 available: buf.len(),
             })?;
         let mut r = PacketReader::new(prefix);
-        let ip = r.take::<4>();
+        let ip = r.take();
         let port = r.u16();
         let user_count = r.u16();
         let _reserved = r.u16();

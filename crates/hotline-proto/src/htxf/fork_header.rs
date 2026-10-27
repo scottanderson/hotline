@@ -33,7 +33,7 @@ impl ForkHeader {
     pub fn decode(buf: &[u8]) -> Result<Self> {
         let buf: [u8; Self::LEN] = SliceReader::new(buf).array()?;
         let mut r = PacketReader::new(buf);
-        let fork_type = r.take::<4>();
+        let fork_type = r.take();
         let _compression_type = r.u32();
         let _reserved = r.u32();
         let data_size = r.u32();

@@ -68,7 +68,7 @@ impl HtxfHeader {
     pub fn decode(buf: &[u8]) -> Result<Self> {
         let buf: [u8; Self::LEN] = SliceReader::new(buf).array()?;
         let mut r = PacketReader::new(buf);
-        let magic = r.take::<4>();
+        let magic = r.take();
         let reference = r.u32();
         let len = r.u32();
         let transfer_type = r.u16();

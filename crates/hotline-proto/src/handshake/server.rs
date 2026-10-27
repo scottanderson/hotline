@@ -40,7 +40,7 @@ impl ServerHandshake {
                 available: buf.len(),
             })?;
         let mut r = PacketReader::new(buf);
-        let magic = r.take::<4>();
+        let magic = r.take();
         let error_code = r.u32();
         r.finish();
         if magic != MAGIC {
