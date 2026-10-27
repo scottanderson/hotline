@@ -3,10 +3,10 @@
 use hotline_client::FileInfo;
 use hotline_proto::text_encoding;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::line::{Line, LineKind};
@@ -63,38 +63,32 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
 /// the input line has no rows. The hint line grows to fit `hints`.
 pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint]) -> Areas {
     let hint_rows = hint_rows(hints, screen.width).len() as u16;
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(6),
-            Constraint::Length(hint_rows),
-        ])
-        .split(screen);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(20), Constraint::Length(24)])
-        .split(rows[1]);
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(input.map_or(0, |text| input_rows(text) + 2)),
-        ])
-        .split(columns[0]);
+    let [tabs, middle, hints] = screen.layout(&Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(6),
+        Constraint::Length(hint_rows),
+    ]));
+    let [left, users] = middle.layout(&Layout::horizontal([
+        Constraint::Min(20),
+        Constraint::Length(24),
+    ]));
+    let [body, input] = left.layout(&Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(input.map_or(0, |text| input_rows(text) + 2)),
+    ]));
     Areas {
         screen,
-        tabs: rows[0],
-        body: left[0],
-        input: left[1],
-        users: columns[1],
-        hints: rows[2],
+        tabs,
+        body,
+        input,
+        users,
+        hints,
     }
 }
 
 /// `rect` inside its border.
 pub fn inner(rect: Rect) -> Rect {
-    Block::default().borders(Borders::ALL).inner(rect)
+    Block::bordered().inner(rect)
 }
 
 /// Each tab and its label: the fixed tabs, then one for each room.
@@ -164,18 +158,6 @@ pub fn menu_item_at(menu: Rect, items: &[MenuItem], x: u16, y: u16) -> Option<Me
     items.get(usize::from(y - inner.y)).copied()
 }
 
-/// A `width` by `height` box in the middle of `screen`.
-fn centered(screen: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(screen.width);
-    let height = height.min(screen.height);
-    Rect::new(
-        screen.x + (screen.width - width) / 2,
-        screen.y + (screen.height - height) / 2,
-        width,
-        height,
-    )
-}
-
 fn border(focused: bool) -> Style {
     if focused {
         Style::default().fg(Color::Yellow)
@@ -213,19 +195,18 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
 }
 
 fn draw_agreement(frame: &mut Frame, text: &str) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
-        .split(frame.area());
+    let [text_area, hint_area] = frame.area().layout(&Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(3),
+    ]));
 
     let paragraph = Paragraph::new(text_encoding::from_wire_lines(text))
-        .block(Block::default().borders(Borders::ALL).title("agreement"))
+        .block(Block::bordered().title("agreement"))
         .wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, rows[0]);
+    frame.render_widget(paragraph, text_area);
 
-    let hint = Paragraph::new("press Enter to accept, Esc to quit")
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(hint, rows[1]);
+    let hint = Paragraph::new("press Enter to accept, Esc to quit").block(Block::bordered());
+    frame.render_widget(hint, hint_area);
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, view: &View) {
@@ -262,7 +243,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, lines: &[Line], title: &str) {
     let start = lines.len().saturating_sub(visible);
 
     let paragraph = Paragraph::new(lines[start..].to_vec())
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(Block::bordered().title(title))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
@@ -273,15 +254,14 @@ fn draw_news(frame: &mut Frame, area: Rect, session: &ClientSession, scroll: u16
         None => "loading news".to_string(),
     };
     let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title("news"))
+        .block(Block::bordered().title("news"))
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 }
 
 fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
         .border_style(border(view.focus == Focus::Files))
         .title(format!("files {}", session.folder_text()));
     let Some(files) = &session.files else {
@@ -315,8 +295,7 @@ fn draw_list(
 }
 
 fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
         .border_style(border(view.focus == Focus::NewsList))
         .title(format!(
             "threaded news /{}",
@@ -331,8 +310,7 @@ fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, vi
 }
 
 fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
         .border_style(border(view.focus == Focus::Accounts))
         .title("accounts");
     let Some(accounts) = &session.accounts else {
@@ -420,10 +398,7 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
         Tab::Files | Tab::Threaded | Tab::Admin => return,
     };
     let focused = view.focus == Focus::Input;
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border(focused))
-        .title(title);
+    let block = Block::bordered().border_style(border(focused)).title(title);
     draw_text_box(
         frame,
         area,
@@ -475,8 +450,7 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
 
     let list = List::new(items)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
+            Block::bordered()
                 .border_style(border(view.focus == Focus::Users))
                 .title(format!("users ({})", users.len())),
         )
@@ -553,7 +527,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         Modal::PickUser {
             users, selected, ..
         } => {
-            let area = centered(screen, 40, list_height(users.len()));
+            let area = screen.centered(
+                Constraint::Length(40),
+                Constraint::Length(list_height(users.len())),
+            );
             let items = users.iter().map(|(_, name)| ListItem::new(&**name));
             draw_list_modal(frame, area, modal_block("invite to chat"), items, *selected);
         }
@@ -561,7 +538,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             downloads,
             selected,
         } => {
-            let area = centered(screen, 50, list_height(downloads.len()));
+            let area = screen.centered(
+                Constraint::Length(50),
+                Constraint::Length(list_height(downloads.len())),
+            );
             let items = downloads.iter().map(|(_, label)| ListItem::new(&**label));
             let block = modal_block("cancel a download");
             draw_list_modal(frame, area, block, items, *selected);
@@ -574,9 +554,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         } => {
             let area = menu_rect(*at, items, screen);
             let items = items.iter().map(|item| ListItem::new(item.label()));
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border(true));
+            let block = Block::bordered().border_style(border(true));
             draw_list_modal(frame, area, block, items, *selected);
         }
         Modal::Article(article) => {
@@ -590,7 +568,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             body,
             on_body,
         } => {
-            let area = centered(screen, 70, input_rows(body) + 5);
+            let area = screen.centered(
+                Constraint::Length(70),
+                Constraint::Length(input_rows(body) + 5),
+            );
             let title_area = Rect::new(area.x, area.y, area.width, 3);
             let body_area = Rect::new(
                 area.x,
@@ -599,12 +580,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
                 area.height.saturating_sub(3),
             );
             let heading = if *parent_id == 0 { "new post" } else { "reply" };
-            let title_block = Block::default()
-                .borders(Borders::ALL)
+            let title_block = Block::bordered()
                 .border_style(border(!on_body))
                 .title(heading);
-            let body_block = Block::default()
-                .borders(Borders::ALL)
+            let body_block = Block::bordered()
                 .border_style(border(*on_body))
                 .title("text");
             frame.render_widget(Clear, area);
@@ -613,7 +592,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         }
         Modal::Account(form) => {
             let rows = account_form_rows(form);
-            let area = centered(screen, 50, list_height(rows.len()));
+            let area = screen.centered(
+                Constraint::Length(50),
+                Constraint::Length(list_height(rows.len())),
+            );
             let title = match &form.old_login {
                 Some(login) => format!("account {login}"),
                 None => "new account".to_string(),
@@ -622,7 +604,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
         }
         Modal::Options(form) => {
             let rows = options_form_rows(form);
-            let area = centered(screen, 60, list_height(rows.len()));
+            let area = screen.centered(
+                Constraint::Length(60),
+                Constraint::Length(list_height(rows.len())),
+            );
             draw_list_modal(frame, area, modal_block("options"), rows, form.row);
         }
         Modal::OpenAccount { input } => {
@@ -647,10 +632,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
 
 /// The bordered, focused block of a modal.
 fn modal_block<'a>(title: impl Into<UiLine<'a>>) -> Block<'a> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(border(true))
-        .title(title)
+    Block::bordered().border_style(border(true)).title(title)
 }
 
 /// The height of a modal list of `len` rows, with at least one row.
@@ -662,14 +644,17 @@ fn list_height(len: usize) -> u16 {
 
 /// Draw a modal that edits `input` under `title`.
 fn draw_input_modal(frame: &mut Frame, screen: Rect, title: String, input: &str) {
-    let area = centered(screen, 60, input_rows(input) + 2);
+    let area = screen.centered(
+        Constraint::Length(60),
+        Constraint::Length(input_rows(input) + 2),
+    );
     frame.render_widget(Clear, area);
     draw_text_box(frame, area, modal_block(title), input, true);
 }
 
 /// Draw a modal that asks the one-line question `text`.
 fn draw_question<'a>(frame: &mut Frame, screen: Rect, title: &'a str, text: impl Into<Text<'a>>) {
-    let area = centered(screen, 60, 3);
+    let area = screen.centered(Constraint::Length(60), Constraint::Length(3));
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(text).block(modal_block(title)), area);
 }
@@ -677,7 +662,7 @@ fn draw_question<'a>(frame: &mut Frame, screen: Rect, title: &'a str, text: impl
 /// Draw a modal that shows `text`, wrapped, under `title`.
 fn draw_text_modal(frame: &mut Frame, screen: Rect, width: u16, title: String, text: String) {
     let height = list_height(text.lines().count()).min(screen.height.saturating_sub(2));
-    let area = centered(screen, width, height);
+    let area = screen.centered(Constraint::Length(width), Constraint::Length(height));
     let paragraph = Paragraph::new(text)
         .block(modal_block(title))
         .wrap(Wrap { trim: false });
