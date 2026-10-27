@@ -16,14 +16,10 @@ use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
-    LeaveAlternateScreen,
-};
+use crossterm::terminal::supports_keyboard_enhancement;
 use crossterm::ExecutableCommand;
 use futures::StreamExt;
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
+use ratatui::DefaultTerminal;
 
 use args::Args;
 use file_edit::FileEdit;
@@ -59,42 +55,46 @@ async fn main() -> anyhow::Result<()> {
     result
 }
 
-/// Also `true` if the terminal now reports Shift+Enter apart from Enter.
+/// Set up the terminal with [`ratatui::try_init`], mouse capture, and the
+/// keyboard enhancement flags when the terminal has them. The `bool` is
+/// `true` if the terminal now reports Shift+Enter apart from Enter.
 /// A panic on any thread restores the terminal, prints, and ends `hlc`.
-fn setup_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout>>, bool)> {
-    enable_raw_mode()?;
-    std::io::stdout()
-        .execute(EnterAlternateScreen)?
-        .execute(EnableMouseCapture)?;
+fn setup_terminal() -> anyhow::Result<(DefaultTerminal, bool)> {
+    let terminal = ratatui::try_init()?;
+    std::io::stdout().execute(EnableMouseCapture)?;
     let enhanced = supports_keyboard_enhancement().unwrap_or(false);
     if enhanced {
         std::io::stdout().execute(PushKeyboardEnhancementFlags(
             KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
         ))?;
     }
-    let default_hook = std::panic::take_hook();
+    let ratatui_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = restore_terminal(enhanced);
-        default_hook(info);
+        let _ = restore_input(enhanced);
+        ratatui_hook(info);
         std::process::exit(101);
     }));
-    let terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     Ok((terminal, enhanced))
 }
 
+/// Undo [`setup_terminal`].
 fn restore_terminal(enhanced: bool) -> anyhow::Result<()> {
+    restore_input(enhanced)?;
+    ratatui::try_restore()?;
+    Ok(())
+}
+
+/// Turn off mouse capture and the keyboard enhancement flags.
+fn restore_input(enhanced: bool) -> std::io::Result<()> {
     if enhanced {
         std::io::stdout().execute(PopKeyboardEnhancementFlags)?;
     }
-    disable_raw_mode()?;
-    std::io::stdout()
-        .execute(DisableMouseCapture)?
-        .execute(LeaveAlternateScreen)?;
+    std::io::stdout().execute(DisableMouseCapture)?;
     Ok(())
 }
 
 async fn run(
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    terminal: &mut DefaultTerminal,
     session: &mut ClientSession,
     client: &HotlineClient,
     events: &mut mpsc::UnboundedReceiver<hotline_proto::Transaction<hotline_proto::Received>>,
