@@ -4,7 +4,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -36,7 +36,7 @@ use crate::news::{
     body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
     ThreadedNewsProvider,
 };
-use crate::policy::{ServerPolicy, Silent};
+use crate::policy::{ServerPolicy, Silent, TimeZone};
 use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
@@ -133,6 +133,20 @@ impl SharedState {
             activity: providers.activity,
             policy: providers.policy,
         }
+    }
+
+    /// `time` as a wire date in the policy's time zone, or the zero date
+    /// for none.
+    pub(crate) fn wire_date(&self, time: Option<SystemTime>) -> HlDate {
+        time.map_or(HlDate::default(), |time| {
+            self.policy.time_zone().convert(HlDate::from(time))
+        })
+    }
+
+    /// An article's stored UTC `date` as a wire date in the policy's time
+    /// zone.
+    pub(crate) fn wire_article_date(&self, date: HlDate) -> HlDate {
+        self.policy.time_zone().convert(date)
     }
 
     /// The server's behavior choices.
@@ -1143,8 +1157,8 @@ impl SharedState {
             file_type,
             creator,
             platform_flags: flags.into(),
-            created: times.created.map_or(HlDate::default(), HlDate::from),
-            modified: times.modified.map_or(HlDate::default(), HlDate::from),
+            created: self.wire_date(times.created),
+            modified: self.wire_date(times.modified),
             name: name.into(),
             comment: comment.unwrap_or_default(),
             ..FlatFileInfo::default()
@@ -1248,7 +1262,10 @@ impl SharedState {
         ];
         const FOOTER_DIVIDER: &str = "__________________________________________________________";
 
-        let now = chrono::Local::now();
+        let now = match self.policy.time_zone() {
+            TimeZone::Local => chrono::Local::now().naive_local(),
+            TimeZone::Utc => chrono::Utc::now().naive_utc(),
+        };
         let month = MONTHS[now.month0() as usize];
         let entry = format!(
             "From {poster} ({month}{day:02} {hour:02}:{minute:02}):\r\r{text}\r{FOOTER_DIVIDER}\r",
@@ -1306,7 +1323,7 @@ impl SharedState {
                 .into_iter()
                 .map(|(id, article)| NewsArticleSummary {
                     id,
-                    date: article.date,
+                    date: self.wire_article_date(article.date),
                     parent_id: article.parent_id,
                     flags: article.flags,
                     title: article.title.clone(),

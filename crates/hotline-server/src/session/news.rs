@@ -236,7 +236,10 @@ impl Session {
         let mut fields = vec![
             Field::string(FieldId::NewsArtTitle, detail.title),
             Field::string(FieldId::NewsArtPoster, detail.poster),
-            Field::bytes(FieldId::NewsArtDate, detail.date.encode().to_vec()),
+            Field::bytes(
+                FieldId::NewsArtDate,
+                state.wire_article_date(detail.date).encode().to_vec(),
+            ),
             Field::u32(FieldId::NewsArtPrevArt, detail.prev_id),
             Field::u32(FieldId::NewsArtNextArt, detail.next_id),
             Field::u32(FieldId::NewsArtParentArt, detail.parent_id),

@@ -4,7 +4,7 @@ use std::time::SystemTime;
 
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::htxf::{self, ResumedFork};
-use hotline_proto::types::{self, HlDate, HlPath};
+use hotline_proto::types::{self, HlPath};
 use hotline_proto::FieldId;
 use hotline_proto::{Field, ForkHeader, Received, Transaction};
 
@@ -564,11 +564,7 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let times = state.file_times(requester, &dir, &name).await;
-        let date = |time: Option<SystemTime>| {
-            time.map_or(HlDate::default(), HlDate::from)
-                .encode()
-                .to_vec()
-        };
+        let date = |time: Option<SystemTime>| state.wire_date(time).encode().to_vec();
         let mut fields = if info.is_folder() {
             vec![
                 Field::string(FieldId::FileTypeString, "Folder"),

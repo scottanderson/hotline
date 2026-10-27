@@ -1,11 +1,11 @@
-//! [`HlsPolicy`], the error replies that `hls` sends where openline sends
-//! none.
+//! [`HlsPolicy`], the choices where `hls` differs from openline.
 
 use std::borrow::Cow;
 
-use hotline_server::{ServerPolicy, Silent};
+use hotline_server::{ServerPolicy, Silent, TimeZone};
 
-/// `hls` replies with an error in each case where openline sends none.
+/// `hls` replies with an error in each case where openline sends none,
+/// and sends dates in [`TimeZone::Utc`].
 pub struct HlsPolicy;
 
 impl ServerPolicy for HlsPolicy {
@@ -16,5 +16,9 @@ impl ServerPolicy for HlsPolicy {
             Silent::CommentWrite { error } => Some(error.to_string().into()),
             _ => None,
         }
+    }
+
+    fn time_zone(&self) -> TimeZone {
+        TimeZone::Utc
     }
 }

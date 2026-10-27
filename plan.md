@@ -85,6 +85,11 @@ works this way.
   add a column or a line. openline writes each line before it replies;
   `hls` queues the line for a writer task, and writes the queue before
   it exits on Ctrl-C or SIGTERM.
+- **`hls` sends dates in UTC.** openline's
+  `UDateTime::GetDateTimeStamp` sends the server's local time, and the
+  `ServerPolicy` default `TimeZone::Local` does the same. `HlsPolicy`
+  picks `TimeZone::Utc`, so a client sees the same times from every
+  `hls`, in any zone.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so

@@ -1,8 +1,10 @@
-//! [`ServerPolicy`] chooses the error replies where openline sends none.
-//! [`OpenlinePolicy`] sends none, as openline does.
+//! [`ServerPolicy`] holds the choices where a server differs from
+//! openline. [`OpenlinePolicy`] makes each choice as openline does.
 
 mod openline;
 mod server_policy;
+mod time_zone;
 
 pub use openline::OpenlinePolicy;
 pub use server_policy::{ServerPolicy, Silent};
+pub use time_zone::TimeZone;

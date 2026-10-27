@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::io;
 
+use super::TimeZone;
+
 /// A case where openline sends no error and goes on.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -42,11 +44,16 @@ pub enum Silent {
     },
 }
 
-/// The error replies that a server sends where openline sends none.
+/// The choices where a server differs from openline.
 pub trait ServerPolicy: Send + Sync {
     /// The error reply for `case`, which stops the request. `None` sends no
     /// error and goes on, as openline does.
     fn error(&self, _case: Silent) -> Option<Cow<'static, str>> {
         None
+    }
+
+    /// The time zone of each date that the server sends.
+    fn time_zone(&self) -> TimeZone {
+        TimeZone::Local
     }
 }
