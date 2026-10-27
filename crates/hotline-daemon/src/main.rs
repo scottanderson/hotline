@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = ServerConfig {
         bind_addr: format!("{}:{}", args.bind, args.port).into(),
-        agreement: args.agreement.into(),
+        agreement: args.agreement(),
         server_name: args.name.as_str().into(),
         console_prefix: args.console_prefix,
         max_connections: NonZeroUsize::new(args.max_connections),

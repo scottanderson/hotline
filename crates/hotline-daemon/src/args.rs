@@ -120,3 +120,34 @@ pub struct Args {
     #[arg(long)]
     pub banner: Option<String>,
 }
+
+/// The most bytes of agreement text that a client gets.
+const MAX_AGREEMENT: usize = 64 * 1024;
+
+impl Args {
+    /// The agreement text with CR line endings, cut to 64K in `encoding`.
+    pub fn agreement(&self) -> Box<str> {
+        let text = text_encoding::to_wire_lines(&self.agreement);
+        text_encoding::cut(self.encoding, &text, MAX_AGREEMENT).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(agreement: &str) -> Args {
+        Args::parse_from(["hls", "--agreement", agreement])
+    }
+
+    #[test]
+    fn agreement_changes_each_line_ending_to_cr() {
+        assert_eq!(&*args("a\r\nb\nc\rd").agreement(), "a\rb\rc\rd");
+    }
+
+    #[test]
+    fn agreement_is_cut_to_64k() {
+        let long = "x".repeat(MAX_AGREEMENT + 1);
+        assert_eq!(args(&long).agreement().len(), MAX_AGREEMENT);
+    }
+}
