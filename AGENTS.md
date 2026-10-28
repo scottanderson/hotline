@@ -24,8 +24,10 @@ voice. This applies to replies, comments, docs, and commit messages.
   conversation.
 - In a code comment, state the behavior. Name a source only for a
   deliberate divergence.
-- Port a condition with the same terms as openline's code. Do not
-  simplify or reorder it.
+- Port openline's behavior, not its code. Write idiomatic Rust when
+  the result is the same for each input. Keep openline's form only
+  where it changes the behavior, such as the order of side effects or
+  a boundary.
 - Ask when a behavior is unclear.
 
 ## Naming
