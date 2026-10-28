@@ -494,6 +494,11 @@ impl SharedState {
             .collect())
     }
 
+    /// `name` as a new file or folder stores it.
+    pub fn stored_file_name(&self, name: &str) -> Result<String, &'static str> {
+        self.files.stored_name(name)
+    }
+
     /// Whether a file or folder already exists at this path.
     pub async fn file_exists(
         &self,

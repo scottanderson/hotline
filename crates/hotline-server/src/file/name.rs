@@ -3,9 +3,6 @@
 /// The longest stored name, in UTF-8 bytes.
 const MAX_NAME_LEN: usize = 255;
 
-/// The start of an AppleDouble sidecar's name. No new name starts with it.
-pub const SIDECAR_PREFIX: &str = "._";
-
 /// Names Windows reserves for devices, with or without an extension.
 const RESERVED: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -25,16 +22,12 @@ pub fn validate_file_name(name: &str) -> Result<String, &'static str> {
     })
 }
 
-/// `name` with each `/`, `\`, and NUL mapped to `-`, `.` and `..` mapped
-/// to dashes, and the dot of a leading [`SIDECAR_PREFIX`] mapped to `-`,
-/// cut to 255 bytes.
+/// `name` with each `/`, `\`, and NUL mapped to `-`, and `.` and `..`
+/// mapped to dashes, cut to 255 bytes.
 fn unix_name(name: &str) -> String {
     let mut mapped = name.replace(['/', '\\', '\0'], "-");
     if mapped == "." || mapped == ".." {
         mapped = "-".repeat(mapped.len());
-    }
-    if mapped.starts_with(SIDECAR_PREFIX) {
-        mapped.replace_range(..1, "-");
     }
     truncate(&mut mapped);
     mapped
@@ -176,11 +169,8 @@ mod tests {
     }
 
     #[test]
-    fn unix_name_maps_a_sidecar_prefix() {
-        assert_eq!(unix_name("._report.txt"), "-_report.txt");
-        assert_eq!(unix_name("._"), "-_");
-        assert_eq!(unix_name("._/x"), "-_-x");
-        assert_eq!(unix_name("a._b"), "a._b");
+    fn unix_name_keeps_a_sidecar_prefix() {
+        assert_eq!(unix_name("._report.txt"), "._report.txt");
     }
 
     #[test]

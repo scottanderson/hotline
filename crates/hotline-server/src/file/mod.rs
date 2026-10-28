@@ -30,7 +30,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub use finder_info::FinderInfo;
 pub use folder_item::FolderItem;
 pub use memory::InMemoryFileProvider;
-pub use name::{validate_file_name, SIDECAR_PREFIX};
+pub use name::validate_file_name;
 pub use provider::FileProvider;
 pub use requester::FileRequester;
 pub use times::ItemTimes;

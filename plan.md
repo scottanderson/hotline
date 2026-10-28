@@ -109,15 +109,16 @@ works this way.
   `UFileSys::ValidateFileName` differs by platform, and so does
   `validate_file_name`. On Mac OS X, openline only cuts the length.
   Elsewhere than Windows, `hls` also maps `/` and `\` to `-`, and the
-  names `.` and `..` to dashes, so a name cannot leave its folder. It
-  also maps the dot of a leading `._`, which starts an AppleDouble
-  sidecar's name. On Windows, openline maps `\ / : * ? " < > |`, control
-  bytes, the bytes 0x81, 0x8D to 0x90, 0x9D, and 0x9E, a leading `.`,
-  and each trailing `.` and space to `-`. `hls` maps the C1 control
-  characters U+0080 to U+009F in place of those bytes, and gives a
-  reserved device name such as `CON` a `-`. `hls` cuts a name at 255
-  UTF-8 bytes, at a character boundary. It also maps the name of a new
-  alias, which openline's `ProcessTran_MakeFileAlias` does not.
+  names `.` and `..` to dashes, so a name cannot leave its folder. The
+  AppleDouble fork store also maps the dot of a leading `._`, which
+  starts a sidecar's name. On Windows, openline maps
+  `\ / : * ? " < > |`, control bytes, the bytes 0x81, 0x8D to 0x90,
+  0x9D, and 0x9E, a leading `.`, and each trailing `.` and space to
+  `-`. `hls` maps the C1 control characters U+0080 to U+009F in place
+  of those bytes, and gives a reserved device name such as `CON` a
+  `-`. `hls` cuts a name at 255 UTF-8 bytes, at a character boundary.
+  It also maps the name of a new alias, which openline's
+  `ProcessTran_MakeFileAlias` does not.
 - **Move and alias check drop boxes.** openline's `ProcessTran_MoveFile`
   and `ProcessTran_MakeFileAlias` check no drop box. A user who guessed
   a name could move a file out of a drop box, or alias it, and then
@@ -250,20 +251,6 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-6. **The resource fork storage is fixed to AppleDouble.**
-   `DiskFileProvider` calls `apple_double` directly for the Finder
-   info, the comment, and the resource fork. Put the storage behind
-   an interface, in `FileProvider` or in a new provider if necessary.
-   The storage must work on real macOS, on Linux, and on network
-   shares. That can need a choice for each server. Examples are
-   AppleDouble sidecars, `.rsrc` sidecars, the native macOS fork, and
-   no fork storage.
-   The current AppleDouble code also has these problems:
-   - `apple_double::write` keeps three entries and the first 32 bytes
-     of the Finder info entry. macOS keeps extended attributes after
-     the Finder info in a `._` file, so a change from `hls` drops them.
-   - `validate_file_name` in `hotline-server` maps a leading `._` for
-     every provider. Let the storage choose the names that it keeps.
 
 ## Resolved
 

@@ -10,7 +10,7 @@ use hotline_proto::{Field, ForkHeader, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::Activity;
-use crate::file::{creator_name, type_name, validate_file_name, FileRequester};
+use crate::file::{creator_name, type_name, FileRequester};
 use crate::state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
     TransferRef, TransferTarget,
@@ -282,7 +282,7 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let name = match validate_file_name(&name) {
+        let name = match state.stored_file_name(&name) {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -418,7 +418,7 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let name = match validate_file_name(&name) {
+        let name = match state.stored_file_name(&name) {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -522,7 +522,7 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let name = match validate_file_name(&name) {
+        let name = match state.stored_file_name(&name) {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -608,7 +608,7 @@ impl Session {
         let new_name = match tx
             .string(FieldId::FileNewName)
             .filter(|new_name| !new_name.is_empty() && *new_name != name)
-            .map(|new_name| validate_file_name(&new_name))
+            .map(|new_name| state.stored_file_name(&new_name))
             .transpose()
         {
             Ok(new_name) => new_name,
@@ -693,7 +693,7 @@ impl Session {
         let link_name = tx
             .string(FieldId::FileNewName)
             .unwrap_or_else(|| name.clone());
-        let link_name = match validate_file_name(&link_name) {
+        let link_name = match state.stored_file_name(&link_name) {
             Ok(link_name) => link_name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };

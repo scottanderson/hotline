@@ -12,10 +12,13 @@ use std::sync::{Arc, PoisonError};
 use std::task::{ready, Context, Poll};
 
 use hotline_proto::wire::{PacketReader, PacketWriter, VecWriter};
-use hotline_server::{BoxedReader, FinderInfo, SIDECAR_PREFIX};
+use hotline_server::{BoxedReader, FinderInfo};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
+
+/// The start of a sidecar's name.
+pub const PREFIX: &str = "._";
 
 const MAGIC: u32 = 0x0005_1607;
 const VERSION: u32 = 0x0002_0000;
@@ -206,7 +209,7 @@ impl Drop for ForkClaim {
 
 /// The sidecar path of the item at `item`.
 pub fn path_of(item: &Path) -> PathBuf {
-    let mut name = OsString::from(SIDECAR_PREFIX);
+    let mut name = OsString::from(PREFIX);
     name.push(item.file_name().unwrap_or_default());
     item.with_file_name(name)
 }

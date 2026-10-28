@@ -7,6 +7,7 @@ mod args;
 mod banner;
 mod bans;
 mod file;
+mod fork_store;
 mod news;
 mod policy;
 mod tracker;
@@ -86,7 +87,8 @@ async fn main() -> anyhow::Result<()> {
                     "failed to open the file store (--files-dir {})",
                     args.files_dir
                 )
-            })?,
+            })?
+            .with_fork_store(args.fork_store.store()),
     );
     let flat_news = Arc::new(
         FileFlatNewsProvider::open(args.news_file.clone())

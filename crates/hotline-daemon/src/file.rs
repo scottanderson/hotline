@@ -2,30 +2,25 @@
 //! every login. `hotline-server` deliberately doesn't own file storage
 //! (see its module docs); this is the concrete backend `hls` plugs in.
 //!
-//! Each item's Finder info, comment, and resource fork are in its
-//! AppleDouble sidecar (see [`apple_double`]), which listings hide.
+//! A [`ForkStore`] keeps each item's Finder info, comment, and resource
+//! fork. Listings hide the names that it keeps for itself.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 use hotline_server::{
-    partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, FileProvider,
-    FileRequester, FinderInfo, ItemTimes, SIDECAR_PREFIX,
+    partial_upload_name, type_and_creator_for_name, validate_file_name, BoxedReader, BoxedWriter,
+    FileProvider, FileRequester, FinderInfo, ItemTimes,
 };
-use tokio::sync::Mutex;
 
-use crate::apple_double::{self, OpenForks, Sidecar};
+use crate::fork_store::{ForkStore, ForkStoreKind};
 
 /// Serves one directory on disk, the same for every login.
 pub struct DiskFileProvider {
     root: PathBuf,
-    /// Held while a sidecar changes or moves.
-    sidecars: Arc<Mutex<()>>,
-    /// The sidecars that an upload writes a resource fork into.
-    open_forks: Arc<OpenForks>,
+    fork_store: Box<dyn ForkStore>,
 }
 
 impl DiskFileProvider {
@@ -35,32 +30,14 @@ impl DiskFileProvider {
         tokio::fs::create_dir_all(&root).await?;
         Ok(Self {
             root,
-            sidecars: Arc::default(),
-            open_forks: Arc::default(),
+            fork_store: ForkStoreKind::AppleDouble.store(),
         })
     }
 
-    /// Change the sidecar of `dir`/`name` with `change`. `NotFound` if the
-    /// item does not exist, and `ResourceBusy` while an upload writes its
-    /// resource fork.
-    async fn update_sidecar(
-        &self,
-        dir: &HlPath,
-        name: &str,
-        change: impl FnOnce(&mut Sidecar),
-    ) -> io::Result<()> {
-        let path = self
-            .resolve_file(dir, name)
-            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        tokio::fs::symlink_metadata(&path).await?;
-        let sidecar_path = apple_double::path_of(&path);
-        let _sidecars = self.sidecars.lock().await;
-        if self.open_forks.contains(&sidecar_path) {
-            return Err(io::ErrorKind::ResourceBusy.into());
-        }
-        let mut sidecar = apple_double::read(&sidecar_path).await?;
-        change(&mut sidecar);
-        apple_double::write(&sidecar_path, &sidecar).await
+    /// Keep each item's Mac metadata in `fork_store`.
+    pub fn with_fork_store(mut self, fork_store: Box<dyn ForkStore>) -> Self {
+        self.fork_store = fork_store;
+        self
     }
 
     /// Resolve a directory path under `root`. `None` when a component is
@@ -68,7 +45,7 @@ impl DiskFileProvider {
     fn resolve_dir(&self, dir: &HlPath) -> Option<PathBuf> {
         let mut path = self.root.clone();
         for component in &dir.components {
-            if !is_plain_name(component) {
+            if !self.is_plain_name(component) {
                 return None;
             }
             path.push(component);
@@ -79,31 +56,45 @@ impl DiskFileProvider {
     /// Resolve the entry `name` in `dir` under `root`, with the checks of
     /// [`Self::resolve_dir`].
     fn resolve_file(&self, dir: &HlPath, name: &str) -> Option<PathBuf> {
-        if !is_plain_name(name) {
+        if !self.is_plain_name(name) {
             return None;
         }
         let mut path = self.resolve_dir(dir)?;
         path.push(name);
         Some(path)
     }
-}
+    /// Whether `name` is one normal path component that the fork store
+    /// does not keep, with no `:` on Windows.
+    fn is_plain_name(&self, name: &str) -> bool {
+        let mut components = Path::new(name).components();
+        !name.contains(['/', '\\'])
+            && !self.fork_store.is_reserved(name)
+            && !(cfg!(windows) && name.contains(':'))
+            && matches!(components.next(), Some(Component::Normal(_)))
+            && components.next().is_none()
+    }
 
-/// Whether `name` is one normal path component that is not a sidecar,
-/// with no `:` on Windows.
-fn is_plain_name(name: &str) -> bool {
-    let mut components = Path::new(name).components();
-    !name.contains(['/', '\\'])
-        && !name.starts_with(SIDECAR_PREFIX)
-        && !(cfg!(windows) && name.contains(':'))
-        && matches!(components.next(), Some(Component::Normal(_)))
-        && components.next().is_none()
-}
+    /// The name of `entry` if a listing shows it: UTF-8 and not kept by the
+    /// fork store.
+    fn listed_name(&self, entry: &tokio::fs::DirEntry) -> Option<String> {
+        let name = entry.file_name().into_string().ok()?;
+        (!self.fork_store.is_reserved(&name)).then_some(name)
+    }
 
-/// The stored Finder info of the item at `path`, zero when it has none.
-async fn stored_finder_info(path: &Path) -> FinderInfo {
-    let sidecar_path = apple_double::path_of(path);
-    let sidecar = apple_double::read(&sidecar_path).await;
-    sidecar.unwrap_or_default().finder_info()
+    /// How many entries a listing of the folder at `path` shows. 0 when it
+    /// cannot be read.
+    async fn count_entries(&self, path: &Path) -> u32 {
+        let Ok(mut read_dir) = tokio::fs::read_dir(path).await else {
+            return 0;
+        };
+        let mut count = 0;
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            if self.listed_name(&entry).is_some() {
+                count += 1;
+            }
+        }
+        count
+    }
 }
 
 /// The type and creator of the file `name`: the stored ones, or those for
@@ -116,29 +107,12 @@ fn file_type_and_creator(stored: FinderInfo, name: &str) -> ([u8; 4], [u8; 4]) {
     }
 }
 
-/// The name of `entry` if a listing shows it: UTF-8 and not a sidecar.
-fn listed_name(entry: &tokio::fs::DirEntry) -> Option<String> {
-    let name = entry.file_name().into_string().ok()?;
-    (!name.starts_with(SIDECAR_PREFIX)).then_some(name)
-}
-
-/// How many entries a listing of the folder at `path` shows. 0 when it
-/// cannot be read.
-async fn count_entries(path: &Path) -> u32 {
-    let Ok(mut read_dir) = tokio::fs::read_dir(path).await else {
-        return 0;
-    };
-    let mut count = 0;
-    while let Ok(Some(entry)) = read_dir.next_entry().await {
-        if listed_name(&entry).is_some() {
-            count += 1;
-        }
-    }
-    count
-}
-
 #[async_trait]
 impl FileProvider for DiskFileProvider {
+    fn stored_name(&self, name: &str) -> Result<String, &'static str> {
+        validate_file_name(name).map(|name| self.fork_store.unreserved_name(name))
+    }
+
     async fn list(
         &self,
         _requester: FileRequester<'_>,
@@ -148,7 +122,7 @@ impl FileProvider for DiskFileProvider {
         let mut read_dir = tokio::fs::read_dir(&path).await.ok()?;
         let mut entries = Vec::new();
         while let Ok(Some(entry)) = read_dir.next_entry().await {
-            let Some(name) = listed_name(&entry) else {
+            let Some(name) = self.listed_name(&entry) else {
                 continue;
             };
             let metadata = match tokio::fs::metadata(entry.path()).await {
@@ -162,11 +136,11 @@ impl FileProvider for DiskFileProvider {
                 FileNameWithInfo {
                     file_type: *b"fldr",
                     creator: *b"\0\0\0\0",
-                    size: count_entries(&entry.path()).await,
+                    size: self.count_entries(&entry.path()).await,
                     name: name.into(),
                 }
             } else {
-                let stored = stored_finder_info(&entry.path()).await;
+                let stored = self.fork_store.finder_info(&entry.path()).await;
                 let (file_type, creator) = file_type_and_creator(stored, &name);
                 FileNameWithInfo {
                     file_type,
@@ -226,8 +200,7 @@ impl FileProvider for DiskFileProvider {
             .resolve_file(dir, &partial_upload_name(name))
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         let file = tokio::fs::File::create(&path).await?;
-        let _sidecars = self.sidecars.lock().await;
-        apple_double::remove(&apple_double::path_of(&path)).await?;
+        self.fork_store.clear(&path).await?;
         Ok(Box::new(file))
     }
 
@@ -277,9 +250,7 @@ impl FileProvider for DiskFileProvider {
         let Some(path) = self.resolve_file(dir, name) else {
             return 0;
         };
-        apple_double::read(&apple_double::path_of(&path))
-            .await
-            .map_or(0, |sidecar| sidecar.resource_fork_len())
+        self.fork_store.resource_fork_size(&path).await
     }
 
     async fn open_resource_read(
@@ -292,7 +263,7 @@ impl FileProvider for DiskFileProvider {
         let path = self
             .resolve_file(dir, name)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        apple_double::open_resource_read(&apple_double::path_of(&path), at).await
+        self.fork_store.open_resource_read(&path, at).await
     }
 
     async fn open_resource_write(
@@ -305,17 +276,7 @@ impl FileProvider for DiskFileProvider {
         let path = self
             .resolve_file(dir, &partial_upload_name(name))
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        tokio::fs::symlink_metadata(&path).await?;
-        let _sidecars = self.sidecars.lock().await;
-        let sidecar_path = apple_double::path_of(&path);
-        let claim = self
-            .open_forks
-            .claim(&sidecar_path)
-            .ok_or_else(|| io::Error::from(io::ErrorKind::ResourceBusy))?;
-        let writer =
-            apple_double::open_resource_write(&sidecar_path, at, Arc::clone(&self.sidecars), claim)
-                .await?;
-        Ok(Box::new(writer))
+        self.fork_store.open_resource_write(&path, at).await
     }
 
     async fn info(
@@ -334,7 +295,7 @@ impl FileProvider for DiskFileProvider {
                 name: name.into(),
             });
         }
-        let stored = stored_finder_info(&path).await;
+        let stored = self.fork_store.finder_info(&path).await;
         let (file_type, creator) = file_type_and_creator(stored, name);
         Some(FileNameWithInfo {
             file_type,
@@ -352,7 +313,7 @@ impl FileProvider for DiskFileProvider {
     ) -> Option<FinderInfo> {
         let path = self.resolve_file(dir, name)?;
         let metadata = tokio::fs::metadata(&path).await.ok()?;
-        let stored = stored_finder_info(&path).await;
+        let stored = self.fork_store.finder_info(&path).await;
         let (file_type, creator) = if metadata.is_dir() {
             (*b"fldr", *b"\0\0\0\0")
         } else {
@@ -372,8 +333,10 @@ impl FileProvider for DiskFileProvider {
         name: &str,
         info: FinderInfo,
     ) -> io::Result<()> {
-        self.update_sidecar(dir, name, |sidecar| sidecar.set_finder_info(info))
-            .await
+        let path = self
+            .resolve_file(dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        self.fork_store.set_finder_info(&path, info).await
     }
 
     #[cfg(unix)]
@@ -409,16 +372,7 @@ impl FileProvider for DiskFileProvider {
         let path = self
             .resolve_file(dir, name)
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        let _sidecars = self.sidecars.lock().await;
-        if is_dir {
-            tokio::fs::remove_dir_all(&path).await?;
-        } else {
-            tokio::fs::remove_file(&path).await?;
-        }
-        if let Err(error) = apple_double::remove(&apple_double::path_of(&path)).await {
-            tracing::debug!(%error, name, "could not remove the sidecar of a deleted entry");
-        }
-        Ok(())
+        self.fork_store.remove(&path, is_dir).await
     }
 
     async fn mkdir(
@@ -449,13 +403,7 @@ impl FileProvider for DiskFileProvider {
         if tokio::fs::metadata(&new_path).await.is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        let _sidecars = self.sidecars.lock().await;
-        tokio::fs::rename(&old_path, &new_path).await?;
-        apple_double::rename(
-            &apple_double::path_of(&old_path),
-            &apple_double::path_of(&new_path),
-        )
-        .await
+        self.fork_store.rename(&old_path, &new_path).await
     }
 
     async fn r#move(
@@ -474,13 +422,7 @@ impl FileProvider for DiskFileProvider {
         if tokio::fs::metadata(&new_path).await.is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        let _sidecars = self.sidecars.lock().await;
-        tokio::fs::rename(&old_path, &new_path).await?;
-        apple_double::rename(
-            &apple_double::path_of(&old_path),
-            &apple_double::path_of(&new_path),
-        )
-        .await
+        self.fork_store.rename(&old_path, &new_path).await
     }
 
     async fn symlink(
@@ -515,9 +457,7 @@ impl FileProvider for DiskFileProvider {
         name: &str,
     ) -> Option<String> {
         let path = self.resolve_file(dir, name)?;
-        let sidecar = apple_double::read(&apple_double::path_of(&path)).await;
-        let comment = sidecar.ok()?.comment;
-        (!comment.is_empty()).then_some(comment)
+        self.fork_store.comment(&path).await
     }
 
     async fn set_comment(
@@ -527,8 +467,10 @@ impl FileProvider for DiskFileProvider {
         name: &str,
         comment: &str,
     ) -> io::Result<()> {
-        self.update_sidecar(dir, name, |sidecar| sidecar.comment = comment.into())
-            .await
+        let path = self
+            .resolve_file(dir, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        self.fork_store.set_comment(&path, comment).await
     }
 }
 
@@ -640,6 +582,56 @@ mod tests {
             .list(requester(), &HlPath::new(["._a.txt"]))
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn stored_name_maps_a_sidecar_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = DiskFileProvider::open(dir.path()).await.unwrap();
+        assert_eq!(provider.stored_name("._a.txt").unwrap(), "-_a.txt");
+        assert_eq!(provider.stored_name("._").unwrap(), "-_");
+        assert_eq!(provider.stored_name("a._b").unwrap(), "a._b");
+        let provider = provider.with_fork_store(ForkStoreKind::NoStore.store());
+        let validated = validate_file_name("._a.txt").unwrap();
+        assert_eq!(provider.stored_name("._a.txt").unwrap(), validated);
+    }
+
+    #[tokio::test]
+    async fn without_a_fork_store_a_sidecar_name_is_a_file() {
+        use tokio::io::AsyncWriteExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("._a.txt"), b"x")
+            .await
+            .unwrap();
+        let provider = DiskFileProvider::open(dir.path())
+            .await
+            .unwrap()
+            .with_fork_store(ForkStoreKind::NoStore.store());
+        let root = HlPath::default();
+        let entries = provider.list(requester(), &root).await.unwrap();
+        let names: Vec<_> = entries.iter().map(|e| &*e.name).collect();
+        assert_eq!(names, ["._a.txt"]);
+        assert!(provider
+            .set_comment(requester(), &root, "._a.txt", "a note")
+            .await
+            .is_err());
+
+        provider
+            .create_write(requester(), &root, "b.txt")
+            .await
+            .unwrap();
+        let mut writer = provider
+            .open_resource_write(requester(), &root, "b.txt", 0)
+            .await
+            .unwrap();
+        writer.write_all(b"rsrc").await.unwrap();
+        writer.shutdown().await.unwrap();
+        let partial = partial_upload_name("b.txt");
+        let size = provider
+            .resource_fork_size(requester(), &root, &partial)
+            .await;
+        assert_eq!(size, 0);
     }
 
     #[tokio::test]

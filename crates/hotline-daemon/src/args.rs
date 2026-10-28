@@ -7,6 +7,8 @@ use hotline_server::{
     DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
 };
 
+use crate::fork_store::ForkStoreKind;
+
 /// A minimal Hotline server.
 #[derive(Parser, Debug)]
 #[command(name = "hls", version, about)]
@@ -39,6 +41,10 @@ pub struct Args {
     /// Directory that clients see (created if missing).
     #[arg(long, default_value = "files")]
     pub files_dir: String,
+
+    /// Where to keep each file's Finder info, comment, and resource fork.
+    #[arg(long, value_enum, default_value_t = ForkStoreKind::AppleDouble)]
+    pub fork_store: ForkStoreKind,
 
     /// File to persist classic (flat) news to, as plain text (created if
     /// missing).

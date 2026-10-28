@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 
 use super::{
-    partial_upload_name, BoxedReader, BoxedWriter, FileRequester, FinderInfo, FolderItem, ItemTimes,
+    partial_upload_name, validate_file_name, BoxedReader, BoxedWriter, FileRequester, FinderInfo,
+    FolderItem, ItemTimes,
 };
 
 /// Storage backing [`myTran_GetFileNameList`] (200),
@@ -20,6 +21,12 @@ use super::{
 /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
 #[async_trait]
 pub trait FileProvider: Send + Sync {
+    /// `name` as a new file or folder stores it. `Err` for a name that
+    /// cannot be stored.
+    fn stored_name(&self, name: &str) -> Result<String, &'static str> {
+        validate_file_name(name)
+    }
+
     /// List a directory as seen by `requester`. `None` if it doesn't
     /// exist (or isn't visible to `requester`).
     async fn list(

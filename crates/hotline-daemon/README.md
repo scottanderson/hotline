@@ -32,6 +32,20 @@ hls --port 5500
 
 The Finder info, the comment, and the resource fork of `files/a.txt` are
 in its AppleDouble file, `files/._a.txt`. Clients do not see these files.
+`--fork-store none` keeps no Finder info, comment, or resource fork. Then
+a client sees and can name each `._` file.
+
+Use `--fork-store none` where the folder already has other `._` files.
+On macOS, a volume with no native extended attributes, such as SMB or
+exFAT, keeps its own `._` files with the same names. A share that
+refuses `._` names, such as a Samba share with `veto files = ._*`,
+cannot keep the sidecars.
+
+A change of `--fork-store` on existing files can lose data. With
+`none`, a client sees each sidecar and can change or replace it, and a
+rename leaves the sidecar behind. With `apple-double`, a client file
+whose name starts with `._` becomes a hidden sidecar, and an upload of
+its item deletes it.
 
 Text in these files is UTF-8. On the wire, text uses Mac OS Roman by
 default. `--encoding utf-8` changes the wire encoding of every
