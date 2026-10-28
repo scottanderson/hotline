@@ -9,7 +9,7 @@ use super::{NewsArticle, NewsArticleDetail, NewsItemKind, NewsListKind};
 #[async_trait]
 pub trait FlatNewsProvider: Send + Sync {
     /// Loads the flat news text.
-    async fn load(&self) -> Arc<Box<str>>;
+    async fn load(&self) -> Arc<str>;
     /// Prepends `entry` to the flat news text.
     async fn post(&self, entry: &str);
 }

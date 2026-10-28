@@ -1,7 +1,7 @@
 //! `hls`'s file-backed news providers.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 /// `MessageBoard.txt`. The text is UTF-8, not the wire encoding.
 pub struct FileFlatNewsProvider {
     path: PathBuf,
-    cache: ArcSwap<Box<str>>,
+    cache: RwLock<Arc<str>>,
     lock: Mutex<()>,
 }
 
@@ -35,7 +35,7 @@ impl FileFlatNewsProvider {
 
         Ok(Self {
             path,
-            cache: ArcSwap::from_pointee(flat.into_boxed_str()),
+            cache: RwLock::new(flat.into()),
             lock: Mutex::new(()),
         })
     }
@@ -43,13 +43,16 @@ impl FileFlatNewsProvider {
 
 #[async_trait]
 impl FlatNewsProvider for FileFlatNewsProvider {
-    async fn load(&self) -> Arc<Box<str>> {
-        self.cache.load_full()
+    async fn load(&self) -> Arc<str> {
+        self.cache
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     async fn post(&self, entry: &str) {
         let _guard = self.lock.lock().await;
-        let flat = self.cache.load_full();
+        let flat = self.load().await;
         let mut new_flat = String::with_capacity(entry.len() + flat.len());
         new_flat.push_str(entry);
         new_flat.push_str(&flat);
@@ -57,7 +60,7 @@ impl FlatNewsProvider for FileFlatNewsProvider {
         if let Err(e) = tokio::fs::write(&self.path, new_flat.as_bytes()).await {
             tracing::error!(error = %e, "failed to persist flat news");
         }
-        self.cache.store(Arc::new(new_flat.into_boxed_str()));
+        *self.cache.write().unwrap_or_else(PoisonError::into_inner) = new_flat.into();
     }
 }
 
@@ -315,7 +318,7 @@ mod tests {
             tokio::fs::read_to_string(&flat_path).await.unwrap(),
             "hello world"
         );
-        assert_eq!(provider.load().await.as_ref().as_ref(), "hello world");
+        assert_eq!(provider.load().await.as_ref(), "hello world");
     }
 
     /// A `\n` in a post body survives a restart.
@@ -332,7 +335,7 @@ mod tests {
         assert_eq!(on_disk, entry.as_bytes());
 
         let reopened = FileFlatNewsProvider::open(&flat_path).await.unwrap();
-        assert_eq!(reopened.load().await.as_ref().as_ref(), entry);
+        assert_eq!(reopened.load().await.as_ref(), entry);
     }
 
     #[tokio::test]
@@ -350,7 +353,7 @@ mod tests {
         let reopened_flat = FileFlatNewsProvider::open(&flat_path).await.unwrap();
         let reopened_tree = FileThreadedNewsProvider::open(&tree_path).await.unwrap();
 
-        assert_eq!(reopened_flat.load().await.as_ref().as_ref(), "hello");
+        assert_eq!(reopened_flat.load().await.as_ref(), "hello");
         assert_eq!(reopened_tree.list_dir(&[]).await.unwrap().len(), 1);
     }
 
@@ -364,7 +367,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(flat.load().await.as_ref().as_ref(), "");
+        assert_eq!(flat.load().await.as_ref(), "");
         assert_eq!(tree.list_dir(&[]).await.unwrap().len(), 0);
     }
 }
