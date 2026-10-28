@@ -66,9 +66,16 @@ Backspace goes up. `d` downloads, `u` uploads a local file or folder,
 sets the comment, `m` moves, and `a` makes an alias. A download goes
 to `name.hpf` first. If one is there, `hlc` asks whether to resume it.
 
-On the Threaded News tab, Enter opens a bundle, a category, or an
-article, and Backspace goes up. `p` posts, `r` replies to the open
-article, `x` deletes, and `b` and `c` create a bundle or a category.
+The Threaded News tab has no user list. It has three panes: a tree of
+bundles (🗞️) and categories (📰) on the left, the threads of the
+selected category on the top right, and the selected article on the
+bottom right. Tab moves from pane to pane. In the tree, → or Enter
+opens a bundle, and ← closes it or goes to the bundle that holds it.
+Enter on a category moves to its threads. Each move in the thread list
+shows that article in the preview, and Enter opens it. ← goes back to
+the tree. `p` posts, `r` replies to the open article, `x` deletes, and
+`b` and `c` create a bundle or a category in the selected bundle, or in
+the bundle that holds the selected category.
 
 On the Admin tab, Enter edits an account, `n` creates one, `o` opens
 one by login, and `x` deletes one. In the account form, Space turns

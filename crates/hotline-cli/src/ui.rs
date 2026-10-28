@@ -6,11 +6,11 @@ use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span, Text};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::line::{Line, LineKind};
-use crate::session::{ClientSession, Mode};
+use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::view::{
     contains, privileges, AccountForm, Focus, MenuItem, Modal, OptionsForm, Tab, View, OPTIONS,
 };
@@ -59,8 +59,9 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
 }
 
 /// `input` is the text in the input line, which grows to fit it. With `None`,
-/// the input line has no rows. The hint line grows to fit `hints`.
-pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint]) -> Areas {
+/// the input line has no rows. The hint line grows to fit `hints`. Without
+/// `users`, the user list has no columns.
+pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool) -> Areas {
     let hint_rows = hint_rows(hints, screen.width).len() as u16;
     let [tabs, middle, hints] = screen.layout(&Layout::vertical([
         Constraint::Length(1),
@@ -69,7 +70,7 @@ pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint]) -> Areas {
     ]));
     let [left, users] = middle.layout(&Layout::horizontal([
         Constraint::Min(20),
-        Constraint::Length(24),
+        Constraint::Length(if users { 24 } else { 0 }),
     ]));
     let [body, input] = left.layout(&Layout::vertical([
         Constraint::Min(3),
@@ -83,6 +84,20 @@ pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint]) -> Areas {
         users,
         hints,
     }
+}
+
+/// The folder tree, the thread list, and the article preview of the
+/// Threaded News tab in `body`.
+pub fn news_areas(body: Rect) -> [Rect; 3] {
+    let [folders, right] = body.layout(&Layout::horizontal([
+        Constraint::Percentage(30),
+        Constraint::Fill(1),
+    ]));
+    let [threads, preview] = right.layout(&Layout::vertical([
+        Constraint::Percentage(50),
+        Constraint::Fill(1),
+    ]));
+    [folders, threads, preview]
 }
 
 /// `rect` inside its border.
@@ -180,7 +195,12 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         return;
     }
 
-    let areas = areas(frame.area(), view.input(), &view.hints());
+    let areas = areas(
+        frame.area(),
+        view.input(),
+        &view.hints(),
+        view.shows_users(),
+    );
     draw_tabs(frame, areas.tabs, view);
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
@@ -195,7 +215,9 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         }
     }
     draw_input(frame, areas.input, view);
-    draw_users(frame, areas.users, session, view);
+    if view.shows_users() {
+        draw_users(frame, areas.users, session, view);
+    }
     draw_hints(frame, areas.hints, view);
     if let Some(modal) = &view.modal {
         draw_modal(frame, areas.screen, modal);
@@ -299,18 +321,72 @@ fn draw_list(
 }
 
 fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
+    let [folders_area, threads_area, preview_area] = news_areas(area);
+    draw_news_folders(frame, folders_area, session, view);
+    draw_news_threads(frame, threads_area, session, view);
+    draw_news_preview(frame, preview_area, session, view);
+}
+
+fn draw_news_folders(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
     let block = Block::bordered()
-        .border_style(border(view.focus == Focus::NewsList))
-        .title(format!(
-            "threaded news /{}",
-            session.threaded_path.components.join("/")
-        ));
-    let Some(items) = &session.threaded else {
+        .border_style(border(view.focus == Focus::NewsFolders))
+        .title("folders");
+    let Some(folders) = &session.news_folders else {
         frame.render_widget(Paragraph::new("loading news").block(block), area);
         return;
     };
-    let rows: Vec<ListItem> = items.iter().map(|i| ListItem::new(i.label())).collect();
-    draw_list(frame, area, block, rows, &mut view.news);
+    let rows = folders.iter().map(NewsFolderNode::cells).map(Row::new);
+    let widths = [Constraint::Fill(1), Constraint::Length(5)];
+    let table = Table::new(rows, widths)
+        .block(block)
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    if view.news_folders.selected().is_none() {
+        view.news_folders.select_first();
+    }
+    frame.render_stateful_widget(table, area, &mut view.news_folders);
+}
+
+fn draw_news_threads(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
+    let title = match &session.news_category {
+        Some(path) => format!("threads /{}", path.components.join("/")),
+        None => "threads".to_string(),
+    };
+    let block = Block::bordered()
+        .border_style(border(view.focus == Focus::NewsThreads))
+        .title(title);
+    let cells: Vec<[String; 3]> = session.news_threads.iter().map(NewsThread::cells).collect();
+    let date_width = cells
+        .iter()
+        .map(|[_, _, date]| text_width(date))
+        .fold(text_width("date"), usize::max);
+    let widths = [
+        Constraint::Fill(1),
+        Constraint::Length(16),
+        Constraint::Length(date_width as u16),
+    ];
+    let header = Row::new(["title", "poster", "date"]);
+    let table = Table::new(cells.into_iter().map(Row::new), widths)
+        .header(header.style(Style::default().add_modifier(Modifier::BOLD)))
+        .block(block)
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    if view.news.selected().is_none() {
+        view.news.select_first();
+    }
+    frame.render_stateful_widget(table, area, &mut view.news);
+}
+
+fn draw_news_preview(frame: &mut Frame, area: Rect, session: &ClientSession, view: &View) {
+    let block = Block::bordered().border_style(border(view.focus == Focus::NewsPreview));
+    let Some(article) = &session.news_preview else {
+        frame.render_widget(block.title("preview"), area);
+        return;
+    };
+    let text = text_encoding::from_wire_lines(&article.text);
+    let paragraph = Paragraph::new(text)
+        .block(block.title(article.heading()))
+        .wrap(Wrap { trim: false })
+        .scroll((view.preview_scroll, 0));
+    frame.render_widget(paragraph, area);
 }
 
 fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
@@ -694,6 +770,7 @@ fn draw_list_modal<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::NewsTarget;
 
     fn draw_to_text(modal: &Modal) -> String {
         let backend = ratatui::backend::TestBackend::new(70, 10);
@@ -732,7 +809,7 @@ mod tests {
     #[test]
     fn draw_modal_shows_the_title_and_the_text() {
         let modal = Modal::DeleteNews {
-            index: 0,
+            target: NewsTarget::Folder(0),
             name: "Old news".into(),
         };
         let text = draw_to_text(&modal);

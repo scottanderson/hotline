@@ -31,7 +31,7 @@ use downloads::RunningDownload;
 pub use event_outcome::EventOutcome;
 pub use keep_alive::KEEP_ALIVE;
 pub use mode::Mode;
-pub use threaded_news::{ArticleText, NewsFolder, NewsItem};
+pub use threaded_news::{ArticleText, NewsFolder, NewsFolderNode, NewsTarget, NewsThread};
 
 pub struct ClientSession {
     pub nick: Box<str>,
@@ -54,12 +54,15 @@ pub struct ClientSession {
     pub server_version: Option<u16>,
     /// The accounts on the Admin tab, `None` until they are fetched.
     pub accounts: Option<Vec<UserAccount>>,
-    /// The threaded news bundle or category on the Threaded News tab.
-    pub threaded_path: HlPath,
-    /// `true` if `threaded_path` is a category, which holds articles.
-    pub threaded_in_category: bool,
-    /// The items at `threaded_path`, `None` until they are fetched.
-    pub threaded: Option<Vec<NewsItem>>,
+    /// The threaded news bundles and categories, as the tree shows them.
+    /// `None` until they are fetched.
+    pub news_folders: Option<Vec<NewsFolderNode>>,
+    /// The category whose threads show.
+    pub news_category: Option<HlPath>,
+    /// The articles of `news_category`, in thread order.
+    pub news_threads: Vec<NewsThread>,
+    /// The article that the preview shows.
+    pub news_preview: Option<ArticleText>,
     /// The private chat rooms this client is in, oldest first.
     pub rooms: Vec<ChatRoom>,
     /// Invitations that wait for an answer, oldest first.
@@ -91,9 +94,10 @@ impl ClientSession {
             access: Access::empty(),
             server_version: None,
             accounts: None,
-            threaded_path: HlPath::default(),
-            threaded_in_category: false,
-            threaded: None,
+            news_folders: None,
+            news_category: None,
+            news_threads: Vec::new(),
+            news_preview: None,
             rooms: Vec::new(),
             invites: VecDeque::new(),
             downloads: Vec::new(),

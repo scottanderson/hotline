@@ -16,10 +16,10 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::Rect;
-use ratatui::widgets::ListState;
+use ratatui::widgets::{ListState, TableState};
 
 use crate::file_edit::FileEdit;
-use crate::session::NewsFolder;
+use crate::session::{NewsFolder, NewsTarget};
 use crate::transfer::{Conflict, Start};
 use crate::ui::{self, Areas};
 
@@ -50,8 +50,12 @@ pub enum Focus {
     Users,
     /// The file list on the Files tab.
     Files,
-    /// The item list on the Threaded News tab.
-    NewsList,
+    /// The folder tree on the Threaded News tab.
+    NewsFolders,
+    /// The thread list on the Threaded News tab.
+    NewsThreads,
+    /// The article preview on the Threaded News tab.
+    NewsPreview,
     /// The account list on the Admin tab.
     Accounts,
 }
@@ -62,7 +66,7 @@ impl Focus {
         match tab {
             Tab::Chat | Tab::News | Tab::Room(_) => Self::Input,
             Tab::Files => Self::Files,
-            Tab::Threaded => Self::NewsList,
+            Tab::Threaded => Self::NewsFolders,
             Tab::Admin => Self::Accounts,
         }
     }
@@ -73,6 +77,7 @@ impl Focus {
 enum Clicked {
     User(u16),
     File(usize),
+    NewsFolder(usize),
     News(usize),
     Account(usize),
 }
@@ -93,10 +98,16 @@ pub struct View {
     pub users_offset: usize,
     /// The selection and scroll position of the file list.
     pub files: ListState,
-    /// The selection and scroll position of the threaded news table.
-    pub news: ListState,
-    /// The number of threaded news items listed.
+    /// The selection and scroll position of the threaded news folder tree.
+    pub news_folders: TableState,
+    /// The number of rows in the folder tree.
+    pub news_folder_count: usize,
+    /// The selection and scroll position of the thread list.
+    pub news: TableState,
+    /// The number of articles in the thread list.
     pub news_count: usize,
+    /// Lines of the article preview scrolled past the top.
+    pub preview_scroll: u16,
     /// The selection and scroll position of the account list.
     pub accounts: ListState,
     /// The number of accounts listed.
@@ -125,8 +136,11 @@ impl Default for View {
             news_scroll: 0,
             users_offset: 0,
             files: ListState::default().with_selected(Some(0)),
-            news: ListState::default().with_selected(Some(0)),
+            news_folders: TableState::default().with_selected(Some(0)),
+            news_folder_count: 0,
+            news: TableState::default().with_selected(Some(0)),
             news_count: 0,
+            preview_scroll: 0,
             accounts: ListState::default().with_selected(Some(0)),
             account_count: 0,
             can_broadcast: false,
@@ -190,7 +204,7 @@ impl View {
     fn users_hints(&self) -> Vec<(&'static str, &'static str)> {
         let main = match Focus::main(self.tab) {
             Focus::Files => "files",
-            Focus::NewsList => "news",
+            Focus::NewsFolders | Focus::NewsThreads | Focus::NewsPreview => "news",
             Focus::Accounts => "accounts",
             Focus::Input | Focus::Users => "input",
         };
@@ -269,14 +283,30 @@ impl View {
                 ("Tab", "users"),
                 ("Esc", "chat"),
             ],
-            (None, Focus::NewsList, _) | (None, Focus::Input, Tab::Threaded) => &[
+            (None, Focus::NewsFolders, _) | (None, Focus::Input, Tab::Threaded) => &[
                 ("↑↓", "select"),
                 ("Enter", "open"),
-                ("⌫", "up"),
+                ("←→", "close/open"),
                 ("p", "post"),
                 ("x", "delete"),
                 ("b", "new bundle"),
                 ("c", "new category"),
+                ("Tab", "threads"),
+                ("Esc", "chat"),
+            ],
+            (None, Focus::NewsThreads, _) => &[
+                ("↑↓", "select"),
+                ("Enter", "read"),
+                ("←", "folders"),
+                ("p", "post"),
+                ("x", "delete"),
+                ("Tab", "preview"),
+                ("Esc", "chat"),
+            ],
+            (None, Focus::NewsPreview, _) => &[
+                ("↑↓", "scroll"),
+                ("p", "post"),
+                ("Tab", "folders"),
                 ("Esc", "chat"),
             ],
             (None, Focus::Input, Tab::Chat) if self.can_broadcast => &[
@@ -382,7 +412,9 @@ impl View {
             Focus::Users => self.users_key(key, users),
             Focus::Input => self.input_key(key),
             Focus::Files => self.files_key(key, files),
-            Focus::NewsList => self.news_key(key),
+            Focus::NewsFolders => self.news_folders_key(key),
+            Focus::NewsThreads => self.news_threads_key(key),
+            Focus::NewsPreview => self.news_preview_key(key),
             Focus::Accounts => self.accounts_key(key),
         }
     }
@@ -433,8 +465,8 @@ impl View {
                 };
             }
             (Modal::Quit, KeyCode::Char('y')) => return Action::Quit,
-            (Modal::DeleteNews { index, .. }, KeyCode::Char('y')) => {
-                return Action::DeleteNewsItem(*index);
+            (Modal::DeleteNews { target, .. }, KeyCode::Char('y')) => {
+                return Action::DeleteNewsItem(*target);
             }
             (Modal::DeleteAccount { login }, KeyCode::Char('y')) => {
                 return Action::DeleteAccount(std::mem::take(login));
@@ -806,19 +838,25 @@ impl View {
         Action::None
     }
 
-    fn news_key(&mut self, key: KeyEvent) -> Action {
+    fn news_folders_key(&mut self, key: KeyEvent) -> Action {
+        let count = self.news_folder_count;
+        let index = selected(self.news_folders.selected(), count);
         match key.code {
-            KeyCode::Tab => self.focus = Focus::Users,
+            KeyCode::Tab => self.focus = Focus::NewsThreads,
             KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.news.select_previous(),
-            KeyCode::Down => self.news.select_next(),
-            KeyCode::Enter if self.news_count > 0 => {
-                return Action::OpenNewsItem(selected(self.news.selected(), self.news_count));
+            KeyCode::Up | KeyCode::Down if count > 0 => {
+                let index = step(index, count, key.code == KeyCode::Down);
+                self.news_folders.select(Some(index));
+                return Action::HighlightNewsFolder(index);
             }
-            KeyCode::Backspace | KeyCode::Left => return Action::ParentNews,
+            KeyCode::Enter if count > 0 => return Action::OpenNewsFolder(index),
+            KeyCode::Right if count > 0 => return Action::ExpandNewsFolder(index),
+            KeyCode::Left | KeyCode::Backspace if count > 0 => {
+                return Action::CollapseNewsFolder(index);
+            }
             KeyCode::Char('p') => return Action::NewPost,
-            KeyCode::Char('x') if self.news_count > 0 => {
-                return Action::AskDeleteNews(selected(self.news.selected(), self.news_count));
+            KeyCode::Char('x') if count > 0 => {
+                return Action::AskDeleteNews(NewsTarget::Folder(index));
             }
             KeyCode::Char(c @ ('b' | 'c')) => {
                 self.modal = Some(Modal::NewsName {
@@ -830,6 +868,42 @@ impl View {
                     input: String::new(),
                 });
             }
+            _ => {}
+        }
+        Action::None
+    }
+
+    fn news_threads_key(&mut self, key: KeyEvent) -> Action {
+        let count = self.news_count;
+        let index = selected(self.news.selected(), count);
+        match key.code {
+            KeyCode::Tab => self.focus = Focus::NewsPreview,
+            KeyCode::Left => self.focus = Focus::NewsFolders,
+            KeyCode::Esc => return self.set_tab(Tab::Chat),
+            KeyCode::Up | KeyCode::Down if count > 0 => {
+                let index = step(index, count, key.code == KeyCode::Down);
+                self.news.select(Some(index));
+                return Action::PreviewArticle(index);
+            }
+            KeyCode::Enter if count > 0 => return Action::OpenArticle(index),
+            KeyCode::Char('p') => return Action::NewPost,
+            KeyCode::Char('x') if count > 0 => {
+                return Action::AskDeleteNews(NewsTarget::Article(index));
+            }
+            _ => {}
+        }
+        Action::None
+    }
+
+    fn news_preview_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Tab => self.focus = Focus::NewsFolders,
+            KeyCode::Esc => return self.set_tab(Tab::Chat),
+            KeyCode::Up => self.scroll_preview(-1),
+            KeyCode::Down => self.scroll_preview(1),
+            KeyCode::PageUp => self.scroll_preview(-10),
+            KeyCode::PageDown => self.scroll_preview(10),
+            KeyCode::Char('p') => return Action::NewPost,
             _ => {}
         }
         Action::None
@@ -896,8 +970,8 @@ impl View {
                 if let Some(index) = self.file_at(areas.body, x, y, files) {
                     return self.click_file(index, files, now);
                 }
-                if let Some(index) = self.news_at(areas.body, x, y) {
-                    return self.click_news(index, now);
+                if self.tab == Tab::Threaded {
+                    return self.click_threaded_news(areas.body, x, y, now);
                 }
                 if let Some(index) = self.account_at(areas.body, x, y) {
                     return self.click_account(index, now);
@@ -920,6 +994,12 @@ impl View {
             }
             MouseEventKind::ScrollUp if self.tab == Tab::News => self.scroll_news(-3),
             MouseEventKind::ScrollDown if self.tab == Tab::News => self.scroll_news(3),
+            MouseEventKind::ScrollUp if self.in_preview(areas.body, x, y) => {
+                self.scroll_preview(-3)
+            }
+            MouseEventKind::ScrollDown if self.in_preview(areas.body, x, y) => {
+                self.scroll_preview(3)
+            }
             _ => {}
         }
         Action::None
@@ -945,13 +1025,29 @@ impl View {
         Action::None
     }
 
-    /// Select the threaded news item at `index`, or open it on the second
-    /// click of a double click.
-    fn click_news(&mut self, index: usize, now: Instant) -> Action {
-        self.news.select(Some(index));
-        self.focus = Focus::NewsList;
-        if self.double_click(Clicked::News(index), now) {
-            return Action::OpenNewsItem(index);
+    /// Select the folder or the article at `x`, `y` of the Threaded News
+    /// tab, or open it on the second click of a double click. A click on
+    /// the preview focuses it.
+    fn click_threaded_news(&mut self, body: Rect, x: u16, y: u16, now: Instant) -> Action {
+        let [folders, threads, preview] = ui::news_areas(body);
+        if let Some(index) = self.news_folder_at(folders, x, y) {
+            self.news_folders.select(Some(index));
+            self.focus = Focus::NewsFolders;
+            if self.double_click(Clicked::NewsFolder(index), now) {
+                return Action::OpenNewsFolder(index);
+            }
+            return Action::HighlightNewsFolder(index);
+        }
+        if let Some(index) = self.news_at(threads, x, y) {
+            self.news.select(Some(index));
+            self.focus = Focus::NewsThreads;
+            if self.double_click(Clicked::News(index), now) {
+                return Action::OpenArticle(index);
+            }
+            return Action::PreviewArticle(index);
+        }
+        if contains(preview, x, y) {
+            self.focus = Focus::NewsPreview;
         }
         Action::None
     }
@@ -1008,7 +1104,7 @@ impl View {
             return Action::None;
         }
         self.tab = tab;
-        if self.focus != Focus::Users {
+        if self.focus != Focus::Users || !self.shows_users() {
             self.focus = Focus::main(tab);
         }
         match tab {
@@ -1037,6 +1133,15 @@ impl View {
             (Some(i), false) => i.saturating_sub(1),
         };
         self.selected_user = Some(users[next].user_id);
+    }
+
+    /// `true` when `x`, `y` is in the article preview of the Threaded News tab.
+    fn in_preview(&self, body: Rect, x: u16, y: u16) -> bool {
+        self.tab == Tab::Threaded && contains(ui::news_areas(body)[2], x, y)
+    }
+
+    const fn scroll_preview(&mut self, lines: i16) {
+        self.preview_scroll = self.preview_scroll.saturating_add_signed(lines);
     }
 
     const fn scroll_news(&mut self, lines: i16) {
@@ -1071,19 +1176,51 @@ impl View {
         row_at(self.accounts.offset(), y - inner.y, self.account_count)
     }
 
-    /// The index of the item on the list row at `x`, `y` of the Threaded News tab.
-    fn news_at(&self, body: Rect, x: u16, y: u16) -> Option<usize> {
-        let inner = ui::inner(body);
-        if self.tab != Tab::Threaded || !contains(inner, x, y) {
+    /// The row of the folder tree at `x`, `y`.
+    fn news_folder_at(&self, folders: Rect, x: u16, y: u16) -> Option<usize> {
+        let inner = ui::inner(folders);
+        if !contains(inner, x, y) {
             return None;
         }
-        row_at(self.news.offset(), y - inner.y, self.news_count)
+        row_at(
+            self.news_folders.offset(),
+            y - inner.y,
+            self.news_folder_count,
+        )
+    }
+
+    /// The row of the thread list at `x`, `y`, below the header row.
+    fn news_at(&self, threads: Rect, x: u16, y: u16) -> Option<usize> {
+        let inner = ui::inner(threads);
+        if !contains(inner, x, y) || y == inner.y {
+            return None;
+        }
+        row_at(self.news.offset(), y - inner.y - 1, self.news_count)
+    }
+
+    /// `false` on a tab that hides the user list.
+    pub fn shows_users(&self) -> bool {
+        self.tab != Tab::Threaded
     }
 }
 
 /// The selected row of a list of `len` rows, kept in range.
 fn selected(selected: Option<usize>, len: usize) -> usize {
     selected.unwrap_or(0).min(len.saturating_sub(1))
+}
+
+/// The row after `index` in a list of `len` rows, or the row before it if
+/// not `down`, kept in range.
+const fn step(index: usize, len: usize, down: bool) -> usize {
+    if down {
+        if index + 1 < len {
+            index + 1
+        } else {
+            index
+        }
+    } else {
+        index.saturating_sub(1)
+    }
 }
 
 /// The index of the row on screen line `row` of a list of `len` rows
@@ -1172,7 +1309,7 @@ mod tests {
     }
 
     fn areas() -> Areas {
-        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[])
+        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true)
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1578,7 +1715,7 @@ mod tests {
         let mut view = View::default();
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[]);
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], true);
         let inner = ui::inner(areas.body);
         let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
         let now = Instant::now();
@@ -1841,6 +1978,68 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_threaded_news_selects_a_folder_or_previews_an_article() {
+        let mut view = View {
+            tab: Tab::Threaded,
+            news_folder_count: 2,
+            news_count: 2,
+            ..View::default()
+        };
+        let body = Rect::new(0, 0, 80, 20);
+        let [folders, threads, preview] = ui::news_areas(body);
+        let now = Instant::now();
+        let folder = ui::inner(folders);
+        assert_eq!(
+            view.click_threaded_news(body, folder.x, folder.y + 1, now),
+            Action::HighlightNewsFolder(1)
+        );
+        assert_eq!(view.focus, Focus::NewsFolders);
+        let thread = ui::inner(threads);
+        assert_eq!(
+            view.click_threaded_news(body, thread.x, thread.y, now),
+            Action::None
+        );
+        assert_eq!(
+            view.click_threaded_news(body, thread.x, thread.y + 1, now),
+            Action::PreviewArticle(0)
+        );
+        assert_eq!(
+            view.click_threaded_news(body, thread.x, thread.y + 1, now),
+            Action::OpenArticle(0)
+        );
+        let preview = ui::inner(preview);
+        let _ = view.click_threaded_news(body, preview.x, preview.y, now);
+        assert_eq!(view.focus, Focus::NewsPreview);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_preview_only_over_it() {
+        let mut view = View {
+            tab: Tab::Threaded,
+            ..View::default()
+        };
+        let areas = areas();
+        let [folders, _, preview] = ui::news_areas(areas.body);
+        let wheel = |x, y| click(MouseEventKind::ScrollDown, x, y);
+        let _ = view.handle_mouse(
+            wheel(folders.x, folders.y),
+            &areas,
+            &users(),
+            &files(),
+            Instant::now(),
+        );
+        assert_eq!(view.preview_scroll, 0);
+        let _ = view.handle_mouse(
+            wheel(preview.x, preview.y),
+            &areas,
+            &users(),
+            &files(),
+            Instant::now(),
+        );
+        assert_eq!(view.preview_scroll, 3);
+    }
+
+    #[test]
     fn esc_on_the_chat_input_asks_before_it_quits() {
         let mut view = View::default();
         assert_eq!(
@@ -1868,37 +2067,72 @@ mod tests {
     }
 
     #[test]
-    fn f4_opens_threaded_news_and_walks_its_items() {
+    fn f4_opens_threaded_news_and_walks_its_panes() {
         let mut view = View::default();
         assert_eq!(
             view.handle_key(key(KeyCode::F(4)), &users(), &files()),
             Action::ListThreadedNews
         );
-        assert_eq!((view.tab, view.focus), (Tab::Threaded, Focus::NewsList));
+        assert_eq!((view.tab, view.focus), (Tab::Threaded, Focus::NewsFolders));
+        assert!(!view.shows_users());
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::None
         );
 
-        view.news_count = 2;
-        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
-        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        view.news_folder_count = 2;
+        assert_eq!(
+            view.handle_key(key(KeyCode::Down), &users(), &files()),
+            Action::HighlightNewsFolder(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Down), &users(), &files()),
+            Action::HighlightNewsFolder(1)
+        );
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::OpenNewsItem(1)
+            Action::OpenNewsFolder(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Right), &users(), &files()),
+            Action::ExpandNewsFolder(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Left), &users(), &files()),
+            Action::CollapseNewsFolder(1)
         );
         assert_eq!(
             view.handle_key(key(KeyCode::Char('x')), &users(), &files()),
-            Action::AskDeleteNews(1)
+            Action::AskDeleteNews(NewsTarget::Folder(1))
+        );
+
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert_eq!(view.focus, Focus::NewsThreads);
+        view.news_count = 3;
+        assert_eq!(
+            view.handle_key(key(KeyCode::Down), &users(), &files()),
+            Action::PreviewArticle(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::OpenArticle(1)
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('x')), &users(), &files()),
+            Action::AskDeleteNews(NewsTarget::Article(1))
         );
         assert_eq!(
             view.handle_key(key(KeyCode::Char('p')), &users(), &files()),
             Action::NewPost
         );
-        assert_eq!(
-            view.handle_key(key(KeyCode::Backspace), &users(), &files()),
-            Action::ParentNews
-        );
+
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert_eq!(view.focus, Focus::NewsPreview);
+        let _ = view.handle_key(key(KeyCode::PageDown), &users(), &files());
+        assert_eq!(view.preview_scroll, 10);
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert_eq!(view.focus, Focus::NewsFolders);
+
         assert_eq!(
             view.handle_key(key(KeyCode::F(1)), &users(), &files()),
             Action::None
@@ -1950,12 +2184,12 @@ mod tests {
         );
 
         view.modal = Some(Modal::DeleteNews {
-            index: 3,
+            target: NewsTarget::Article(3),
             name: "Gen".into(),
         });
         assert_eq!(
             view.handle_key(key(KeyCode::Char('y')), &users(), &files()),
-            Action::DeleteNewsItem(3)
+            Action::DeleteNewsItem(NewsTarget::Article(3))
         );
     }
 

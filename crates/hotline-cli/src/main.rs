@@ -20,7 +20,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::crossterm::ExecutableCommand;
-use ratatui::widgets::ListState;
+use ratatui::widgets::{ListState, TableState};
 use ratatui::DefaultTerminal;
 
 use args::Args;
@@ -28,9 +28,9 @@ use file_edit::FileEdit;
 use hotline_client::HotlineClient;
 use hotline_proto::types::HlPath;
 use line::Line;
-use session::{ClientSession, EventOutcome, Mode, KEEP_ALIVE};
+use session::{ClientSession, EventOutcome, Mode, NewsFolder, NewsTarget, KEEP_ALIVE};
 use tokio::sync::mpsc;
-use view::{AccountForm, Action, Modal, OptionsForm, View};
+use view::{AccountForm, Action, Focus, Modal, OptionsForm, View};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -148,7 +148,7 @@ async fn run(
                         view.handle_key(key, users, files)
                     }
                     Event::Mouse(mouse) if !matches!(session.mode, Mode::Agreement(_)) => {
-                        let areas = ui::areas(terminal.size()?.into(), view.input(), &view.hints());
+                        let areas = ui::areas(terminal.size()?.into(), view.input(), &view.hints(), view.shows_users());
                         let users = ui::tab_users(session, view.tab);
                         let files = session.files.as_deref().unwrap_or_default();
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())
@@ -159,7 +159,8 @@ async fn run(
             }
         }
         view.set_tabs(ui::tab_labels(session));
-        view.news_count = session.threaded.as_ref().map_or(0, Vec::len);
+        view.news_folder_count = session.news_folders.as_ref().map_or(0, Vec::len);
+        view.news_count = session.news_threads.len();
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
         view.can_broadcast = session.can_broadcast();
         view.can_disconnect = session.can_disconnect();
@@ -312,19 +313,42 @@ async fn perform(
         }
         Action::ListThreadedNews => {
             session.list_threaded_news(client).await;
-            view.news = ListState::default().with_selected(Some(0));
+            view.news_folders = TableState::default().with_selected(Some(0));
+            reselect_news_folder(session, view, client).await;
         }
-        Action::OpenNewsItem(index) => {
-            let path = session.threaded_path.clone();
-            if let Some(article) = session.open_news_item(client, index).await {
-                view.modal = Some(Modal::Article(article));
-            } else if session.threaded_path != path {
-                view.news = ListState::default().with_selected(Some(0));
+        Action::HighlightNewsFolder(index) => {
+            view.news_folders.select(Some(index));
+            reselect_news_folder(session, view, client).await;
+        }
+        Action::OpenNewsFolder(index) => {
+            match session.news_folders.as_ref().and_then(|f| f.get(index)) {
+                Some(node) if node.kind == NewsFolder::Category => view.focus = Focus::NewsThreads,
+                Some(_) => session.toggle_news_folder(client, index).await,
+                None => {}
             }
         }
-        Action::ParentNews => {
-            session.parent_news(client).await;
-            view.news = ListState::default().with_selected(Some(0));
+        Action::ExpandNewsFolder(index) => session.expand_news_folder(client, index).await,
+        Action::CollapseNewsFolder(index) => {
+            let expanded = session
+                .news_folders
+                .as_ref()
+                .and_then(|f| f.get(index))
+                .is_some_and(|node| node.expanded);
+            if expanded {
+                session.collapse_news_folder(index);
+            } else if let Some(parent) = session.news_folder_parent(index) {
+                view.news_folders.select(Some(parent));
+                reselect_news_folder(session, view, client).await;
+            }
+        }
+        Action::PreviewArticle(index) => preview_news_article(session, view, client, index).await,
+        Action::OpenArticle(index) => {
+            if let Some(summary) = session.news_threads.get(index).map(|t| t.summary.clone()) {
+                view.modal = session
+                    .read_article(client, &summary)
+                    .await
+                    .map(Modal::Article);
+            }
         }
         Action::NewPost => {
             if session.can_post() {
@@ -340,17 +364,32 @@ async fn perform(
             parent_id,
             title,
             text,
-        } => session.post_article(client, parent_id, &title, &text).await,
-        Action::AskDeleteNews(index) => {
-            let item = session.threaded.as_ref().and_then(|items| items.get(index));
-            view.modal = item.map(|item| Modal::DeleteNews {
-                index,
-                name: item.name().into(),
+        } => {
+            session.post_article(client, parent_id, &title, &text).await;
+            reselect_news_thread(session, view, client).await;
+        }
+        Action::AskDeleteNews(target) => {
+            view.modal = session.news_name(target).map(|name| Modal::DeleteNews {
+                target,
+                name: name.into(),
             });
         }
-        Action::DeleteNewsItem(index) => session.delete_news_item(client, index).await,
+        Action::DeleteNewsItem(target) => {
+            session.delete_news_item(client, target).await;
+            match target {
+                NewsTarget::Folder(_) => reselect_news_folder(session, view, client).await,
+                NewsTarget::Article(_) => reselect_news_thread(session, view, client).await,
+            }
+        }
         Action::NewNewsItem { name, kind } => {
-            session.new_news_item(client, &name, kind).await;
+            let count = session.news_folders.as_ref().map_or(0, Vec::len);
+            let index = view.news_folders.selected().filter(|&i| i < count);
+            let path = index.and_then(|i| session.news_folder_path(i));
+            session.new_news_item(client, index, &name, kind).await;
+            if let Some(row) = path.and_then(|path| session.news_folder_row(&path)) {
+                view.news_folders.select(Some(row));
+            }
+            reselect_news_folder(session, view, client).await;
         }
         Action::ListAccounts => {
             session.list_accounts(client).await;
@@ -386,5 +425,57 @@ async fn list_files(
 ) {
     if session.get_file_name_list(client, path).await {
         view.files = ListState::default().with_selected(Some(0));
+    }
+}
+
+/// Keep the tree selection in range, and show the threads of that row.
+/// A new category selects its first thread.
+async fn reselect_news_folder(
+    session: &mut ClientSession,
+    view: &mut View,
+    client: &HotlineClient,
+) {
+    let count = session.news_folders.as_ref().map_or(0, Vec::len);
+    let index = view
+        .news_folders
+        .selected()
+        .unwrap_or(0)
+        .min(count.saturating_sub(1));
+    view.news_folders.select(Some(index));
+    let category = session.news_category.clone();
+    session.highlight_news_folder(client, index).await;
+    if session.news_category != category || session.news_category.is_none() {
+        view.news = TableState::default().with_selected(Some(0));
+        view.preview_scroll = 0;
+        session.preview_article(client, 0).await;
+    }
+}
+
+/// Keep the thread selection in range, and show that article in the preview.
+async fn reselect_news_thread(
+    session: &mut ClientSession,
+    view: &mut View,
+    client: &HotlineClient,
+) {
+    let index = view
+        .news
+        .selected()
+        .unwrap_or(0)
+        .min(session.news_threads.len().saturating_sub(1));
+    view.news.select(Some(index));
+    preview_news_article(session, view, client, index).await;
+}
+
+/// Show thread `index` in the preview, and scroll to the top for a new article.
+async fn preview_news_article(
+    session: &mut ClientSession,
+    view: &mut View,
+    client: &HotlineClient,
+    index: usize,
+) {
+    let shown = session.news_preview.as_ref().map(|article| article.id);
+    session.preview_article(client, index).await;
+    if session.news_preview.as_ref().map(|article| article.id) != shown {
+        view.preview_scroll = 0;
     }
 }

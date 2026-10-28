@@ -1,7 +1,7 @@
 use hotline_client::{Ban, ClientUserInfo, UserAccount};
 
 use crate::file_edit::FileEdit;
-use crate::session::NewsFolder;
+use crate::session::{NewsFolder, NewsTarget};
 use crate::transfer::{Conflict, Start};
 
 /// What the caller must do after one key press or mouse click.
@@ -90,13 +90,23 @@ pub enum Action {
     DeleteFile(Box<str>),
     /// Show the info of the file or folder with this name in the current folder.
     GetFileInfo(Box<str>),
-    /// List the current threaded news bundle or category again.
+    /// List the root of the threaded news tree again.
     ListThreadedNews,
-    /// Open the threaded news item at this index, or read the article there.
-    OpenNewsItem(usize),
-    /// List the bundle that holds the current one.
-    ParentNews,
-    /// Ask for a new article in the current category.
+    /// Show the threads of the category on this row of the folder tree.
+    HighlightNewsFolder(usize),
+    /// Open or close the bundle on this row of the folder tree, or move to
+    /// the threads of the category there.
+    OpenNewsFolder(usize),
+    /// Show the contents of the bundle on this row of the folder tree.
+    ExpandNewsFolder(usize),
+    /// Hide the contents of the bundle on this row of the folder tree, or
+    /// select the bundle that holds the folder there.
+    CollapseNewsFolder(usize),
+    /// Show the article on this row of the thread list in the preview.
+    PreviewArticle(usize),
+    /// Read the article on this row of the thread list.
+    OpenArticle(usize),
+    /// Ask for a new article in the open category.
     NewPost,
     /// Post an article as a reply to `parent_id`, or `0` for a new thread.
     PostArticle {
@@ -104,10 +114,10 @@ pub enum Action {
         title: String,
         text: String,
     },
-    /// Ask before the threaded news item at this index is deleted.
-    AskDeleteNews(usize),
-    DeleteNewsItem(usize),
-    /// Create a bundle or category in the current bundle.
+    /// Ask before this threaded news folder or article is deleted.
+    AskDeleteNews(NewsTarget),
+    DeleteNewsItem(NewsTarget),
+    /// Create a bundle or category in the selected bundle.
     NewNewsItem {
         name: String,
         kind: NewsFolder,
