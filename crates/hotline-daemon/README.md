@@ -92,6 +92,14 @@ client that floods the server is banned for 30 minutes. This includes
 too many transactions, messages, chat bytes, name changes, repeated
 lines, or connections.
 
+## Logging
+
+`hls` logs at INFO to standard output. `-v` adds debug lines and `-vv`
+trace lines. `-q` logs warnings, `-qq` only errors, and `-qqq` nothing.
+`RUST_LOG` overrides both flags with a list of `target=level`
+directives, such as `RUST_LOG=hotline_server=debug,info`. An invalid
+`RUST_LOG` prints a note, and the flags apply.
+
 ## Activity logs
 
 Each log is off until you give it a file:

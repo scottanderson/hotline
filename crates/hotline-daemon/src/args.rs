@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use hotline_proto::text_encoding::{self, Encoding};
 use hotline_server::{
     DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS, DEFAULT_MAX_DOWNLOADS,
     DEFAULT_MAX_DOWNLOADS_PER_CLIENT,
 };
+use tracing_subscriber::filter::LevelFilter;
 
 use crate::fork_store::ForkStoreKind;
 
@@ -125,6 +126,14 @@ pub struct Args {
     /// local or relative path to an image file served over `HTXF`.
     #[arg(long)]
     pub banner: Option<String>,
+
+    /// Log more: `-v` adds debug lines and `-vv` trace lines.
+    #[arg(short, long, action = ArgAction::Count, conflicts_with = "quiet")]
+    pub verbose: u8,
+
+    /// Log less: `-q` logs warnings, `-qq` only errors, and `-qqq` nothing.
+    #[arg(short, long, action = ArgAction::Count)]
+    pub quiet: u8,
 }
 
 /// The most bytes of agreement text that a client gets.
@@ -135,6 +144,18 @@ impl Args {
     pub fn agreement(&self) -> Box<str> {
         let text = text_encoding::to_wire_lines(&self.agreement);
         text_encoding::cut(self.encoding, &text, MAX_AGREEMENT).into()
+    }
+
+    /// The log level that `-v` and `-q` set, with INFO as the default.
+    pub fn log_level(&self) -> LevelFilter {
+        match i16::from(self.verbose) - i16::from(self.quiet) {
+            ..=-3 => LevelFilter::OFF,
+            -2 => LevelFilter::ERROR,
+            -1 => LevelFilter::WARN,
+            0 => LevelFilter::INFO,
+            1 => LevelFilter::DEBUG,
+            2.. => LevelFilter::TRACE,
+        }
     }
 }
 
@@ -155,5 +176,36 @@ mod tests {
     fn agreement_is_cut_to_64k() {
         let long = "x".repeat(MAX_AGREEMENT + 1);
         assert_eq!(args(&long).agreement().len(), MAX_AGREEMENT);
+    }
+
+    fn log_level_of(flags: &[&str]) -> LevelFilter {
+        let argv = ["hls"].iter().chain(flags);
+        Args::parse_from(argv).log_level()
+    }
+
+    #[test]
+    fn log_level_is_info_by_default() {
+        assert_eq!(log_level_of(&[]), LevelFilter::INFO);
+    }
+
+    #[test]
+    fn log_level_rises_with_each_verbose() {
+        assert_eq!(log_level_of(&["-v"]), LevelFilter::DEBUG);
+        assert_eq!(log_level_of(&["-vv"]), LevelFilter::TRACE);
+        assert_eq!(log_level_of(&["-vvv"]), LevelFilter::TRACE);
+    }
+
+    #[test]
+    fn log_level_falls_with_each_quiet() {
+        assert_eq!(log_level_of(&["-q"]), LevelFilter::WARN);
+        assert_eq!(log_level_of(&["--quiet", "--quiet"]), LevelFilter::ERROR);
+        assert_eq!(log_level_of(&["-qqq"]), LevelFilter::OFF);
+        assert_eq!(log_level_of(&["-qqqq"]), LevelFilter::OFF);
+    }
+
+    #[test]
+    fn log_level_refuses_verbose_with_quiet() {
+        assert!(Args::try_parse_from(["hls", "-v", "-q"]).is_err());
+        assert!(Args::try_parse_from(["hls", "-q", "-v"]).is_err());
     }
 }

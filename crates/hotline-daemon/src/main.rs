@@ -22,6 +22,8 @@ use hotline_server::{
     Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Providers,
     Server, ServerConfig, UrlBannerProvider,
 };
+use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::{fmt, prelude::*};
 
 use accounts::{random_password, FileAccountProvider, ADMIN_LOGIN, GUEST_LOGIN};
 use activity::{FileActivityLog, LogPaths};
@@ -33,10 +35,29 @@ use news::{import_openline_news, FileFlatNewsProvider, FileThreadedNewsProvider}
 use policy::HlsPolicy;
 use tracker::{run_beacon, TrackerTarget};
 
+/// Parses `rust_log`, the value of `RUST_LOG`, as the log filter, or logs
+/// at `level` for every target.
+fn log_targets(rust_log: Option<String>, level: LevelFilter) -> Targets {
+    rust_log
+        .filter(|var| !var.is_empty())
+        .and_then(|var| {
+            var.parse()
+                .inspect_err(|e| eprintln!("ignoring RUST_LOG={var:?}: {e}"))
+                .ok()
+        })
+        .unwrap_or_else(|| Targets::new().with_default(level))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
     let args = Args::parse();
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(log_targets(
+            std::env::var("RUST_LOG").ok(),
+            args.log_level(),
+        ))
+        .init();
 
     if let Some(dir) = &args.import_news {
         return import_news(dir, &args).await;
@@ -221,4 +242,32 @@ async fn import_news(dir: &Path, args: &Args) -> anyhow::Result<()> {
         .with_context(|| format!("failed to write {}", out.display()))?;
     tracing::info!(from = %dir.display(), to = %out.display(), "imported openline news");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_level(rust_log: Option<&str>) -> Option<LevelFilter> {
+        log_targets(rust_log.map(String::from), LevelFilter::WARN).default_level()
+    }
+
+    #[test]
+    fn log_targets_logs_at_the_level_without_rust_log() {
+        assert_eq!(default_level(None), Some(LevelFilter::WARN));
+        assert_eq!(default_level(Some("")), Some(LevelFilter::WARN));
+    }
+
+    #[test]
+    fn log_targets_logs_at_the_level_for_an_invalid_rust_log() {
+        assert_eq!(default_level(Some("x=bogus")), Some(LevelFilter::WARN));
+    }
+
+    #[test]
+    fn log_targets_parses_rust_log() {
+        let targets = log_targets(Some("hotline_server=debug,warn".into()), LevelFilter::INFO);
+        assert_eq!(targets.default_level(), Some(LevelFilter::WARN));
+        assert!(targets.would_enable("hotline_server::session", &tracing::Level::DEBUG));
+        assert!(!targets.would_enable("tokio", &tracing::Level::INFO));
+    }
 }
