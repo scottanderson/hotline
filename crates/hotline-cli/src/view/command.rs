@@ -41,17 +41,16 @@ impl Command {
     /// The key that runs the command without the palette.
     pub const fn key(self) -> &'static str {
         match self {
-            Self::OpenTab(_) => "",
-            Self::Broadcast => "^G",
-            Self::Options | Self::User(_, MenuItem::PrivateChat) => "",
-            Self::CancelDownload => "^K",
-            Self::Invite(_) => "^A",
-            Self::Subject(_) => "^T",
-            Self::Leave(_) => "^W",
+            Self::Broadcast => "Alt-A",
+            Self::Options => "Alt-O",
+            Self::Invite(_) => "Alt-I",
+            Self::Subject(_) => "Alt-S",
+            Self::Leave(_) => "Alt-W",
             Self::Quit => "^C",
             Self::User(_, MenuItem::SendMessage) => "Enter",
             Self::User(_, MenuItem::GetInfo) => "i",
             Self::User(_, MenuItem::Disconnect) => "k",
+            Self::OpenTab(_) | Self::CancelDownload | Self::User(_, MenuItem::PrivateChat) => "",
         }
     }
 }
@@ -108,9 +107,11 @@ impl Palette {
         self.selected = (self.selected + 1).min(last);
     }
 
-    /// Change the filter text with `edit`, and select the first match.
-    pub fn edit(&mut self, edit: impl FnOnce(&mut String)) {
-        edit(&mut self.input);
-        self.selected = 0;
+    /// Change the filter text with `edit`. When `edit` returns `true`,
+    /// select the first match.
+    pub fn edit(&mut self, edit: impl FnOnce(&mut String) -> bool) {
+        if edit(&mut self.input) {
+            self.selected = 0;
+        }
     }
 }

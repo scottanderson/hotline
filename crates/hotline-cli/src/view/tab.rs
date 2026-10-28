@@ -23,4 +23,12 @@ impl Tab {
 
     /// The label of [`Tab::Admin`].
     pub const ADMIN_LABEL: &'static str = "Admin";
+
+    /// The ID of the private chat room, for [`Tab::Room`].
+    pub const fn chat_id(self) -> Option<u32> {
+        match self {
+            Self::Room(chat_id) => Some(chat_id),
+            _ => None,
+        }
+    }
 }

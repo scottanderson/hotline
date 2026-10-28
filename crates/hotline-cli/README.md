@@ -47,21 +47,29 @@ quits.
 
 | Key    | Where                | Effect                                          |
 |--------|----------------------|-------------------------------------------------|
-| Ctrl-P | anywhere             | the commands that work now; type to filter      |
-| Ctrl-G | anywhere             | a broadcast, with the broadcast privilege       |
+| Ctrl-P | outside a dialog     | the commands that work now; type to filter      |
 | Ctrl-O | a room, user list    | the actions of the room or the selected user    |
-| Ctrl-K | anywhere             | cancel a download                               |
+| Alt-A  | outside a dialog     | a broadcast, with the broadcast privilege       |
+| Alt-O  | outside a dialog     | your name, icon, and options                    |
+| Alt-I  | a room               | invite a user                                   |
+| Alt-S  | a room               | set the subject                                 |
+| Alt-W  | a room               | leave the room                                  |
 | ⇧Enter | a text box           | a new line (also Alt-Enter or Ctrl-J)           |
+| Ctrl-W | a text box           | delete the last word (also Alt-⌫)               |
+| Ctrl-U | a text box           | delete the whole text                           |
 | Enter  | user list            | send a private message                          |
 | `i`    | user list            | the user's info                                 |
 | `k`    | user list            | disconnect the user, with the privilege         |
-| Ctrl-A | a room               | invite a user                                   |
-| Ctrl-T | a room               | set the subject                                 |
-| Ctrl-W | a room               | leave the room                                  |
 
-Shift-F10 and the Menu key also open the actions. The palette has
-your name, icon, and options. A right click on a user opens a menu
-that also starts a private chat.
+Alt-X also opens the palette, for a terminal that takes Ctrl-P.
+Shift-F10 and the Menu key also open the actions. The palette and
+the action menu show the key of each entry. A right click on a user
+opens a menu that also starts a private chat. Only the palette lists
+"Cancel a download".
+
+On macOS, Option with a letter types a symbol by default. Set the
+Option key to send Meta for the Alt keys. In Terminal, turn on "Use
+Option as Meta key". In iTerm2, set the left Option key to "Esc+".
 
 On the Files tab, Enter opens a folder or downloads a file, and
 Backspace goes up. `d` downloads, `u` uploads a local file or folder,

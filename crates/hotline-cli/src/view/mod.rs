@@ -45,6 +45,59 @@ fn is_new_line(key: KeyEvent) -> bool {
     }
 }
 
+/// Whether `key` is a character with Ctrl or Alt.
+fn is_modified_char(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_))
+        && key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+}
+
+/// The code of `key`, or [`KeyCode::Null`] for a character with Ctrl or
+/// Alt.
+fn plain_code(key: KeyEvent) -> KeyCode {
+    if is_modified_char(key) {
+        KeyCode::Null
+    } else {
+        key.code
+    }
+}
+
+/// Type into `text`, or edit it with Backspace, Alt+Backspace,
+/// Ctrl+Backspace, Ctrl+H, Ctrl+U, or Ctrl+W. Returns `false` for any
+/// other key.
+fn edit_text(text: &mut String, key: KeyEvent) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Backspace if ctrl || alt => delete_word(text),
+        KeyCode::Backspace => {
+            text.pop();
+        }
+        KeyCode::Char('h') if ctrl => {
+            text.pop();
+        }
+        KeyCode::Char('u') if ctrl => text.clear(),
+        KeyCode::Char('w') if ctrl => delete_word(text),
+        // AltGr on Windows sends Ctrl and Alt, and gives no ASCII letter or digit.
+        KeyCode::Char(c) if !ctrl && !alt || ctrl && alt && !c.is_ascii_alphanumeric() => {
+            text.push(c);
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Delete the last word of `text` and the spaces after it.
+fn delete_word(text: &mut String) {
+    let end = text.trim_end().len();
+    let start = text[..end]
+        .char_indices()
+        .rfind(|&(_, c)| c.is_whitespace())
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    text.truncate(start);
+}
+
 /// The pane that takes keys when no modal is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -319,23 +372,12 @@ impl View {
                 ("Tab", "folders"),
                 ("Esc", "chat"),
             ],
-            (None, Focus::Input, Tab::Chat) if self.can_broadcast => &[
-                ("Enter", "send"),
-                ("⇧Enter", "new line"),
-                ("Tab", "users"),
-                ("F1-F9", "tab"),
-                ("^P", "commands"),
-                ("^G", "broadcast"),
-                ("^K", "cancel download"),
-                ("Esc", "quit"),
-            ],
             (None, Focus::Input, Tab::Chat) => &[
                 ("Enter", "send"),
                 ("⇧Enter", "new line"),
                 ("Tab", "users"),
                 ("F1-F9", "tab"),
                 ("^P", "commands"),
-                ("^K", "cancel download"),
                 ("Esc", "quit"),
             ],
             (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => &[
@@ -359,9 +401,6 @@ impl View {
                 ("Tab", "users"),
                 ("^P", "commands"),
                 ("^O", "actions"),
-                ("^A", "invite"),
-                ("^T", "subject"),
-                ("^W", "leave"),
                 ("Esc", "chat"),
             ],
             (None, Focus::Input, Tab::News) => &[
@@ -398,15 +437,14 @@ impl View {
                 None => Action::None,
             };
         }
-        if ctrl {
-            if key.code == KeyCode::Char('p') {
-                let palette = Palette::new("commands", self.commands(users), &self.tabs);
-                self.modal = Some(Modal::Palette(palette));
-                return Action::None;
-            }
-            if let Some(command) = self.ctrl_command(key.code, users) {
-                return self.run(command, users);
-            }
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if (ctrl && key.code == KeyCode::Char('p')) || (alt && key.code == KeyCode::Char('x')) {
+            let palette = Palette::new("commands", self.commands(users), &self.tabs);
+            self.modal = Some(Modal::Palette(palette));
+            return Action::None;
+        }
+        if let Some(command) = self.alt_command(key, users) {
+            return self.run(command, users);
         }
         if is_menu_key(key) {
             let commands = self.focus_commands(users);
@@ -415,6 +453,9 @@ impl View {
                     "actions", commands, &self.tabs,
                 )));
             }
+            return Action::None;
+        }
+        if self.focus != Focus::Input && is_modified_char(key) {
             return Action::None;
         }
         match self.focus {
@@ -481,18 +522,17 @@ impl View {
         }
     }
 
-    /// The command of Ctrl with `code`, if it works now.
-    fn ctrl_command(&self, code: KeyCode, users: &[UserNameWithInfo]) -> Option<Command> {
-        let room = match self.tab {
-            Tab::Room(chat_id) => chat_id,
-            _ => 0,
-        };
-        let command = match code {
-            KeyCode::Char('g') => Command::Broadcast,
-            KeyCode::Char('k') => Command::CancelDownload,
-            KeyCode::Char('a') => Command::Invite(room),
-            KeyCode::Char('t') => Command::Subject(room),
-            KeyCode::Char('w') => Command::Leave(room),
+    /// The command of Alt with a letter, if it works now.
+    fn alt_command(&self, key: KeyEvent, users: &[UserNameWithInfo]) -> Option<Command> {
+        if !key.modifiers.contains(KeyModifiers::ALT) {
+            return None;
+        }
+        let command = match key.code {
+            KeyCode::Char('a') => Command::Broadcast,
+            KeyCode::Char('o') => Command::Options,
+            KeyCode::Char('i') => Command::Invite(self.tab.chat_id()?),
+            KeyCode::Char('s') => Command::Subject(self.tab.chat_id()?),
+            KeyCode::Char('w') => Command::Leave(self.tab.chat_id()?),
             _ => return None,
         };
         self.commands(users).contains(&command).then_some(command)
@@ -536,13 +576,7 @@ impl View {
             }
             KeyCode::Up => palette.select_previous(),
             KeyCode::Down => palette.select_next(),
-            KeyCode::Backspace => palette.edit(|input| {
-                input.pop();
-            }),
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                palette.edit(|input| input.push(c));
-            }
-            _ => {}
+            _ => palette.edit(|input| edit_text(input, key)),
         }
         self.modal = Some(Modal::Palette(palette));
         Action::None
@@ -561,7 +595,7 @@ impl View {
         if let Modal::Options(form) = modal {
             return self.options_form_key(form, key);
         }
-        match (&mut modal, key.code) {
+        match (&mut modal, plain_code(key)) {
             (Modal::Article(article), KeyCode::Char('r')) => {
                 let title = match article.title.strip_prefix("Re: ") {
                     Some(_) => article.title.to_string(),
@@ -723,16 +757,6 @@ impl View {
                     start: Start::Ask,
                 };
             }
-            (modal, KeyCode::Backspace) => {
-                if let Some(input) = modal.input_mut() {
-                    input.pop();
-                }
-            }
-            (modal, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(input) = modal.input_mut() {
-                    input.push(c);
-                }
-            }
             (Modal::UserMenu { selected, .. }, KeyCode::Up) => {
                 *selected = selected.saturating_sub(1);
             }
@@ -755,14 +779,18 @@ impl View {
             ) => {
                 return self.choose(*user_id, items[*selected], users);
             }
-            _ => {}
+            (modal, _) => {
+                if let Some(input) = modal.input_mut() {
+                    edit_text(input, key);
+                }
+            }
         }
         self.modal = Some(modal);
         Action::None
     }
 
     fn confirm_key(&mut self, conflict: Conflict, key: KeyEvent) -> Action {
-        match key.code {
+        match plain_code(key) {
             KeyCode::Char('r') => Action::retry(conflict, Start::Resume),
             KeyCode::Char('o') if conflict.can_replace() => Action::retry(conflict, Start::Replace),
             KeyCode::Esc => Action::None,
@@ -820,12 +848,7 @@ impl View {
                     text: std::mem::take(input),
                 };
             }
-            (KeyCode::Backspace, _) => {
-                input.pop();
-            }
-            (KeyCode::Char(c), _) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                input.push(c);
-            }
+            _ if edit_text(input, key) => {}
             (KeyCode::Tab, _) => self.focus = Focus::Users,
             (KeyCode::Esc, Tab::Chat) => self.modal = Some(Modal::Quit),
             (KeyCode::Esc, _) => return self.set_tab(Tab::Chat),
@@ -900,16 +923,7 @@ impl View {
             KeyCode::PageUp => form.row = form.row.saturating_sub(10),
             KeyCode::PageDown => form.row = (form.row + 10).min(last),
             KeyCode::Char(' ') if form.row >= account_form::TEXT_ROWS => form.toggle(),
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(text) = form.text_mut() {
-                    text.push(c);
-                }
-            }
-            KeyCode::Backspace => {
-                if let Some(text) = form.text_mut() {
-                    text.pop();
-                }
-            }
+            _ if form.text_mut().is_some_and(|text| edit_text(text, key)) => {}
             _ => {}
         }
         self.modal = Some(Modal::Account(form));
@@ -928,16 +942,7 @@ impl View {
             KeyCode::Up => form.row = form.row.saturating_sub(1),
             KeyCode::Down => form.row = (form.row + 1).min(last),
             KeyCode::Char(' ') if form.row >= options_form::TEXT_ROWS => form.toggle(),
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(text) = form.text_mut() {
-                    text.push(c);
-                }
-            }
-            KeyCode::Backspace => {
-                if let Some(text) = form.text_mut() {
-                    text.pop();
-                }
-            }
+            _ if form.text_mut().is_some_and(|text| edit_text(text, key)) => {}
             _ => {}
         }
         self.modal = Some(Modal::Options(form));
@@ -1615,6 +1620,111 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_w_deletes_a_word_and_ctrl_u_the_line() {
+        let mut view = View::default();
+        type_text(&mut view, "héllo wörld  ");
+        let _ = view.handle_key(ctrl('w'), &users(), &files());
+        assert_eq!(view.chat_input, "héllo ");
+        let _ = view.handle_key(ctrl('w'), &users(), &files());
+        assert_eq!(view.chat_input, "");
+
+        type_text(&mut view, "ab cd");
+        let _ = view.handle_key(ctrl('h'), &users(), &files());
+        assert_eq!(view.chat_input, "ab c");
+        let ctrl_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL);
+        let _ = view.handle_key(ctrl_backspace, &users(), &files());
+        assert_eq!(view.chat_input, "ab ");
+        type_text(&mut view, "cd");
+        let alt_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT);
+        let _ = view.handle_key(alt_backspace, &users(), &files());
+        assert_eq!(view.chat_input, "ab ");
+        view.chat_input.clear();
+
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        type_text(&mut view, "go to");
+        let _ = view.handle_key(ctrl('u'), &users(), &files());
+        let Some(Modal::Palette(palette)) = &view.modal else {
+            panic!("no palette");
+        };
+        assert_eq!(palette.input, "");
+    }
+
+    #[test]
+    fn alt_keys_run_the_commands_that_work_now() {
+        let mut view = view_with_rooms();
+        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        assert_eq!(view.handle_key(alt('a'), &users(), &files()), Action::None);
+        assert_eq!(view.modal, None);
+        assert_eq!(view.handle_key(alt('w'), &users(), &files()), Action::None);
+        assert_eq!(view.chat_input, "");
+
+        view.show_room(9);
+        assert_eq!(
+            view.handle_key(alt('w'), &users(), &files()),
+            Action::LeaveChat(9)
+        );
+        assert_eq!(
+            view.handle_key(alt('o'), &users(), &files()),
+            Action::EditOptions
+        );
+        assert_eq!(
+            view.handle_key(alt('i'), &users(), &files()),
+            Action::PickInvitee(9)
+        );
+        assert_eq!(
+            view.handle_key(alt('s'), &users(), &files()),
+            Action::EditChatSubject(9)
+        );
+
+        view.can_broadcast = true;
+        assert_eq!(view.handle_key(alt('a'), &users(), &files()), Action::None);
+        assert!(matches!(view.modal, Some(Modal::Broadcast { .. })));
+    }
+
+    #[test]
+    fn a_dialog_ignores_a_letter_with_alt() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('c'), &users(), &files());
+        let alt_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
+        assert_eq!(view.handle_key(alt_y, &users(), &files()), Action::None);
+        assert_eq!(view.modal, Some(Modal::Quit));
+    }
+
+    #[test]
+    fn a_list_ignores_an_alt_key_with_no_command() {
+        let mut view = View::default();
+        let _ = view.handle_key(key(KeyCode::F(3)), &users(), &files());
+        let alt_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT);
+        assert_eq!(view.handle_key(alt_r, &users(), &files()), Action::None);
+        assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn alt_x_opens_the_palette() {
+        let mut view = View::default();
+        let alt_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT);
+        let _ = view.handle_key(alt_x, &users(), &files());
+        assert!(matches!(view.modal, Some(Modal::Palette(_))));
+    }
+
+    #[test]
+    fn altgr_types_its_character() {
+        let mut view = View::default();
+        let altgr = KeyEvent::new(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let _ = view.handle_key(altgr, &users(), &files());
+        assert_eq!(view.chat_input, "@");
+        let ctrl_alt_x = KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let _ = view.handle_key(ctrl_alt_x, &users(), &files());
+        assert_eq!(view.chat_input, "@");
+    }
+
+    #[test]
     fn ctrl_p_runs_the_command_that_matches_the_text() {
         let mut view = View::default();
         let _ = view.handle_key(ctrl('p'), &users(), &files());
@@ -1686,13 +1796,13 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_g_broadcasts_only_with_the_privilege() {
+    fn broadcast_needs_the_privilege() {
         let mut view = View::default();
-        let _ = view.handle_key(ctrl('g'), &users(), &files());
+        assert_eq!(run_command(&mut view, "broadcast"), Action::None);
         assert_eq!(view.modal, None);
 
         view.can_broadcast = true;
-        let _ = view.handle_key(ctrl('g'), &users(), &files());
+        let _ = run_command(&mut view, "broadcast");
         type_text(&mut view, "bye");
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
@@ -1815,12 +1925,9 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_k_asks_for_a_download_and_cancels_the_chosen_one() {
+    fn cancel_download_asks_for_a_download_and_cancels_the_chosen_one() {
         let mut view = View::default();
-        assert_eq!(
-            view.handle_key(ctrl('k'), &users(), &files()),
-            Action::PickDownload
-        );
+        assert_eq!(run_command(&mut view, "cancel"), Action::PickDownload);
         view.modal = Some(Modal::PickDownload {
             downloads: vec![(3, "a.txt".into()), (5, "b.txt (queued)".into())],
             selected: 0,
@@ -1881,6 +1988,14 @@ mod tests {
         assert!(!view.hints().contains(&("k", "disconnect")));
         view.can_disconnect = true;
         assert!(view.hints().contains(&("k", "disconnect")));
+    }
+
+    #[test]
+    fn a_list_ignores_a_letter_with_ctrl() {
+        let mut view = View::default();
+        let _ = view.handle_key(key(KeyCode::F(3)), &users(), &files());
+        assert_eq!(view.handle_key(ctrl('x'), &users(), &files()), Action::None);
+        assert_eq!(view.modal, None);
     }
 
     #[test]
@@ -2030,6 +2145,13 @@ mod tests {
         view
     }
 
+    /// Run the first palette command that matches `text`.
+    fn run_command(view: &mut View, text: &str) -> Action {
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        type_text(view, text);
+        view.handle_key(key(KeyCode::Enter), &users(), &files())
+    }
+
     fn ctrl(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
@@ -2062,21 +2184,15 @@ mod tests {
     }
 
     #[test]
-    fn room_keys_leave_set_the_subject_and_invite() {
+    fn room_commands_leave_set_the_subject_and_invite() {
         let mut view = view_with_rooms();
         view.show_room(9);
+        assert_eq!(run_command(&mut view, "leave"), Action::LeaveChat(9));
         assert_eq!(
-            view.handle_key(ctrl('w'), &users(), &files()),
-            Action::LeaveChat(9)
-        );
-        assert_eq!(
-            view.handle_key(ctrl('t'), &users(), &files()),
+            run_command(&mut view, "subject"),
             Action::EditChatSubject(9)
         );
-        assert_eq!(
-            view.handle_key(ctrl('a'), &users(), &files()),
-            Action::PickInvitee(9)
-        );
+        assert_eq!(run_command(&mut view, "invite"), Action::PickInvitee(9));
     }
 
     #[test]
