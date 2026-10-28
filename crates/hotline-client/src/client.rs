@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -54,10 +54,21 @@ enum PendingState {
     Closed,
 }
 
-type PendingMap = Arc<Mutex<PendingState>>;
+/// The state that [`HotlineClient`] and its [`read_loop`] share.
+struct Shared {
+    pending: Mutex<PendingState>,
+    /// When the handshake ended.
+    connected: Instant,
+    /// When a transaction last went either way, in nanoseconds after `connected`.
+    last_traffic: AtomicU64,
+}
 
-/// When a transaction last went either way on the connection.
-type LastTraffic = Arc<std::sync::Mutex<Instant>>;
+/// The write half of the connection and the next transaction ID, used
+/// only by the clones of [`HotlineClient`].
+struct Writer {
+    sink: Mutex<SplitSink<Conn, Transaction>>,
+    next_id: AtomicU32,
+}
 
 /// A connected, logged-in-or-not Hotline client session. Cloning is
 /// cheap: it shares the same connection and pending-request table. The
@@ -65,13 +76,11 @@ type LastTraffic = Arc<std::sync::Mutex<Instant>>;
 /// only touches the write half.
 #[derive(Clone)]
 pub struct HotlineClient {
-    writer: Arc<Mutex<SplitSink<Conn, Transaction>>>,
-    pending: PendingMap,
-    next_id: Arc<AtomicU32>,
+    writer: Arc<Writer>,
+    shared: Arc<Shared>,
     encoding: EncodingHandle,
     /// The server's transaction address.
     peer: SocketAddr,
-    last_traffic: LastTraffic,
 }
 
 impl HotlineClient {
@@ -98,25 +107,23 @@ impl HotlineClient {
         let encoding = EncodingHandle::default();
         let codec = TransactionCodec::for_client(encoding.clone());
         let (writer, reader) = Framed::new(stream, codec).split();
-        let pending: PendingMap = Arc::new(Mutex::new(PendingState::Open(HashMap::new())));
+        let shared = Arc::new(Shared {
+            pending: Mutex::new(PendingState::Open(HashMap::new())),
+            connected: Instant::now(),
+            last_traffic: AtomicU64::new(0),
+        });
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-
-        let last_traffic = Arc::new(std::sync::Mutex::new(Instant::now()));
-        tokio::spawn(read_loop(
-            reader,
-            pending.clone(),
-            event_tx,
-            last_traffic.clone(),
-        ));
+        tokio::spawn(read_loop(reader, shared.clone(), event_tx));
 
         Ok((
             Self {
-                writer: Arc::new(Mutex::new(writer)),
-                pending,
-                next_id: Arc::new(AtomicU32::new(1)),
+                writer: Arc::new(Writer {
+                    sink: Mutex::new(writer),
+                    next_id: AtomicU32::new(1),
+                }),
+                shared,
                 encoding,
                 peer,
-                last_traffic,
             },
             event_rx,
         ))
@@ -137,12 +144,12 @@ impl HotlineClient {
         opcode: Opcode,
         fields: Vec<Field>,
     ) -> Result<Transaction<Received>> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.writer.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(opcode, id, fields);
 
         let (reply_tx, reply_rx) = oneshot::channel();
         {
-            let mut pending = self.pending.lock().await;
+            let mut pending = self.shared.pending.lock().await;
             match &mut *pending {
                 PendingState::Open(map) => {
                     map.insert(id, reply_tx);
@@ -152,7 +159,7 @@ impl HotlineClient {
         }
 
         if let Err(e) = self.send(tx).await {
-            if let PendingState::Open(map) = &mut *self.pending.lock().await {
+            if let PendingState::Open(map) = &mut *self.shared.pending.lock().await {
                 map.remove(&id);
             }
             return Err(e);
@@ -161,7 +168,7 @@ impl HotlineClient {
         let reply = match tokio::time::timeout(REQUEST_TIMEOUT, reply_rx).await {
             Ok(reply) => reply.map_err(|_| ClientError::ConnectionClosed)?,
             Err(_) => {
-                if let PendingState::Open(map) = &mut *self.pending.lock().await {
+                if let PendingState::Open(map) = &mut *self.shared.pending.lock().await {
                     map.remove(&id);
                 }
                 return Err(ClientError::Timeout);
@@ -332,24 +339,22 @@ impl HotlineClient {
 
     /// Send a request that gets no reply.
     async fn send_without_reply(&self, opcode: Opcode, fields: Vec<Field>) -> Result<()> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.writer.next_id.fetch_add(1, Ordering::Relaxed);
         let tx = Transaction::request(opcode, id, fields);
         self.send(tx).await
     }
 
     /// Write `tx` and note the traffic.
     async fn send(&self, tx: Transaction) -> Result<()> {
-        self.writer.lock().await.send(tx).await?;
-        touch(&self.last_traffic);
+        self.writer.sink.lock().await.send(tx).await?;
+        self.shared.touch();
         Ok(())
     }
 
     /// When a transaction last went either way on the connection.
     pub fn last_traffic(&self) -> Instant {
-        *self
-            .last_traffic
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        let nanos = self.shared.last_traffic.load(Ordering::Relaxed);
+        self.shared.connected + Duration::from_nanos(nanos)
     }
 
     /// Tell the server that the connection is in use,
@@ -668,24 +673,24 @@ fn reference(reply: &Transaction<Received>) -> Result<u32> {
         .ok_or(ClientError::MissingField(FieldId::RefNum))
 }
 
-/// Set `last_traffic` to now.
-fn touch(last_traffic: &LastTraffic) {
-    *last_traffic
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+impl Shared {
+    /// Move `last_traffic` forward to now.
+    fn touch(&self) {
+        let nanos = u64::try_from(self.connected.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.last_traffic.fetch_max(nanos, Ordering::Relaxed);
+    }
 }
 
 /// Forwards every transaction the server sends until the connection ends.
 async fn read_loop(
     mut reader: SplitStream<Conn>,
-    pending: PendingMap,
+    shared: Arc<Shared>,
     events: mpsc::UnboundedSender<Transaction<Received>>,
-    last_traffic: LastTraffic,
 ) {
     while let Some(Ok(tx)) = reader.next().await {
-        touch(&last_traffic);
+        shared.touch();
         if tx.is_reply() {
-            let sender = match &mut *pending.lock().await {
+            let sender = match &mut *shared.pending.lock().await {
                 PendingState::Open(map) => map.remove(&tx.trans()),
                 PendingState::Closed => None,
             };
@@ -699,6 +704,6 @@ async fn read_loop(
 
     // Swapping in Closed under the same lock request() checks is what
     // makes this race-free.
-    let old = std::mem::replace(&mut *pending.lock().await, PendingState::Closed);
+    let old = std::mem::replace(&mut *shared.pending.lock().await, PendingState::Closed);
     drop(old); // dropping each sender fails its matching reply_rx.await
 }
