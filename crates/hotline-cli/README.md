@@ -49,7 +49,7 @@ quits.
 |--------|----------------------|-------------------------------------------------|
 | Ctrl-P | anywhere             | the commands that work now; type to filter      |
 | Ctrl-G | anywhere             | a broadcast, with the broadcast privilege       |
-| Ctrl-O | anywhere             | your name, icon, and options                    |
+| Ctrl-O | a room, user list    | the actions of the room or the selected user    |
 | Ctrl-K | anywhere             | cancel a download                               |
 | ⇧Enter | a text box           | a new line (also Alt-Enter or Ctrl-J)           |
 | Enter  | user list            | send a private message                          |
@@ -59,7 +59,9 @@ quits.
 | Ctrl-T | a room               | set the subject                                 |
 | Ctrl-W | a room               | leave the room                                  |
 
-A right click on a user opens a menu that also starts a private chat.
+Shift-F10 and the Menu key also open the actions. The palette has
+your name, icon, and options. A right click on a user opens a menu
+that also starts a private chat.
 
 On the Files tab, Enter opens a folder or downloads a file, and
 Backspace goes up. `d` downloads, `u` uploads a local file or folder,

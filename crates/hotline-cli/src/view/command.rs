@@ -1,4 +1,4 @@
-use super::Tab;
+use super::{MenuItem, Tab};
 
 /// One entry in the command palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +15,8 @@ pub enum Command {
     /// Leave the room `chat_id`.
     Leave(u32),
     Quit,
+    /// Run `item` of the user menu on the user `user_id`.
+    User(u16, MenuItem),
 }
 
 impl Command {
@@ -32,6 +34,7 @@ impl Command {
             Self::Subject(_) => "Set the room subject".into(),
             Self::Leave(_) => "Leave this room".into(),
             Self::Quit => "Quit".into(),
+            Self::User(_, item) => item.label().into(),
         }
     }
 
@@ -40,19 +43,24 @@ impl Command {
         match self {
             Self::OpenTab(_) => "",
             Self::Broadcast => "^G",
-            Self::Options => "^O",
+            Self::Options | Self::User(_, MenuItem::PrivateChat) => "",
             Self::CancelDownload => "^K",
             Self::Invite(_) => "^A",
             Self::Subject(_) => "^T",
             Self::Leave(_) => "^W",
             Self::Quit => "^C",
+            Self::User(_, MenuItem::SendMessage) => "Enter",
+            Self::User(_, MenuItem::GetInfo) => "i",
+            Self::User(_, MenuItem::Disconnect) => "k",
         }
     }
 }
 
-/// The command palette: the commands that match `input`.
+/// The command palette, or the action menu: the commands that match `input`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Palette {
+    /// The title shown while `input` is empty.
+    pub title: &'static str,
     pub input: String,
     /// Each command and its label, in palette order.
     commands: Vec<(Command, String)>,
@@ -60,8 +68,13 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub fn new(commands: impl IntoIterator<Item = Command>, tabs: &[(Tab, String)]) -> Self {
+    pub fn new(
+        title: &'static str,
+        commands: impl IntoIterator<Item = Command>,
+        tabs: &[(Tab, String)],
+    ) -> Self {
         Self {
+            title,
             input: String::new(),
             commands: commands
                 .into_iter()

@@ -636,7 +636,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
                 Constraint::Length(46),
                 Constraint::Length(list_height(rows.len())),
             );
-            let block = modal_block(format!("> {}", palette.input));
+            let block = match palette.input.as_str() {
+                "" => modal_block(palette.title),
+                input => modal_block(format!("> {input}")),
+            };
             draw_list_modal(frame, area, block, rows, palette.selected);
         }
         Modal::UserMenu {

@@ -210,7 +210,12 @@ impl View {
             Focus::Accounts => "accounts",
             Focus::Input | Focus::Users => "input",
         };
-        let mut hints = vec![("↑↓", "select"), ("Enter", "message"), ("i", "info")];
+        let mut hints = vec![
+            ("↑↓", "select"),
+            ("^O", "actions"),
+            ("Enter", "message"),
+            ("i", "info"),
+        ];
         if self.can_disconnect {
             hints.push(("k", "disconnect"));
         }
@@ -322,7 +327,6 @@ impl View {
                 ("^P", "commands"),
                 ("^G", "broadcast"),
                 ("^K", "cancel download"),
-                ("^O", "options"),
                 ("Esc", "quit"),
             ],
             (None, Focus::Input, Tab::Chat) => &[
@@ -332,7 +336,6 @@ impl View {
                 ("F1-F9", "tab"),
                 ("^P", "commands"),
                 ("^K", "cancel download"),
-                ("^O", "options"),
                 ("Esc", "quit"),
             ],
             (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => &[
@@ -355,6 +358,7 @@ impl View {
                 ("Enter", "send"),
                 ("Tab", "users"),
                 ("^P", "commands"),
+                ("^O", "actions"),
                 ("^A", "invite"),
                 ("^T", "subject"),
                 ("^W", "leave"),
@@ -396,12 +400,22 @@ impl View {
         }
         if ctrl {
             if key.code == KeyCode::Char('p') {
-                self.modal = Some(Modal::Palette(Palette::new(self.commands(), &self.tabs)));
+                let palette = Palette::new("commands", self.commands(users), &self.tabs);
+                self.modal = Some(Modal::Palette(palette));
                 return Action::None;
             }
-            if let Some(command) = self.ctrl_command(key.code) {
-                return self.run(command);
+            if let Some(command) = self.ctrl_command(key.code, users) {
+                return self.run(command, users);
             }
+        }
+        if is_menu_key(key) {
+            let commands = self.focus_commands(users);
+            if !commands.is_empty() {
+                self.modal = Some(Modal::Palette(Palette::new(
+                    "actions", commands, &self.tabs,
+                )));
+            }
+            return Action::None;
         }
         match self.focus {
             Focus::Users => self.users_key(key, users),
@@ -415,18 +429,15 @@ impl View {
     }
 
     /// The commands that work now, in palette order.
-    fn commands(&self) -> Vec<Command> {
+    fn commands(&self, users: &[UserNameWithInfo]) -> Vec<Command> {
         let mut commands: Vec<Command> = self
             .tabs
             .iter()
             .map(|&(tab, _)| Command::OpenTab(tab))
             .collect();
-        if let Tab::Room(chat_id) = self.tab {
-            commands.extend([
-                Command::Invite(chat_id),
-                Command::Subject(chat_id),
-                Command::Leave(chat_id),
-            ]);
+        commands.extend(self.room_commands());
+        if self.focus == Focus::Users {
+            commands.extend(self.user_commands(users));
         }
         if self.can_broadcast {
             commands.push(Command::Broadcast);
@@ -435,26 +446,60 @@ impl View {
         commands
     }
 
+    /// The commands of the room tab, if one is open.
+    fn room_commands(&self) -> Vec<Command> {
+        match self.tab {
+            Tab::Room(chat_id) => vec![
+                Command::Invite(chat_id),
+                Command::Subject(chat_id),
+                Command::Leave(chat_id),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The commands of the user menu on the selected user, if one is selected.
+    fn user_commands(&self, users: &[UserNameWithInfo]) -> Vec<Command> {
+        self.selected_user(users).map_or_else(Vec::new, |user_id| {
+            MenuItem::items(self.can_disconnect)
+                .iter()
+                .map(|&item| Command::User(user_id, item))
+                .collect()
+        })
+    }
+
+    /// The commands of the action menu for the item with the focus.
+    fn focus_commands(&self, users: &[UserNameWithInfo]) -> Vec<Command> {
+        match self.focus {
+            Focus::Users => self.user_commands(users),
+            Focus::Input => self.room_commands(),
+            Focus::Files
+            | Focus::NewsFolders
+            | Focus::NewsThreads
+            | Focus::NewsPreview
+            | Focus::Accounts => Vec::new(),
+        }
+    }
+
     /// The command of Ctrl with `code`, if it works now.
-    fn ctrl_command(&self, code: KeyCode) -> Option<Command> {
+    fn ctrl_command(&self, code: KeyCode, users: &[UserNameWithInfo]) -> Option<Command> {
         let room = match self.tab {
             Tab::Room(chat_id) => chat_id,
             _ => 0,
         };
         let command = match code {
             KeyCode::Char('g') => Command::Broadcast,
-            KeyCode::Char('o') => Command::Options,
             KeyCode::Char('k') => Command::CancelDownload,
             KeyCode::Char('a') => Command::Invite(room),
             KeyCode::Char('t') => Command::Subject(room),
             KeyCode::Char('w') => Command::Leave(room),
             _ => return None,
         };
-        self.commands().contains(&command).then_some(command)
+        self.commands(users).contains(&command).then_some(command)
     }
 
     /// Run `command`.
-    fn run(&mut self, command: Command) -> Action {
+    fn run(&mut self, command: Command, users: &[UserNameWithInfo]) -> Action {
         match command {
             Command::OpenTab(tab) => self.set_tab(tab),
             Command::Broadcast => {
@@ -472,16 +517,22 @@ impl View {
                 self.modal = Some(Modal::Quit);
                 Action::None
             }
+            Command::User(user_id, item) => self.choose(user_id, item, users),
         }
     }
 
-    fn palette_key(&mut self, mut palette: Palette, key: KeyEvent) -> Action {
+    fn palette_key(
+        &mut self,
+        mut palette: Palette,
+        key: KeyEvent,
+        users: &[UserNameWithInfo],
+    ) -> Action {
         match key.code {
             KeyCode::Esc => return Action::None,
             KeyCode::Enter => {
                 return palette
                     .chosen()
-                    .map_or(Action::None, |command| self.run(command));
+                    .map_or(Action::None, |command| self.run(command, users));
             }
             KeyCode::Up => palette.select_previous(),
             KeyCode::Down => palette.select_next(),
@@ -499,7 +550,7 @@ impl View {
 
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         if let Modal::Palette(palette) = modal {
-            return self.palette_key(palette, key);
+            return self.palette_key(palette, key, users);
         }
         if let Modal::Confirm(conflict) = modal {
             return self.confirm_key(conflict, key);
@@ -1345,6 +1396,16 @@ pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
     (rect.left()..rect.right()).contains(&x) && (rect.top()..rect.bottom()).contains(&y)
 }
 
+/// Ctrl+O, Shift+F10, or the Menu key.
+const fn is_menu_key(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char('o') => key.modifiers.contains(KeyModifiers::CONTROL),
+        KeyCode::F(10) => key.modifiers.contains(KeyModifiers::SHIFT),
+        KeyCode::Menu => true,
+        _ => false,
+    }
+}
+
 /// The tab number of F1 to F9, or of Alt with 1 to 9.
 fn tab_number(key: KeyEvent) -> Option<usize> {
     match key.code {
@@ -1590,6 +1651,41 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_o_opens_the_actions_of_the_selected_user() {
+        let mut view = View {
+            focus: Focus::Users,
+            ..View::default()
+        };
+        let _ = view.handle_key(ctrl('o'), &users(), &files());
+        assert_eq!(view.modal, None);
+
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        let _ = view.handle_key(ctrl('o'), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::GetClientInfoText(1)
+        );
+    }
+
+    #[test]
+    fn ctrl_o_opens_the_actions_of_the_room() {
+        let mut view = View::default();
+        view.set_tabs(vec![
+            (Tab::Chat, "Chat".into()),
+            (Tab::Room(7), "Room".into()),
+        ]);
+        view.show_room(7);
+        let shift_f10 = KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT);
+        let _ = view.handle_key(shift_f10, &users(), &files());
+        type_text(&mut view, "subj");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::EditChatSubject(7)
+        );
+    }
+
+    #[test]
     fn ctrl_g_broadcasts_only_with_the_privilege() {
         let mut view = View::default();
         let _ = view.handle_key(ctrl('g'), &users(), &files());
@@ -1608,8 +1704,10 @@ mod tests {
     #[test]
     fn the_options_form_sends_the_new_name_and_options() {
         let mut view = View::default();
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        type_text(&mut view, "options");
         assert_eq!(
-            view.handle_key(ctrl('o'), &users(), &files()),
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::EditOptions
         );
         let info = ClientUserInfo {
