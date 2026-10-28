@@ -10,6 +10,10 @@ readme = "README.md"
 keywords.workspace = true
 categories = ["command-line-utilities", "network-programming"]
 
+[package.metadata.cargo-machete]
+# crossterm turns on the event-stream feature of ratatui's crossterm.
+ignored = ["crossterm"]
+
 [[bin]]
 name = "hlc"
 path = "src/main.rs"
