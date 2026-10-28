@@ -1,6 +1,6 @@
 use hotline_client::{ClientInfoText, FileInfo};
 
-use super::{AccountForm, OptionsForm};
+use super::{AccountForm, OptionsForm, Palette};
 use crate::file_edit::FileEdit;
 use crate::session::{ArticleText, ChatInvite, NewsFolder, NewsTarget};
 use crate::transfer::Conflict;
@@ -77,6 +77,8 @@ pub enum Modal {
         downloads: Vec<(u64, Box<str>)>,
         selected: usize,
     },
+    /// The command palette.
+    Palette(Palette),
     /// The users to invite to the room `chat_id`, as `(user ID, name)`.
     PickUser {
         chat_id: u32,

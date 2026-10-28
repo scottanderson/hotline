@@ -3,6 +3,7 @@
 
 mod account_form;
 mod action;
+mod command;
 mod modal;
 mod options_form;
 mod tab;
@@ -25,6 +26,7 @@ use crate::ui::{self, Areas};
 
 pub use account_form::{privileges, AccountForm};
 pub use action::Action;
+pub use command::{Command, Palette};
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OptionsForm, OPTIONS};
 pub use tab::Tab;
@@ -222,6 +224,9 @@ impl View {
             (Some(Modal::InstantMsg { .. } | Modal::Broadcast { .. }), ..) => {
                 &[("Enter", "send"), ("⇧Enter", "new line"), ("Esc", "cancel")]
             }
+            (Some(Modal::Palette(_)), ..) => {
+                &[("↑↓", "choose"), ("Enter", "run"), ("Esc", "close")]
+            }
             (Some(Modal::UserMenu { .. }), ..) => {
                 &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
             }
@@ -314,6 +319,7 @@ impl View {
                 ("⇧Enter", "new line"),
                 ("Tab", "users"),
                 ("F1-F9", "tab"),
+                ("^P", "commands"),
                 ("^G", "broadcast"),
                 ("^K", "cancel download"),
                 ("^O", "options"),
@@ -324,6 +330,7 @@ impl View {
                 ("⇧Enter", "new line"),
                 ("Tab", "users"),
                 ("F1-F9", "tab"),
+                ("^P", "commands"),
                 ("^K", "cancel download"),
                 ("^O", "options"),
                 ("Esc", "quit"),
@@ -347,6 +354,7 @@ impl View {
             (None, Focus::Input, Tab::Room(_)) => &[
                 ("Enter", "send"),
                 ("Tab", "users"),
+                ("^P", "commands"),
                 ("^A", "invite"),
                 ("^T", "subject"),
                 ("^W", "leave"),
@@ -387,25 +395,12 @@ impl View {
             };
         }
         if ctrl {
-            if key.code == KeyCode::Char('o') {
-                return Action::EditOptions;
-            }
-            if key.code == KeyCode::Char('k') {
-                return Action::PickDownload;
-            }
-            if key.code == KeyCode::Char('g') && self.can_broadcast {
-                self.modal = Some(Modal::Broadcast {
-                    input: String::new(),
-                });
+            if key.code == KeyCode::Char('p') {
+                self.modal = Some(Modal::Palette(Palette::new(self.commands(), &self.tabs)));
                 return Action::None;
             }
-            if let Tab::Room(chat_id) = self.tab {
-                match key.code {
-                    KeyCode::Char('w') => return Action::LeaveChat(chat_id),
-                    KeyCode::Char('t') => return Action::EditChatSubject(chat_id),
-                    KeyCode::Char('a') => return Action::PickInvitee(chat_id),
-                    _ => {}
-                }
+            if let Some(command) = self.ctrl_command(key.code) {
+                return self.run(command);
             }
         }
         match self.focus {
@@ -419,7 +414,93 @@ impl View {
         }
     }
 
+    /// The commands that work now, in palette order.
+    fn commands(&self) -> Vec<Command> {
+        let mut commands: Vec<Command> = self
+            .tabs
+            .iter()
+            .map(|&(tab, _)| Command::OpenTab(tab))
+            .collect();
+        if let Tab::Room(chat_id) = self.tab {
+            commands.extend([
+                Command::Invite(chat_id),
+                Command::Subject(chat_id),
+                Command::Leave(chat_id),
+            ]);
+        }
+        if self.can_broadcast {
+            commands.push(Command::Broadcast);
+        }
+        commands.extend([Command::Options, Command::CancelDownload, Command::Quit]);
+        commands
+    }
+
+    /// The command of Ctrl with `code`, if it works now.
+    fn ctrl_command(&self, code: KeyCode) -> Option<Command> {
+        let room = match self.tab {
+            Tab::Room(chat_id) => chat_id,
+            _ => 0,
+        };
+        let command = match code {
+            KeyCode::Char('g') => Command::Broadcast,
+            KeyCode::Char('o') => Command::Options,
+            KeyCode::Char('k') => Command::CancelDownload,
+            KeyCode::Char('a') => Command::Invite(room),
+            KeyCode::Char('t') => Command::Subject(room),
+            KeyCode::Char('w') => Command::Leave(room),
+            _ => return None,
+        };
+        self.commands().contains(&command).then_some(command)
+    }
+
+    /// Run `command`.
+    fn run(&mut self, command: Command) -> Action {
+        match command {
+            Command::OpenTab(tab) => self.set_tab(tab),
+            Command::Broadcast => {
+                self.modal = Some(Modal::Broadcast {
+                    input: String::new(),
+                });
+                Action::None
+            }
+            Command::Options => Action::EditOptions,
+            Command::CancelDownload => Action::PickDownload,
+            Command::Invite(chat_id) => Action::PickInvitee(chat_id),
+            Command::Subject(chat_id) => Action::EditChatSubject(chat_id),
+            Command::Leave(chat_id) => Action::LeaveChat(chat_id),
+            Command::Quit => {
+                self.modal = Some(Modal::Quit);
+                Action::None
+            }
+        }
+    }
+
+    fn palette_key(&mut self, mut palette: Palette, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => return Action::None,
+            KeyCode::Enter => {
+                return palette
+                    .chosen()
+                    .map_or(Action::None, |command| self.run(command));
+            }
+            KeyCode::Up => palette.select_previous(),
+            KeyCode::Down => palette.select_next(),
+            KeyCode::Backspace => palette.edit(|input| {
+                input.pop();
+            }),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                palette.edit(|input| input.push(c));
+            }
+            _ => {}
+        }
+        self.modal = Some(Modal::Palette(palette));
+        Action::None
+    }
+
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
+        if let Modal::Palette(palette) = modal {
+            return self.palette_key(palette, key);
+        }
         if let Modal::Confirm(conflict) = modal {
             return self.confirm_key(conflict, key);
         }
@@ -947,6 +1028,7 @@ impl View {
                 | Modal::Subject { .. }
                 | Modal::PickUser { .. }
                 | Modal::PickDownload { .. }
+                | Modal::Palette(_)
                 | Modal::Post { .. }
                 | Modal::NewsName { .. }
                 | Modal::DeleteNews { .. }
@@ -1468,6 +1550,42 @@ mod tests {
         assert_eq!(
             view.handle_mouse(left, &areas(), &users(), &files(), Instant::now()),
             Action::GetClientInfoText(1)
+        );
+    }
+
+    #[test]
+    fn ctrl_p_runs_the_command_that_matches_the_text() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        type_text(&mut view, "FILES");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::ListFiles
+        );
+        assert_eq!((view.tab, view.modal), (Tab::Files, None));
+    }
+
+    #[test]
+    fn ctrl_p_lists_only_the_commands_that_work_now() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        type_text(&mut view, "broadcast");
+        let Some(Modal::Palette(palette)) = &view.modal else {
+            panic!("no palette");
+        };
+        assert_eq!(palette.chosen(), None);
+
+        view.set_tabs(vec![
+            (Tab::Chat, "Chat".into()),
+            (Tab::Room(7), "Room".into()),
+        ]);
+        view.show_room(7);
+        view.modal = None;
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        type_text(&mut view, "leave");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::LeaveChat(7)
         );
     }
 

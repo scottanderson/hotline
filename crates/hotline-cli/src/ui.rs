@@ -627,6 +627,18 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             let block = modal_block("cancel a download");
             draw_list_modal(frame, area, block, items, *selected);
         }
+        Modal::Palette(palette) => {
+            let rows: Vec<String> = palette
+                .matches()
+                .map(|(command, label)| format!("{label:<38}{}", command.key()))
+                .collect();
+            let area = screen.centered(
+                Constraint::Length(46),
+                Constraint::Length(list_height(rows.len())),
+            );
+            let block = modal_block(format!("> {}", palette.input));
+            draw_list_modal(frame, area, block, rows, palette.selected);
+        }
         Modal::UserMenu {
             at,
             items,

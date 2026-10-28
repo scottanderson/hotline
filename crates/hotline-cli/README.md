@@ -47,6 +47,7 @@ quits.
 
 | Key    | Where                | Effect                                          |
 |--------|----------------------|-------------------------------------------------|
+| Ctrl-P | anywhere             | the commands that work now; type to filter      |
 | Ctrl-G | anywhere             | a broadcast, with the broadcast privilege       |
 | Ctrl-O | anywhere             | your name, icon, and options                    |
 | Ctrl-K | anywhere             | cancel a download                               |
