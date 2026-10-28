@@ -60,14 +60,10 @@ impl Inner {
     }
 }
 
-/// `ahead` term from openline's `ProcessTran_DownloadFile`/`DownloadFldr`:
+/// The downloads ahead of a new one when `count` run and `max` may run:
 /// `0` under `max`, `count - max + 1` at or past it.
 const fn ahead(count: usize, max: usize) -> u32 {
-    if count >= max {
-        (count - max + 1) as u32
-    } else {
-        0
-    }
+    (count + 1).saturating_sub(max) as u32
 }
 
 /// One promotion or position update to push as [`myTran_DownloadInfo`] (211).
@@ -245,6 +241,14 @@ fn recompute(inner: &mut Inner) -> Vec<QueueUpdate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ahead_is_zero_under_max_and_counts_from_max() {
+        assert_eq!(
+            [0, 1, 2, 3, 4].map(|count| ahead(count, 2)),
+            [0, 0, 1, 2, 3]
+        );
+    }
 
     fn update(user_id: u16, reference: u32, waiting_count: u32) -> QueueUpdate {
         QueueUpdate {
