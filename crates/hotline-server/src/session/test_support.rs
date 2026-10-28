@@ -1,5 +1,6 @@
 //! Shared fixtures for the `session` module's tests.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::mpsc;
@@ -45,9 +46,9 @@ pub(super) fn request(opcode: Opcode, trans: u32, fields: Vec<Field>) -> Transac
 }
 
 /// Shared state with openline's flood limits.
-pub(super) fn state_with_flood() -> SharedState {
+pub(super) fn state_with_flood() -> Arc<SharedState> {
     SharedState::new(Providers {
-        flood: std::sync::Arc::new(crate::flood::InMemoryFloodPolicy::default()),
+        flood: Arc::new(crate::flood::InMemoryFloodPolicy::default()),
         ..Providers::default()
     })
 }
@@ -102,16 +103,16 @@ pub(super) fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> A
 }
 
 /// State with `policy`'s behavior choices.
-pub(super) fn state_with_policy(policy: impl crate::ServerPolicy + 'static) -> SharedState {
+pub(super) fn state_with_policy(policy: impl crate::ServerPolicy + 'static) -> Arc<SharedState> {
     SharedState::new(Providers {
-        policy: std::sync::Arc::new(policy),
+        policy: Arc::new(policy),
         ..Providers::default()
     })
 }
 
 pub(super) fn state_with_banner(
-    banner: std::sync::Arc<dyn crate::banner::BannerProvider>,
-) -> SharedState {
+    banner: Arc<dyn crate::banner::BannerProvider>,
+) -> Arc<SharedState> {
     SharedState::new(Providers {
         banner,
         ..Providers::default()
@@ -120,8 +121,8 @@ pub(super) fn state_with_banner(
 
 /// State over the given account storage.
 pub(super) fn state_with_accounts(
-    accounts: std::sync::Arc<dyn crate::account::AccountProvider>,
-) -> SharedState {
+    accounts: Arc<dyn crate::account::AccountProvider>,
+) -> Arc<SharedState> {
     SharedState::new(Providers {
         accounts,
         ..Providers::default()
@@ -150,10 +151,10 @@ impl ActivityLog for RecordingActivityLog {
 /// State over `files` whose activity goes to the returned log.
 pub(super) fn state_recording_activity(
     files: crate::file::InMemoryFileProvider,
-) -> (SharedState, std::sync::Arc<RecordingActivityLog>) {
-    let log = std::sync::Arc::new(RecordingActivityLog::default());
+) -> (Arc<SharedState>, Arc<RecordingActivityLog>) {
+    let log = Arc::new(RecordingActivityLog::default());
     let state = SharedState::new(Providers {
-        files: std::sync::Arc::new(files),
+        files: Arc::new(files),
         activity: log.clone(),
         ..Providers::default()
     });

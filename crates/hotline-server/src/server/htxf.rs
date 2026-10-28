@@ -31,7 +31,7 @@ const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Accept `HTXF` data connections forever, spawning one task per
 /// connection. Each connection completes exactly one pending transfer,
 /// matched by the reference number in its handshake header.
-pub(crate) async fn run_htxf_listener(listener: TcpListener, state: SharedState) {
+pub(crate) async fn run_htxf_listener(listener: TcpListener, state: Arc<SharedState>) {
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(x) => x,
@@ -58,7 +58,7 @@ pub(crate) async fn run_htxf_listener(listener: TcpListener, state: SharedState)
 async fn handle_htxf_connection(
     mut stream: TcpStream,
     peer: SocketAddr,
-    state: &SharedState,
+    state: &Arc<SharedState>,
 ) -> Result<()> {
     let mut header_buf = [0u8; 16];
     let Ok(read) = tokio::time::timeout(HEADER_TIMEOUT, stream.read_exact(&mut header_buf)).await
@@ -125,7 +125,7 @@ async fn handle_htxf_connection(
 /// before it holds a slot.
 async fn wait_for_slot_or_close(
     stream: &TcpStream,
-    state: &SharedState,
+    state: &Arc<SharedState>,
     reference: TransferRef,
 ) -> bool {
     let closed = async {
@@ -164,7 +164,7 @@ async fn run_upload(
 ///
 /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
 async fn run_download(
-    state: &SharedState,
+    state: &Arc<SharedState>,
     reference: TransferRef,
     send: impl Future<Output = Result<()>>,
 ) -> Result<()> {
@@ -662,7 +662,7 @@ mod tests {
     async fn htxf_listener_closes_a_connection_from_a_banned_address() {
         use tokio::io::AsyncReadExt;
 
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .ban(crate::BanRecord::new("127.0.0.1".parse().unwrap(), None))
             .await
@@ -692,7 +692,7 @@ mod tests {
         assert!(stored_item_path(&root, &HlPath::new(["ok", ""]), &state).is_none());
     }
 
-    fn state_with_files(files: InMemoryFileProvider) -> SharedState {
+    fn state_with_files(files: InMemoryFileProvider) -> Arc<SharedState> {
         SharedState::new(Providers {
             files: Arc::new(files),
             ..Providers::default()
@@ -1177,7 +1177,7 @@ mod tests {
     /// Register `folder`, connect to it over loopback, and send the
     /// `HTXF` header, with the server side running in a spawned task.
     async fn start_folder_transfer(
-        state: &SharedState,
+        state: &Arc<SharedState>,
         folder: FolderTransfer,
         direction: TransferDirection,
     ) -> (TcpStream, JoinHandle<()>) {

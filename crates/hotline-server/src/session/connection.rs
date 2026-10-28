@@ -1,6 +1,7 @@
 //! The per-connection `Session`: handshake, run loop, and dispatch.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use unicode_general_category::{get_general_category, GeneralCategory};
@@ -174,7 +175,7 @@ impl Session {
     /// loop until the client disconnects.
     pub async fn run(
         mut stream: TcpStream,
-        state: SharedState,
+        state: Arc<SharedState>,
         config: ServerConfig,
     ) -> Result<()> {
         let remote_addr = stream.peer_addr()?;
@@ -237,7 +238,7 @@ impl Session {
     /// the cleanup.
     async fn dispatch(
         session: &mut Session,
-        state: &SharedState,
+        state: &Arc<SharedState>,
         config: &ServerConfig,
         writer: &mut SessionWriter,
         reader: &mut SessionReader,
@@ -318,7 +319,7 @@ impl Session {
     }
 
     /// Removes a session from cross-session state and notifies other users.
-    async fn leave_server(session: &Session, state: &SharedState) {
+    async fn leave_server(session: &Session, state: &Arc<SharedState>) {
         state.remove_recipient(session.user_id).await;
         state.remove_user(session.user_id).await;
         state.reset_flood(session.user_id).await;
@@ -379,7 +380,7 @@ impl Session {
     pub(super) async fn handle(
         &mut self,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
         if self.flood_banned(FloodEvent::Transaction, state).await {
@@ -445,7 +446,7 @@ impl Session {
         &mut self,
         opcode: Opcode,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
         config: &ServerConfig,
     ) -> Vec<Transaction> {
         match opcode {
@@ -982,7 +983,7 @@ mod tests {
     #[tokio::test]
     async fn login_from_a_banned_address_says_why() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let ip = session.remote_addr.ip();
         let login = request(Opcode::Login, 1, vec![]);
 
@@ -1018,7 +1019,7 @@ mod tests {
     #[tokio::test]
     async fn login_reply_advertises_server_version_190() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
 
         let login = request(Opcode::Login, 1, vec![]);
@@ -1036,7 +1037,7 @@ mod tests {
     #[tokio::test]
     async fn login_reply_sends_community_banner_id_zero() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
 
         let login = request(Opcode::Login, 1, vec![]);
@@ -1055,7 +1056,7 @@ mod tests {
     async fn login_reply_sends_empty_server_name_when_unconfigured() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig {
             server_name: Box::default(),
             ..ServerConfig::default()
@@ -1074,7 +1075,7 @@ mod tests {
     async fn login_with_name_registers_and_broadcasts_join_immediately() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         let mut observer = state.register_recipient(2).await;
         let mut joiner_rx = state.register_recipient(1).await;
@@ -1184,7 +1185,7 @@ mod tests {
     #[tokio::test]
     async fn login_grants_the_matching_account_privileges() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         state
             .put_account(
@@ -1216,7 +1217,7 @@ mod tests {
     #[tokio::test]
     async fn login_changes_each_cr_to_a_dash() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         state
             .put_account(
@@ -1248,7 +1249,7 @@ mod tests {
     #[tokio::test]
     async fn login_matches_the_account_regardless_of_case() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         state
             .put_account(
@@ -1280,7 +1281,7 @@ mod tests {
     #[tokio::test]
     async fn login_grants_the_account_user_getlist_setting() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         state
             .put_account(
@@ -1308,7 +1309,7 @@ mod tests {
     #[tokio::test]
     async fn login_with_wrong_password_fails_the_login() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         state
             .put_account(
@@ -1351,7 +1352,7 @@ mod tests {
             let mut session = test_session("guest1", Access::all());
             session.state = SessionState::Agreement;
             session.login = login.into();
-            let state = SharedState::default();
+            let state = Arc::<SharedState>::default();
             let mut own = state.register_recipient(session.user_id).await;
             let mut bystander = state.register_recipient(2).await;
 
@@ -1381,7 +1382,7 @@ mod tests {
     #[tokio::test]
     async fn login_with_a_nonempty_password_against_a_blank_stored_one_is_rejected() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         state
             .put_account(
@@ -1412,7 +1413,7 @@ mod tests {
     #[tokio::test]
     async fn login_with_unknown_account_fails_the_login() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         let mut rx = state.register_recipient(session.user_id).await;
 
@@ -1436,7 +1437,7 @@ mod tests {
     #[tokio::test]
     async fn login_without_a_guest_account_is_rejected() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state.delete_account("guest").await.unwrap();
         let config = ServerConfig::default();
         let mut rx = state.register_recipient(session.user_id).await;
@@ -1451,7 +1452,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_access_update_takes_an_empty_name_as_is() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         for access in [Access::empty(), Access::ANY_NAME] {
             let mut session = test_session("Bob", access);
             session.login = "bob".into();
@@ -1472,7 +1473,7 @@ mod tests {
         for opcode in [Opcode::GetUserNameList, Opcode::KeepConnectionAlive] {
             let mut session = test_session("guest1", Access::default());
             session.state = SessionState::Agreement;
-            let state = SharedState::default();
+            let state = Arc::<SharedState>::default();
             let config = ServerConfig::default();
             let mut rx = state.register_recipient(session.user_id).await;
 
@@ -1497,7 +1498,7 @@ mod tests {
             request(Opcode::SetChatSubject, 2, vec![]),
         ];
 
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         for request in &requests {
             assert!(session.handle(request, &state, &config).await.is_empty());
         }
@@ -1511,7 +1512,7 @@ mod tests {
     async fn login_without_name_defers_join_until_agreed() {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
 
@@ -1547,7 +1548,7 @@ mod tests {
     #[tokio::test]
     async fn pre_150_client_joins_immediately_without_a_name() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
 
@@ -1566,7 +1567,7 @@ mod tests {
     #[tokio::test]
     async fn modern_client_with_a_name_but_no_icon_defers_join_until_agreed() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
 
@@ -1591,7 +1592,7 @@ mod tests {
     #[tokio::test]
     async fn modern_client_with_a_name_and_icon_joins_immediately() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
         let mut bystander = state.register_recipient(2).await;
 
@@ -1617,7 +1618,7 @@ mod tests {
     #[tokio::test]
     async fn login_with_name_sends_user_access_before_the_agreement() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
 
         let login = request(
@@ -1745,7 +1746,7 @@ mod tests {
     #[tokio::test]
     async fn agreed_push_omitted_when_no_banner_configured() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig::default();
 
         let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
@@ -1794,7 +1795,7 @@ mod tests {
     #[tokio::test]
     async fn modern_client_gets_no_agreement_push_without_configured_text() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig {
             agreement: Box::default(),
             ..ServerConfig::default()
@@ -1813,7 +1814,7 @@ mod tests {
     #[tokio::test]
     async fn pre_150_client_gets_no_agreement_push_without_configured_text() {
         let mut session = test_session("guest1", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig {
             agreement: Box::default(),
             ..ServerConfig::default()
@@ -1833,7 +1834,7 @@ mod tests {
     #[tokio::test]
     async fn dont_show_agreement_skips_the_configured_text_but_still_marks_modern_clients_done() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "skipper".to_string(),
@@ -1875,7 +1876,7 @@ mod tests {
     #[tokio::test]
     async fn dont_show_agreement_sends_nothing_to_a_pre_150_client() {
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "skipper".to_string(),
@@ -1910,7 +1911,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let mut session = test_session("guest1", Access::default());
         session.login = "guest".into();
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let agreed = request(
             Opcode::Agreed,
@@ -1953,7 +1954,7 @@ mod tests {
         let mut session = test_session("guest1", Access::ANY_NAME);
         session.login = "alice".into();
         session.account_name = "Stale".into();
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "alice".to_string(),
@@ -1977,7 +1978,7 @@ mod tests {
     async fn agreed_with_any_name_cleans_and_cuts_the_name() {
         let mut session = test_session("guest1", Access::ANY_NAME);
         session.login = "guest".into();
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let long = format!("a\rb{}", "c".repeat(40));
         session
@@ -1995,7 +1996,7 @@ mod tests {
     async fn agreed_replaces_each_code_point_that_does_not_print() {
         let mut session = test_session("guest1", Access::ANY_NAME);
         session.login = "guest".into();
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let utf8 = Encoding::for_label(b"utf-8").unwrap();
         session.encoding.set(utf8);
@@ -2011,7 +2012,7 @@ mod tests {
     async fn agreed_reads_the_refusal_options() {
         let mut session = test_session("guest1", Access::default());
         session.login = "guest".into();
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let agreed = agreed_as("Alice", UserChangeOptions::REFUSE_PM);
         session.on_agreed(&agreed, &state).await;
@@ -2023,7 +2024,7 @@ mod tests {
     #[tokio::test]
     async fn set_client_user_info_without_any_name_keeps_the_name() {
         let mut session = test_session("Guest", Access::default() - Access::ANY_NAME);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SetClientUserInfo,
@@ -2042,7 +2043,7 @@ mod tests {
     async fn agreed_selfinfo_sends_the_access_read_again() {
         let mut session = test_session("guest1", Access::all());
         session.login = "alice".into();
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "alice".to_string(),
@@ -2084,7 +2085,7 @@ mod tests {
         // Color derives from DISCONNECT_USERS alone, even for a non-admin
         // login, and must be correct in the join broadcast itself.
         let mut session = test_session("guest1", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "guest".to_string(),
@@ -2126,7 +2127,7 @@ mod tests {
     #[tokio::test]
     async fn set_away_broadcasts_the_away_bit_and_clears_it() {
         let mut session = test_session("Alice", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 user_id: session.user_id,
@@ -2192,7 +2193,7 @@ mod tests {
     #[tokio::test]
     async fn set_client_user_info_reads_the_refusal_bits_out_of_options() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SetClientUserInfo,
@@ -2218,7 +2219,7 @@ mod tests {
     #[tokio::test]
     async fn set_client_user_info_reads_a_custom_automatic_response() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SetClientUserInfo,
@@ -2238,7 +2239,7 @@ mod tests {
     #[tokio::test]
     async fn set_client_user_info_cuts_the_automatic_response_to_127_bytes() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SetClientUserInfo,
@@ -2261,7 +2262,7 @@ mod tests {
     #[tokio::test]
     async fn set_client_user_info_falls_back_to_a_default_automatic_response_text() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SetClientUserInfo,
@@ -2299,7 +2300,7 @@ mod tests {
     async fn a_malformed_transaction_still_unregisters_the_session() {
         use tokio::net::TcpListener;
 
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -2330,9 +2331,9 @@ mod tests {
     async fn run_with_short_login_timeout() -> (
         tokio::task::JoinHandle<Result<()>>,
         tokio::net::TcpStream,
-        SharedState,
+        Arc<SharedState>,
     ) {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let config = ServerConfig {
@@ -2382,7 +2383,7 @@ mod tests {
     /// Runs one session on `state`, and does the handshake. Returns its
     /// task and a framed client.
     async fn run_session(
-        state: SharedState,
+        state: Arc<SharedState>,
     ) -> (
         tokio::task::JoinHandle<Result<()>>,
         Framed<TcpStream, TransactionCodec>,
@@ -2414,7 +2415,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn login_failed_reads_no_request_and_closes_after_the_wait() {
-        let (server, mut client) = run_session(SharedState::default()).await;
+        let (server, mut client) = run_session(Arc::<SharedState>::default()).await;
 
         client.send(unknown_login()).await.unwrap();
         assert!(client.next().await.unwrap().unwrap().is_error());
@@ -2427,7 +2428,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_sends_a_server_msg_and_closes() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
         while state.connection_count().await == 0 {
             tokio::task::yield_now().await;
@@ -2446,7 +2447,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn kick_closes_after_the_drain_when_the_client_stays_open() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
         while state.connection_count().await == 0 {
             tokio::task::yield_now().await;

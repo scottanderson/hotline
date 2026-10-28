@@ -1,6 +1,7 @@
 //! Periodic `HTRK` registration with one or more trackers.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
@@ -69,7 +70,7 @@ fn beacon(
 /// Beacon `state`'s user count to every target, forever, resolving each
 /// address again every cycle.
 pub async fn run_beacon(
-    state: SharedState,
+    state: Arc<SharedState>,
     targets: Vec<TrackerTarget>,
     port: u16,
     name: String,

@@ -15,7 +15,7 @@ use crate::state::SharedState;
 /// A running (or not-yet-started) Hotline server.
 pub struct Server {
     config: ServerConfig,
-    state: SharedState,
+    state: Arc<SharedState>,
     connections: Arc<ConnectionLimits>,
 }
 
@@ -35,7 +35,7 @@ impl Server {
 
     /// This server's cross-session state, for a caller that runs its own
     /// task alongside [`Server::run`].
-    pub const fn state(&self) -> &SharedState {
+    pub const fn state(&self) -> &Arc<SharedState> {
         &self.state
     }
 

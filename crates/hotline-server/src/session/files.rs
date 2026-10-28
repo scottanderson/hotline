@@ -1,5 +1,6 @@
 //! File listing, transfer setup, and file/folder maintenance.
 
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use hotline_proto::consts::{Access, RequireFlags};
@@ -123,7 +124,7 @@ impl Session {
     pub(super) async fn on_download_file(
         &self,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DOWNLOAD_FILE) {
             return vec![tx.reply_error(reason)];
@@ -211,7 +212,7 @@ impl Session {
         kind: TransferKind,
         size: u64,
         resume_offset: u64,
-        state: &SharedState,
+        state: &Arc<SharedState>,
     ) -> Vec<Field> {
         let reference = state
             .register_transfer(PendingTransfer {
@@ -241,7 +242,7 @@ impl Session {
     pub(super) async fn on_download_banner(
         &self,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access_extra.require(AccessExtra::BANNER_GET) {
             return vec![tx.reply_error(reason)];
@@ -272,7 +273,7 @@ impl Session {
     pub(super) async fn on_upload_file(
         &self,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::UPLOAD_FILE) {
             return vec![tx.reply_error(reason)];
@@ -354,7 +355,7 @@ impl Session {
     pub(super) async fn on_download_fldr(
         &self,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::DOWNLOAD_FOLDER) {
             return vec![tx.reply_error(reason)];
@@ -408,7 +409,7 @@ impl Session {
     pub(super) async fn on_upload_fldr(
         &self,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
         if let Err(reason) = self.access.require(Access::UPLOAD_FOLDER) {
             return vec![tx.reply_error(reason)];
@@ -475,7 +476,7 @@ impl Session {
     pub(super) async fn on_kill_download(
         &self,
         tx: &Transaction<Received>,
-        state: &SharedState,
+        state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
         if let Some(reference) = tx
             .field(FieldId::RefNum)
@@ -792,7 +793,7 @@ mod tests {
         assert!(reply.is_error());
     }
 
-    fn state_with_files(files: crate::file::InMemoryFileProvider) -> SharedState {
+    fn state_with_files(files: crate::file::InMemoryFileProvider) -> Arc<SharedState> {
         SharedState::new(Providers {
             files: std::sync::Arc::new(files),
             ..Providers::default()
@@ -806,7 +807,7 @@ mod tests {
     fn state_with_files_and_policy(
         files: crate::file::InMemoryFileProvider,
         policy: impl crate::ServerPolicy + 'static,
-    ) -> SharedState {
+    ) -> Arc<SharedState> {
         SharedState::new(Providers {
             files: std::sync::Arc::new(files),
             policy: std::sync::Arc::new(policy),

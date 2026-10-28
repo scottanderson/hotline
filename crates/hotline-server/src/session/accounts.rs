@@ -417,6 +417,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::account::AccountProvider;
     use crate::state::{RecipientMessage, UserEntry};
@@ -430,7 +432,7 @@ mod tests {
     async fn new_user_then_get_user_round_trips() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let create = request(
             Opcode::NewUser,
@@ -471,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn new_user_folds_the_login_to_lowercase() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let create = request(
             Opcode::NewUser,
@@ -493,7 +495,7 @@ mod tests {
     async fn new_user_refuses_a_taken_login() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account("bob".to_string(), Account::guest())
             .await
@@ -521,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn new_user_cannot_create_with_more_access_than_self() {
         let session = test_session("Admin", Access::CREATE_USER);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let create = request(
             Opcode::NewUser,
@@ -539,7 +541,7 @@ mod tests {
     async fn set_user_refuses_a_missing_login() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let modify = request(
             Opcode::SetUser,
@@ -563,7 +565,7 @@ mod tests {
     #[tokio::test]
     async fn delete_user_matches_the_login_regardless_of_case() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -589,7 +591,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_only_overwrites_fields_present() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -624,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_without_a_password_field_at_all_clears_it() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -658,7 +660,7 @@ mod tests {
     async fn get_user_never_echoes_the_real_password() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -724,7 +726,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_propagates_to_a_live_session_without_reconnect() {
         let admin = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -810,7 +812,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_gives_the_account_name_then_restores_the_chosen_name() {
         let admin = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -880,7 +882,7 @@ mod tests {
     #[tokio::test]
     async fn delete_user_removes_it() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -907,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn account_crud_denied_without_matching_privilege() {
         let session = test_session("Alice", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let login_field = Field::obfuscated_string(FieldId::UserLogin, "bob");
 
         let create = request(Opcode::NewUser, 1, vec![login_field.clone()]);
@@ -953,7 +955,7 @@ mod tests {
     #[tokio::test]
     async fn get_user_list_denied_without_open_user() {
         let session = test_session("Alice", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(Opcode::GetUserList, 1, vec![]);
         assert!(session.on_get_user_list(&request, &state).await[0].is_error());
     }
@@ -962,7 +964,7 @@ mod tests {
     async fn get_user_list_returns_every_account_with_a_redacted_password() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -1005,7 +1007,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_denied_without_an_account_privilege() {
         let session = test_session("Alice", Access::SEND_CHAT);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let record = user_list_record(
             None,
@@ -1026,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_with_no_records_is_an_error() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(Opcode::SetUserList, 1, vec![]);
         let [reply] = session
@@ -1040,7 +1042,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_creates_a_new_account() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let record = user_list_record(
             None,
@@ -1062,7 +1064,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_cannot_create_with_more_access_than_self() {
         let session = test_session("Admin", Access::SEND_CHAT);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let record = user_list_record(
             None,
@@ -1080,7 +1082,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_creating_over_an_existing_login_is_a_notice_not_an_error() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -1113,7 +1115,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_renames_and_reuses_the_password_on_the_unchanged_sentinel() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -1265,7 +1267,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_rename_updates_sessions_under_the_old_login() {
         let admin = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let account = Account {
             access_extra: AccessExtra::default(),
             password: "secret".into(),
@@ -1298,7 +1300,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_rename_onto_a_taken_login_changes_nothing() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         for (login, password) in [("bob", "bob's"), ("alice", "alice's")] {
             let account = Account {
                 access_extra: AccessExtra::default(),
@@ -1329,7 +1331,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_new_record_with_a_taken_login_sends_a_server_notice() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account("bob".to_string(), Account::guest())
             .await
@@ -1363,7 +1365,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_delete_disconnects_the_online_session() {
         let session = test_session("Admin", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -1418,7 +1420,7 @@ mod tests {
     #[tokio::test]
     async fn set_user_list_denied_without_matching_privilege() {
         let session = test_session("Alice", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let create = user_list_record(
             None,

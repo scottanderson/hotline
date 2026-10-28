@@ -338,6 +338,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::state::RecipientMessage;
     use hotline_proto::opcode::TransactionType;
@@ -348,7 +350,7 @@ mod tests {
     async fn newsfile_round_trips_through_post_and_get() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let post = request(
             Opcode::OldPostNews,
@@ -370,7 +372,7 @@ mod tests {
     async fn get_msgs_clamps_a_board_past_the_field_limit() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         for i in 0..20 {
             let body = format!("{i}{}", "x".repeat(8000));
@@ -399,7 +401,7 @@ mod tests {
     #[tokio::test]
     async fn old_post_news_publishes_once() {
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut rx = state.register_recipient(1).await;
         let post = request(
             Opcode::OldPostNews,
@@ -443,7 +445,7 @@ mod tests {
     async fn old_post_news_rejects_oversized_text() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut rx = state.register_recipient(1).await;
         let post = request(
             Opcode::OldPostNews,
@@ -464,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_news_fldr_and_new_news_cat_create_items_get_news_cat_name_list_can_see() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let session = test_session("Alice", Access::all());
 
         let mkdir = request(
@@ -503,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_news_cat_name_list_sends_the_old_field_below_version_15() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .news_mkcategory(&HlPath::default(), "General")
             .await
@@ -535,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_news_fldr_denied_without_news_create_fldr() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut access = Access::all();
         access.remove(Access::NEWS_CREATE_FLDR);
         let session = test_session("Alice", access);
@@ -556,7 +558,7 @@ mod tests {
     #[tokio::test]
     async fn del_news_item_removes_a_bundle_and_requires_news_delete_fldr() {
         let encoding = text_encoding::DEFAULT;
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let session = test_session("Alice", Access::all());
         state
             .news_mkdir(&HlPath::default(), "Bundle")
@@ -599,7 +601,7 @@ mod tests {
     #[tokio::test]
     async fn post_news_art_get_news_art_data_and_get_news_art_name_list_round_trip_an_article() {
         let encoding = text_encoding::DEFAULT;
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let session = test_session("Alice", Access::all());
         state
             .news_mkcategory(&HlPath::default(), "General")
@@ -687,7 +689,7 @@ mod tests {
     async fn post_news_art_stores_text_as_utf8_and_sends_it_in_each_encoding() {
         let encoding = text_encoding::DEFAULT;
         let utf8 = text_encoding::Encoding::for_label(b"utf-8").unwrap();
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let roman = test_session("Alice", Access::all());
         let unicode = test_session("Bob", Access::all());
         unicode.encoding.set(utf8);
@@ -744,7 +746,7 @@ mod tests {
         let utf8 = text_encoding::Encoding::for_label(b"utf-8").unwrap();
         let session = test_session("Alice", Access::all());
         session.encoding.set(utf8);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         for _ in 0..20 {
             let post = request(
@@ -767,7 +769,7 @@ mod tests {
     #[tokio::test]
     async fn post_news_art_with_an_empty_body_is_an_error() {
         let encoding = text_encoding::DEFAULT;
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let session = test_session("Alice", Access::all());
         state
             .news_mkcategory(&HlPath::default(), "General")
@@ -802,7 +804,7 @@ mod tests {
     #[tokio::test]
     async fn post_news_art_denied_without_post_news_art() {
         let encoding = text_encoding::DEFAULT;
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut access = Access::all();
         access.remove(Access::POST_NEWS_ART);
         let session = test_session("Alice", access);

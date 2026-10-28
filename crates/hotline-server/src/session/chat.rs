@@ -516,6 +516,8 @@ fn chat_request_replies(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::session::connection::MsgOption;
     use crate::state::{ConsoleUpdate, RecipientMessage, UserEntry};
@@ -556,7 +558,7 @@ mod tests {
     async fn chat_relay_starts_with_cr_for_scrollback_clients() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -584,7 +586,7 @@ mod tests {
     async fn chat_relay_uses_emote_format_for_style_1() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -614,7 +616,7 @@ mod tests {
     #[tokio::test]
     async fn chat_send_relay_is_cut_to_8192_bytes() {
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -641,7 +643,7 @@ mod tests {
     async fn chat_relay_prefixes_every_line_of_a_multiline_message() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -669,7 +671,7 @@ mod tests {
     async fn chat_relay_truncates_a_long_name_keeping_its_start() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("ANameThatIsWayTooLong", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -697,7 +699,7 @@ mod tests {
     async fn chat_relay_keeps_normal_format_for_non_emote_style() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -728,7 +730,7 @@ mod tests {
     async fn chat_starting_with_slash_dispatches_as_a_console_command_not_a_relay() {
         let mut session = test_session("Alice", Access::default());
         session.access_extra.insert(AccessExtra::MANAGE_USERS);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -764,7 +766,7 @@ mod tests {
     #[tokio::test]
     async fn console_reply_in_a_private_room_carries_its_chat_id() {
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -793,7 +795,7 @@ mod tests {
     async fn chat_starting_with_slash_relays_as_chat_when_console_is_off() {
         let mut session = test_session("Alice", Access::default());
         session.access_extra.insert(AccessExtra::MANAGE_USERS);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -823,7 +825,7 @@ mod tests {
     async fn console_prefix_is_configurable() {
         let mut session = test_session("Alice", Access::default());
         session.access_extra.insert(AccessExtra::MANAGE_USERS);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let config = ServerConfig {
             console_prefix: Some('!'),
             ..ServerConfig::default()
@@ -847,7 +849,7 @@ mod tests {
         // SEND_CHAT is required even though /users itself needs only MANAGE_USERS.
         let mut session = test_session("Alice", Access::empty());
         session.access_extra.insert(AccessExtra::MANAGE_USERS);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -868,7 +870,7 @@ mod tests {
     #[tokio::test]
     async fn chat_send_without_data_relays_an_empty_line() {
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(Opcode::ChatSend, 1, vec![]);
 
         let mut rx = state.register_recipient(1).await;
@@ -891,7 +893,7 @@ mod tests {
     #[tokio::test]
     async fn chat_send_without_send_chat_or_data_sends_a_server_notice() {
         let session = test_session("Alice", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(Opcode::ChatSend, 1, vec![]);
 
         let reply = session
@@ -905,7 +907,7 @@ mod tests {
     #[tokio::test]
     async fn chat_send_without_send_chat_sends_a_server_notice() {
         let session = test_session("Alice", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -930,7 +932,7 @@ mod tests {
     #[tokio::test]
     async fn unrecognized_console_command_replies_command_not_found() {
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::ChatSend,
             1,
@@ -952,7 +954,7 @@ mod tests {
     async fn console_access_update_is_applied_live_and_broadcast() {
         let mut session = test_session("Bob", Access::default());
         session.user_id = 2;
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut rx = state.register_recipient(2).await;
 
         session
@@ -997,7 +999,7 @@ mod tests {
     async fn chat_membership_opcodes_denied_without_chat_private() {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::CHAT_PRIVATE);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let invite = request(
             Opcode::InviteToChat,
@@ -1040,7 +1042,7 @@ mod tests {
     async fn chat_room_create_invite_and_room_scoped_chat() {
         let encoding = text_encoding::DEFAULT;
         let creator = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 user_id: 1,
@@ -1164,7 +1166,7 @@ mod tests {
 
     #[tokio::test]
     async fn leave_chat_of_the_main_room_does_nothing() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state.add_chat_member(0, 1).await;
         state.add_chat_member(0, 2).await;
         let mut creator_rx = state.register_recipient(1).await;
@@ -1179,7 +1181,7 @@ mod tests {
 
     #[tokio::test]
     async fn leave_chat_by_a_non_member_notifies_no_one() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
 
         let mut creator_rx = state.register_recipient(1).await;
@@ -1196,7 +1198,7 @@ mod tests {
 
     #[tokio::test]
     async fn leave_chat_sends_no_reply_but_still_notifies_remaining_members() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         state.add_chat_member(chat_id, 2).await;
 
@@ -1241,7 +1243,7 @@ mod tests {
     #[tokio::test]
     async fn joining_an_unprotected_room_without_an_invite_is_an_error() {
         let bob = test_session("Bob", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
 
         let join = request(
@@ -1260,7 +1262,7 @@ mod tests {
     #[tokio::test]
     async fn join_chat_sends_the_subject_only_when_the_room_has_one() {
         let bob = test_session("Bob", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         let join = request(
             Opcode::JoinChat,
@@ -1293,7 +1295,7 @@ mod tests {
     #[tokio::test]
     async fn join_chat_accepts_a_short_encoded_chat_id() {
         let bob = test_session("Bob", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         state.invite(chat_id, bob.user_id).await;
 
@@ -1313,7 +1315,7 @@ mod tests {
     #[tokio::test]
     async fn joining_a_password_protected_room_requires_the_right_password() {
         let bob = test_session("Bob", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         state
             .set_chat_password(chat_id, "hunter2".to_string())
@@ -1350,7 +1352,7 @@ mod tests {
     #[tokio::test]
     async fn a_pending_invite_bypasses_a_rooms_password() {
         let bob = test_session("Bob", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         state
             .set_chat_password(chat_id, "hunter2".to_string())
@@ -1372,7 +1374,7 @@ mod tests {
             user_id: 2,
             ..outsider
         };
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
 
         let request = request(
@@ -1392,7 +1394,7 @@ mod tests {
     async fn a_member_can_set_a_private_rooms_password() {
         let encoding = text_encoding::DEFAULT;
         let member = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(member.user_id).await;
         let mut rx = state.register_recipient(member.user_id).await;
 
@@ -1425,7 +1427,7 @@ mod tests {
     #[tokio::test]
     async fn set_chat_subject_cuts_the_subject_to_255_bytes() {
         let member = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(member.user_id).await;
 
         let request = request(
@@ -1447,7 +1449,7 @@ mod tests {
     #[tokio::test]
     async fn setting_the_global_room_subject_requires_set_subject() {
         let guest = test_session("Guest", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SetChatSubject,
@@ -1467,7 +1469,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let mut admin = test_session("Admin", Access::empty());
         admin.access_extra.insert(AccessExtra::SET_SUBJECT);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut rx = state.register_recipient(admin.user_id).await;
 
         let request = request(
@@ -1512,7 +1514,7 @@ mod tests {
     #[tokio::test]
     async fn invite_to_chat_invites_every_listed_user_and_skips_a_failed_one() {
         let alice = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(alice.user_id).await;
         state.insert_user(test_user(2, "Bob")).await;
         state.insert_user(test_user(3, "Carol")).await;
@@ -1545,7 +1547,7 @@ mod tests {
     #[tokio::test]
     async fn inviting_a_disconnected_user_is_an_error() {
         let alice = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
 
         let invite = request(
@@ -1564,7 +1566,7 @@ mod tests {
     #[tokio::test]
     async fn inviting_with_a_zero_chat_id_or_user_id_is_an_error() {
         let alice = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
 
         let missing_uid = request(
@@ -1594,7 +1596,7 @@ mod tests {
     #[tokio::test]
     async fn inviting_an_existing_member_is_an_error() {
         let alice = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 user_id: 2,
@@ -1632,7 +1634,7 @@ mod tests {
     #[tokio::test]
     async fn inviting_an_already_invited_user_is_an_error() {
         let alice = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 user_id: 2,
@@ -1671,7 +1673,7 @@ mod tests {
     async fn chat_invite_bounces_and_is_not_delivered_when_target_refuses() {
         let encoding = text_encoding::DEFAULT;
         let alice = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 refuses_chat: true,
@@ -1713,7 +1715,7 @@ mod tests {
     #[tokio::test]
     async fn invite_new_chat_bounces_and_is_not_delivered_when_target_refuses() {
         let alice = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 refuses_chat: true,
@@ -1752,7 +1754,7 @@ mod tests {
 
     #[tokio::test]
     async fn joining_clears_the_invite() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         state.invite(chat_id, 2).await;
         assert!(state.is_invited(chat_id, 2).await);
@@ -1773,7 +1775,7 @@ mod tests {
 
     #[tokio::test]
     async fn declining_clears_the_invite() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         state.invite(chat_id, 2).await;
 
@@ -1795,7 +1797,7 @@ mod tests {
     #[tokio::test]
     async fn declining_notifies_the_room() {
         let encoding = text_encoding::DEFAULT;
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
         state.invite(chat_id, 2).await;
 

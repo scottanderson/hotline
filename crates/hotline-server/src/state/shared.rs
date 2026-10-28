@@ -54,109 +54,125 @@ const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 /// The bytes an upload must leave free on the disk.
 const UPLOAD_SPACE_MARGIN: u64 = 512_000;
 
-/// State shared by every [`crate::Session`], behind cheap `Arc` clones.
-#[derive(Clone)]
+/// State shared by every [`crate::Session`], behind one `Arc`.
 pub struct SharedState {
-    users: Arc<RwLock<HashMap<u16, UserEntry>>>,
-    next_user_id: Arc<AtomicU16>,
+    users: RwLock<HashMap<u16, UserEntry>>,
+    next_user_id: AtomicU16,
     /// One inbound channel per currently connected recipient.
-    recipients: Arc<RwLock<HashMap<u16, mpsc::Sender<RecipientMessage>>>>,
-    /// File storage backing the file listing, [`myTran_DownloadFile`] (202),
-    /// and [`myTran_UploadFile`] (203); see [`crate::FileProvider`].
-    ///
-    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
-    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
-    files: Arc<dyn FileProvider>,
-    /// Classic news storage, see [`crate::FlatNewsProvider`].
-    flat_news: Arc<dyn FlatNewsProvider>,
-    /// Threaded news storage, see [`crate::ThreadedNewsProvider`].
-    threaded_news: Arc<dyn ThreadedNewsProvider>,
+    recipients: RwLock<HashMap<u16, mpsc::Sender<RecipientMessage>>>,
+    /// The storage and the behavior choices.
+    providers: Providers,
     /// Chat ID `0` is always present: the main room every connected
     /// user is implicitly in. Other entries are private rooms.
-    chat_rooms: Arc<RwLock<HashMap<u32, ChatRoom>>>,
-    next_chat_id: Arc<AtomicU32>,
-    /// Account storage; see [`crate::AccountProvider`].
-    accounts: Arc<dyn AccountProvider>,
-    /// Held across each check and write of `accounts`.
-    account_writes: Arc<Mutex<()>>,
-    /// Ban storage; see [`crate::BanProvider`].
-    bans: Arc<dyn BanProvider>,
-    /// Flood/spam policy; see [`crate::FloodPolicy`].
-    flood: Arc<dyn FloodPolicy>,
-    /// Banner storage; see [`crate::BannerProvider`].
-    banner: Arc<dyn BannerProvider>,
+    chat_rooms: RwLock<HashMap<u32, ChatRoom>>,
+    next_chat_id: AtomicU32,
+    /// Held across each check and write of the accounts.
+    account_writes: Mutex<()>,
     /// Transfers awaiting their `HTXF` data connection, keyed by the
     /// reference number handed to the client.
-    transfers: Arc<RwLock<HashMap<TransferRef, PendingTransfer>>>,
+    transfers: RwLock<HashMap<TransferRef, PendingTransfer>>,
     /// Transfers whose data connection is open.
     running: Arc<RunningTransfers>,
-    next_transfer_ref: Arc<AtomicU32>,
+    next_transfer_ref: AtomicU32,
     /// Concurrent-download admission; see
     /// [`download_queue::DownloadQueue`](crate::state::download_queue::DownloadQueue).
-    download_queue: Arc<DownloadQueue>,
-    /// Console command dispatch; see [`crate::ChatCommandDispatcher`].
-    commands: Arc<dyn ChatCommandDispatcher>,
-    /// Activity reports; see [`crate::ActivityLog`].
-    activity: Arc<dyn ActivityLog>,
-    /// Behavior choices; see [`crate::ServerPolicy`].
-    policy: Arc<dyn ServerPolicy>,
+    download_queue: DownloadQueue,
 }
 
 impl Default for SharedState {
     fn default() -> Self {
-        Self::new(Providers::default())
+        Self {
+            users: RwLock::new(HashMap::new()),
+            next_user_id: AtomicU16::new(1),
+            recipients: RwLock::new(HashMap::new()),
+            providers: Providers::default(),
+            chat_rooms: RwLock::new(HashMap::from([(0, ChatRoom::default())])),
+            next_chat_id: AtomicU32::new(1),
+            account_writes: Mutex::default(),
+            transfers: RwLock::new(HashMap::new()),
+            running: Arc::default(),
+            next_transfer_ref: AtomicU32::new(1),
+            download_queue: DownloadQueue::default(),
+        }
     }
 }
 
 impl SharedState {
     /// Build fresh shared state backed by `providers`.
-    pub fn new(providers: Providers) -> Self {
-        Self {
-            users: Arc::new(RwLock::new(HashMap::new())),
-            next_user_id: Arc::new(AtomicU16::new(1)),
-            recipients: Arc::new(RwLock::new(HashMap::new())),
-            files: providers.files,
-            flat_news: providers.flat_news,
-            threaded_news: providers.threaded_news,
-            chat_rooms: Arc::new(RwLock::new(HashMap::from([(0, ChatRoom::default())]))),
-            next_chat_id: Arc::new(AtomicU32::new(1)),
-            accounts: providers.accounts,
-            account_writes: Arc::default(),
-            bans: providers.bans,
-            flood: providers.flood,
-            banner: providers.banner,
-            transfers: Arc::new(RwLock::new(HashMap::new())),
-            running: Arc::default(),
-            next_transfer_ref: Arc::new(AtomicU32::new(1)),
-            download_queue: Arc::new(DownloadQueue::default()),
-            commands: providers.commands,
-            activity: providers.activity,
-            policy: providers.policy,
-        }
+    pub fn new(providers: Providers) -> Arc<Self> {
+        Arc::new(Self {
+            providers,
+            ..Self::default()
+        })
     }
 
     /// `time` as a wire date in the policy's time zone, or the zero date
     /// for none.
     pub(crate) fn wire_date(&self, time: Option<SystemTime>) -> HlDate {
         time.map_or(HlDate::default(), |time| {
-            self.policy.time_zone().convert(HlDate::from(time))
+            self.policy().time_zone().convert(HlDate::from(time))
         })
     }
 
     /// An article's stored UTC `date` as a wire date in the policy's time
     /// zone.
     pub(crate) fn wire_article_date(&self, date: HlDate) -> HlDate {
-        self.policy.time_zone().convert(date)
+        self.policy().time_zone().convert(date)
     }
 
     /// The server's behavior choices.
     pub(crate) fn policy(&self) -> &dyn ServerPolicy {
-        &*self.policy
+        &*self.providers.policy
+    }
+
+    /// The account storage.
+    fn accounts(&self) -> &dyn AccountProvider {
+        &*self.providers.accounts
+    }
+
+    /// The file storage.
+    fn files(&self) -> &dyn FileProvider {
+        &*self.providers.files
+    }
+
+    /// The flat news storage.
+    fn flat_news(&self) -> &dyn FlatNewsProvider {
+        &*self.providers.flat_news
+    }
+
+    /// The threaded news storage.
+    fn threaded_news(&self) -> &dyn ThreadedNewsProvider {
+        &*self.providers.threaded_news
+    }
+
+    /// The ban list.
+    fn bans(&self) -> &dyn BanProvider {
+        &*self.providers.bans
+    }
+
+    /// The flood policy.
+    fn flood(&self) -> &dyn FloodPolicy {
+        &*self.providers.flood
+    }
+
+    /// The banner.
+    fn banner(&self) -> &dyn BannerProvider {
+        &*self.providers.banner
+    }
+
+    /// The chat commands.
+    fn commands(&self) -> &dyn ChatCommandDispatcher {
+        &*self.providers.commands
+    }
+
+    /// The activity log.
+    fn activity(&self) -> &dyn ActivityLog {
+        &*self.providers.activity
     }
 
     /// Report `entry` to the activity log.
     pub async fn record_activity(&self, entry: ActivityEntry) {
-        self.activity.record(entry).await;
+        self.activity().record(entry).await;
     }
 
     /// Set the download limits. A `0` falls back to its default.
@@ -183,7 +199,7 @@ impl SharedState {
     }
 
     /// Remove a user on disconnect.
-    pub async fn remove_user(&self, user_id: u16) {
+    pub async fn remove_user(self: &Arc<Self>, user_id: u16) {
         self.users.write().await.remove(&user_id);
         self.leave_chat_room(0, user_id).await;
         self.release_downloads_for_user(user_id).await;
@@ -430,7 +446,7 @@ impl SharedState {
         args: &str,
         actor: &ChatCommandActor,
     ) -> Option<ConsoleReply> {
-        self.commands.run(command, args, actor, self).await
+        self.commands().run(command, args, actor, self).await
     }
 
     /// List a directory as seen by `requester`. `dir` is empty for the
@@ -442,7 +458,7 @@ impl SharedState {
         dir: &HlPath,
         access: Access,
     ) -> Option<Vec<FileNameWithInfo>> {
-        let mut files = self.files.list(requester, dir).await?;
+        let mut files = self.files().list(requester, dir).await?;
         if dropbox_blocked(dir, None, access) {
             files.retain(|file| file.file_type == PARTIAL_TYPE);
         }
@@ -463,7 +479,7 @@ impl SharedState {
     ) -> Result<u64, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let size = self
-            .files
+            .files()
             .size(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -484,7 +500,7 @@ impl SharedState {
     ) -> Result<Vec<FolderItem>, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let items = self
-            .files
+            .files()
             .walk(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -496,7 +512,7 @@ impl SharedState {
 
     /// `name` as a new file or folder stores it.
     pub fn stored_file_name(&self, name: &str) -> Result<String, &'static str> {
-        self.files.stored_name(name)
+        self.files().stored_name(name)
     }
 
     /// Whether a file or folder already exists at this path.
@@ -506,7 +522,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> bool {
-        self.files.exists(requester, dir, name).await
+        self.files().exists(requester, dir, name).await
     }
 
     /// Whether `requester` may start (or resume) a [`myTran_UploadFile`] (203)
@@ -532,10 +548,10 @@ impl SharedState {
             Err("file or folder not found.")?;
         }
         upload_destination_access(dir, access)?;
-        if self.files.exists(requester, dir, name).await {
+        if self.files().exists(requester, dir, name).await {
             Err("file already exists.")?;
         }
-        let partial = self.files.partial_upload_size(requester, dir, name).await;
+        let partial = self.files().partial_upload_size(requester, dir, name).await;
         if resume {
             Ok(partial.ok_or("file or folder not found.")?)
         } else if partial.is_some() {
@@ -558,7 +574,7 @@ impl SharedState {
         name: &str,
         size: u64,
     ) -> Result<(), String> {
-        match self.files.free_space(requester, dir).await {
+        match self.files().free_space(requester, dir).await {
             Some(free) if size + UPLOAD_SPACE_MARGIN > free => Err(format!(
                 "Cannot accept upload of the {kind} \"{name}\" because there is not enough free disk space."
             )),
@@ -571,7 +587,7 @@ impl SharedState {
         let Some((name, parent)) = dir.components.split_last() else {
             return true;
         };
-        self.files
+        self.files()
             .info(requester, &HlPath::new(parent), name)
             .await
             .is_some_and(|info| info.is_folder())
@@ -598,7 +614,7 @@ impl SharedState {
             Err("file or folder not found.")?;
         }
         upload_destination_access(dir, access)?;
-        let existing = self.files.info(requester, dir, name).await;
+        let existing = self.files().info(requester, dir, name).await;
         if resume {
             let info = existing.ok_or("file or folder not found.")?;
             if !info.is_folder() {
@@ -612,7 +628,7 @@ impl SharedState {
         if resume {
             return Ok(());
         }
-        self.files
+        self.files()
             .mkdir(requester, dir, name)
             .await
             .map_err(|e| e.to_string())?;
@@ -633,20 +649,20 @@ impl SharedState {
         name: &str,
         is_folder: bool,
     ) -> Option<u64> {
-        self.files.list(requester, dir).await?;
+        self.files().list(requester, dir).await?;
         if is_folder {
-            if !self.files.exists(requester, dir, name).await {
+            if !self.files().exists(requester, dir, name).await {
                 // A failed folder still moves on to the next item.
-                if let Err(error) = self.files.mkdir(requester, dir, name).await {
+                if let Err(error) = self.files().mkdir(requester, dir, name).await {
                     tracing::debug!(%error, name, "folder upload item failed");
                 }
             }
             return None;
         }
-        if let Some(offset) = self.files.partial_upload_size(requester, dir, name).await {
+        if let Some(offset) = self.files().partial_upload_size(requester, dir, name).await {
             return Some(offset);
         }
-        (!self.files.exists(requester, dir, name).await).then_some(0)
+        (!self.files().exists(requester, dir, name).await).then_some(0)
     }
 
     /// Open a file for reading, for a [`myTran_DownloadFile`] (202) download.
@@ -658,7 +674,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> std::io::Result<BoxedReader> {
-        self.files.open_read(requester, dir, name).await
+        self.files().open_read(requester, dir, name).await
     }
 
     /// Create a file for writing, for a [`myTran_UploadFile`] (203) upload.
@@ -670,7 +686,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> std::io::Result<BoxedWriter> {
-        self.files.create_write(requester, dir, name).await
+        self.files().create_write(requester, dir, name).await
     }
 
     /// Open an existing file for writing from `at` onward, continuing a
@@ -684,7 +700,9 @@ impl SharedState {
         name: &str,
         at: u64,
     ) -> std::io::Result<BoxedWriter> {
-        self.files.open_write_resume(requester, dir, name, at).await
+        self.files()
+            .open_write_resume(requester, dir, name, at)
+            .await
     }
 
     /// The byte length of the resource fork of `dir`/`name`.
@@ -694,7 +712,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> u64 {
-        self.files.resource_fork_size(requester, dir, name).await
+        self.files().resource_fork_size(requester, dir, name).await
     }
 
     /// The byte length of the resource fork of `name`'s in-progress upload.
@@ -706,14 +724,14 @@ impl SharedState {
         name: &str,
     ) -> u64 {
         if self
-            .files
+            .files()
             .partial_upload_size(requester, dir, name)
             .await
             .is_none()
         {
             return 0;
         }
-        self.files
+        self.files()
             .resource_fork_size(requester, dir, &partial_upload_name(name))
             .await
     }
@@ -726,7 +744,7 @@ impl SharedState {
         name: &str,
         at: u64,
     ) -> std::io::Result<BoxedReader> {
-        self.files
+        self.files()
             .open_resource_read(requester, dir, name, at)
             .await
     }
@@ -740,7 +758,7 @@ impl SharedState {
         name: &str,
         at: u64,
     ) -> std::io::Result<BoxedWriter> {
-        self.files
+        self.files()
             .open_resource_write(requester, dir, name, at)
             .await
     }
@@ -756,7 +774,7 @@ impl SharedState {
     ) -> Result<FileNameWithInfo, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let info = self
-            .files
+            .files()
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -770,7 +788,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> ItemTimes {
-        self.files.times(requester, dir, name).await
+        self.files().times(requester, dir, name).await
     }
 
     /// Delete a file, or a folder and everything under it, after
@@ -783,7 +801,7 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         let info = self
-            .files
+            .files()
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -794,7 +812,7 @@ impl SharedState {
             Access::DELETE_FILE
         };
         access.require(required)?;
-        self.files
+        self.files()
             .delete(requester, dir, name, is_dir)
             .await
             .map_err(|e| e.to_string())?;
@@ -810,7 +828,7 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        self.files
+        self.files()
             .mkdir(requester, dir, name)
             .await
             .map_err(|e| e.to_string())?;
@@ -829,7 +847,7 @@ impl SharedState {
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let info = self
-            .files
+            .files()
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -839,7 +857,7 @@ impl SharedState {
         } else {
             Access::RENAME_FILE
         })?;
-        self.files
+        self.files()
             .rename(requester, dir, name, new_name)
             .await
             .map_err(|e| e.to_string())?;
@@ -859,7 +877,7 @@ impl SharedState {
     ) -> Result<(), Cow<'static, str>> {
         self.drop_box_source(dir, name, access)?;
         let info = self
-            .files
+            .files()
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -869,7 +887,8 @@ impl SharedState {
             Access::MOVE_FILE
         };
         access.require(required)?;
-        self.files
+        self.providers
+            .files
             .r#move(requester, dir, name, to_dir)
             .await
             .map_err(|e| e.to_string())?;
@@ -888,7 +907,7 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         self.drop_box_source(target_dir, target_name, access)?;
-        self.files
+        self.files()
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await
             .map_err(|e| e.to_string())?;
@@ -905,7 +924,7 @@ impl SharedState {
         access: Access,
     ) -> Result<Option<String>, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        Ok(self.files.comment(requester, dir, name).await)
+        Ok(self.files().comment(requester, dir, name).await)
     }
 
     /// Set a file or folder's comment, after checking the matching
@@ -921,7 +940,7 @@ impl SharedState {
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let info = self
-            .files
+            .files()
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -931,11 +950,15 @@ impl SharedState {
             Access::SET_FILE_COMMENT
         };
         access.require(required)?;
-        let Err(error) = self.files.set_comment(requester, dir, name, comment).await else {
+        let Err(error) = self
+            .files()
+            .set_comment(requester, dir, name, comment)
+            .await
+        else {
             return Ok(());
         };
         tracing::debug!(%error, name, "comment write failed");
-        self.policy
+        self.policy()
             .error(Silent::CommentWrite { error })
             .map_or(Ok(()), Err)
     }
@@ -951,7 +974,7 @@ impl SharedState {
         let Err(reason) = dropbox_access(dir, Some(name), access) else {
             return Ok(());
         };
-        self.policy
+        self.policy()
             .error(Silent::DropBoxSource { reason })
             .map_or(Ok(()), Err)
     }
@@ -960,7 +983,7 @@ impl SharedState {
     /// hand the client. Retries on the vanishingly unlikely case the
     /// counter wraps into a still-pending ref. An upload expires after
     /// `TRANSFER_IDLE_TIMEOUT`.
-    pub async fn register_transfer(&self, transfer: PendingTransfer) -> TransferRef {
+    pub async fn register_transfer(self: &Arc<Self>, transfer: PendingTransfer) -> TransferRef {
         let is_upload = transfer.direction == TransferDirection::Put;
         let reference = {
             let mut transfers = self.transfers.write().await;
@@ -980,8 +1003,8 @@ impl SharedState {
 
     /// Drop upload `reference` if no `HTXF` connection arrives within
     /// [`TRANSFER_IDLE_TIMEOUT`].
-    fn spawn_upload_idle_timeout(&self, reference: TransferRef) {
-        let state = self.clone();
+    fn spawn_upload_idle_timeout(self: &Arc<Self>, reference: TransferRef) {
+        let state = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(TRANSFER_IDLE_TIMEOUT).await;
             state.take_transfer(reference).await;
@@ -1045,7 +1068,7 @@ impl SharedState {
     /// `0` if it is active now.
     ///
     /// [`myField_WaitingCount`]: hotline_proto::FieldId::WaitingCount
-    pub async fn admit_download(&self, reference: TransferRef, user_id: u16) -> u32 {
+    pub async fn admit_download(self: &Arc<Self>, reference: TransferRef, user_id: u16) -> u32 {
         let waiting_count = self.download_queue.admit(reference, user_id);
         if waiting_count == 0 {
             self.spawn_download_idle_timeout(reference);
@@ -1055,8 +1078,8 @@ impl SharedState {
 
     /// Free `reference`'s slot if no `HTXF` connection arrives within
     /// [`TRANSFER_IDLE_TIMEOUT`]. Restarts on promotion.
-    fn spawn_download_idle_timeout(&self, reference: TransferRef) {
-        let state = self.clone();
+    fn spawn_download_idle_timeout(self: &Arc<Self>, reference: TransferRef) {
+        let state = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(TRANSFER_IDLE_TIMEOUT).await;
             if state.take_transfer(reference).await.is_some() {
@@ -1075,7 +1098,7 @@ impl SharedState {
     /// [`myTran_DownloadInfo`] (211) to each download it promotes or moves.
     ///
     /// [`myTran_DownloadInfo`]: hotline_proto::Opcode::DownloadInfo
-    pub async fn release_download_slot(&self, reference: TransferRef) {
+    pub async fn release_download_slot(self: &Arc<Self>, reference: TransferRef) {
         let updates = self.download_queue.release(reference);
         self.push_download_updates(updates).await;
     }
@@ -1083,7 +1106,7 @@ impl SharedState {
     /// Cancel `user_id`'s download `reference`, queued or running, like
     /// openline's `KillDownloadByRefNum`. Another user's download is left
     /// alone.
-    pub async fn kill_download(&self, reference: TransferRef, user_id: u16) {
+    pub async fn kill_download(self: &Arc<Self>, reference: TransferRef, user_id: u16) {
         let Some(updates) = self.download_queue.kill(reference, user_id) else {
             return;
         };
@@ -1102,7 +1125,7 @@ impl SharedState {
 
     /// Drop a disconnected user's active and waiting downloads, promoting
     /// and notifying any others that now fit.
-    async fn release_downloads_for_user(&self, user_id: u16) {
+    async fn release_downloads_for_user(self: &Arc<Self>, user_id: u16) {
         let updates = self.download_queue.remove_user(user_id);
         self.push_download_updates(updates).await;
     }
@@ -1111,7 +1134,7 @@ impl SharedState {
     /// promoted entry's idle timeout.
     ///
     /// [`myTran_DownloadInfo`]: hotline_proto::Opcode::DownloadInfo
-    async fn push_download_updates(&self, updates: Vec<QueueUpdate>) {
+    async fn push_download_updates(self: &Arc<Self>, updates: Vec<QueueUpdate>) {
         for QueueUpdate {
             user_id,
             reference,
@@ -1139,7 +1162,7 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> std::io::Result<()> {
-        self.files.finish_upload(requester, dir, name).await
+        self.files().finish_upload(requester, dir, name).await
     }
 
     /// The `INFO` fork data of the file `dir`/`name`, for a download.
@@ -1150,14 +1173,14 @@ impl SharedState {
         name: &str,
         encoding: &'static Encoding,
     ) -> Vec<u8> {
-        let finder_info = self.files.finder_info(requester, dir, name).await;
+        let finder_info = self.files().finder_info(requester, dir, name).await;
         let FinderInfo {
             file_type,
             creator,
             flags,
         } = finder_info.unwrap_or_default();
-        let times = self.files.times(requester, dir, name).await;
-        let comment = self.files.comment(requester, dir, name).await;
+        let times = self.files().times(requester, dir, name).await;
+        let comment = self.files().comment(requester, dir, name).await;
         FlatFileInfo {
             file_type,
             creator,
@@ -1187,7 +1210,7 @@ impl SharedState {
             flags: info.platform_flags as u16 & !FinderInfo::INITED & !FinderInfo::ALIAS,
         };
         let stored = self
-            .files
+            .files()
             .set_finder_info(requester, dir, name, finder_info)
             .await;
         if let Err(error) = stored {
@@ -1195,7 +1218,7 @@ impl SharedState {
         }
         if !info.comment.is_empty() {
             let stored = self
-                .files
+                .files()
                 .set_comment(requester, dir, name, &info.comment)
                 .await;
             if let Err(error) = stored {
@@ -1209,23 +1232,23 @@ impl SharedState {
     ///
     /// [`myTran_ServerBanner`]: hotline_proto::Opcode::ServerBanner
     pub async fn banner_kind(&self) -> Option<BannerKind> {
-        self.banner.kind().await
+        self.banner().kind().await
     }
 
     /// Start a banner-image download over `HTXF`, returning `(byte size,
     /// reference)` to reply with. `Err` if no image banner is configured
     /// (a URL banner has nothing to fetch this way).
     pub async fn start_banner_transfer(
-        &self,
+        self: &Arc<Self>,
         client_ip: IpAddr,
         user_id: u16,
     ) -> Result<(u64, TransferRef), &'static str> {
-        match self.banner.kind().await {
+        match self.banner().kind().await {
             Some(BannerKind::Image { .. }) => {}
             _ => return Err("no banner is configured."),
         }
         let size = self
-            .banner
+            .banner()
             .size()
             .await
             .map_err(|_| "banner is unavailable.")?;
@@ -1247,12 +1270,12 @@ impl SharedState {
     ///
     /// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
     pub async fn open_banner_read(&self) -> std::io::Result<BoxedReader> {
-        self.banner.open_read().await
+        self.banner().open_read().await
     }
 
     /// The full classic news text.
     pub async fn news(&self) -> String {
-        self.flat_news.load().await.to_string()
+        self.flat_news().load().await.to_string()
     }
 
     /// Prepend a new post to the classic news. Returns the formatted entry.
@@ -1267,7 +1290,7 @@ impl SharedState {
         ];
         const FOOTER_DIVIDER: &str = "__________________________________________________________";
 
-        let now = match self.policy.time_zone() {
+        let now = match self.policy().time_zone() {
             TimeZone::Local => chrono::Local::now().naive_local(),
             TimeZone::Utc => chrono::Utc::now().naive_utc(),
         };
@@ -1278,7 +1301,7 @@ impl SharedState {
             hour = now.hour(),
             minute = now.minute(),
         );
-        self.flat_news.post(&entry).await;
+        self.flat_news().post(&entry).await;
         entry
     }
 
@@ -1289,7 +1312,7 @@ impl SharedState {
         path: &HlPath,
     ) -> Result<Vec<NewsCategoryListEntry>, &'static str> {
         let entries = self
-            .threaded_news
+            .threaded_news()
             .list_dir(&path.components)
             .await
             .ok_or("news bundle not found")?;
@@ -1319,7 +1342,7 @@ impl SharedState {
         encoding: &'static Encoding,
     ) -> Result<NewsArticleListData, &'static str> {
         let articles = self
-            .threaded_news
+            .threaded_news()
             .list_articles(&path.components)
             .await
             .ok_or("news category not found")?;
@@ -1354,7 +1377,7 @@ impl SharedState {
         path: &HlPath,
         id: u32,
     ) -> Result<NewsArticleDetail, &'static str> {
-        self.threaded_news
+        self.threaded_news()
             .article(&path.components, id)
             .await
             .ok_or("news article not found")
@@ -1362,12 +1385,14 @@ impl SharedState {
 
     /// Create a news bundle (folder) named `name` under `path`.
     pub async fn news_mkdir(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        self.threaded_news.mkdir(&path.components, name).await
+        self.threaded_news().mkdir(&path.components, name).await
     }
 
     /// Create a news category named `name` under `path`.
     pub async fn news_mkcategory(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        self.threaded_news.mkcategory(&path.components, name).await
+        self.threaded_news()
+            .mkcategory(&path.components, name)
+            .await
     }
 
     /// Delete the news bundle or category named by `path` (its last
@@ -1383,7 +1408,7 @@ impl SharedState {
             Err("news item not found")?;
         }
         let kind = self
-            .threaded_news
+            .threaded_news()
             .item_kind(&path.components)
             .await
             .ok_or("news item not found")?;
@@ -1392,7 +1417,7 @@ impl SharedState {
             NewsItemKind::Category => Access::NEWS_DELETE_CAT,
         };
         access.require(required)?;
-        self.threaded_news.delete(&path.components).await?;
+        self.threaded_news().delete(&path.components).await?;
         Ok(())
     }
 
@@ -1408,7 +1433,7 @@ impl SharedState {
         mime_type: String,
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
-        self.threaded_news
+        self.threaded_news()
             .post_article(
                 &path.components,
                 parent_id,
@@ -1430,7 +1455,7 @@ impl SharedState {
         id: u32,
         recursive: bool,
     ) -> Result<(), &'static str> {
-        self.threaded_news
+        self.threaded_news()
             .delete_article(&path.components, id, recursive)
             .await
     }
@@ -1638,7 +1663,7 @@ impl SharedState {
 
     /// Look up an account by login.
     pub async fn account(&self, login: &str) -> Option<Account> {
-        self.accounts.get(login).await
+        self.accounts().get(login).await
     }
 
     /// The stored account for `login`, which `Err` names.
@@ -1654,7 +1679,7 @@ impl SharedState {
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
-        self.accounts.put(login, account).await
+        self.accounts().put(login, account).await
     }
 
     /// Create the account `login`. `Err` if the login is taken.
@@ -1664,12 +1689,12 @@ impl SharedState {
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
-        if self.accounts.get(&login).await.is_some() {
+        if self.accounts().get(&login).await.is_some() {
             Err(format!(
                 "Cannot create account \"{login}\" because there is already an account with that login."
             ))?;
         }
-        self.accounts.put(login, account).await
+        self.accounts().put(login, account).await
     }
 
     /// Save `edit` of the account at `old_login` under `login`, and return
@@ -1682,17 +1707,17 @@ impl SharedState {
         edit: impl FnOnce(Account) -> Account,
     ) -> Result<Account, Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
-        let Some(existing) = self.accounts.get(old_login).await else {
+        let Some(existing) = self.accounts().get(old_login).await else {
             Err(format!("No account with login \"{old_login}\"."))?
         };
         let renamed = old_login != login;
-        if renamed && self.accounts.get(&login).await.is_some() {
+        if renamed && self.accounts().get(&login).await.is_some() {
             Err("that login is taken")?;
         }
         let account = edit(existing);
-        self.accounts.put(login, account.clone()).await?;
+        self.accounts().put(login, account.clone()).await?;
         if renamed {
-            if let Err(error) = self.accounts.delete(old_login).await {
+            if let Err(error) = self.accounts().delete(old_login).await {
                 tracing::warn!(%error, old_login, "could not delete a renamed account's old login");
             }
         }
@@ -1701,7 +1726,7 @@ impl SharedState {
 
     /// The active ban on `ip`, if any; see [`crate::BanProvider::is_banned`].
     pub async fn is_banned(&self, ip: IpAddr) -> Option<BanRecord> {
-        self.bans.is_banned(ip).await
+        self.bans().is_banned(ip).await
     }
 
     /// `Err` with the reason a login fails if `ip` is banned.
@@ -1717,7 +1742,7 @@ impl SharedState {
 
     /// Store `record`, which replaces any ban on its address.
     pub async fn ban(&self, record: BanRecord) -> Result<(), Cow<'static, str>> {
-        self.bans.ban(record).await
+        self.bans().ban(record).await
     }
 
     /// Ban `ip` for [`TEMP_BAN_DURATION`], logging a failure.
@@ -1730,30 +1755,33 @@ impl SharedState {
 
     /// Lift `ip`'s ban. `Err` if it isn't banned.
     pub async fn unban(&self, ip: IpAddr) -> Result<(), Cow<'static, str>> {
-        self.bans.unban(ip).await?.ok_or("address is not banned")?;
+        self.bans()
+            .unban(ip)
+            .await?
+            .ok_or("address is not banned")?;
         Ok(())
     }
 
     /// Record one `event` from `user_id`; see [`crate::FloodPolicy::check`].
     pub async fn check_flood(&self, user_id: u16, event: FloodEvent<'_>) -> FloodDecision {
-        self.flood.check(user_id, event).await
+        self.flood().check(user_id, event).await
     }
 
     /// Record one new connection from `ip`; see
     /// [`crate::FloodPolicy::check_connection`].
     pub async fn check_connection_flood(&self, ip: IpAddr) -> FloodDecision {
-        self.flood.check_connection(ip).await
+        self.flood().check_connection(ip).await
     }
 
     /// Forget `user_id`'s accumulated flood state, called on disconnect.
     pub async fn reset_flood(&self, user_id: u16) {
-        self.flood.reset(user_id).await;
+        self.flood().reset(user_id).await;
     }
 
     /// Delete an account. `Err("no such account")` if it didn't exist.
     pub async fn delete_account(&self, login: &str) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
-        if !self.accounts.delete(login).await? {
+        if !self.accounts().delete(login).await? {
             Err("no such account")?;
         }
         Ok(())
@@ -1764,7 +1792,7 @@ impl SharedState {
     ///
     /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
     pub async fn list_accounts(&self) -> Vec<(String, Account)> {
-        let mut accounts = self.accounts.list().await;
+        let mut accounts = self.accounts().list().await;
         accounts.sort_by(|(a, _), (b, _)| a.cmp(b));
         accounts
     }
@@ -1780,7 +1808,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_running_transfer_reports_its_bytes_until_its_guard_drops() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let transfer = PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
@@ -1819,7 +1847,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_connected_download_that_waits_for_a_slot_reports_as_waiting() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state.set_download_limits(1, 1);
         let transfer = PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
@@ -1854,7 +1882,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_count_includes_a_connection_before_login() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let _rx = state.register_recipient(1).await;
         assert!(state.users().await.is_empty());
         assert_eq!(state.connection_count().await, 1);
@@ -1913,7 +1941,7 @@ mod tests {
     /// with no `<` byte.
     #[tokio::test]
     async fn post_news_matches_openlines_header_and_footer_shape() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let entry = state.post_news("alice", "hello").await;
 
@@ -1928,7 +1956,7 @@ mod tests {
     /// `users()` must sort explicitly rather than rely on it.
     #[tokio::test]
     async fn users_are_ordered_by_user_id_not_insertion_order() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         for id in [3, 1, 2] {
             state
                 .insert_user(UserEntry {
@@ -1955,7 +1983,7 @@ mod tests {
 
     #[tokio::test]
     async fn leave_all_chat_rooms_notifies_remaining_and_deletes_empty_rooms() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let solo = state.create_chat_room(1).await;
         let shared = state.create_chat_room(2).await;
         state.add_chat_member(shared, 1).await;
@@ -1971,7 +1999,7 @@ mod tests {
 
     #[tokio::test]
     async fn global_room_members_are_tracked_in_join_order() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         for id in [3, 1, 2] {
             state
                 .insert_user(UserEntry {
@@ -2000,7 +2028,7 @@ mod tests {
 
     #[tokio::test]
     async fn leaving_the_global_room_never_deletes_it() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state.leave_chat_room(0, 1).await;
         assert!(state.chat_room(0).await.is_some());
     }
@@ -2029,7 +2057,7 @@ mod tests {
         assert_eq!(&entries[1].file_type, b"fldr");
     }
 
-    fn state_with_files(files: InMemoryFileProvider) -> SharedState {
+    fn state_with_files(files: InMemoryFileProvider) -> Arc<SharedState> {
         SharedState::new(Providers {
             files: Arc::new(files),
             ..Providers::default()
@@ -2038,7 +2066,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_account_refuses_a_taken_login() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .create_account("bob".to_string(), Account::guest())
             .await
@@ -2051,7 +2079,7 @@ mod tests {
 
     #[tokio::test]
     async fn replace_account_refuses_a_deleted_login_and_a_taken_rename() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         assert!(state
             .replace_account("bob", "bob".to_string(), |_| Account::guest())
             .await
@@ -2159,7 +2187,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_transfer_allocates_distinct_refs_and_take_consumes_them() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
@@ -2191,7 +2219,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn an_upload_whose_htxf_connection_never_arrives_expires() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let reference = state
             .register_transfer(PendingTransfer {
                 kind: TransferKind::File(crate::state::FileTransfer {
@@ -2223,7 +2251,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn an_admitted_download_whose_htxf_connection_never_arrives_frees_its_slot() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state.set_download_limits(1, 10);
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
@@ -2268,7 +2296,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_killed_download_refuses_its_htxf_connection_and_promotes_the_next() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state.set_download_limits(1, 10);
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
@@ -2328,7 +2356,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_access_fields_grants_a_flag_live() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;
@@ -2350,7 +2378,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_access_fields_rejects_broadcast_which_has_no_console_key() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;
@@ -2363,7 +2391,7 @@ mod tests {
     /// mhxd matches console keys with `strcmp`.
     #[tokio::test]
     async fn apply_access_fields_console_key_is_case_sensitive() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;
@@ -2376,7 +2404,7 @@ mod tests {
     /// mhxd stops at a word with no `=` and still applies what came before.
     #[tokio::test]
     async fn apply_access_fields_stops_at_a_word_without_equals() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;
@@ -2395,7 +2423,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_access_fields_refuses_a_target_without_access_volatile() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let non_volatile = AccessExtra::default() - AccessExtra::ACCESS_VOLATILE;
         state.insert_user(test_user_entry(2, non_volatile)).await;
 
@@ -2406,7 +2434,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_0wn_fields_sets_icon_and_name() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;
@@ -2429,7 +2457,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_0wn_fields_refuses_a_target_without_is_0wn3d() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::empty()))
             .await;
@@ -2442,7 +2470,7 @@ mod tests {
     /// mhxd's `user_0wn` ignores a key it doesn't know.
     #[tokio::test]
     async fn apply_0wn_fields_ignores_an_unknown_key() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;
@@ -2455,7 +2483,7 @@ mod tests {
     /// mhxd reads the icon with `strtoul`, so a non-number is `0`.
     #[tokio::test]
     async fn apply_0wn_fields_reads_the_icon_like_strtoul() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;
@@ -2473,7 +2501,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_0wn_fields_caps_a_name_at_31_bytes() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(test_user_entry(2, AccessExtra::default()))
             .await;

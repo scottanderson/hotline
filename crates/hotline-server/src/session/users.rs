@@ -376,6 +376,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::server::ServerConfig;
     use crate::session::test_support::*;
@@ -387,7 +389,7 @@ mod tests {
     async fn get_user_name_list_denied_without_user_getlist() {
         let mut session = test_session("Alice", Access::all());
         session.access_extra.remove(AccessExtra::USER_GETLIST);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(Opcode::GetUserNameList, 1, vec![]);
 
         assert!(session.on_get_user_name_list(&request, &state).await[0].is_error());
@@ -396,7 +398,7 @@ mod tests {
     #[tokio::test]
     async fn get_user_name_list_skips_a_user_with_an_empty_name() {
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         for (user_id, name) in [(2, ""), (3, "Carol")] {
             state
                 .insert_user(UserEntry {
@@ -438,7 +440,7 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let sjis = hotline_proto::Encoding::for_label(b"shift-jis").unwrap();
         session.encoding.set(sjis);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}"; // "こんにちは"
         state
             .insert_user(UserEntry {
@@ -473,7 +475,7 @@ mod tests {
     async fn get_client_info_text_reports_the_reference_shaped_text_block() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 user_id: 2,
@@ -551,7 +553,7 @@ mod tests {
         use crate::state::TransferDirection::{Get, Put};
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 user_id: 2,
@@ -599,7 +601,7 @@ mod tests {
     async fn get_client_info_text_defaults_login_and_account_name_when_empty() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 user_id: 2,
@@ -634,7 +636,7 @@ mod tests {
     #[tokio::test]
     async fn kick_denied_without_privilege() {
         let mut session = test_session("Alice", Access::empty());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::DisconnectUser,
             1,
@@ -648,7 +650,7 @@ mod tests {
     #[tokio::test]
     async fn kick_disconnects_target_with_no_wire_notice() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(2).await;
         let request = request(
             Opcode::DisconnectUser,
@@ -667,7 +669,7 @@ mod tests {
     #[tokio::test]
     async fn kick_with_permanent_ban_option_bans_the_target_address() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target = test_user(2, "Bob");
         target.access.remove(Access::CANNOT_BE_DISCON);
         target.remote_addr = "192.0.2.9:5500".parse().unwrap();
@@ -705,7 +707,7 @@ mod tests {
     #[tokio::test]
     async fn kick_with_temporary_ban_option_sends_the_temporary_ban_notice() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target = test_user(2, "Bob");
         target.access.remove(Access::CANNOT_BE_DISCON);
         target.remote_addr = "192.0.2.9:5500".parse().unwrap();
@@ -742,7 +744,7 @@ mod tests {
     #[tokio::test]
     async fn kick_with_missing_uid_replies_success() {
         let mut session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let request = request(Opcode::DisconnectUser, 1, vec![]);
         let replies = session.on_disconnect_user(&request, &state).await;
         assert_eq!(replies.len(), 1);
@@ -847,7 +849,7 @@ mod tests {
     async fn private_message_delivered_only_to_target() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
         let mut sender_rx = state.register_recipient(session.user_id).await;
@@ -881,7 +883,7 @@ mod tests {
     #[tokio::test]
     async fn private_message_echoes_options_onto_the_delivered_push() {
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
 
@@ -916,7 +918,7 @@ mod tests {
     async fn private_message_bounces_and_is_not_delivered_when_target_refuses() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 refuses_pm: true,
@@ -960,7 +962,7 @@ mod tests {
     async fn private_message_delivers_and_bounces_an_automatic_response() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 automatic_response: Some("At lunch, back soon.".into()),
@@ -1008,7 +1010,7 @@ mod tests {
     async fn private_message_no_bounce_when_sender_also_refuses() {
         let mut session = test_session("Alice", Access::all());
         session.refuses_pm = true;
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .insert_user(UserEntry {
                 refuses_pm: true,
@@ -1038,7 +1040,7 @@ mod tests {
         let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}";
         let session = test_session("Alice", Access::all());
         session.encoding.set(sjis);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
 
@@ -1071,7 +1073,7 @@ mod tests {
     #[tokio::test]
     async fn send_instant_msg_with_an_empty_quote_sends_no_quote() {
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
 
@@ -1098,7 +1100,7 @@ mod tests {
     async fn send_instant_msg_with_a_refusal_option_sends_the_refusal_text() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
         let send = |option| {
@@ -1137,7 +1139,7 @@ mod tests {
     async fn send_instant_msg_cuts_the_message_and_quote_and_skips_an_empty_one() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
         let send = |data: String| {
@@ -1190,7 +1192,7 @@ mod tests {
         );
         let broadcast = request(Opcode::UserBroadcast, 2, vec![]);
 
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
         let replies = session.on_send_instant_msg(&pm, &state).await;
@@ -1207,7 +1209,7 @@ mod tests {
     #[tokio::test]
     async fn send_instant_msg_to_a_user_who_is_gone_is_an_error() {
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SendInstantMsg,
@@ -1227,7 +1229,7 @@ mod tests {
     async fn msg_allowed_via_access_extra_msg_without_send_message() {
         let mut session = test_session("Alice", Access::empty());
         session.access_extra.insert(AccessExtra::MSG_OVERRIDE);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(42).await;
         state.insert_user(test_user(42, "Bob")).await;
 
@@ -1248,7 +1250,7 @@ mod tests {
     async fn msg_denied_without_send_message_or_access_extra_msg() {
         let mut session = test_session("Alice", Access::empty());
         session.access_extra.remove(AccessExtra::MSG_OVERRIDE);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::SendInstantMsg,
@@ -1266,7 +1268,7 @@ mod tests {
     async fn user_broadcast_is_cut_and_an_empty_one_is_not_sent() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut rx = state.register_recipient(2).await;
         let broadcast = |data: String| {
             request(
@@ -1303,7 +1305,7 @@ mod tests {
         let konnichiwa = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}";
         let session = test_session("Alice", Access::all());
         session.encoding.set(utf8);
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut sjis_rx = state.register_recipient(2).await;
         let mut utf8_rx = state.register_recipient(3).await;
 
@@ -1338,7 +1340,7 @@ mod tests {
     async fn message_broadcast_reaches_everyone_except_sender() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let mut sender_rx = state.register_recipient(session.user_id).await;
         let mut rx = state.register_recipient(2).await;
 
@@ -1370,7 +1372,7 @@ mod tests {
     #[tokio::test]
     async fn message_broadcast_denied_without_privilege() {
         let session = test_session("Alice", Access::default());
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
 
         let request = request(
             Opcode::UserBroadcast,

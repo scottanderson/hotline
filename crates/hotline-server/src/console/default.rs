@@ -200,6 +200,7 @@ async fn cmd_unban(args: &str, actor: &ChatCommandActor, state: &SharedState) ->
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
+    use std::sync::Arc;
     use std::time::Instant;
 
     use super::*;
@@ -249,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn users_denied_without_manage_users() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let reply = chat(cmd_users(&actor(AccessExtra::empty()), &state).await);
         assert!(reply.starts_with("users: "), "{reply}");
         assert!(reply.contains("not allowed"), "{reply}");
@@ -258,7 +259,7 @@ mod tests {
     /// mhxd's `cmd_users` layout, sent as a private message.
     #[tokio::test]
     async fn users_lists_connected_users_like_mhxd() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
 
         let reply = cmd_users(&actor(AccessExtra::MANAGE_USERS), &state).await;
@@ -275,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_arguments_reply_nothing() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let actor = actor(AccessExtra::all());
         assert_eq!(cmd_access("", &actor, &state).await, ConsoleReply::Silent);
         assert_eq!(cmd_0wn("", &actor, &state).await, ConsoleReply::Silent);
@@ -283,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn access_denied_without_user_access() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let reply = chat(cmd_access("2", &actor(AccessExtra::empty()), &state).await);
         assert!(reply.starts_with("access: "), "{reply}");
         assert!(reply.contains("not allowed"), "{reply}");
@@ -291,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn access_view_reports_current_flags() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = chat(cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state).await);
         assert!(reply.contains("Bob"));
@@ -302,7 +303,7 @@ mod tests {
     /// The view has to name flags the way the modify path takes them.
     #[tokio::test]
     async fn access_view_shows_keys_the_modify_path_accepts() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
 
         let reply = chat(cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state).await);
@@ -314,14 +315,14 @@ mod tests {
 
     #[tokio::test]
     async fn access_unknown_user_is_reported() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let reply = cmd_access("99", &actor(AccessExtra::USER_ACCESS), &state).await;
         assert_eq!(reply, cmd_err("access", "no such user (uid:99)"));
     }
 
     #[tokio::test]
     async fn access_unknown_nickname_is_reported() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = cmd_access("Zed x=1", &actor(AccessExtra::USER_ACCESS), &state).await;
         assert_eq!(reply, cmd_err("access", "no such user \"Zed\""));
@@ -329,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn access_unknown_field_is_rejected() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = cmd_access("2 not_a_field=1", &actor(AccessExtra::USER_ACCESS), &state).await;
         assert_eq!(reply, cmd_err("access", "unknown argument \"not_a_field\""));
@@ -338,7 +339,7 @@ mod tests {
     /// A change replies nothing, like mhxd.
     #[tokio::test]
     async fn access_change_by_nickname_replies_nothing() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = cmd_access(
             "Bob delete_files=1",
@@ -351,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn access_modify_never_persists_to_the_account() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         state
             .put_account(
                 "bob".to_string(),
@@ -374,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn zeroown_denied_without_user_0wn() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let reply = chat(cmd_0wn("2 icon=5", &actor(AccessExtra::empty()), &state).await);
         assert!(reply.starts_with("0wn: "), "{reply}");
         assert!(reply.contains("not allowed"), "{reply}");
@@ -382,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn zeroown_change_replies_nothing() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = cmd_0wn("2 icon=5", &actor(AccessExtra::USER_0WN), &state).await;
         assert_eq!(reply, ConsoleReply::Silent);
@@ -403,7 +404,7 @@ mod tests {
 
     #[tokio::test]
     async fn unban_denied_without_discon_user() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let actor = ChatCommandActor {
             access: Access::empty(),
             ..actor(AccessExtra::all())
@@ -415,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn unban_lifts_a_ban() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let ip: IpAddr = BANNED.parse().unwrap();
         state.ban(crate::BanRecord::new(ip, None)).await.unwrap();
 
@@ -427,14 +428,14 @@ mod tests {
 
     #[tokio::test]
     async fn unban_reports_an_address_that_is_not_banned() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let reply = cmd_unban(BANNED, &actor(AccessExtra::empty()), &state).await;
         assert_eq!(reply, cmd_err("unban", "address is not banned"));
     }
 
     #[tokio::test]
     async fn unban_rejects_a_word_that_is_not_an_address() {
-        let state = SharedState::default();
+        let state = Arc::<SharedState>::default();
         let reply = cmd_unban("bob", &actor(AccessExtra::empty()), &state).await;
         assert_eq!(reply, cmd_err("unban", "not an address \"bob\""));
     }
