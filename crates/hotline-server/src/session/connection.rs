@@ -277,7 +277,11 @@ impl Session {
                 }
                 // Fires after `login_timeout` with no request before the session joins, or after `LOGIN_FAILED_WAIT`.
                 () = &mut login_sleep, if matches!(session.state, SessionState::Agreement | SessionState::LoginFailed) => {
-                    tracing::debug!(user_id = session.user_id, "login timed out");
+                    let event = match session.state {
+                        SessionState::LoginFailed => "closed after a failed login",
+                        _ => "login timed out",
+                    };
+                    tracing::debug!(user_id = session.user_id, "{event}");
                     break Ok(SessionEnd::Closed);
                 }
                 // Everything server-initiated for this session.
@@ -2435,7 +2439,27 @@ mod tests {
         assert_eq!(notice.r#type(), TransactionType::Push(Opcode::ServerMsg));
         assert_eq!(notice.string(FieldId::Data).as_deref(), Some("Go away."));
         assert!(client.next().await.is_none());
-        assert!(server.await.unwrap().is_ok());
+        drop(client);
+        let finished = tokio::time::timeout(KICK_DRAIN_TIMEOUT / 2, server).await;
+        assert!(finished.unwrap().unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kick_closes_after_the_drain_when_the_client_stays_open() {
+        let state = SharedState::default();
+        let (server, mut client) = run_session(state.clone()).await;
+        while state.connection_count().await == 0 {
+            tokio::task::yield_now().await;
+        }
+        let start = tokio::time::Instant::now();
+
+        state.kick(1, "Go away.").await;
+
+        assert!(client.next().await.unwrap().is_ok());
+        assert!(client.next().await.is_none());
+        let finished = tokio::time::timeout(2 * KICK_DRAIN_TIMEOUT, server).await;
+        assert!(finished.unwrap().unwrap().is_ok());
+        assert!(start.elapsed() >= KICK_DRAIN_TIMEOUT);
     }
 
     #[tokio::test]
