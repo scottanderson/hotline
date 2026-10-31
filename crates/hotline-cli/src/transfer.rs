@@ -50,24 +50,35 @@ impl Conflict {
 /// `bytes` as openline's `UText::SizeToText` shows them: `0K`, the bytes
 /// under 1K, whole kilobytes, or megabytes with a tenth.
 pub fn size_text(bytes: u64) -> String {
-    size_to_text(bytes, false)
+    size_to_text(bytes, false, false)
 }
 
 /// `bytes` with `<1K` for 1 to 1023 bytes, as openline's file list shows
 /// a size (`kDontShowBytes`).
 pub fn file_size_text(bytes: u64) -> String {
-    size_to_text(bytes, true)
+    size_to_text(bytes, true, false)
+}
+
+/// A rate of `bytes` a second, with a tenth of a kilobyte under 10K
+/// (`kSmallKilobyteFrac`).
+pub fn rate_text(bytes: u64) -> String {
+    size_to_text(bytes, false, true)
 }
 
 /// openline's `UText::SizeToText`. Each fraction drops its remainder.
-fn size_to_text(bytes: u64, dont_show_bytes: bool) -> String {
+fn size_to_text(bytes: u64, dont_show_bytes: bool, small_kilobyte_frac: bool) -> String {
     const K: u64 = 1 << 10;
     const M: u64 = 1 << 20;
     match bytes {
         0 => "0K".to_string(),
         1..K if dont_show_bytes => "<1K".to_string(),
         1..K => bytes.to_string(),
-        K..M => format!("{}K", bytes / K),
+        K..M => match (bytes / K, (bytes % K) / 103) {
+            (whole, tenth) if tenth > 0 && small_kilobyte_frac && whole < 10 => {
+                format!("{whole}.{tenth}K")
+            }
+            (whole, _) => format!("{whole}K"),
+        },
         _ => match (bytes / M, (bytes % M) / 104_858) {
             (whole, 0) => format!("{whole}M"),
             (whole, tenth) => format!("{whole}.{tenth}M"),
@@ -94,5 +105,12 @@ mod tests {
         assert_eq!(file_size_text(0), "0K");
         assert_eq!(file_size_text(300), "<1K");
         assert_eq!(file_size_text(2047), "1K");
+    }
+
+    #[test]
+    fn rate_text_shows_a_tenth_under_10k() {
+        assert_eq!(rate_text(1536), "1.4K");
+        assert_eq!(rate_text(1024), "1K");
+        assert_eq!(rate_text(15 * 1024), "15K");
     }
 }

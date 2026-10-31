@@ -193,6 +193,7 @@ impl ClientSession {
                     };
                     let items = download.item_count;
                     progress.set_item_count(items);
+                    progress.set_size(0, download.transfer_size.into());
                     if let Some(reference) = download.reference() {
                         progress.set_reference(reference);
                     }

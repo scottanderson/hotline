@@ -13,7 +13,7 @@ use tokio::task::AbortHandle;
 use super::{ClientSession, Request};
 use crate::line::LineKind;
 use crate::tasks::{TaskId, TaskRow};
-use crate::transfer::size_text;
+use crate::transfer::{rate_text, size_text};
 
 /// The lowest server version that holds a queued download before its
 /// transfer starts.
@@ -23,6 +23,9 @@ const QUEUE_VERSION: u16 = 185;
 ///
 /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
 const KILL_DOWNLOAD_VERSION: u16 = 182;
+
+/// The fewest bytes that give a transfer rate.
+const MIN_RATE_BYTES: u64 = 1024;
 
 /// How far a transfer is.
 #[derive(Debug, Default)]
@@ -35,6 +38,8 @@ pub struct Progress {
     items: AtomicU32,
     /// The items of a folder transfer, `0` for a file.
     item_count: AtomicU32,
+    /// When the first byte moved, and the bytes before it.
+    started: OnceLock<(Instant, u64)>,
     /// The server's reference of a download.
     reference: OnceLock<u32>,
     /// `true` after the transfer ends well.
@@ -78,18 +83,32 @@ impl Progress {
         if n == 0 {
             return;
         }
+        self.started
+            .get_or_init(|| (Instant::now(), self.bytes.load(Ordering::Relaxed)));
         self.waiting.store(0, Ordering::Relaxed);
         self.bytes.fetch_add(n as u64, Ordering::Relaxed);
     }
 
-    /// The bytes, such as `1.5M/2M`. `None` before any size is known.
-    fn sizes(&self) -> Option<String> {
+    /// The rate, the bytes, and the time left at `now`, such as
+    /// `12K/sec 1.5M/2M 0:42`. `None` until a second passes and more than
+    /// 1 KB moves.
+    fn stats(&self, now: Instant) -> Option<String> {
+        let &(start, start_bytes) = self.started.get()?;
         let bytes = self.bytes.load(Ordering::Relaxed);
-        match self.total.load(Ordering::Relaxed) {
-            0 if bytes == 0 => None,
-            0 => Some(size_text(bytes)),
-            total => Some(format!("{}/{}", size_text(bytes), size_text(total))),
-        }
+        let total = self.total.load(Ordering::Relaxed);
+        let seconds = now.saturating_duration_since(start).as_secs();
+        let moved = bytes.saturating_sub(start_bytes);
+        let rate = (seconds > 0 && moved > seconds && moved > MIN_RATE_BYTES)
+            .then(|| moved.checked_div(seconds))
+            .flatten()?;
+        let left = total.saturating_sub(bytes).checked_div(rate)?;
+        Some(format!(
+            "{}/sec {}/{} {}",
+            rate_text(rate),
+            size_text(bytes),
+            size_text(total),
+            seconds_text(left)
+        ))
     }
 
     /// The part that is done, from 0 to 1. `None` while the download waits
@@ -101,6 +120,18 @@ impl Progress {
         let total = self.total.load(Ordering::Relaxed);
         let bytes = self.bytes.load(Ordering::Relaxed).min(total);
         (total > 0).then(|| bytes as f64 / total as f64)
+    }
+}
+
+/// `seconds` as `m:ss`, `h:mm:ss`, or `d:hh:mm:ss`.
+fn seconds_text(seconds: u64) -> String {
+    let (minutes, seconds) = (seconds / 60, seconds % 60);
+    let (hours, minutes) = (minutes / 60, minutes % 60);
+    let (days, hours) = (hours / 24, hours % 24);
+    match (days, hours) {
+        (0, 0) => format!("{minutes}:{seconds:02}"),
+        (0, hours) => format!("{hours}:{minutes:02}:{seconds:02}"),
+        (days, hours) => format!("{days}:{hours:02}:{minutes:02}:{seconds:02}"),
     }
 }
 
@@ -200,7 +231,8 @@ impl ClientSession {
     /// The row of each transfer, oldest first, with the time the user
     /// started it.
     pub fn transfer_rows(&self) -> impl Iterator<Item = (Instant, TaskRow)> + '_ {
-        self.transfers.iter().map(|t| {
+        let now = Instant::now();
+        self.transfers.iter().map(move |t| {
             let progress = &t.progress;
             let waiting = progress.waiting.load(Ordering::Relaxed);
             let mut label = format!("{} “{}”", t.kind.does(), t.name);
@@ -209,10 +241,8 @@ impl ClientSession {
                     "All downloads slots are full. “{}” is number {waiting} in the server queue. Please wait...",
                     t.name
                 );
-            } else {
-                if let Some(sizes) = progress.sizes() {
-                    label.push_str(&format!(" ({sizes})"));
-                }
+            } else if let Some(stats) = progress.stats(now) {
+                label.push_str(&format!(" ({stats})"));
                 let count = progress.item_count.load(Ordering::Relaxed);
                 if count > 0 {
                     let items = progress.items.load(Ordering::Relaxed).min(count);
@@ -342,12 +372,20 @@ impl<R: AsyncRead + Unpin> AsyncRead for Counted<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use hotline_proto::types::HlPath;
     use hotline_server::{InMemoryFileProvider, Providers, ServerConfig};
 
     use super::*;
     use crate::session::test_support;
     use crate::transfer::Start;
+
+    /// Start the clock of `progress` two seconds ago.
+    fn start_two_seconds_ago(progress: &Progress) {
+        let start = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        progress.started.set((start, 0)).unwrap();
+    }
 
     /// Track a transfer that never ends.
     fn track(session: &mut ClientSession, kind: Kind, progress: Arc<Progress>) -> AbortHandle {
@@ -462,15 +500,18 @@ mod tests {
         let mut session = ClientSession::new("me", 0, Default::default());
         let progress = Arc::new(Progress::default());
         progress.set_item_count(2);
+        progress.set_size(0, 4096);
+        start_two_seconds_ago(&progress);
+        progress.count(2048);
         progress.add_item();
         let _ = track(&mut session, Kind::UploadFolder, progress);
         assert_eq!(
             session.running_transfers(),
             [TaskRow {
                 id: TaskId::Transfer(1),
-                label: "Uploading folder “f” [1 of 2]".into(),
+                label: "Uploading folder “f” (1K/sec 2K/4K 0:02) [1 of 2]".into(),
                 cancellable: true,
-                ratio: None,
+                ratio: Some(0.5),
             }]
         );
     }
@@ -486,16 +527,27 @@ mod tests {
     }
 
     #[test]
-    fn sizes_give_the_bytes_and_the_total() {
+    fn stats_give_the_rate_and_the_time_left() {
         let progress = Progress::default();
         progress.set_size(1024, 10 * 1024);
-        assert_eq!(progress.sizes().unwrap(), "1K/10K");
         progress.count(2048);
-        assert_eq!(progress.sizes().unwrap(), "3K/10K");
+        let (start, _) = *progress.started.get().unwrap();
+        let later = start + Duration::from_secs(2);
+        assert_eq!(progress.stats(later).unwrap(), "1K/sec 3K/10K 0:07");
     }
 
     #[test]
-    fn sizes_wait_for_a_size() {
-        assert_eq!(Progress::default().sizes(), None);
+    fn stats_wait_for_the_rate() {
+        let progress = Progress::default();
+        progress.set_size(0, 10 * 1024);
+        progress.count(2048);
+        assert_eq!(progress.stats(Instant::now()), None);
+    }
+
+    #[test]
+    fn seconds_text_adds_hours_and_days_when_needed() {
+        assert_eq!(seconds_text(42), "0:42");
+        assert_eq!(seconds_text(3600 + 61), "1:01:01");
+        assert_eq!(seconds_text(86_400 + 3600 + 61), "1:01:01:01");
     }
 }
