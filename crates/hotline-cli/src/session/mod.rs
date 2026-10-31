@@ -9,6 +9,7 @@ mod event_outcome;
 mod file_ops;
 mod keep_alive;
 mod mode;
+mod request;
 #[cfg(test)]
 mod test_support;
 mod threaded_news;
@@ -31,6 +32,7 @@ use downloads::RunningDownload;
 pub use event_outcome::EventOutcome;
 pub use keep_alive::KEEP_ALIVE;
 pub use mode::Mode;
+pub use request::{Next, Request};
 pub use threaded_news::{ArticleText, NewsFolder, NewsFolderNode, NewsTarget, NewsThread};
 
 pub struct ClientSession {
@@ -117,15 +119,25 @@ impl ClientSession {
     /// Accept the agreement, [`myTran_Agreed`] (121), and switch to chat.
     ///
     /// [`myTran_Agreed`]: hotline_proto::Opcode::Agreed
-    pub async fn accept_agreement(&mut self, client: &HotlineClient) {
-        if let Err(e) = client.agree(&self.user_info()).await {
-            self.push(format!("failed to complete login: {e}"), LineKind::Error);
-        }
-        match client.get_user_name_list().await {
-            Ok(users) => self.users = users,
-            Err(e) => self.push(format!("failed to fetch user list: {e}"), LineKind::Error),
-        }
+    pub fn accept_agreement(&mut self, client: &HotlineClient) -> Request<()> {
         self.mode = Mode::Chat;
+        let client = client.clone();
+        let info = self.user_info();
+        Request::new(async move {
+            let agreed = client.agree(&info).await;
+            let users = client.get_user_name_list().await;
+            move |session: &mut Self| {
+                if let Err(e) = agreed {
+                    session.push(format!("failed to complete login: {e}"), LineKind::Error);
+                }
+                match users {
+                    Ok(users) => session.users = users,
+                    Err(e) => {
+                        session.push(format!("failed to fetch user list: {e}"), LineKind::Error)
+                    }
+                }
+            }
+        })
     }
 
     fn push(&mut self, text: impl Into<Box<str>>, kind: LineKind) {
@@ -381,10 +393,14 @@ impl ClientSession {
     /// [`myTran_UserBroadcast`] (355), showing an error line if it fails.
     ///
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
-    pub async fn user_broadcast(&mut self, client: &HotlineClient, text: &str) {
-        if let Err(e) = client.user_broadcast(&to_wire_lines(text)).await {
-            self.push(format!("failed to broadcast: {e}"), LineKind::Error);
-        }
+    pub fn user_broadcast(client: &HotlineClient, text: &str) -> Request<()> {
+        let client = client.clone();
+        let text = to_wire_lines(text);
+        Request::report(
+            async move { client.user_broadcast(&text).await },
+            "failed to broadcast",
+            |_, ()| {},
+        )
     }
 
     /// Send `line` as chat, reporting a failed send as a local error line
@@ -398,46 +414,52 @@ impl ClientSession {
     /// [`myTran_GetClientInfoText`] (303), showing an error line if it fails.
     ///
     /// [`myTran_GetClientInfoText`]: hotline_proto::Opcode::GetClientInfoText
-    pub async fn get_client_info_text(
-        &mut self,
+    pub fn get_client_info_text(
         client: &HotlineClient,
         user_id: u16,
-    ) -> Option<ClientInfoText> {
-        client
-            .get_client_info_text(user_id)
-            .await
-            .inspect_err(|e| self.push(format!("failed to get info: {e}"), LineKind::Error))
-            .ok()
+    ) -> Request<Option<ClientInfoText>> {
+        let client = client.clone();
+        Request::report(
+            async move { client.get_client_info_text(user_id).await },
+            "failed to get info",
+            |_, info| Some(info),
+        )
     }
 
-    pub async fn get_msgs(&mut self, client: &HotlineClient) {
-        match client.get_msgs().await {
-            Ok(news) => {
-                if self.news.as_ref() != Some(&news) {
-                    self.news_revision += 1;
+    pub fn get_msgs(client: &HotlineClient) -> Request<()> {
+        let client = client.clone();
+        Request::report(
+            async move { client.get_msgs().await },
+            "failed to get news",
+            |session: &mut Self, news| {
+                if session.news.as_ref() != Some(&news) {
+                    session.news_revision += 1;
                 }
-                self.news = Some(news);
-            }
-            Err(e) => self.push(format!("failed to get news: {e}"), LineKind::Error),
-        }
+                session.news = Some(news);
+            },
+        )
     }
 
     /// [`myTran_GetFileNameList`] (200) for `path`. On success, `path` becomes
     /// the current folder and this returns `true`.
     ///
     /// [`myTran_GetFileNameList`]: hotline_proto::Opcode::GetFileNameList
-    pub async fn get_file_name_list(&mut self, client: &HotlineClient, path: HlPath) -> bool {
-        match client.get_file_name_list(&path).await {
-            Ok(files) => {
-                self.files = Some(files);
-                self.file_path = path;
+    pub fn get_file_name_list(client: &HotlineClient, path: HlPath) -> Request<bool> {
+        let client = client.clone();
+        Request::report(
+            async move {
+                client
+                    .get_file_name_list(&path)
+                    .await
+                    .map(|files| (files, path))
+            },
+            "failed to list files",
+            |session: &mut Self, (files, path)| {
+                session.files = Some(files);
+                session.file_path = path;
                 true
-            }
-            Err(e) => {
-                self.push(format!("failed to list files: {e}"), LineKind::Error);
-                false
-            }
-        }
+            },
+        )
     }
 
     /// The path of the folder `name` in the current folder.
@@ -454,10 +476,14 @@ impl ClientSession {
         Some(path)
     }
 
-    pub async fn old_post_news(&mut self, client: &HotlineClient, text: &str) {
-        if let Err(e) = client.old_post_news(&to_wire_lines(text)).await {
-            self.push(format!("failed to post news: {e}"), LineKind::Error);
-        }
+    pub fn old_post_news(client: &HotlineClient, text: &str) -> Request<()> {
+        let client = client.clone();
+        let text = to_wire_lines(text);
+        Request::report(
+            async move { client.old_post_news(&text).await },
+            "failed to post news",
+            |_, ()| {},
+        )
     }
 
     /// This user's name, icon, and options.
@@ -487,11 +513,15 @@ impl ClientSession {
     /// [`myTran_DisconnectUser`] (110), showing an error line if it fails.
     ///
     /// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
-    pub async fn disconnect_user(&mut self, client: &HotlineClient, user_id: u16, ban: Ban) {
+    pub fn disconnect_user(&self, client: &HotlineClient, user_id: u16, ban: Ban) -> Request<()> {
+        let client = client.clone();
         let name = self.user_name(user_id);
-        if let Err(e) = client.disconnect_user(user_id, &name, ban).await {
-            self.push(format!("failed to disconnect {name}: {e}"), LineKind::Error);
-        }
+        let failed = format!("failed to disconnect {name}");
+        Request::report(
+            async move { client.disconnect_user(user_id, &name, ban).await },
+            failed,
+            |_, ()| {},
+        )
     }
 
     /// The name of the user `user_id`, or `#<user_id>` for a user not in the list.
@@ -502,15 +532,17 @@ impl ClientSession {
         }
     }
 
-    pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {
+    pub fn send_instant_msg(client: &HotlineClient, user_id: u16, text: &str) -> Request<()> {
+        let client = client.clone();
         let text = to_wire_lines(text);
-        match client.send_instant_msg(user_id, &text).await {
-            Ok(()) => {
-                let to = self.user_name(user_id);
-                self.push(format!("[PM to {to}] {text}"), LineKind::Chat);
-            }
-            Err(e) => self.push(format!("failed to send: {e}"), LineKind::Error),
-        }
+        Request::report(
+            async move { client.send_instant_msg(user_id, &text).await.map(|()| text) },
+            "failed to send",
+            move |session: &mut Self, text| {
+                let to = session.user_name(user_id);
+                session.push(format!("[PM to {to}] {text}"), LineKind::Chat);
+            },
+        )
     }
 }
 
@@ -568,7 +600,8 @@ mod tests {
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let mut session = ClientSession::new("me", 0, client.encoding());
         for _ in 0..2 {
-            session.get_msgs(&client).await;
+            let apply = ClientSession::get_msgs(&client).reply().await;
+            let _ = apply(&mut session);
         }
         assert_eq!(session.news_revision, 1);
     }

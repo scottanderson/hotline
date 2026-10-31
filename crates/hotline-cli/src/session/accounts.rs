@@ -14,7 +14,7 @@
 use hotline_client::{AccountChange, HotlineClient, UserAccount};
 use hotline_proto::Access;
 
-use super::ClientSession;
+use super::{ClientSession, Request};
 use crate::line::LineKind;
 
 /// The lowest server version that lists and saves accounts in bulk.
@@ -28,10 +28,10 @@ impl ClientSession {
 
     /// List every account, or keep the accounts opened so far on an older
     /// server. Without the open user privilege, it lists none.
-    pub async fn list_accounts(&mut self, client: &HotlineClient) {
+    pub fn list_accounts(&mut self, client: &HotlineClient) -> Request<()> {
         if !self.granted().contains(Access::OPEN_USER) {
             self.accounts.get_or_insert_default();
-            return;
+            return Request::ready(());
         }
         if !self.bulk_accounts() {
             if self.accounts.is_none() {
@@ -41,81 +41,99 @@ impl ClientSession {
                     LineKind::System,
                 );
             }
-            return;
+            return Request::ready(());
         }
-        match client.get_user_list().await {
-            Ok(mut accounts) => {
-                accounts.sort_by(|a, b| a.login.cmp(&b.login));
-                self.accounts = Some(accounts);
+        let client = client.clone();
+        Request::new(async move {
+            let accounts = client.get_user_list().await;
+            move |session: &mut Self| match accounts {
+                Ok(mut accounts) => {
+                    accounts.sort_by(|a, b| a.login.cmp(&b.login));
+                    session.accounts = Some(accounts);
+                }
+                Err(e) => {
+                    session.accounts = Some(Vec::new());
+                    session.push(format!("failed to list accounts: {e}"), LineKind::Error);
+                }
             }
-            Err(e) => {
-                self.accounts = Some(Vec::new());
-                self.push(format!("failed to list accounts: {e}"), LineKind::Error);
-            }
-        }
+        })
     }
 
     /// Read the account `login` and add it to the list.
-    pub async fn open_account(
-        &mut self,
-        client: &HotlineClient,
-        login: &str,
-    ) -> Option<UserAccount> {
-        match client.get_user(login).await {
-            Ok(account) => {
-                self.keep_account(account.clone());
+    pub fn open_account(client: &HotlineClient, login: &str) -> Request<Option<UserAccount>> {
+        let client = client.clone();
+        let login = login.to_string();
+        let failed = format!("failed to open {login}");
+        Request::report(
+            async move { client.get_user(&login).await },
+            failed,
+            |session: &mut Self, account| {
+                session.keep_account(account.clone());
                 Some(account)
-            }
-            Err(e) => {
-                self.push(format!("failed to open {login}: {e}"), LineKind::Error);
-                None
-            }
-        }
+            },
+        )
     }
 
     /// Create `account`, or replace the account `old_login`.
-    pub async fn save_account(
+    pub fn save_account(
         &mut self,
         client: &HotlineClient,
         old_login: Option<Box<str>>,
         account: UserAccount,
-    ) {
+    ) -> Request<()> {
+        let bulk = self.bulk_accounts();
+        if !bulk && old_login.as_ref().is_some_and(|old| *old != account.login) {
+            self.push("this server cannot rename an account", LineKind::Error);
+            return Request::ready(());
+        }
+        let client = client.clone();
         let login = account.login.clone();
-        let saved = if self.bulk_accounts() {
-            let change = AccountChange::Save { old_login, account };
-            client.set_user_list(&[change]).await
-        } else {
-            match old_login {
-                None => client.new_user(&account).await,
-                Some(old) if old == account.login => client.set_user(&account).await,
-                Some(_) => {
-                    self.push("this server cannot rename an account", LineKind::Error);
-                    return;
+        Request::wait({
+            let client = client.clone();
+            async move {
+                if bulk {
+                    let change = AccountChange::Save { old_login, account };
+                    client.set_user_list(&[change]).await
+                } else if old_login.is_none() {
+                    client.new_user(&account).await
+                } else {
+                    client.set_user(&account).await
                 }
             }
-        };
-        match saved {
-            Ok(()) if self.bulk_accounts() => self.list_accounts(client).await,
-            Ok(()) => {
-                let _ = self.open_account(client, &login).await;
+        })
+        .and_then(move |session, saved| match saved {
+            Ok(()) if bulk => session.list_accounts(&client),
+            Ok(()) => Self::open_account(&client, &login).map(|_, _| ()),
+            Err(e) => {
+                session.push(format!("failed to save {login}: {e}"), LineKind::Error);
+                Request::ready(())
             }
-            Err(e) => self.push(format!("failed to save {login}: {e}"), LineKind::Error),
-        }
+        })
     }
 
     /// Delete the account `login`.
-    pub async fn delete_account(&mut self, client: &HotlineClient, login: &str) {
-        let deleted = if self.bulk_accounts() {
-            let change = AccountChange::Delete(login.into());
-            client.set_user_list(&[change]).await
-        } else {
-            client.delete_user(login).await
-        };
-        if let Err(e) = deleted {
-            self.push(format!("failed to delete {login}: {e}"), LineKind::Error);
-        } else if let Some(accounts) = &mut self.accounts {
-            accounts.retain(|a| &*a.login != login);
-        }
+    pub fn delete_account(&self, client: &HotlineClient, login: &str) -> Request<()> {
+        let bulk = self.bulk_accounts();
+        let client = client.clone();
+        let login = login.to_string();
+        let failed = format!("failed to delete {login}");
+        Request::report(
+            async move {
+                let deleted = if bulk {
+                    let change = AccountChange::Delete(login.as_str().into());
+                    client.set_user_list(&[change]).await
+                } else {
+                    client.delete_user(&login).await
+                };
+                deleted.map(|()| login)
+            },
+            failed,
+            |session: &mut Self, login| {
+                if let Some(accounts) = &mut session.accounts {
+                    accounts.retain(|a| *a.login != *login);
+                }
+            },
+        )
     }
 
     /// Add `account` to the list, or replace the listed account with its login.
@@ -165,41 +183,58 @@ mod tests {
     async fn list_accounts_lists_none_without_open_user() {
         let (mut session, client) = session(190).await;
         session.access = Access::CREATE_USER;
-        session.list_accounts(&client).await;
+        session.list_accounts(&client).run(&mut session).await;
         assert_eq!(session.accounts, Some(Vec::new()));
     }
 
     #[tokio::test]
     async fn a_new_server_lists_saves_and_deletes_in_bulk() {
         let (mut session, client) = session(184).await;
-        session.list_accounts(&client).await;
+        session.list_accounts(&client).run(&mut session).await;
         assert_eq!(logins(&session), ["admin", "guest"]);
 
-        session.save_account(&client, None, account("bo")).await;
+        session
+            .save_account(&client, None, account("bo"))
+            .run(&mut session)
+            .await;
         assert_eq!(logins(&session), ["admin", "bo", "guest"]);
         session
             .save_account(&client, Some("bo".into()), account("cy"))
+            .run(&mut session)
             .await;
         assert_eq!(logins(&session), ["admin", "cy", "guest"]);
-        session.delete_account(&client, "cy").await;
+        session
+            .delete_account(&client, "cy")
+            .run(&mut session)
+            .await;
         assert_eq!(logins(&session), ["admin", "guest"]);
     }
 
     #[tokio::test]
     async fn an_old_server_opens_saves_and_deletes_one_account() {
         let (mut session, client) = session(151).await;
-        session.list_accounts(&client).await;
+        session.list_accounts(&client).run(&mut session).await;
         assert_eq!(logins(&session), Vec::<&str>::new());
 
-        session.save_account(&client, None, account("bo")).await;
+        session
+            .save_account(&client, None, account("bo"))
+            .run(&mut session)
+            .await;
         assert_eq!(logins(&session), ["bo"]);
         session
             .save_account(&client, Some("bo".into()), account("cy"))
+            .run(&mut session)
             .await;
         assert_eq!(logins(&session), ["bo"]);
-        assert!(session.open_account(&client, "admin").await.is_some());
+        assert!(ClientSession::open_account(&client, "admin")
+            .run(&mut session)
+            .await
+            .is_some());
         assert_eq!(logins(&session), ["admin", "bo"]);
-        session.delete_account(&client, "bo").await;
+        session
+            .delete_account(&client, "bo")
+            .run(&mut session)
+            .await;
         assert_eq!(logins(&session), ["admin"]);
     }
 }

@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use hotline_client::HotlineClient;
 
-use super::ClientSession;
-use crate::line::LineKind;
+use super::{ClientSession, Request};
 
 /// The time without traffic before [`ClientSession::keep_alive`] runs.
 pub const KEEP_ALIVE: Duration = Duration::from_secs(180);
@@ -21,20 +20,20 @@ impl ClientSession {
     ///
     /// [`myTran_KeepConnectionAlive`]: hotline_proto::Opcode::KeepConnectionAlive
     /// [`myTran_GetUserNameList`]: hotline_proto::Opcode::GetUserNameList
-    pub async fn keep_alive(&mut self, client: &HotlineClient) {
+    pub fn keep_alive(&self, client: &HotlineClient) -> Request<()> {
+        let client = client.clone();
         if self.server_at_least(KEEP_ALIVE_VERSION) {
-            if let Err(e) = client.keep_connection_alive().await {
-                self.push(
-                    format!("failed to keep the connection: {e}"),
-                    LineKind::Error,
-                );
-            }
-            return;
+            return Request::report(
+                async move { client.keep_connection_alive().await },
+                "failed to keep the connection",
+                |_, ()| {},
+            );
         }
-        match client.get_user_name_list().await {
-            Ok(users) => self.users = users,
-            Err(e) => self.push(format!("failed to fetch user list: {e}"), LineKind::Error),
-        }
+        Request::report(
+            async move { client.get_user_name_list().await },
+            "failed to fetch user list",
+            |session: &mut Self, users| session.users = users,
+        )
     }
 }
 
@@ -51,11 +50,11 @@ mod tests {
         let before = session.lines.len();
 
         session.server_version = Some(190);
-        session.keep_alive(&client).await;
+        session.keep_alive(&client).run(&mut session).await;
         assert!(session.users.is_empty());
 
         session.server_version = Some(151);
-        session.keep_alive(&client).await;
+        session.keep_alive(&client).run(&mut session).await;
         assert_eq!(session.users.len(), 1);
         assert_eq!(session.lines.len(), before);
     }

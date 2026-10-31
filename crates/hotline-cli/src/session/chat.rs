@@ -4,7 +4,7 @@ use hotline_client::{HotlineClient, JoinedChat};
 use hotline_proto::text_encoding;
 use hotline_proto::{Field, FieldId, Received, Transaction};
 
-use super::{display_text, ChatInvite, ChatRoom, ClientSession};
+use super::{display_text, ChatInvite, ChatRoom, ClientSession, Request};
 use crate::line::LineKind;
 
 /// The most invitations that wait for an answer.
@@ -125,14 +125,13 @@ impl ClientSession {
     /// Returns the room's ID.
     ///
     /// [`myTran_InviteNewChat`]: hotline_proto::Opcode::InviteNewChat
-    pub async fn invite_new_chat(&mut self, client: &HotlineClient, user_id: u16) -> Option<u32> {
-        match client.invite_new_chat(user_id).await {
-            Ok(joined) => Some(self.add_room(joined)),
-            Err(e) => {
-                self.push(format!("failed to open a chat: {e}"), LineKind::Error);
-                None
-            }
-        }
+    pub fn invite_new_chat(client: &HotlineClient, user_id: u16) -> Request<Option<u32>> {
+        let client = client.clone();
+        Request::report(
+            async move { client.invite_new_chat(user_id).await },
+            "failed to open a chat",
+            |session: &mut Self, joined| Some(session.add_room(joined)),
+        )
     }
 
     /// Invite `user_id` to the room `chat_id`, [`myTran_InviteToChat`] (113).
@@ -152,14 +151,13 @@ impl ClientSession {
     /// Join the room `chat_id`, [`myTran_JoinChat`] (115). Returns the room's ID.
     ///
     /// [`myTran_JoinChat`]: hotline_proto::Opcode::JoinChat
-    pub async fn join_chat(&mut self, client: &HotlineClient, chat_id: u32) -> Option<u32> {
-        match client.join_chat(chat_id).await {
-            Ok(joined) => Some(self.add_room(joined)),
-            Err(e) => {
-                self.push(format!("failed to join the chat: {e}"), LineKind::Error);
-                None
-            }
-        }
+    pub fn join_chat(client: &HotlineClient, chat_id: u32) -> Request<Option<u32>> {
+        let client = client.clone();
+        Request::report(
+            async move { client.join_chat(chat_id).await },
+            "failed to join the chat",
+            |session: &mut Self, joined| Some(session.add_room(joined)),
+        )
     }
 
     fn add_room(&mut self, joined: JoinedChat) -> u32 {
@@ -340,7 +338,10 @@ mod tests {
         let bob_id = users.iter().find(|u| &*u.name == "bob").unwrap().user_id;
 
         let mut alice_session = ClientSession::new("alice", 0, alice.encoding());
-        let chat_id = alice_session.invite_new_chat(&alice, bob_id).await.unwrap();
+        let chat_id = ClientSession::invite_new_chat(&alice, bob_id)
+            .run(&mut alice_session)
+            .await
+            .unwrap();
 
         let invite = test_support::next_push(&mut bob_events, Opcode::InviteToChat).await;
         let mut bob_session = ClientSession::new("bob", 0, bob.encoding());
@@ -348,7 +349,10 @@ mod tests {
         let invite = bob_session.invites.pop_front().unwrap();
         assert_eq!(invite.chat_id, chat_id);
 
-        bob_session.join_chat(&bob, chat_id).await.unwrap();
+        ClientSession::join_chat(&bob, chat_id)
+            .run(&mut bob_session)
+            .await
+            .unwrap();
         assert_eq!(bob_session.room(chat_id).unwrap().users.len(), 2);
 
         bob_session.leave_chat(&bob, chat_id).await;

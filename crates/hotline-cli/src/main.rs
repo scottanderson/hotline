@@ -32,8 +32,12 @@ use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
 use line::Line;
-use session::{ClientSession, EventOutcome, Mode, NewsFolder, NewsTarget, KEEP_ALIVE};
+use session::{
+    ClientSession, EventOutcome, Mode, NewsFolder, NewsTarget, Next, Request, KEEP_ALIVE,
+};
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use transfer::Conflict;
 use view::{AccountForm, Action, Focus, Modal, OptionsForm, View};
 
 #[tokio::main]
@@ -123,6 +127,7 @@ async fn run(
     // `true` while the screen lags behind the state.
     let mut stale = false;
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
+    let mut tasks = Tasks::new(client);
     let mut last_keep_alive = Instant::now();
     let idle_since = |last_keep_alive| client.last_traffic().max(last_keep_alive);
 
@@ -135,10 +140,12 @@ async fn run(
                 session.lines.push(line);
                 happened = Bell::TRANSFER;
             }
+            // A reply to a request.
+            Some(step) = tasks.next() => step(session, &mut view, &mut tasks),
             // No traffic or keep-alive attempt for a while.
             () = tokio::time::sleep_until((idle_since(last_keep_alive) + KEEP_ALIVE).into()) => {
                 if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {
-                    session.keep_alive(client).await;
+                    tasks.run(session.keep_alive(client));
                     last_keep_alive = Instant::now();
                 }
             }
@@ -152,7 +159,9 @@ async fn run(
                     happened |= Bell::for_tab(tab, view.tab, focused);
                 }
                 match session.apply_server_event(&tx) {
-                    EventOutcome::NeedsAgreementAccept => session.accept_agreement(client).await,
+                    EventOutcome::NeedsAgreementAccept => {
+                        tasks.run(session.accept_agreement(client));
+                    }
                     EventOutcome::Quit => should_quit = true,
                     EventOutcome::Applied => {}
                 }
@@ -167,7 +176,7 @@ async fn run(
                         if matches!(session.mode, Mode::Agreement(_)) {
                             match key.code {
                                 KeyCode::Esc => should_quit = true,
-                                KeyCode::Enter => session.accept_agreement(client).await,
+                                KeyCode::Enter => tasks.run(session.accept_agreement(client)),
                                 _ => {}
                             }
                             continue;
@@ -194,7 +203,7 @@ async fn run(
                     }
                     _ => Action::None,
                 };
-                should_quit = perform(action, session, &mut view, client, &done_tx).await;
+                should_quit = perform(action, session, &mut view, &mut tasks, &done_tx).await;
             }
         }
         view.set_tabs(ui::tab_labels(session));
@@ -216,14 +225,85 @@ async fn run(
     Ok(())
 }
 
+/// What a reply does to the session and the view.
+type Step = Box<dyn FnOnce(&mut ClientSession, &mut View, &mut Tasks) + Send>;
+
+/// The requests that run off the event loop.
+struct Tasks {
+    set: JoinSet<Step>,
+    client: HotlineClient,
+}
+
+impl Tasks {
+    fn new(client: &HotlineClient) -> Self {
+        Self {
+            set: JoinSet::new(),
+            client: client.clone(),
+        }
+    }
+
+    /// Run `request`, then give its value to `then`.
+    fn start<T: Send + 'static>(
+        &mut self,
+        request: Request<T>,
+        then: impl FnOnce(T, &mut ClientSession, &mut View, &mut Self) + Send + 'static,
+    ) {
+        self.set.spawn(async move {
+            let apply = request.reply().await;
+            let step: Step = Box::new(move |session, view, tasks| match apply(session) {
+                Next::Done(value) => then(value, session, view, tasks),
+                Next::Then(request) => tasks.start(request, then),
+            });
+            step
+        });
+    }
+
+    /// Run `request`.
+    fn run(&mut self, request: Request<()>) {
+        self.start(request, |(), _, _, _| {});
+    }
+
+    /// The step of the next reply. `None` when no request runs.
+    async fn next(&mut self) -> Option<Step> {
+        loop {
+            match self.set.join_next().await? {
+                Ok(step) => return Some(step),
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => std::panic::resume_unwind(e.into_panic()),
+            }
+        }
+    }
+}
+
+/// Show `modal`, if any.
+fn open(view: &mut View, modal: Option<Modal>) {
+    if modal.is_some() {
+        view.modal = modal;
+    }
+}
+
+/// Show the room `chat_id`, if any.
+fn show_room(chat_id: Option<u32>, session: &mut ClientSession, view: &mut View, _: &mut Tasks) {
+    if let Some(chat_id) = chat_id {
+        view.set_tabs(ui::tab_labels(session));
+        view.show_room(chat_id);
+    }
+}
+
+/// Show the conflict that stops a transfer, if any.
+fn ask(conflict: Option<Conflict>, _: &mut ClientSession, view: &mut View, _: &mut Tasks) {
+    open(view, conflict.map(Modal::ask));
+}
+
 /// Run `action`. A finished transfer sends its line to `done`. `true` means quit.
 async fn perform(
     action: Action,
     session: &mut ClientSession,
     view: &mut View,
-    client: &HotlineClient,
+    tasks: &mut Tasks,
     done: &mpsc::UnboundedSender<Line>,
 ) -> bool {
+    let client = &tasks.client.clone();
     match action {
         Action::None => {}
         Action::Quit => return true,
@@ -232,10 +312,7 @@ async fn perform(
             session.send_room_chat(client, chat_id, &text).await;
         }
         Action::InviteNewChat(user_id) => {
-            if let Some(chat_id) = session.invite_new_chat(client, user_id).await {
-                view.set_tabs(ui::tab_labels(session));
-                view.show_room(chat_id);
-            }
+            tasks.start(ClientSession::invite_new_chat(client, user_id), show_room);
         }
         Action::PickInvitee(chat_id) => {
             let members = ui::tab_users(session, view::Tab::Room(chat_id));
@@ -255,10 +332,7 @@ async fn perform(
             session.invite_to_chat(client, chat_id, user_id).await;
         }
         Action::JoinChat(chat_id) => {
-            if let Some(chat_id) = session.join_chat(client, chat_id).await {
-                view.set_tabs(ui::tab_labels(session));
-                view.show_room(chat_id);
-            }
+            tasks.start(ClientSession::join_chat(client, chat_id), show_room)
         }
         Action::RejectChatInvite(chat_id) => session.reject_chat_invite(client, chat_id).await,
         Action::LeaveChat(chat_id) => session.leave_chat(client, chat_id).await,
@@ -273,35 +347,29 @@ async fn perform(
             session.set_chat_subject(client, chat_id, &subject).await;
         }
         Action::SendInstantMsg { user_id, text } => {
-            session.send_instant_msg(client, user_id, &text).await;
+            tasks.run(ClientSession::send_instant_msg(client, user_id, &text));
         }
         Action::GetClientInfoText(user_id) => {
-            view.modal = session
-                .get_client_info_text(client, user_id)
-                .await
-                .map(Modal::Info);
+            let request = ClientSession::get_client_info_text(client, user_id);
+            tasks.start(request, |info, _, view, _| {
+                open(view, info.map(Modal::Info))
+            });
         }
         Action::DisconnectUser { user_id, ban } => {
-            session.disconnect_user(client, user_id, ban).await;
+            tasks.run(session.disconnect_user(client, user_id, ban));
         }
-        Action::UserBroadcast(text) => session.user_broadcast(client, &text).await,
+        Action::UserBroadcast(text) => tasks.run(ClientSession::user_broadcast(client, &text)),
         Action::EditOptions => {
             view.modal = Some(Modal::Options(OptionsForm::edit(&session.user_info())));
         }
         Action::SetClientUserInfo(info) => session.set_client_user_info(client, info).await,
-        Action::GetMsgs => session.get_msgs(client).await,
-        Action::OldPostNews(text) => session.old_post_news(client, &text).await,
-        Action::ListFiles => {
-            let path = session.file_path.clone();
-            list_files(session, view, client, path).await;
-        }
-        Action::OpenFolder(name) => {
-            let path = session.child_folder(&name);
-            list_files(session, view, client, path).await;
-        }
+        Action::GetMsgs => tasks.run(ClientSession::get_msgs(client)),
+        Action::OldPostNews(text) => tasks.run(ClientSession::old_post_news(client, &text)),
+        Action::ListFiles => list_files(tasks, session.file_path.clone()),
+        Action::OpenFolder(name) => list_files(tasks, session.child_folder(&name)),
         Action::ParentFolder => {
             if let Some(path) = session.parent_folder() {
-                list_files(session, view, client, path).await;
+                list_files(tasks, path);
             }
         }
         Action::DownloadFile {
@@ -309,14 +377,13 @@ async fn perform(
             save_as,
             start,
         } => {
-            let conflict = session
-                .download_file(client, &name, &save_as, start, done)
-                .await;
-            view.modal = conflict.map(Modal::ask);
+            tasks.start(
+                session.download_file(client, &name, &save_as, start, done),
+                ask,
+            );
         }
         Action::DownloadFolder { name, start } => {
-            let conflict = session.download_folder(client, &name, start, done).await;
-            view.modal = conflict.map(Modal::ask);
+            tasks.start(session.download_folder(client, &name, start, done), ask);
         }
         Action::PickDownload => {
             let downloads = session.running_downloads();
@@ -327,51 +394,63 @@ async fn perform(
                 });
             }
         }
-        Action::KillDownload(id) => session.kill_download(client, id).await,
+        Action::KillDownload(id) => tasks.run(session.kill_download(client, id)),
         Action::Upload { path, start } => {
             let path = std::path::Path::new(&path);
-            let conflict = session.upload(client, path, start, done).await;
-            view.modal = conflict.map(Modal::ask);
+            tasks.start(session.upload(client, path, start, done), ask);
         }
-        Action::AskFileEdit { edit, name } => {
-            let input = match edit {
-                FileEdit::NewFolder => Some(String::new()),
-                FileEdit::Rename => Some(name.to_string()),
-                FileEdit::Comment => session
-                    .get_file_info(client, &name)
-                    .await
-                    .map(|info| info.comment.into()),
-                FileEdit::Move | FileEdit::Alias => Some(session.folder_text()),
-            };
-            view.modal = input.map(|input| Modal::FileEdit { edit, name, input });
-        }
+        Action::AskFileEdit { edit, name } => match edit {
+            FileEdit::Comment => {
+                tasks.start(
+                    session.get_file_info(client, &name),
+                    move |info, _, view, _| {
+                        let input = info.map(|info| info.comment.into());
+                        open(
+                            view,
+                            input.map(|input| Modal::FileEdit { edit, name, input }),
+                        );
+                    },
+                );
+            }
+            FileEdit::NewFolder | FileEdit::Rename | FileEdit::Move | FileEdit::Alias => {
+                let input = match edit {
+                    FileEdit::Rename => name.to_string(),
+                    FileEdit::Move | FileEdit::Alias => session.folder_text(),
+                    _ => String::new(),
+                };
+                view.modal = Some(Modal::FileEdit { edit, name, input });
+            }
+        },
         Action::EditFile { edit, name, text } => {
-            session.edit_file(client, edit, &name, &text).await;
+            tasks.run(session.edit_file(client, edit, &name, &text));
         }
-        Action::DeleteFile(name) => session.delete_file(client, &name).await,
+        Action::DeleteFile(name) => tasks.run(session.delete_file(client, &name)),
         Action::GetFileInfo(name) => {
-            view.modal = session
-                .get_file_info(client, &name)
-                .await
-                .map(Modal::FileInfo);
+            tasks.start(session.get_file_info(client, &name), |info, _, view, _| {
+                open(view, info.map(Modal::FileInfo));
+            });
         }
         Action::ListThreadedNews => {
-            session.list_threaded_news(client).await;
-            view.news_folders = TableState::default().with_selected(Some(0));
-            reselect_news_folder(session, view, client).await;
+            tasks.start(
+                session.list_threaded_news(client),
+                |(), session, view, tasks| {
+                    view.news_folders = TableState::default().with_selected(Some(0));
+                    reselect_news_folder(session, view, tasks);
+                },
+            );
         }
         Action::HighlightNewsFolder(index) => {
             view.news_folders.select(Some(index));
-            reselect_news_folder(session, view, client).await;
+            reselect_news_folder(session, view, tasks);
         }
         Action::OpenNewsFolder(index) => {
             match session.news_folders.as_ref().and_then(|f| f.get(index)) {
                 Some(node) if node.kind == NewsFolder::Category => view.focus = Focus::NewsThreads,
-                Some(_) => session.toggle_news_folder(client, index).await,
+                Some(_) => tasks.run(session.toggle_news_folder(client, index)),
                 None => {}
             }
         }
-        Action::ExpandNewsFolder(index) => session.expand_news_folder(client, index).await,
+        Action::ExpandNewsFolder(index) => tasks.run(session.expand_news_folder(client, index)),
         Action::CollapseNewsFolder(index) => {
             let expanded = session
                 .news_folders
@@ -382,16 +461,18 @@ async fn perform(
                 session.collapse_news_folder(index);
             } else if let Some(parent) = session.news_folder_parent(index) {
                 view.news_folders.select(Some(parent));
-                reselect_news_folder(session, view, client).await;
+                reselect_news_folder(session, view, tasks);
             }
         }
-        Action::PreviewArticle(index) => preview_news_article(session, view, client, index).await,
+        Action::PreviewArticle(index) => preview_news_article(session, tasks, index),
         Action::OpenArticle(index) => {
             if let Some(summary) = session.news_threads.get(index).map(|t| t.summary.clone()) {
-                view.modal = session
-                    .read_article(client, &summary)
-                    .await
-                    .map(Modal::Article);
+                tasks.start(
+                    session.read_article(client, &summary),
+                    |article, _, view, _| {
+                        open(view, article.map(Modal::Article));
+                    },
+                );
             }
         }
         Action::NewPost => {
@@ -409,8 +490,10 @@ async fn perform(
             title,
             text,
         } => {
-            session.post_article(client, parent_id, &title, &text).await;
-            reselect_news_thread(session, view, client).await;
+            tasks.start(
+                session.post_article(client, parent_id, &title, &text),
+                |(), session, view, tasks| reselect_news_thread(session, view, tasks),
+            );
         }
         Action::AskDeleteNews(target) => {
             if let NewsTarget::Folder(index) = target {
@@ -424,36 +507,47 @@ async fn perform(
             });
         }
         Action::DeleteNewsItem(target) => {
-            session.delete_news_item(client, target).await;
-            match target {
-                NewsTarget::Folder(_) => reselect_news_folder(session, view, client).await,
-                NewsTarget::Article(_) => reselect_news_thread(session, view, client).await,
-            }
+            tasks.start(
+                session.delete_news_item(client, target),
+                move |(), session, view, tasks| match target {
+                    NewsTarget::Folder(_) => reselect_news_folder(session, view, tasks),
+                    NewsTarget::Article(_) => reselect_news_thread(session, view, tasks),
+                },
+            );
         }
         Action::NewNewsItem { name, kind } => {
             let count = session.news_folders.as_ref().map_or(0, Vec::len);
             let index = view.news_folders.selected().filter(|&i| i < count);
             let path = index.and_then(|i| session.news_folder_path(i));
-            session.new_news_item(client, index, &name, kind).await;
-            if let Some(row) = path.and_then(|path| session.news_folder_row(&path)) {
-                view.news_folders.select(Some(row));
-            }
-            reselect_news_folder(session, view, client).await;
+            tasks.start(
+                session.new_news_item(client, index, &name, kind),
+                move |(), session, view, tasks| {
+                    if let Some(row) = path.and_then(|path| session.news_folder_row(&path)) {
+                        view.news_folders.select(Some(row));
+                    }
+                    reselect_news_folder(session, view, tasks);
+                },
+            );
         }
         Action::ListAccounts => {
-            session.list_accounts(client).await;
-            view.accounts = ListState::default().with_selected(Some(0));
+            tasks.start(session.list_accounts(client), |(), _, view, _| {
+                view.accounts = ListState::default().with_selected(Some(0));
+            });
         }
         Action::EditAccount(index) => {
             let account = session.accounts.as_ref().and_then(|a| a.get(index));
             view.modal = account.map(|a| Modal::Account(AccountForm::edit(a)));
         }
         Action::OpenAccount(login) => {
-            let account = session.open_account(client, &login).await;
-            view.modal = account.map(|a| Modal::Account(AccountForm::edit(&a)));
+            tasks.start(
+                ClientSession::open_account(client, &login),
+                |account, _, view, _| {
+                    open(view, account.map(|a| Modal::Account(AccountForm::edit(&a))));
+                },
+            );
         }
         Action::SaveAccount { old_login, account } => {
-            session.save_account(client, old_login, account).await;
+            tasks.run(session.save_account(client, old_login, account));
         }
         Action::AskDeleteAccount(index) => {
             let account = session.accounts.as_ref().and_then(|a| a.get(index));
@@ -461,29 +555,24 @@ async fn perform(
                 login: a.login.clone(),
             });
         }
-        Action::DeleteAccount(login) => session.delete_account(client, &login).await,
+        Action::DeleteAccount(login) => tasks.run(session.delete_account(client, &login)),
     }
     false
 }
 
-async fn list_files(
-    session: &mut ClientSession,
-    view: &mut View,
-    client: &HotlineClient,
-    path: HlPath,
-) {
-    if session.get_file_name_list(client, path).await {
-        view.files = ListState::default().with_selected(Some(0));
-    }
+/// List the folder `path`, and select its first item.
+fn list_files(tasks: &mut Tasks, path: HlPath) {
+    let request = ClientSession::get_file_name_list(&tasks.client, path);
+    tasks.start(request, |listed, _, view, _| {
+        if listed {
+            view.files = ListState::default().with_selected(Some(0));
+        }
+    });
 }
 
 /// Keep the tree selection in range, and show the threads of that row.
 /// A new category selects its first thread.
-async fn reselect_news_folder(
-    session: &mut ClientSession,
-    view: &mut View,
-    client: &HotlineClient,
-) {
+fn reselect_news_folder(session: &mut ClientSession, view: &mut View, tasks: &mut Tasks) {
     let count = session.news_folders.as_ref().map_or(0, Vec::len);
     let index = view
         .news_folders
@@ -492,39 +581,34 @@ async fn reselect_news_folder(
         .min(count.saturating_sub(1));
     view.news_folders.select(Some(index));
     let category = session.news_category.clone();
-    session.highlight_news_folder(client, index).await;
-    if session.news_category != category || session.news_category.is_none() {
-        view.news = TableState::default().with_selected(Some(0));
-        view.preview_scroll = 0;
-        session.preview_article(client, 0).await;
-    }
+    let request = session.highlight_news_folder(&tasks.client, index);
+    tasks.start(request, move |(), session, view, tasks| {
+        if session.news_category != category || session.news_category.is_none() {
+            view.news = TableState::default().with_selected(Some(0));
+            view.preview_scroll = 0;
+            tasks.run(session.preview_article(&tasks.client, 0));
+        }
+    });
 }
 
 /// Keep the thread selection in range, and show that article in the preview.
-async fn reselect_news_thread(
-    session: &mut ClientSession,
-    view: &mut View,
-    client: &HotlineClient,
-) {
+fn reselect_news_thread(session: &mut ClientSession, view: &mut View, tasks: &mut Tasks) {
     let index = view
         .news
         .selected()
         .unwrap_or(0)
         .min(session.news_threads.len().saturating_sub(1));
     view.news.select(Some(index));
-    preview_news_article(session, view, client, index).await;
+    preview_news_article(session, tasks, index);
 }
 
 /// Show thread `index` in the preview, and scroll to the top for a new article.
-async fn preview_news_article(
-    session: &mut ClientSession,
-    view: &mut View,
-    client: &HotlineClient,
-    index: usize,
-) {
+fn preview_news_article(session: &mut ClientSession, tasks: &mut Tasks, index: usize) {
     let shown = session.news_preview.as_ref().map(|article| article.id);
-    session.preview_article(client, index).await;
-    if session.news_preview.as_ref().map(|article| article.id) != shown {
-        view.preview_scroll = 0;
-    }
+    let request = session.preview_article(&tasks.client, index);
+    tasks.start(request, move |(), session, view, _| {
+        if session.news_preview.as_ref().map(|article| article.id) != shown {
+            view.preview_scroll = 0;
+        }
+    });
 }

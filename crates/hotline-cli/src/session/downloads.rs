@@ -9,7 +9,7 @@ use hotline_client::HotlineClient;
 use tokio::io::AsyncWrite;
 use tokio::task::AbortHandle;
 
-use super::ClientSession;
+use super::{ClientSession, Request};
 use crate::line::LineKind;
 
 /// The lowest server version that holds a queued download before its
@@ -93,24 +93,30 @@ impl ClientSession {
     /// file stays for a resume.
     ///
     /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
-    pub async fn kill_download(&mut self, client: &HotlineClient, id: u64) {
+    pub fn kill_download(&mut self, client: &HotlineClient, id: u64) -> Request<()> {
         let Some(pos) = self.downloads.iter().position(|d| d.id == id) else {
-            return;
+            return Request::ready(());
         };
         let download = self.downloads.remove(pos);
         download.task.abort();
         let in_queue = download.queued.load(Ordering::Relaxed);
         let kill = in_queue && self.server_at_least(KILL_DOWNLOAD_VERSION);
-        if let Some(reference) = download.reference.filter(|_| kill) {
-            if let Err(e) = client.kill_download(reference).await {
-                let text = format!("failed to cancel {}: {e}", download.name);
-                return self.push(text, LineKind::Error);
-            }
-        }
-        self.push(
-            format!("cancelled the download of {}", download.name),
-            LineKind::System,
-        );
+        let reference = download.reference.filter(|_| kill);
+        let client = client.clone();
+        let failed = format!("failed to cancel {}", download.name);
+        Request::report(
+            async move {
+                match reference {
+                    Some(reference) => client.kill_download(reference).await,
+                    None => Ok(()),
+                }
+            },
+            failed,
+            move |session: &mut Self, ()| {
+                let text = format!("cancelled the download of {}", download.name);
+                session.push(text, LineKind::System);
+            },
+        )
     }
 }
 
@@ -178,11 +184,12 @@ mod tests {
         let _first = client.download_file(&root, "a.txt", 0).await.unwrap();
         let _ = session
             .download_file(&client, "a.txt", "b.txt", Start::Ask, &tx)
+            .run(&mut session)
             .await;
         let running = session.running_downloads();
         assert_eq!(running, [(1, "a.txt (queued)".into())]);
 
-        session.kill_download(&client, 1).await;
+        session.kill_download(&client, 1).run(&mut session).await;
         assert_eq!(
             &*session.lines.last().unwrap().text,
             "cancelled the download of a.txt"

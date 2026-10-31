@@ -3,7 +3,7 @@
 use hotline_client::{FileInfo, HotlineClient};
 use hotline_proto::types::HlPath;
 
-use super::ClientSession;
+use super::{ClientSession, Request};
 use crate::file_edit::FileEdit;
 use crate::line::LineKind;
 
@@ -16,62 +16,90 @@ impl ClientSession {
     /// The file or folder `name` in the current folder, [`myTran_GetFileInfo`] (206).
     ///
     /// [`myTran_GetFileInfo`]: hotline_proto::Opcode::GetFileInfo
-    pub async fn get_file_info(&mut self, client: &HotlineClient, name: &str) -> Option<FileInfo> {
-        client
-            .get_file_info(&self.file_path, name)
-            .await
-            .inspect_err(|e| self.push(format!("failed to get info: {e}"), LineKind::Error))
-            .ok()
+    pub fn get_file_info(&self, client: &HotlineClient, name: &str) -> Request<Option<FileInfo>> {
+        let client = client.clone();
+        let path = self.file_path.clone();
+        let name = name.to_string();
+        Request::report(
+            async move { client.get_file_info(&path, &name).await },
+            "failed to get info",
+            |_, info| Some(info),
+        )
     }
 
     /// Delete the file or folder `name` in the current folder,
     /// [`myTran_DeleteFile`] (204).
     ///
     /// [`myTran_DeleteFile`]: hotline_proto::Opcode::DeleteFile
-    pub async fn delete_file(&mut self, client: &HotlineClient, name: &str) {
-        match client.delete_file(&self.file_path, name).await {
-            Ok(()) => self.refresh_files(client).await,
-            Err(e) => self.push(format!("failed to delete {name}: {e}"), LineKind::Error),
-        }
+    pub fn delete_file(&self, client: &HotlineClient, name: &str) -> Request<()> {
+        let path = self.file_path.clone();
+        let name = name.to_string();
+        Request::wait({
+            let client = client.clone();
+            async move {
+                let deleted = client.delete_file(&path, &name).await;
+                (deleted, name)
+            }
+        })
+        .and_then({
+            let client = client.clone();
+            move |session, (deleted, name)| match deleted {
+                Ok(()) => session.refresh_files(&client),
+                Err(e) => {
+                    session.push(format!("failed to delete {name}: {e}"), LineKind::Error);
+                    Request::ready(())
+                }
+            }
+        })
     }
 
     /// Apply `edit` with `text` to the file or folder `name` in the current
     /// folder. A folder in `text` is `/`-separated from the root.
-    pub async fn edit_file(
-        &mut self,
+    pub fn edit_file(
+        &self,
         client: &HotlineClient,
         edit: FileEdit,
         name: &str,
         text: &str,
-    ) {
-        let path = &self.file_path;
-        let done = match edit {
-            FileEdit::NewFolder => client.new_folder(path, text).await,
-            FileEdit::Rename => client.set_file_info(path, name, text, None).await,
-            FileEdit::Comment => client.set_file_info(path, name, "", Some(text)).await,
-            FileEdit::Move => client.move_file(path, name, &parse_folder(text)).await,
-            FileEdit::Alias => {
-                client
-                    .make_file_alias(path, name, &parse_folder(text))
-                    .await
+    ) -> Request<()> {
+        let path = self.file_path.clone();
+        let label = if name.is_empty() { text } else { name }.to_string();
+        let (name, text) = (name.to_string(), text.to_string());
+        Request::wait({
+            let client = client.clone();
+            async move {
+                let done = match edit {
+                    FileEdit::NewFolder => client.new_folder(&path, &text).await,
+                    FileEdit::Rename => client.set_file_info(&path, &name, &text, None).await,
+                    FileEdit::Comment => client.set_file_info(&path, &name, "", Some(&text)).await,
+                    FileEdit::Move => client.move_file(&path, &name, &parse_folder(&text)).await,
+                    FileEdit::Alias => {
+                        client
+                            .make_file_alias(&path, &name, &parse_folder(&text))
+                            .await
+                    }
+                };
+                done
             }
-        };
-        match done {
-            Ok(()) => self.refresh_files(client).await,
-            Err(e) => {
-                let name = if name.is_empty() { text } else { name };
-                self.push(
-                    format!("failed to {} {name}: {e}", edit.verb()),
-                    LineKind::Error,
-                );
+        })
+        .and_then({
+            let client = client.clone();
+            move |session, done| match done {
+                Ok(()) => session.refresh_files(&client),
+                Err(e) => {
+                    session.push(
+                        format!("failed to {} {label}: {e}", edit.verb()),
+                        LineKind::Error,
+                    );
+                    Request::ready(())
+                }
             }
-        }
+        })
     }
 
     /// List the current folder again.
-    async fn refresh_files(&mut self, client: &HotlineClient) {
-        let path = self.file_path.clone();
-        self.get_file_name_list(client, path).await;
+    fn refresh_files(&self, client: &HotlineClient) -> Request<()> {
+        Self::get_file_name_list(client, self.file_path.clone()).map(|_, _| ())
     }
 }
 
@@ -117,13 +145,15 @@ mod tests {
 
         session
             .edit_file(&client, FileEdit::NewFolder, "", "Docs")
+            .run(&mut session)
             .await;
         assert!(names(&session).contains(&"Docs".to_string()));
         session
             .edit_file(&client, FileEdit::Move, "a.txt", "/Docs")
+            .run(&mut session)
             .await;
         assert_eq!(names(&session), ["Docs"]);
-        session.delete_file(&client, "Docs").await;
+        session.delete_file(&client, "Docs").run(&mut session).await;
         assert_eq!(names(&session), Vec::<String>::new());
         assert_eq!(session.folder_text(), "/");
     }
