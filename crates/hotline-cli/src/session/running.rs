@@ -13,7 +13,7 @@ use tokio::task::AbortHandle;
 
 use super::{ClientSession, Request};
 use crate::line::LineKind;
-use crate::tasks::{TaskId, TaskRow};
+use crate::tasks::{Stop, TaskId, TaskRow};
 use crate::transfer::{rate_text, size_text};
 
 /// The lowest server version that holds a queued download before its
@@ -307,7 +307,7 @@ impl ClientSession {
             let row = TaskRow {
                 id: TaskId::Transfer(t.id),
                 label,
-                cancellable: true,
+                stop: Some(Stop::Cancel),
                 queued,
                 ratio: progress.ratio().filter(|_| !queued),
             };
@@ -600,7 +600,7 @@ mod tests {
             [TaskRow {
                 id: TaskId::Transfer(1),
                 label: "Uploading folder “f” (1K/sec 2K/4K 0:02) [1 of 2]".into(),
-                cancellable: true,
+                stop: Some(Stop::Cancel),
                 queued: false,
                 ratio: Some(0.5),
             }]

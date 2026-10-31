@@ -139,9 +139,10 @@ moves from the user list to the box. On Threaded News, the box fills
 the right column, and Tab moves from the preview to the box. Alt-J
 moves to it from anywhere. A click selects a task. Enter cancels the
 selected download, upload, or request that only reads. Enter does
-nothing on a request that changes the server. A cancelled download
-that waits in the server's queue leaves the queue. A cancelled upload
-closes its connection.
+nothing on a request that changes the server. Enter on the
+`Logging in...` step of the login ends the connection. A cancelled
+download that waits in the server's queue leaves the queue. A
+cancelled upload closes its connection.
 
 Each transfer waits until each older transfer ends. A waiting transfer
 shows `(queued)`, and the box title counts these transfers. `s` starts

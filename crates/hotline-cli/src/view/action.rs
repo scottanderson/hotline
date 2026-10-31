@@ -74,6 +74,8 @@ pub enum Action {
     },
     /// Cancel the task with this ID.
     CancelTask(TaskId),
+    /// Cancel the login step with this ID, and end the connection.
+    StopLogin(TaskId),
     /// Start the transfer with this ID, which waits in `hlc`'s queue.
     StartTransfer(u64),
     /// Upload the local file or folder at `path` to the current folder.

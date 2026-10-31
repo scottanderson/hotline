@@ -15,12 +15,21 @@ const KEEP_FINISHED: Duration = Duration::from_millis(500);
 /// What a reply does to the session and the view.
 pub type Step = Box<dyn FnOnce(&mut ClientSession, &mut View, &mut Tasks) + Send>;
 
+/// What Enter does on a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// Cancel the task.
+    Cancel,
+    /// Cancel the task and end the connection.
+    Disconnect,
+}
+
 /// A request as the tasks box shows it.
 #[derive(Debug, Clone)]
 pub struct Task {
     /// The text of the row, `None` for a request with no row.
     label: Option<Box<str>>,
-    cancellable: bool,
+    stop: Option<Stop>,
     /// `true` if the row stays for a moment after the request ends.
     keeps_row: bool,
 }
@@ -30,7 +39,7 @@ impl Task {
     pub fn read(label: impl Into<Box<str>>) -> Self {
         Self {
             label: Some(label.into()),
-            cancellable: true,
+            stop: Some(Stop::Cancel),
             keeps_row: true,
         }
     }
@@ -39,7 +48,16 @@ impl Task {
     pub fn change(label: impl Into<Box<str>>) -> Self {
         Self {
             label: Some(label.into()),
-            cancellable: false,
+            stop: None,
+            keeps_row: true,
+        }
+    }
+
+    /// A step of the login. A stop ends the connection.
+    pub fn login(label: impl Into<Box<str>>) -> Self {
+        Self {
+            label: Some(label.into()),
+            stop: Some(Stop::Disconnect),
             keeps_row: true,
         }
     }
@@ -48,7 +66,7 @@ impl Task {
     pub fn transfer(label: impl Into<Box<str>>) -> Self {
         Self {
             label: Some(label.into()),
-            cancellable: false,
+            stop: None,
             keeps_row: false,
         }
     }
@@ -57,7 +75,7 @@ impl Task {
     pub const fn unlisted() -> Self {
         Self {
             label: None,
-            cancellable: false,
+            stop: None,
             keeps_row: true,
         }
     }
@@ -75,7 +93,8 @@ pub enum TaskId {
 pub struct TaskRow {
     pub id: TaskId,
     pub label: String,
-    pub cancellable: bool,
+    /// What Enter does, `None` if the task cannot stop.
+    pub stop: Option<Stop>,
     /// `true` while a transfer waits for its turn in `hlc`'s queue.
     pub queued: bool,
     /// The part that is done, from 0 to 1, when the size is known.
@@ -91,7 +110,7 @@ impl TaskRow {
     /// The row of this task after it ends well, with a full gauge.
     fn finished(self) -> Self {
         Self {
-            cancellable: false,
+            stop: None,
             queued: false,
             ratio: Some(1.0),
             ..self
@@ -235,7 +254,7 @@ impl Tasks {
             let row = TaskRow {
                 id: TaskId::Request(r.id),
                 label: r.task.label.as_deref()?.to_string(),
-                cancellable: r.task.cancellable,
+                stop: r.task.stop,
                 queued: false,
                 ratio: None,
             };
@@ -340,7 +359,7 @@ mod tests {
         let rows = tasks.rows(&mut session);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "Listing root folder...");
-        assert!(!rows[0].cancellable);
+        assert_eq!(rows[0].stop, None);
         assert_eq!(rows[0].ratio, Some(1.0));
         tasks.finished_at -= KEEP_FINISHED;
         assert!(tasks.rows(&mut session).is_empty());
@@ -366,7 +385,7 @@ mod tests {
             labels,
             ["Listing root folder...", "Transferring messages..."]
         );
-        assert!(!rows[0].cancellable);
+        assert_eq!(rows[0].stop, None);
     }
 
     #[tokio::test]
@@ -421,16 +440,16 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_row_cannot_cancel_and_has_a_full_gauge() {
+    fn a_finished_row_cannot_stop_and_has_a_full_gauge() {
         let row = TaskRow {
             id: TaskId::Transfer(1),
             label: "Downloading".into(),
-            cancellable: true,
+            stop: Some(Stop::Cancel),
             queued: false,
             ratio: None,
         };
         let finished = row.finished();
-        assert!(!finished.cancellable);
+        assert_eq!(finished.stop, None);
         assert_eq!(finished.ratio, Some(1.0));
     }
 
@@ -438,7 +457,7 @@ mod tests {
     async fn rows_show_a_request_at_once() {
         let (mut tasks, mut session) = tasks().await;
         tasks.run(
-            Task::change("Logging in..."),
+            Task::login("Logging in..."),
             ClientSession::get_msgs(&tasks.client),
         );
         assert_eq!(
@@ -446,7 +465,7 @@ mod tests {
             [TaskRow {
                 id: TaskId::Request(1),
                 label: "Logging in...".into(),
-                cancellable: false,
+                stop: Some(Stop::Disconnect),
                 queued: false,
                 ratio: None,
             }]

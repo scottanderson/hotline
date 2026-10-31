@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
 use super::{contains, Action, Focus, Hint, View};
-use crate::tasks::{TaskId, TaskRow};
+use crate::tasks::{Stop, TaskId, TaskRow};
 use crate::ui;
 
 impl View {
@@ -69,11 +69,11 @@ impl View {
                     .saturating_add(1)
                     .min(self.tasks.len().saturating_sub(1));
             }
-            KeyCode::Enter => {
-                if let Some(row) = self.selected_task().filter(|row| row.cancellable) {
-                    return Action::CancelTask(row.id);
-                }
-            }
+            KeyCode::Enter => match self.selected_task().map(|row| (row.id, row.stop)) {
+                Some((id, Some(Stop::Cancel))) => return Action::CancelTask(id),
+                Some((id, Some(Stop::Disconnect))) => return Action::StopLogin(id),
+                _ => {}
+            },
             KeyCode::Char('s') => {
                 if let Some(TaskId::Transfer(id)) = self.queued_task() {
                     return Action::StartTransfer(id);
@@ -93,11 +93,15 @@ impl View {
 
     /// The keys of the tasks box.
     pub(super) fn tasks_hints(&self) -> Vec<Hint> {
-        let cancellable = self.selected_task().is_some_and(|row| row.cancellable);
+        let stop = self.selected_task().and_then(|row| row.stop);
+        let stop = match stop {
+            Some(Stop::Disconnect) => Hint::new("Enter", "disconnect"),
+            _ => Hint::new("Enter", "cancel").only_if(stop.is_some()),
+        };
         let main = self.main_name();
         vec![
             Hint::new("↑↓", "select"),
-            Hint::new("Enter", "cancel").only_if(cancellable),
+            stop,
             Hint::new("s", "start").only_if(self.queued_task().is_some()),
             Hint::new("Tab", main),
             Hint::new("Esc", main),
@@ -120,7 +124,7 @@ mod tests {
         TaskRow {
             id,
             label: "a task".into(),
-            cancellable,
+            stop: cancellable.then_some(Stop::Cancel),
             queued: false,
             ratio: None,
         }
@@ -191,6 +195,20 @@ mod tests {
         let hint = view.tasks_hints()[1];
         assert!(!hint.on);
         assert_eq!(press(&mut view, KeyCode::Enter), Action::None);
+    }
+
+    #[test]
+    fn enter_on_a_login_step_disconnects() {
+        let mut view = View::default();
+        let mut login = row(TaskId::Request(1), true);
+        login.stop = Some(Stop::Disconnect);
+        view.set_tasks(vec![login]);
+        view.focus = Focus::Tasks;
+        assert_eq!(view.tasks_hints()[1].does, "disconnect");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Action::StopLogin(TaskId::Request(1))
+        );
     }
 
     #[test]

@@ -182,7 +182,7 @@ async fn run(
                     }
                     match session.apply_server_event(&tx) {
                         EventOutcome::NeedsAgreementAccept => {
-                            tasks.run(Task::change("Logging in..."), session.accept_agreement(client));
+                            tasks.run(Task::login("Logging in..."), session.accept_agreement(client));
                         }
                         EventOutcome::Disconnected(reason) => disconnected = Some(reason),
                         EventOutcome::Applied => {}
@@ -201,7 +201,7 @@ async fn run(
                                 KeyCode::Esc => should_quit = true,
                                 KeyCode::Enter => {
                                     let request = session.accept_agreement(client);
-                                    tasks.run(Task::change("Logging in..."), request);
+                                    tasks.run(Task::login("Logging in..."), request);
                                 }
                                 _ => {}
                             }
@@ -230,7 +230,10 @@ async fn run(
                     }
                     _ => Action::None,
                 };
-                should_quit = perform(action, session, &mut view, &mut tasks, &lines_tx).await;
+                match perform(action, session, &mut view, &mut tasks, &lines_tx).await {
+                    Flow::Go => {}
+                    Flow::Quit => should_quit = true,
+                }
             }
         }
         view.set_tabs(ui::tab_labels(session));
@@ -277,18 +280,24 @@ fn ask(conflict: Option<Conflict>, _: &mut ClientSession, view: &mut View, _: &m
     open(view, conflict.map(Modal::ask));
 }
 
-/// Run `action`. A transfer sends its lines to `lines`. `true` means quit.
+/// What the loop does after an action.
+enum Flow {
+    Go,
+    Quit,
+}
+
+/// Run `action`. A transfer sends its lines to `lines`.
 async fn perform(
     action: Action,
     session: &mut ClientSession,
     view: &mut View,
     tasks: &mut Tasks,
     lines: &mpsc::UnboundedSender<TransferLine>,
-) -> bool {
+) -> Flow {
     let client = &tasks.client.clone();
     match action {
         Action::None => {}
-        Action::Quit => return true,
+        Action::Quit => return Flow::Quit,
         Action::SendChat(text) => session.send_chat(client, &text).await,
         Action::SendRoomChat { chat_id, text } => {
             session.send_room_chat(client, chat_id, &text).await;
@@ -398,6 +407,12 @@ async fn perform(
             );
         }
         Action::CancelTask(TaskId::Request(id)) => tasks.cancel(id),
+        Action::StopLogin(id) => {
+            if let TaskId::Request(id) = id {
+                tasks.cancel(id);
+            }
+            return Flow::Quit;
+        }
         Action::StartTransfer(id) => session.start_transfer(id),
         Action::CancelTask(TaskId::Transfer(id)) => {
             tasks.forget(TaskId::Transfer(id));
@@ -548,7 +563,7 @@ async fn perform(
         Action::AskDeleteNews(target) => {
             if let NewsTarget::Folder(index) = target {
                 if !session.may_delete_news_folder(index) {
-                    return false;
+                    return Flow::Go;
                 }
             }
             view.modal = session.news_name(target).map(|name| Modal::DeleteNews {
@@ -631,7 +646,7 @@ async fn perform(
             tasks.run(task, session.delete_account(client, &login));
         }
     }
-    false
+    Flow::Go
 }
 
 /// List the folder `path`, and select its first item.

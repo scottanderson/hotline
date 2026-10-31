@@ -1047,7 +1047,7 @@ mod tests {
     use super::*;
     use crate::line::Scrollback;
     use crate::session::{ChatRoom, Disconnect, NewsTarget};
-    use crate::tasks::{TaskId, TaskRow};
+    use crate::tasks::{Stop, TaskId, TaskRow};
 
     #[test]
     fn account_circle_follows_openlines_icon_order() {
@@ -1075,14 +1075,14 @@ mod tests {
             TaskRow {
                 id: TaskId::Transfer(1),
                 label: "up".into(),
-                cancellable: true,
+                stop: Some(Stop::Cancel),
                 queued: false,
                 ratio: Some(0.3),
             },
             TaskRow {
                 id: TaskId::Request(2),
                 label: "list".into(),
-                cancellable: true,
+                stop: Some(Stop::Cancel),
                 queued: false,
                 ratio: None,
             },
