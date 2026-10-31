@@ -11,7 +11,6 @@ use futures::{SinkExt, Stream, StreamExt};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
@@ -29,7 +28,8 @@ use crate::error::{Result, ServerError};
 use crate::flood::{FloodDecision, FloodEvent};
 use crate::server::ServerConfig;
 use crate::state::{
-    AccessUpdate, ConsoleUpdate, RecipientMessage, SharedState, UserEntry, IDLE_THRESHOLD,
+    AccessUpdate, ConsoleUpdate, Inbox, RecipientMessage, SharedState, UserEntry, IDLE_THRESHOLD,
+    QUEUE_LEN,
 };
 
 /// [`myField_Options`] (113) values on
@@ -82,8 +82,11 @@ impl From<u16> for KickBan {
 /// [`myTran_GetMsgs`]: hotline_proto::Opcode::GetMsgs
 pub(super) const MAX_FLAT_NEWS_LEN: usize = u16::MAX as usize;
 
-/// How long a kicked session reads and discards after it closes its
-/// write side.
+/// The longest time a kicked session spends to write its queued messages
+/// and the notice, and to close its side of the connection.
+const KICK_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long a kicked session reads and discards after its notice.
 const KICK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long a session waits for the client to close after a failed login.
@@ -97,6 +100,38 @@ const MAX_AUTOMATIC_RESPONSE: usize = 127;
 /// Reads and discards `stream` until it ends or `timeout` elapses.
 async fn drain_with_timeout<S: Stream + Unpin>(mut stream: S, timeout: Duration) {
     let _ = tokio::time::timeout(timeout, async { while stream.next().await.is_some() {} }).await;
+}
+
+/// Writes `tx` to the client. Drops it when the server ends the session
+/// while the write waits.
+async fn send_unless_ended(writer: &mut SessionWriter, tx: Transaction, rx: &Inbox) -> Result<()> {
+    tokio::select! {
+        biased;
+        sent = writer.send(tx) => Ok(sent?),
+        () = rx.ended() => Ok(()),
+    }
+}
+
+/// Writes `queued` and closes the write side. `false` when the client does
+/// not read it in [`KICK_WRITE_TIMEOUT`].
+async fn write_kick(
+    writer: &mut SessionWriter,
+    queued: Vec<Transaction>,
+    user_id: u16,
+) -> Result<bool> {
+    let write = async {
+        for tx in queued {
+            writer.feed(tx).await?;
+        }
+        writer.close().await?;
+        Ok(true)
+    };
+    tokio::time::timeout(KICK_WRITE_TIMEOUT, write)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::debug!(user_id, "kick notice timed out");
+            Ok(false)
+        })
 }
 
 /// Which opcodes a session may currently send.
@@ -122,9 +157,9 @@ type SessionReader = SplitStream<Framed<TcpStream, TransactionCodec>>;
 enum SessionEnd {
     /// Close the connection at once.
     Closed,
-    /// The write side is closed. Drain the reader for
-    /// [`KICK_DRAIN_TIMEOUT`] before closing.
-    Kicked,
+    /// Write these messages, the last of them the kick notice, then drain
+    /// the reader for [`KICK_DRAIN_TIMEOUT`] before closing.
+    Kicked(Vec<Transaction>),
 }
 
 /// A single client connection: handshake state plus the transaction
@@ -227,11 +262,13 @@ impl Session {
         .await;
         // Runs on every exit from `dispatch`, including an early `?`.
         Self::leave_server(&session, &state).await;
-        if let Ok(SessionEnd::Kicked) = outcome {
-            // Read the client's unsent requests so the close does not reset the connection.
-            drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
+        if let SessionEnd::Kicked(queued) = outcome? {
+            if write_kick(&mut writer, queued, user_id).await? {
+                // Read the client's unsent requests so the close does not reset the connection.
+                drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
+            }
         }
-        outcome.map(|_| ())
+        Ok(())
     }
 
     /// Dispatches this connection's traffic until it ends. The caller owns
@@ -242,7 +279,7 @@ impl Session {
         config: &ServerConfig,
         writer: &mut SessionWriter,
         reader: &mut SessionReader,
-        rx: &mut mpsc::Receiver<RecipientMessage>,
+        rx: &mut Inbox,
         login_deadline: tokio::time::Instant,
     ) -> Result<SessionEnd> {
         let idle_sleep = tokio::time::sleep(IDLE_THRESHOLD);
@@ -253,7 +290,7 @@ impl Session {
         loop {
             tokio::select! {
                 // Traffic from this client.
-                frame = reader.next() => {
+                frame = reader.next(), if !rx.is_ended() => {
                     let Some(tx) = frame.transpose()? else { break Ok(SessionEnd::Closed) }; // clean EOF
                     if matches!(session.state, SessionState::LoginFailed) {
                         continue;
@@ -266,18 +303,18 @@ impl Session {
                         session.set_away(false, state).await;
                     }
                     for reply in session.handle(&tx, state, config).await {
-                        writer.send(reply).await?;
+                        send_unless_ended(writer, reply, rx).await?;
                     }
                     if matches!(session.state, SessionState::LoginFailed) {
                         login_sleep.as_mut().reset(now + LOGIN_FAILED_WAIT);
                     }
                 }
                 // Fires after IDLE_THRESHOLD with no request from this client.
-                () = &mut idle_sleep, if !session.is_away && matches!(session.state, SessionState::Joined) => {
+                () = &mut idle_sleep, if !rx.is_ended() && !session.is_away && matches!(session.state, SessionState::Joined) => {
                     session.set_away(true, state).await;
                 }
                 // Fires after `login_timeout` with no request before the session joins, or after `LOGIN_FAILED_WAIT`.
-                () = &mut login_sleep, if matches!(session.state, SessionState::Agreement | SessionState::LoginFailed) => {
+                () = &mut login_sleep, if !rx.is_ended() && matches!(session.state, SessionState::Agreement | SessionState::LoginFailed) => {
                     let event = match session.state {
                         SessionState::LoginFailed => "closed after a failed login",
                         _ => "login timed out",
@@ -285,17 +322,19 @@ impl Session {
                     tracing::debug!(user_id = session.user_id, "{event}");
                     break Ok(SessionEnd::Closed);
                 }
-                // Everything server-initiated for this session.
-                msg = rx.recv() => {
+                // The server ends this session.
+                () = rx.ended() => break Ok(session.take_until_kick(rx, None)),
+                // Everything else server-initiated for this session.
+                msg = rx.recv(), if !rx.is_ended() => {
                     match msg {
                         Some(RecipientMessage::Push(tx)) => {
                             if session.may_receive(tx.r#type()) {
-                                writer.send(tx).await?;
+                                send_unless_ended(writer, tx, rx).await?;
                             }
                         }
                         Some(RecipientMessage::Broadcast(tx)) => {
                             if session.may_receive_broadcast(tx.r#type()) {
-                                writer.send(tx).await?;
+                                send_unless_ended(writer, tx, rx).await?;
                             }
                         }
                         Some(RecipientMessage::AccessUpdate(update)) => {
@@ -304,18 +343,43 @@ impl Session {
                         Some(RecipientMessage::Console(update)) => {
                             session.apply_console_update(update, state).await;
                         }
-                        Some(RecipientMessage::Disconnect) => break Ok(SessionEnd::Closed),
                         Some(RecipientMessage::Kick(reason)) => {
-                            let data = vec![Field::string(FieldId::Data, &*reason)];
-                            writer.send(Transaction::push(Opcode::ServerMsg, data)).await?;
-                            writer.close().await?;
-                            break Ok(SessionEnd::Kicked);
+                            break Ok(session.take_until_kick(rx, Some(reason)));
                         }
                         None => break Ok(SessionEnd::Closed),
                     }
                 }
             }
         }
+    }
+
+    /// The queued messages before a kick notice, then the notice. `kick` is
+    /// a notice that the caller already took from the queue. With no notice
+    /// in the next [`QUEUE_LEN`] messages, the session closes at once.
+    fn take_until_kick(&self, rx: &mut Inbox, mut kick: Option<Box<str>>) -> SessionEnd {
+        let mut queued = Vec::new();
+        let mut messages = std::iter::from_fn(|| rx.try_recv().ok()).take(QUEUE_LEN);
+        while kick.is_none() {
+            match messages.next() {
+                Some(RecipientMessage::Push(tx)) if self.may_receive(tx.r#type()) => {
+                    queued.push(tx)
+                }
+                Some(RecipientMessage::Broadcast(tx))
+                    if self.may_receive_broadcast(tx.r#type()) =>
+                {
+                    queued.push(tx);
+                }
+                Some(RecipientMessage::Kick(reason)) => kick = Some(reason),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        let Some(reason) = kick else {
+            return SessionEnd::Closed;
+        };
+        let data = vec![Field::string(FieldId::Data, &*reason)];
+        queued.push(Transaction::push(Opcode::ServerMsg, data));
+        SessionEnd::Kicked(queued)
     }
 
     /// Removes a session from cross-session state and notifies other users.
@@ -1475,11 +1539,11 @@ mod tests {
             session.state = SessionState::Agreement;
             let state = Arc::<SharedState>::default();
             let config = ServerConfig::default();
-            let mut rx = state.register_recipient(session.user_id).await;
+            let rx = state.register_recipient(session.user_id).await;
 
             let tx = request(opcode, 1, vec![]);
             assert!(session.handle(&tx, &state, &config).await.is_empty());
-            assert!(matches!(rx.try_recv(), Ok(RecipientMessage::Disconnect)));
+            assert!(rx.is_ended());
         }
     }
 
@@ -2446,6 +2510,77 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn kick_writes_the_queued_pushes_before_the_notice() {
+        let state = Arc::<SharedState>::default();
+        let (server, mut client) = run_session(state.clone()).await;
+        while state.connection_count().await == 0 {
+            tokio::task::yield_now().await;
+        }
+        let data = vec![Field::string(FieldId::Data, "first")];
+        state
+            .send_to(1, Transaction::push(Opcode::ServerMsg, data))
+            .await;
+
+        state.kick(1, "Go away.").await;
+
+        let first = client.next().await.unwrap().unwrap();
+        assert_eq!(first.string(FieldId::Data).as_deref(), Some("first"));
+        let notice = client.next().await.unwrap().unwrap();
+        assert_eq!(notice.string(FieldId::Data).as_deref(), Some("Go away."));
+        assert!(client.next().await.is_none());
+        drop(client);
+        let finished = tokio::time::timeout(KICK_DRAIN_TIMEOUT / 2, server).await;
+        assert!(finished.unwrap().unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kick_leaves_the_server_before_it_writes_the_notice() {
+        let state = Arc::<SharedState>::default();
+        let (server, mut client) = run_session(state.clone()).await;
+        while state.connection_count().await == 0 {
+            tokio::task::yield_now().await;
+        }
+        let data = vec![Field::string(FieldId::Data, "a".repeat(60_000))];
+        let push = Transaction::push(Opcode::ServerMsg, data);
+        // More than the socket buffers hold, and less than the queue, so the notice waits.
+        for _ in 0..250 {
+            state.send_to(1, push.clone()).await;
+            tokio::task::yield_now().await;
+        }
+
+        state.kick(1, "Go away.").await;
+
+        for _ in 0..10_000 {
+            if state.connection_count().await == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(state.connection_count().await, 0);
+        assert!(!server.is_finished());
+        let mut last = None;
+        while let Some(Ok(tx)) = client.next().await {
+            last = tx.string(FieldId::Data);
+        }
+        assert_eq!(last.as_deref(), Some("Go away."));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn disconnect_closes_with_no_message_and_no_drain() {
+        let state = Arc::<SharedState>::default();
+        let (server, mut client) = run_session(state.clone()).await;
+        while state.connection_count().await == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        state.disconnect(1).await;
+
+        let finished = tokio::time::timeout(KICK_DRAIN_TIMEOUT / 2, server).await;
+        assert!(finished.unwrap().unwrap().is_ok());
+        assert!(client.next().await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn kick_closes_after_the_drain_when_the_client_stays_open() {
         let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
@@ -2461,6 +2596,30 @@ mod tests {
         let finished = tokio::time::timeout(2 * KICK_DRAIN_TIMEOUT, server).await;
         assert!(finished.unwrap().unwrap().is_ok());
         assert!(start.elapsed() >= KICK_DRAIN_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kick_ends_a_session_whose_client_does_not_read() {
+        let state = Arc::<SharedState>::default();
+        let (server, mut client) = run_session(state.clone()).await;
+        while state.connection_count().await == 0 {
+            tokio::task::yield_now().await;
+        }
+        let data = vec![Field::string(FieldId::Data, "a".repeat(60_000))];
+        let push = Transaction::push(Opcode::ServerMsg, data);
+        // Far more than the socket buffers and the queue hold, so a write blocks.
+        for _ in 0..1_000 {
+            state.send_to(1, push.clone()).await;
+            tokio::task::yield_now().await;
+        }
+
+        state.kick(1, "Go away.").await;
+
+        let finished = tokio::time::timeout(2 * KICK_WRITE_TIMEOUT, server).await;
+        assert!(finished.unwrap().unwrap().is_ok());
+        while let Some(Ok(tx)) = client.next().await {
+            assert_ne!(tx.string(FieldId::Data).as_deref(), Some("Go away."));
+        }
     }
 
     #[tokio::test]

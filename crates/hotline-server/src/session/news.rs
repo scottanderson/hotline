@@ -437,8 +437,8 @@ mod tests {
 
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
-        let msg = rx.try_recv().expect("a disconnect");
-        assert!(msg.is_disconnect(), "the banning post is not published");
+        assert!(rx.is_ended());
+        assert!(rx.try_recv().is_err(), "the banning post is not published");
     }
 
     #[tokio::test]

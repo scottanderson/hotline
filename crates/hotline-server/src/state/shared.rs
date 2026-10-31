@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use hotline_proto::consts::{Access, RequireFlags};
@@ -41,9 +41,10 @@ use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::progress::RunningTransfers;
+use crate::state::recipient::{self, Recipient};
 use crate::state::{
     dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom,
-    ConsoleUpdate, PendingTransfer, ProgressGuard, RecipientMessage, TransferDirection,
+    ConsoleUpdate, Inbox, PendingTransfer, ProgressGuard, RecipientMessage, TransferDirection,
     TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
 };
 
@@ -59,7 +60,7 @@ pub struct SharedState {
     users: RwLock<HashMap<u16, UserEntry>>,
     next_user_id: AtomicU16,
     /// One inbound channel per currently connected recipient.
-    recipients: RwLock<HashMap<u16, mpsc::Sender<RecipientMessage>>>,
+    recipients: RwLock<HashMap<u16, Recipient>>,
     /// The storage and the behavior choices.
     providers: Providers,
     /// Chat ID `0` is always present: the main room every connected
@@ -266,10 +267,10 @@ impl SharedState {
 
     /// Register a newly connected socket as a recipient, returning its
     /// inbound channel. Called once per connection, before login.
-    pub async fn register_recipient(&self, user_id: u16) -> mpsc::Receiver<RecipientMessage> {
-        let (tx, rx) = mpsc::channel(256);
-        self.recipients.write().await.insert(user_id, tx);
-        rx
+    pub(crate) async fn register_recipient(&self, user_id: u16) -> Inbox {
+        let (recipient, inbox) = recipient::channel();
+        self.recipients.write().await.insert(user_id, recipient);
+        inbox
     }
 
     /// Drop a recipient's channel on disconnect.
@@ -277,11 +278,11 @@ impl SharedState {
         self.recipients.write().await.remove(&user_id);
     }
 
-    /// Resolves once `user_id`'s session drops its inbound channel. `None`
-    /// if it has already gone.
+    /// Resolves once `user_id`'s session ends. `None` if it has already
+    /// gone.
     pub(crate) async fn session_ended(&self, user_id: u16) -> Option<impl Future<Output = ()>> {
-        let sender = self.recipients.read().await.get(&user_id)?.clone();
-        Some(async move { sender.closed().await })
+        let recipient = self.recipients.read().await.get(&user_id)?.clone();
+        Some(async move { recipient.ended().await })
     }
 
     /// How many connections have finished the handshake, logged in or not.
@@ -293,40 +294,44 @@ impl SharedState {
     /// list change. A slow or closed session misses it. Each recipient
     /// filters it with `Session::may_receive_broadcast`.
     pub async fn publish(&self, tx: Transaction) {
-        for sender in self.recipients.read().await.values() {
-            let _ = sender.try_send(RecipientMessage::Broadcast(tx.clone()));
+        for recipient in self.recipients.read().await.values() {
+            recipient.try_send(RecipientMessage::Broadcast(tx.clone()));
         }
     }
 
     /// Send a transaction to exactly one connected user, unfiltered. A
     /// no-op if that user isn't connected.
     pub async fn send_to(&self, target_user_id: u16, tx: Transaction) {
-        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
-            let _ = sender.try_send(RecipientMessage::Push(tx));
+        if let Some(recipient) = self.recipients.read().await.get(&target_user_id) {
+            recipient.try_send(RecipientMessage::Push(tx));
         }
     }
 
-    /// Disconnect one connected user with a notice of `reason`. A no-op if
-    /// that user is not connected.
+    /// Queue a notice of `reason` for one connected user, then end the
+    /// session. A full queue drops the notice. A no-op if that user is not
+    /// connected.
     pub async fn kick(&self, target_user_id: u16, reason: &str) {
-        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
-            let _ = sender.try_send(RecipientMessage::Kick(reason.into()));
+        if let Some(recipient) = self.recipients.read().await.get(&target_user_id) {
+            if !recipient.try_send(RecipientMessage::Kick(reason.into())) {
+                tracing::debug!(user_id = target_user_id, "kick notice dropped: queue full");
+            }
+            recipient.end();
         }
     }
 
-    /// Disconnect exactly one connected user with no wire-visible notice.
-    /// A no-op if that user isn't connected.
+    /// End one connected user's session with no notice. A no-op if that
+    /// user isn't connected.
     pub async fn disconnect(&self, target_user_id: u16) {
-        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
-            let _ = sender.try_send(RecipientMessage::Disconnect);
+        if let Some(recipient) = self.recipients.read().await.get(&target_user_id) {
+            recipient.end();
         }
     }
 
     /// Like [`Self::publish`], except `exclude_user_id` never receives it.
     pub async fn announce(&self, exclude_user_id: u16, tx: Transaction) {
-        for (&user_id, sender) in self.recipients.read().await.iter() {
+        for (&user_id, recipient) in self.recipients.read().await.iter() {
             if user_id != exclude_user_id {
-                let _ = sender.try_send(RecipientMessage::Broadcast(tx.clone()));
+                recipient.try_send(RecipientMessage::Broadcast(tx.clone()));
             }
         }
     }
@@ -334,16 +339,16 @@ impl SharedState {
     /// Push `update` to every session; each one applies it if it is logged in
     /// under `update.login`.
     pub(crate) async fn push_access_update(&self, update: AccessUpdate) {
-        for sender in self.recipients.read().await.values() {
-            let _ = sender.try_send(RecipientMessage::AccessUpdate(update.clone()));
+        for recipient in self.recipients.read().await.values() {
+            recipient.try_send(RecipientMessage::AccessUpdate(update.clone()));
         }
     }
 
     /// Send a console-command-driven update to exactly one connected
     /// session. A no-op if that user isn't connected.
     pub async fn send_console_update(&self, target_user_id: u16, update: ConsoleUpdate) {
-        if let Some(sender) = self.recipients.read().await.get(&target_user_id) {
-            let _ = sender.try_send(RecipientMessage::Console(update));
+        if let Some(recipient) = self.recipients.read().await.get(&target_user_id) {
+            recipient.try_send(RecipientMessage::Console(update));
         }
     }
 

@@ -531,7 +531,7 @@ mod tests {
     async fn chat_send_past_the_byte_limit_bans_before_the_access_check() {
         let state = state_with_flood();
         let mut session = test_session("Alice", Access::all());
-        let mut rx = state.register_recipient(session.user_id).await;
+        let rx = state.register_recipient(session.user_id).await;
         let config = ServerConfig::default();
         let line = |i: usize| {
             request(
@@ -550,7 +550,7 @@ mod tests {
             .on_chat_send(&line(114), &state, &config)
             .await
             .is_empty());
-        assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|msg| msg.is_disconnect()));
+        assert!(rx.is_ended());
         assert!(state.is_banned(session.remote_addr.ip()).await.is_some());
     }
 

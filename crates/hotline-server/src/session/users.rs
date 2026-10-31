@@ -661,9 +661,11 @@ mod tests {
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
 
-        let msg = target_rx.try_recv().expect("expected a recipient message");
-        assert!(msg.is_disconnect(), "plain kick must send no wire notice");
-        assert!(target_rx.try_recv().is_err(), "only one message sent");
+        assert!(target_rx.is_ended());
+        assert!(
+            target_rx.try_recv().is_err(),
+            "plain kick must send no wire notice"
+        );
     }
 
     #[tokio::test]
@@ -765,8 +767,8 @@ mod tests {
         let replies = session.handle(&ping(), &state, &config).await;
 
         assert!(replies.is_empty());
-        let msg = rx.try_recv().expect("expected a recipient message");
-        assert!(msg.is_disconnect(), "a flood ban sends no wire notice");
+        assert!(rx.is_ended());
+        assert!(rx.try_recv().is_err(), "a flood ban sends no wire notice");
         assert!(state.is_banned(session.remote_addr.ip()).await.is_some());
     }
 
@@ -798,7 +800,7 @@ mod tests {
     async fn the_sixth_identical_private_message_bans() {
         let state = state_with_flood();
         let session = test_session("Alice", Access::all());
-        let mut rx = state.register_recipient(session.user_id).await;
+        let rx = state.register_recipient(session.user_id).await;
         let message = || {
             request(
                 Opcode::SendInstantMsg,
@@ -821,7 +823,7 @@ mod tests {
             .on_send_instant_msg(&message(), &state)
             .await
             .is_empty());
-        assert!(rx.try_recv().expect("a disconnect").is_disconnect());
+        assert!(rx.is_ended());
     }
 
     #[tokio::test]
@@ -836,13 +838,13 @@ mod tests {
         for _ in 0..5 {
             session.on_user_broadcast(&broadcast, &state).await;
         }
-        let mut rx = state.register_recipient(session.user_id).await;
+        let rx = state.register_recipient(session.user_id).await;
 
         let replies = session.on_user_broadcast(&broadcast, &state).await;
 
         assert_eq!(replies.len(), 1);
         assert!(!replies[0].is_error());
-        assert!(rx.try_recv().expect("a disconnect").is_disconnect());
+        assert!(rx.is_ended());
     }
 
     #[tokio::test]
@@ -1317,7 +1319,7 @@ mod tests {
         .received(utf8);
         session.on_user_broadcast(&request, &state).await;
 
-        let next = |rx: &mut tokio::sync::mpsc::Receiver<RecipientMessage>| {
+        let next = |rx: &mut crate::state::Inbox| {
             rx.try_recv()
                 .ok()
                 .and_then(RecipientMessage::into_push)

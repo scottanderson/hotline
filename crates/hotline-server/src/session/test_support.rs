@@ -3,8 +3,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::mpsc;
-
 use hotline_proto::consts::Access;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::{self, EncodingHandle};
@@ -13,7 +11,7 @@ use hotline_proto::{Field, Received, Transaction};
 use crate::account::AccessExtra;
 use crate::activity::{Activity, ActivityEntry, ActivityLog};
 use crate::server::ServerConfig;
-use crate::state::{AccessUpdate, RecipientMessage, SharedState, UserEntry};
+use crate::state::{AccessUpdate, Inbox, RecipientMessage, SharedState, UserEntry};
 
 use super::connection::{Session, SessionState};
 
@@ -84,7 +82,7 @@ pub(super) fn test_user(user_id: u16, name: &str) -> UserEntry {
 
 /// Drains `rx` until an `AccessUpdate` arrives, skipping the pushes a
 /// prior `apply_access_update` already queued.
-pub(super) fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> AccessUpdate {
+pub(super) fn next_access_update(rx: &mut Inbox) -> AccessUpdate {
     loop {
         match rx.try_recv().expect("expected an access update") {
             RecipientMessage::AccessUpdate(update) => return update,
@@ -95,9 +93,7 @@ pub(super) fn next_access_update(rx: &mut mpsc::Receiver<RecipientMessage>) -> A
                 ));
             }
             RecipientMessage::Console(_) => panic!("unexpected console update"),
-            RecipientMessage::Disconnect | RecipientMessage::Kick(_) => {
-                panic!("unexpected disconnect")
-            }
+            RecipientMessage::Kick(_) => panic!("unexpected kick"),
         }
     }
 }

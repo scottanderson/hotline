@@ -95,7 +95,10 @@ async fn handle_htxf_connection(
         .map_or_else(Arc::default, ProgressGuard::counter);
     let mut stream = CountingStream::new(&mut stream, count);
     match &transfer.kind {
-        TransferKind::Banner => send_banner(&mut stream, state).await,
+        TransferKind::Banner => {
+            let send = send_banner(&mut stream, state);
+            run_until_session_ends(state, transfer.user_id, send).await
+        }
         TransferKind::File(file) => match transfer.direction {
             TransferDirection::Get => {
                 let send = send_file(&mut stream, file, &transfer, state);
@@ -104,7 +107,7 @@ async fn handle_htxf_connection(
             TransferDirection::Put => {
                 let mut stream = IdleStream::new(&mut stream, UPLOAD_IDLE_TIMEOUT);
                 let receive = receive_file(&mut stream, file, &transfer, state);
-                run_upload(state, transfer.user_id, receive).await
+                run_until_session_ends(state, transfer.user_id, receive).await
             }
         },
         TransferKind::Folder(folder) => match transfer.direction {
@@ -115,7 +118,7 @@ async fn handle_htxf_connection(
             TransferDirection::Put => {
                 let mut stream = IdleStream::new(&mut stream, UPLOAD_IDLE_TIMEOUT);
                 let receive = receive_folder(&mut stream, folder, state);
-                run_upload(state, transfer.user_id, receive).await
+                run_until_session_ends(state, transfer.user_id, receive).await
             }
         },
     }
@@ -144,17 +147,17 @@ async fn wait_for_slot_or_close(
     }
 }
 
-/// Run `receive` until it ends or its owner's session ends.
-async fn run_upload(
+/// Run `transfer` until it ends or `user_id`'s session ends.
+async fn run_until_session_ends(
     state: &SharedState,
     user_id: u16,
-    receive: impl Future<Output = Result<()>>,
+    transfer: impl Future<Output = Result<()>>,
 ) -> Result<()> {
     let Some(session_ended) = state.session_ended(user_id).await else {
         return Ok(());
     };
     tokio::select! {
-        result = receive => result,
+        result = transfer => result,
         () = session_ended => Ok(()),
     }
 }
@@ -1059,6 +1062,14 @@ mod tests {
     /// Connect over loopback and send `reference`'s `HTXF` header. Returns
     /// the client, the server's side, and the client's address.
     async fn connect_htxf(reference: TransferRef) -> (TcpStream, TcpStream, SocketAddr) {
+        connect_htxf_as(reference, HtxfType::File).await
+    }
+
+    /// Like [`connect_htxf`], with a header of `transfer_type`.
+    async fn connect_htxf_as(
+        reference: TransferRef,
+        transfer_type: HtxfType,
+    ) -> (TcpStream, TcpStream, SocketAddr) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap())
             .await
@@ -1067,7 +1078,7 @@ mod tests {
         let header = HtxfHeader {
             reference: reference.0,
             len: 0,
-            transfer_type: HtxfType::File,
+            transfer_type,
         };
         client.write_all(&header.encode()).await.unwrap();
         (client, server_stream, peer)
@@ -1099,6 +1110,44 @@ mod tests {
                 .await
         );
         drop(client);
+    }
+
+    #[tokio::test]
+    async fn an_upload_stops_when_its_session_is_kicked() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let _session = state.register_recipient(1).await;
+        let reference = state
+            .register_transfer(a_txt_transfer(TransferDirection::Put, 1))
+            .await;
+        let (mut client, server_stream, peer) = connect_htxf(reference).await;
+        let full = htxf::encode_flat_file(b"hello world");
+        client.write_all(&full[..full.len() - 1]).await.unwrap();
+
+        state.kick(1, "Go away.").await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle_htxf_connection(server_stream, peer, &state),
+        )
+        .await;
+
+        assert!(result.expect("the upload should stop").is_ok());
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn a_banner_download_whose_session_has_ended_is_refused() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let banner = PendingTransfer {
+            kind: TransferKind::Banner,
+            ..a_txt_transfer(TransferDirection::Get, 1)
+        };
+        let reference = state.register_transfer(banner).await;
+        let (_client, server_stream, peer) = connect_htxf_as(reference, HtxfType::Banner).await;
+
+        let result = handle_htxf_connection(server_stream, peer, &state).await;
+
+        assert!(result.is_ok());
+        assert!(state.take_transfer(reference).await.is_none());
     }
 
     #[tokio::test]

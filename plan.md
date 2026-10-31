@@ -33,12 +33,17 @@ works this way.
   `g0away=`, and `visible=`, since this server has no user color or
   invisibility. A denied command names the missing privilege through
   `RequireFlags::require`, not mhxd's fixed text.
-- **A kicked client gets a drain window.** `ProcessTran_DisconnectUser`
-  calls `Disconnect()` outright, with its own comment saying it avoids
-  `StartDisconnect()` "because we want to be sure that the Client gets
-  disconnected". This server instead reads and discards for
-  `KICK_DRAIN_TIMEOUT` (3 seconds) so the client can display the
-  `myTran_DisconnectMsg` (111) notice, then closes regardless.
+- **A kicked client gets a drain window.** For a ban,
+  `ProcessTran_DisconnectUser` puts `myTran_ServerMsg` (104) in the
+  client's send queue, then calls `Disconnect()`, which drops the data
+  in that queue. A plain kick sends no notice. In this server, a
+  kicked session leaves the user list and stops its transfers at once.
+  Then it writes the messages before the notice, and the notice, for
+  at most `KICK_WRITE_TIMEOUT` (3 seconds). Then it closes its write
+  side, and reads and discards for `KICK_DRAIN_TIMEOUT` (3 seconds).
+  Without the drain, unread client data makes the close a reset, and
+  the client can lose the notice. A full queue drops the notice. A
+  disconnect with no notice drops the queue at once, as openline does.
 - **Folder transfer drops one of openline's safeguards.** No skip for
   an item whose path is too long for openline's fixed 1024-byte buffer.
 - **Any received byte restarts a folder upload's idle timer.** openline's
