@@ -26,6 +26,17 @@ impl Tab {
     /// The label of [`Tab::Admin`].
     pub const ADMIN_LABEL: &'static str = "Admin";
 
+    /// The label of [`Tab::Chat`] in the room row.
+    pub const PUBLIC_LABEL: &'static str = "Public";
+
+    /// The tab in the tab bar that shows `self`: [`Tab::Chat`] for a room.
+    pub const fn top(self) -> Self {
+        match self {
+            Self::Room(_) => Self::Chat,
+            tab => tab,
+        }
+    }
+
     /// The privileges that turn the tab on. Any one of them is enough.
     pub const fn enabled_by(self) -> Access {
         match self {

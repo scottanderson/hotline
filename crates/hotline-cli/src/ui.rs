@@ -22,6 +22,8 @@ use crate::view::{
 pub struct Areas {
     pub screen: Rect,
     pub tabs: Rect,
+    /// The room row under the Chat tab.
+    pub rooms: Rect,
     /// The chat lines or the news.
     pub body: Rect,
     pub input: Rect,
@@ -60,11 +62,13 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
 
 /// `input` is the text in the input line, which grows to fit it. With `None`,
 /// the input line has no rows. The hint line grows to fit `hints`. Without
-/// `users`, the user list has no columns.
-pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool) -> Areas {
+/// `users`, the user list has no columns. Without `rooms`, the room row has
+/// no rows.
+pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool, rooms: bool) -> Areas {
     let hint_rows = hint_rows(hints, screen.width).len() as u16;
-    let [tabs, middle, hints] = screen.layout(&Layout::vertical([
+    let [tabs, rooms, middle, hints] = screen.layout(&Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(u16::from(rooms)),
         Constraint::Min(6),
         Constraint::Length(hint_rows),
     ]));
@@ -79,6 +83,7 @@ pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool) -> 
     Areas {
         screen,
         tabs,
+        rooms,
         body,
         input,
         users,
@@ -106,7 +111,8 @@ pub fn inner(rect: Rect) -> Rect {
 }
 
 /// Each tab and its label: the fixed tabs, then one for each room. Each
-/// of the first nine labels starts with its number, the key of the tab.
+/// of the first nine labels before the rooms starts with its number, the
+/// key of the tab.
 pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
     let fixed = Tab::FIXED
         .iter()
@@ -119,12 +125,12 @@ pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
         .map(|room| (Tab::Room(room.id), room.label()));
     fixed
         .chain(admin)
-        .chain(rooms)
         .zip(1..)
         .map(|((tab, label), n)| match n {
             1..=9 => (tab, format!("{n} {label}")),
             _ => (tab, label),
         })
+        .chain(rooms)
         .collect()
 }
 
@@ -224,8 +230,16 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     }
 
     let hints = view.hints(session.files.as_deref().unwrap_or_default());
-    let areas = areas(frame.area(), view.input(), &hints, view.shows_users());
-    draw_tabs(frame, areas.tabs, view);
+    let room_row = view.room_row();
+    let areas = areas(
+        frame.area(),
+        view.input(),
+        &hints,
+        view.shows_users(),
+        !room_row.is_empty(),
+    );
+    draw_tabs(frame, areas.tabs, view, view.bar_tabs(), true);
+    draw_tabs(frame, areas.rooms, view, &room_row, false);
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
         Tab::News | Tab::Threaded if !view.may(view.tab.enabled_by()) => {
@@ -268,13 +282,21 @@ fn draw_agreement(frame: &mut Frame, text: &str) {
     frame.render_widget(hint, hint_area);
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, view: &View) {
+/// Draw `labels` as a row of tabs. In the tab `bar`, the Chat tab shows
+/// as open and as changed for each room too.
+fn draw_tabs(frame: &mut Frame, area: Rect, view: &View, labels: &[(Tab, String)], bar: bool) {
     let mut spans = Vec::new();
-    for (tab, label, _) in tab_columns(area, &view.tabs) {
+    for (tab, label, _) in tab_columns(area, labels) {
         if !spans.is_empty() {
             spans.push(Span::raw("│"));
         }
-        let style = match (tab == view.tab, view.updated.contains(&tab)) {
+        let (shown, updated) = if bar {
+            let under = |other: &Tab| other.top() == tab;
+            (view.tab.top() == tab, view.updated.iter().any(under))
+        } else {
+            (tab == view.tab, view.updated.contains(&tab))
+        };
+        let style = match (shown, updated) {
             (true, _) => enabled_style(view.may(tab.enabled_by())).add_modifier(Modifier::REVERSED),
             _ if !view.may(tab.enabled_by()) => enabled_style(false),
             (false, true) => Style::default().fg(Color::Yellow),
@@ -835,7 +857,8 @@ mod tests {
     use hotline_proto::text_encoding::EncodingHandle;
 
     use super::*;
-    use crate::session::NewsTarget;
+    use crate::line::Scrollback;
+    use crate::session::{ChatRoom, NewsTarget};
 
     fn draw_to_text(modal: &Modal) -> String {
         let backend = ratatui::backend::TestBackend::new(70, 10);
@@ -857,6 +880,35 @@ mod tests {
             })
             .unwrap();
         terminal.backend_mut().assert_cursor_position((4, 1));
+    }
+
+    #[test]
+    fn tab_labels_number_only_the_tab_bar() {
+        let mut session = ClientSession::new("me".to_string(), 0, Default::default());
+        session.rooms.push(ChatRoom {
+            id: 7,
+            subject: "".into(),
+            users: Vec::new(),
+            lines: Scrollback::default(),
+        });
+        let labels = tab_labels(&session);
+        assert_eq!(labels.first(), Some(&(Tab::Chat, "1 Chat".to_string())));
+        assert_eq!(labels.last(), Some(&(Tab::Room(7), "Chat 7".to_string())));
+    }
+
+    #[test]
+    fn draw_tabs_marks_the_chat_tab_for_a_changed_room() {
+        let mut view = View::default();
+        (view.tab, view.access) = (Tab::News, Access::all());
+        view.tabs.push((Tab::Room(7), "Chat 7".to_string()));
+        view.updated.insert(Tab::Room(7));
+        let backend = ratatui::backend::TestBackend::new(40, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_tabs(frame, frame.area(), &view, view.bar_tabs(), true))
+            .unwrap();
+        let chat = &terminal.backend().buffer().content[1];
+        assert_eq!((chat.symbol(), chat.fg), ("C", Color::Yellow));
     }
 
     #[test]

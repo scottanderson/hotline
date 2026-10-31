@@ -149,7 +149,7 @@ pub struct View {
     pub tab: Tab,
     pub focus: Focus,
     pub modal: Option<Modal>,
-    /// Each tab and its label, in tab bar order.
+    /// Each tab and its label: the tab bar in order, then the rooms.
     pub tabs: Vec<(Tab, String)>,
     pub chat_input: String,
     pub post_input: String,
@@ -255,6 +255,45 @@ impl View {
         if !self.tabs.iter().any(|&(tab, _)| tab == self.tab) {
             let _ = self.set_tab(Tab::Chat);
         }
+    }
+
+    /// The index in `tabs` of the first room.
+    fn first_room(&self) -> usize {
+        self.tabs
+            .iter()
+            .position(|&(tab, _)| tab != tab.top())
+            .unwrap_or(self.tabs.len())
+    }
+
+    /// The tabs of the tab bar.
+    pub fn bar_tabs(&self) -> &[(Tab, String)] {
+        self.tabs.get(..self.first_room()).unwrap_or_default()
+    }
+
+    /// The row under the Chat tab: Public, then each room. It is empty
+    /// with no room, or on another tab.
+    pub fn room_row(&self) -> Vec<(Tab, String)> {
+        let rooms = self.tabs.get(self.first_room()..).unwrap_or_default();
+        if rooms.is_empty() || self.tab.top() != Tab::Chat {
+            return Vec::new();
+        }
+        std::iter::once((Tab::Chat, Tab::PUBLIC_LABEL.to_string()))
+            .chain(rooms.iter().cloned())
+            .collect()
+    }
+
+    /// Whether the room row shows.
+    pub fn has_room_row(&self) -> bool {
+        !self.room_row().is_empty()
+    }
+
+    /// The entry of the room row after the shown one, or before it, with
+    /// wraparound.
+    fn step_room(&self, forward: bool) -> Option<Tab> {
+        let row = self.room_row();
+        let at = row.iter().position(|&(tab, _)| tab == self.tab)?;
+        let next = if forward { at + 1 } else { at + row.len() - 1 };
+        row.get(next % row.len()).map(|&(tab, _)| tab)
     }
 
     /// Mark each tab whose revision changed while it was hidden. Clear the
@@ -500,17 +539,23 @@ impl View {
                 Hint::new("Tab", "folders"),
                 Hint::new("Esc", "chat"),
             ],
-            (None, Focus::Input, Tab::Chat) => vec![
+            (None, Focus::Input, Tab::Chat) => [
                 Hint::new("Enter", "send").enabled_by(Access::SEND_CHAT),
                 Hint::new("⇧Enter", "new line"),
                 Hint::new("Tab", "users"),
+            ]
+            .into_iter()
+            .chain(self.has_room_row().then_some(Hint::new("Alt-,.", "room")))
+            .chain([
                 Hint::new("F1-F9", "tab"),
                 Hint::new("^P", "commands"),
                 Hint::new("Esc", "quit"),
-            ],
+            ])
+            .collect(),
             (None, Focus::Input, Tab::Room(_)) => vec![
                 Hint::new("Enter", "send").enabled_by(Access::SEND_CHAT),
                 Hint::new("Tab", "users"),
+                Hint::new("Alt-,.", "room"),
                 Hint::new("^P", "commands"),
                 Hint::new("^O", "actions"),
                 Hint::new("Esc", "chat"),
@@ -544,10 +589,15 @@ impl View {
             return self.modal_key(modal, key, users);
         }
         if let Some(number) = tab_number(key) {
-            return match self.tabs.get(number - 1) {
+            return match self.bar_tabs().get(number - 1) {
                 Some(&(tab, _)) => self.set_tab(tab),
                 None => Action::None,
             };
+        }
+        if let Some(forward) = room_step(key) {
+            return self
+                .step_room(forward)
+                .map_or(Action::None, |tab| self.set_tab(tab));
         }
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         if (ctrl && key.code == KeyCode::Char('p')) || (alt && key.code == KeyCode::Char('x')) {
@@ -1240,7 +1290,10 @@ impl View {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(tab) = ui::tab_at(areas.tabs, x, y, &self.tabs) {
+                if let Some(tab) = ui::tab_at(areas.tabs, x, y, self.bar_tabs()) {
+                    return self.set_tab(tab);
+                }
+                if let Some(tab) = ui::tab_at(areas.rooms, x, y, &self.room_row()) {
                     return self.set_tab(tab);
                 }
                 if let Some(user_id) = self.user_at(areas.users, x, y, users) {
@@ -1564,6 +1617,18 @@ const fn is_menu_key(key: KeyEvent) -> bool {
     }
 }
 
+/// `Some(true)` for Alt-`.`, the next room, and `Some(false)` for Alt-`,`.
+const fn room_step(key: KeyEvent) -> Option<bool> {
+    if !key.modifiers.contains(KeyModifiers::ALT) || key.modifiers.contains(KeyModifiers::CONTROL) {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('.') => Some(true),
+        KeyCode::Char(',') => Some(false),
+        _ => None,
+    }
+}
+
 /// The tab number of F1 to F9, or of Alt with 1 to 9.
 fn tab_number(key: KeyEvent) -> Option<usize> {
     match key.code {
@@ -1609,7 +1674,7 @@ mod tests {
     }
 
     fn areas() -> Areas {
-        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true)
+        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, false)
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -2343,7 +2408,7 @@ mod tests {
         let mut view = View::default();
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], true);
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], true, false);
         let inner = ui::inner(areas.body);
         let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
         let now = Instant::now();
@@ -2469,15 +2534,78 @@ mod tests {
     }
 
     #[test]
-    fn a_tab_number_picks_its_tab() {
+    fn a_tab_number_picks_its_tab_and_skips_the_rooms() {
         let mut view = view_with_rooms();
+        let alt_3 = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT);
+        let _ = view.handle_key(alt_3, &users(), &files());
+        assert_eq!(view.tab, Tab::Files);
         let _ = view.handle_key(key(KeyCode::F(5)), &users(), &files());
+        assert_eq!(view.tab, Tab::Files);
+        let _ = view.handle_key(key(KeyCode::F(1)), &users(), &files());
+        assert_eq!(view.tab, Tab::Chat);
+    }
+
+    #[test]
+    fn alt_comma_and_dot_step_through_the_room_row_and_wrap() {
+        let mut view = view_with_rooms();
+        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        for tab in [Tab::Room(7), Tab::Room(9), Tab::Chat] {
+            let _ = view.handle_key(alt('.'), &users(), &files());
+            assert_eq!(view.tab, tab);
+        }
+        let _ = view.handle_key(alt(','), &users(), &files());
+        assert_eq!(view.tab, Tab::Room(9));
+    }
+
+    #[test]
+    fn altgr_comma_types_and_keeps_the_tab() {
+        let mut view = view_with_rooms();
+        let altgr = KeyEvent::new(
+            KeyCode::Char(','),
+            KeyModifiers::ALT | KeyModifiers::CONTROL,
+        );
+        let _ = view.handle_key(altgr, &users(), &files());
+        assert_eq!(view.tab, Tab::Chat);
+        assert_eq!(view.chat_input.as_str(), ",");
+    }
+
+    #[test]
+    fn alt_dot_does_nothing_off_the_chat_tab() {
+        let mut view = view_with_rooms();
+        let _ = view.handle_key(key(KeyCode::F(3)), &users(), &files());
+        let alt = KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT);
+        assert_eq!(view.handle_key(alt, &users(), &files()), Action::None);
+        assert_eq!(view.tab, Tab::Files);
+    }
+
+    #[test]
+    fn room_row_lists_public_and_each_room_on_the_chat_tab() {
+        let mut view = granted();
+        assert!(view.room_row().is_empty());
+        assert!(!view.has_room_row());
+        assert_eq!(hint_enabled(&view, "Alt-,.", "room"), None);
+        view = view_with_rooms();
+        assert_eq!(hint_enabled(&view, "Alt-,.", "room"), Some(true));
+        let row: Vec<Tab> = view.room_row().into_iter().map(|(tab, _)| tab).collect();
+        assert_eq!(row, [Tab::Chat, Tab::Room(7), Tab::Room(9)]);
+        assert!(view.has_room_row());
+        assert_eq!(view.bar_tabs().len(), Tab::FIXED.len());
+        let _ = view.handle_key(key(KeyCode::F(2)), &users(), &files());
+        assert!(view.room_row().is_empty());
+        assert!(!view.has_room_row());
+    }
+
+    #[test]
+    fn a_click_on_the_room_row_shows_its_room() {
+        let mut view = view_with_rooms();
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, true);
+        let row = areas.rooms;
+        let x = (row.x..row.right())
+            .find(|&x| ui::tab_at(row, x, row.y, &view.room_row()) == Some(Tab::Room(7)))
+            .unwrap();
+        let left = click(MouseEventKind::Down(MouseButton::Left), x, row.y);
+        let _ = view.handle_mouse(left, &areas, &users(), &files(), Instant::now());
         assert_eq!(view.tab, Tab::Room(7));
-        let alt_6 = KeyEvent::new(KeyCode::Char('6'), KeyModifiers::ALT);
-        let _ = view.handle_key(alt_6, &users(), &files());
-        assert_eq!(view.tab, Tab::Room(9));
-        let _ = view.handle_key(key(KeyCode::F(9)), &users(), &files());
-        assert_eq!(view.tab, Tab::Room(9));
     }
 
     #[test]

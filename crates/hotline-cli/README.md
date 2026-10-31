@@ -40,23 +40,25 @@ host, because they can read a command line.
 The line at the bottom of the screen shows the keys of the focused
 pane.
 The tabs are Chat, News, Files, and Threaded News, then Admin with the
-account privileges, then one for each private chat room. Each tab has
-a number, which the tab bar shows. F1 to F9, or Alt with
-1 to 9, opens a tab. Each tab has a main pane and the user list. Tab
-moves between them, and Esc goes back to Chat. On Chat, Esc asks
-whether to quit. Ctrl-C asks too, from anywhere, and a second Ctrl-C
-quits.
+account privileges. Each tab has a number, which the tab bar shows. F1
+to F9, or Alt with 1 to 9, opens a tab. When you have joined a private
+chat room, a row under the tab bar of Chat and of each room shows
+Public, the public chat, then each room. Alt-, and Alt-. move to the
+previous and the next entry of that row. Each tab has a main pane and
+the user list. Tab moves between them, and Esc goes back to Chat. On
+Chat, Esc asks whether to quit. Ctrl-C asks too, from anywhere, and a
+second Ctrl-C quits.
 
 A tab label turns yellow when the tab changes while another tab shows.
-The Chat tab and each room tab change with each new line, and the News
-tab changes with each new post. The label turns back when you open the
-tab.
+The Chat tab and each room change with each new line, and the News
+tab changes with each new post. The Chat tab also turns yellow when a
+room changes. The label turns back when you open the tab.
 
-The terminal bell rings on each chat line in a room tab that you cannot
-see: another tab shows, or the terminal does not have the focus. It
-also rings on a private message, an administrator
-message, a broadcast, an invitation to a private chat, and the end of a
-file transfer. `--no-bell` turns it off.
+The terminal bell rings on each chat line in a room that you cannot
+see: another tab or room shows, or the terminal does not have the
+focus. It also rings on a private message, an administrator message,
+a broadcast, an invitation to a private chat, and the end of a file
+transfer. `--no-bell` turns it off.
 
 A key, a command, a menu item, or a tab that needs a privilege you do
 not have shows in gray, and it does nothing. hlc gets the privileges
@@ -77,6 +79,8 @@ or the folder privilege, for the kind of the selected item.
 | Ctrl-O | a room, user list    | the actions of the room or the selected user    |
 | Alt-A  | outside a dialog     | a broadcast                                     |
 | Alt-O  | outside a dialog     | your name, icon, and options                    |
+| Alt-,  | Chat, a room         | the previous room, or Public                    |
+| Alt-.  | Chat, a room         | the next room, or Public                        |
 | Alt-I  | a room               | invite a user                                   |
 | Alt-S  | a room               | set the subject                                 |
 | Alt-W  | a room               | leave the room                                  |

@@ -175,7 +175,13 @@ async fn run(
                     Event::Mouse(mouse) if !matches!(session.mode, Mode::Agreement(_)) => {
                         let users = ui::tab_users(session, view.tab);
                         let files = session.files.as_deref().unwrap_or_default();
-                        let areas = ui::areas(terminal.size()?.into(), view.input(), &view.hints(files), view.shows_users());
+                        let areas = ui::areas(
+                            terminal.size()?.into(),
+                            view.input(),
+                            &view.hints(files),
+                            view.shows_users(),
+                            view.has_room_row(),
+                        );
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())
                     }
                     Event::FocusGained | Event::FocusLost => {
