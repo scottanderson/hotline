@@ -32,6 +32,8 @@ const MIN_RATE_BYTES: u64 = 1024;
 pub struct Progress {
     /// The downloads ahead of this one in the server's queue.
     waiting: AtomicU32,
+    /// The most downloads that were ahead of this one.
+    most_waiting: AtomicU32,
     bytes: AtomicU64,
     /// The bytes of the whole transfer, `0` if unknown.
     total: AtomicU64,
@@ -76,6 +78,7 @@ impl Progress {
     /// Note that `waiting` downloads are ahead of this one in the server's queue.
     pub(super) fn set_waiting(&self, waiting: u32) {
         self.waiting.store(waiting, Ordering::Relaxed);
+        self.most_waiting.fetch_max(waiting, Ordering::Relaxed);
     }
 
     /// Count `n` bytes that moved. The first bytes end the wait in the queue.
@@ -111,11 +114,14 @@ impl Progress {
         ))
     }
 
-    /// The part that is done, from 0 to 1. `None` while the download waits
-    /// in the server's queue, or when the size is unknown.
+    /// The part that is done, from 0 to 1: the place in the server's queue
+    /// while the download waits there, or the bytes. `None` when the size
+    /// is unknown.
     fn ratio(&self) -> Option<f64> {
-        if self.waiting.load(Ordering::Relaxed) > 0 {
-            return None;
+        let waiting = self.waiting.load(Ordering::Relaxed);
+        if waiting > 0 {
+            let most = self.most_waiting.load(Ordering::Relaxed);
+            return Some(f64::from(most.saturating_sub(waiting)) / f64::from(most));
         }
         let total = self.total.load(Ordering::Relaxed);
         let bytes = self.bytes.load(Ordering::Relaxed).min(total);
@@ -434,7 +440,7 @@ mod tests {
             running[0].label,
             "All downloads slots are full. “a.txt” is number 1 in the server queue. Please wait..."
         );
-        assert_eq!(running[0].ratio, None);
+        assert_eq!(running[0].ratio, Some(0.0));
 
         session.cancel_transfer(&client, 1).run(&mut session).await;
         assert_eq!(
@@ -517,11 +523,13 @@ mod tests {
     }
 
     #[test]
-    fn ratio_waits_for_the_end_of_the_server_queue() {
+    fn ratio_follows_the_place_in_the_server_queue() {
         let progress = Progress::default();
         progress.set_size(0, 100);
         progress.set_waiting(4);
-        assert_eq!(progress.ratio(), None);
+        assert_eq!(progress.ratio(), Some(0.0));
+        progress.set_waiting(1);
+        assert_eq!(progress.ratio(), Some(0.75));
         progress.count(10);
         assert_eq!(progress.ratio(), Some(0.1));
     }

@@ -130,17 +130,18 @@ that waits for its reply, in the order the user started them. A
 transfer shows its rate, its bytes, and the time left, such as
 `12K/sec 1.5M/2M 0:42`. A gauge under a transfer of known size shows
 how much is done. A download that waits in the server's queue shows
-its place. A task that ends well stays in its place with a full gauge,
-and goes 500 ms after the last task ends. A task that fails or that
-the user cancels goes at once. The error line in the chat tells why a
-task failed. The box shows only while it has a task, on each tab.
-Under the user list, Tab moves from the user list to the box. On
-Threaded News, the box fills the right column, and Tab moves from the
-preview to the box. Alt-J moves to it from anywhere. A click selects a
-task. Enter cancels the selected download, upload, or request that
-only reads. Enter does nothing on a request that changes the server. A
-cancelled download that waits in the server's queue leaves the queue.
-A cancelled upload closes its connection.
+its place, and its gauge fills as the queue moves. A task that ends
+well stays in its place with a full gauge, and goes 500 ms after the
+last task ends. A task that fails or that the user cancels goes at
+once. The error line in the chat tells why a task failed. The box
+shows only while it has a task, on each tab. Under the user list, Tab
+moves from the user list to the box. On Threaded News, the box fills
+the right column, and Tab moves from the preview to the box. Alt-J
+moves to it from anywhere. A click selects a task. Enter cancels the
+selected download, upload, or request that only reads. Enter does
+nothing on a request that changes the server. A cancelled download
+that waits in the server's queue leaves the queue. A cancelled upload
+closes its connection.
 
 The Threaded News tab has no user list. It has three panes: a tree of
 bundles (🗞️) and categories (📰) on the left, the threads of the
