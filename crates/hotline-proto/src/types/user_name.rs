@@ -1,6 +1,6 @@
 //! [`UserNameWithInfo`]: the packed `myField_UserNameWithInfo` (300) record.
 
-use crate::error::{ProtoError, Result};
+use crate::error::Result;
 use crate::text_encoding::{self, Encoding};
 use crate::types::UserFlags;
 use crate::wire::{PacketReader, SliceReader, VecWriter};
@@ -40,22 +40,14 @@ impl UserNameWithInfo {
 
     /// Decode from a field's raw data.
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
-        let fixed: [u8; Self::LEN] = SliceReader::new(buf).array()?;
-        let mut r = PacketReader::new(fixed);
+        let mut slice = SliceReader::new(buf);
+        let mut r = PacketReader::new(slice.array::<{ Self::LEN }>()?);
         let user_id = r.u16();
         let icon = r.u16();
         let flags = r.u16();
         let name_len = r.u16();
         r.finish();
-        let name_len = name_len as usize;
-        let end = Self::LEN + name_len;
-        if buf.len() < end {
-            return Err(ProtoError::UnexpectedEof {
-                needed: end,
-                available: buf.len(),
-            });
-        }
-        let name = text_encoding::decode(encoding, &buf[Self::LEN..end]);
+        let name = text_encoding::decode(encoding, slice.bytes(name_len.into())?);
         Ok(Self {
             user_id,
             icon,

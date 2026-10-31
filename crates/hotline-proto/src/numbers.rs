@@ -26,7 +26,9 @@ impl Deref for EncodedInt {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.bytes[..self.len as usize]
+        self.bytes
+            .get(..usize::from(self.len))
+            .unwrap_or(&self.bytes)
     }
 }
 
@@ -56,10 +58,10 @@ pub const fn encode(value: u32) -> EncodedInt {
 /// Decode a 1, 2, or 4 byte unsigned integer field body. `None` for
 /// any other length.
 pub const fn decode(bytes: &[u8]) -> Option<u32> {
-    match bytes.len() {
-        1 => Some(bytes[0] as u32),
-        2 => Some(u16::from_be_bytes([bytes[0], bytes[1]]) as u32),
-        4 => Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+    match *bytes {
+        [a] => Some(a as u32),
+        [a, b] => Some(u16::from_be_bytes([a, b]) as u32),
+        [a, b, c, d] => Some(u32::from_be_bytes([a, b, c, d])),
         _ => None,
     }
 }

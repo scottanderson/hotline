@@ -86,15 +86,13 @@ impl NewsCategory {
         depth
     }
 
-    fn siblings_of_mut(&mut self, parent_id: u32) -> &mut Vec<u32> {
+    fn siblings_of_mut(&mut self, parent_id: u32) -> Option<&mut Vec<u32>> {
         if parent_id == 0 {
-            &mut self.roots
+            Some(&mut self.roots)
         } else {
-            &mut self
-                .articles
+            self.articles
                 .get_mut(&parent_id)
-                .expect("caller already checked the parent exists")
-                .children
+                .map(|parent| &mut parent.children)
         }
     }
 
@@ -106,8 +104,11 @@ impl NewsCategory {
         flags: u32,
         mime_type: String,
         data: Vec<u8>,
-    ) -> u32 {
+    ) -> Result<u32, &'static str> {
         let id = self.next_article_id;
+        self.siblings_of_mut(parent_id)
+            .ok_or("no such parent article")?
+            .push(id);
         self.next_article_id += 1;
         self.articles.insert(
             id,
@@ -121,9 +122,8 @@ impl NewsCategory {
                 children: Vec::new(),
             },
         );
-        self.siblings_of_mut(parent_id).push(id);
         self.add_sn += 1;
-        id
+        Ok(id)
     }
 
     pub(crate) fn delete_article(&mut self, id: u32, recursive: bool) -> Result<(), &'static str> {
@@ -140,22 +140,18 @@ impl NewsCategory {
             return Ok(());
         }
 
-        if children.is_empty() {
+        // The first child takes the article's place and adopts the other children.
+        let Some((&first_child, rest)) = children.split_first() else {
             self.remove_from_siblings(parent_id, id);
             self.articles.remove(&id);
             return Ok(());
+        };
+        if let Some(slot) = self
+            .siblings_of_mut(parent_id)
+            .and_then(|siblings| siblings.iter_mut().find(|sid| **sid == id))
+        {
+            *slot = first_child;
         }
-
-        // Promote the first child into the deleted article's place; its
-        // own remaining siblings become the promoted child's own
-        // (trailing) children.
-        let (&first_child, rest) = children.split_first().expect("checked non-empty above");
-        let siblings = self.siblings_of_mut(parent_id);
-        let index = siblings
-            .iter()
-            .position(|&sid| sid == id)
-            .expect("article is its own sibling");
-        siblings[index] = first_child;
 
         for &sibling in rest {
             if let Some(a) = self.articles.get_mut(&sibling) {
@@ -172,7 +168,9 @@ impl NewsCategory {
     }
 
     fn remove_from_siblings(&mut self, parent_id: u32, id: u32) {
-        self.siblings_of_mut(parent_id).retain(|&sid| sid != id);
+        if let Some(siblings) = self.siblings_of_mut(parent_id) {
+            siblings.retain(|&sid| sid != id);
+        }
     }
 
     pub(crate) fn push_article_and_children<'a>(
@@ -359,22 +357,26 @@ mod tests {
     #[test]
     fn a_reply_nests_under_its_parent_in_json_instead_of_linking_by_id() {
         let mut category = NewsCategory::new();
-        let root = category.add_article(
-            0,
-            "Root".into(),
-            "alice".into(),
-            0,
-            "text/plain".into(),
-            b"hi".to_vec(),
-        );
-        category.add_article(
-            root,
-            "Reply".into(),
-            "bob".into(),
-            0,
-            "text/plain".into(),
-            b"hey".to_vec(),
-        );
+        let root = category
+            .add_article(
+                0,
+                "Root".into(),
+                "alice".into(),
+                0,
+                "text/plain".into(),
+                b"hi".to_vec(),
+            )
+            .unwrap();
+        category
+            .add_article(
+                root,
+                "Reply".into(),
+                "bob".into(),
+                0,
+                "text/plain".into(),
+                b"hey".to_vec(),
+            )
+            .unwrap();
 
         let json = serde_json::to_value(&category).unwrap();
 
@@ -393,22 +395,26 @@ mod tests {
     #[test]
     fn a_thread_round_trips_through_the_nested_json_shape() {
         let mut category = NewsCategory::new();
-        let root = category.add_article(
-            0,
-            "Root".into(),
-            "alice".into(),
-            0,
-            "text/plain".into(),
-            b"hi".to_vec(),
-        );
-        let reply = category.add_article(
-            root,
-            "Reply".into(),
-            "bob".into(),
-            0,
-            "text/plain".into(),
-            b"hey".to_vec(),
-        );
+        let root = category
+            .add_article(
+                0,
+                "Root".into(),
+                "alice".into(),
+                0,
+                "text/plain".into(),
+                b"hi".to_vec(),
+            )
+            .unwrap();
+        let reply = category
+            .add_article(
+                root,
+                "Reply".into(),
+                "bob".into(),
+                0,
+                "text/plain".into(),
+                b"hey".to_vec(),
+            )
+            .unwrap();
 
         let json = serde_json::to_value(&category).unwrap();
         let round_tripped: NewsCategory = serde_json::from_value(json).unwrap();
@@ -422,14 +428,16 @@ mod tests {
     #[test]
     fn add_sn_and_del_sn_are_recovered_from_next_article_id_not_stored() {
         let mut category = NewsCategory::new();
-        category.add_article(
-            0,
-            "Root".into(),
-            "alice".into(),
-            0,
-            "text/plain".into(),
-            b"hi".to_vec(),
-        );
+        category
+            .add_article(
+                0,
+                "Root".into(),
+                "alice".into(),
+                0,
+                "text/plain".into(),
+                b"hi".to_vec(),
+            )
+            .unwrap();
 
         let json = serde_json::to_value(&category).unwrap();
 
@@ -443,14 +451,16 @@ mod tests {
     #[test]
     fn a_leaf_article_with_no_flags_omits_both_from_json() {
         let mut category = NewsCategory::new();
-        category.add_article(
-            0,
-            "Root".into(),
-            "alice".into(),
-            0,
-            "text/plain".into(),
-            b"hi".to_vec(),
-        );
+        category
+            .add_article(
+                0,
+                "Root".into(),
+                "alice".into(),
+                0,
+                "text/plain".into(),
+                b"hi".to_vec(),
+            )
+            .unwrap();
 
         let json = serde_json::to_value(&category).unwrap();
 
@@ -466,22 +476,26 @@ mod tests {
     #[test]
     fn a_flagged_article_with_a_reply_keeps_both_in_json() {
         let mut category = NewsCategory::new();
-        let root = category.add_article(
-            0,
-            "Root".into(),
-            "alice".into(),
-            7,
-            "text/plain".into(),
-            b"hi".to_vec(),
-        );
-        category.add_article(
-            root,
-            "Reply".into(),
-            "bob".into(),
-            0,
-            "text/plain".into(),
-            b"hey".to_vec(),
-        );
+        let root = category
+            .add_article(
+                0,
+                "Root".into(),
+                "alice".into(),
+                7,
+                "text/plain".into(),
+                b"hi".to_vec(),
+            )
+            .unwrap();
+        category
+            .add_article(
+                root,
+                "Reply".into(),
+                "bob".into(),
+                0,
+                "text/plain".into(),
+                b"hey".to_vec(),
+            )
+            .unwrap();
 
         let json = serde_json::to_value(&category).unwrap();
 

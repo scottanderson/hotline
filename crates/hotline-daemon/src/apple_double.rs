@@ -259,7 +259,7 @@ pub async fn read(path: &Path) -> io::Result<Sidecar> {
                 let bytes =
                     read_at(&mut file, offset, len.min(FinderInfoEntry::LEN as u64)).await?;
                 let mut buf = [0; FinderInfoEntry::LEN];
-                buf[..bytes.len()].copy_from_slice(&bytes);
+                buf.iter_mut().zip(&bytes).for_each(|(b, &v)| *b = v);
                 sidecar.finder_info = FinderInfoEntry::decode(buf);
             }
             COMMENT_ID => {
@@ -352,7 +352,9 @@ impl AsyncWrite for ResourceForkWriter {
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.closing.is_none() {
+        let closing = if let Some(closing) = self.closing.take() {
+            closing
+        } else {
             let mut file = self
                 .file
                 .take()
@@ -363,15 +365,15 @@ impl AsyncWrite for ResourceForkWriter {
                 len: self.len as u32,
             };
             let sidecars = Arc::clone(&self.claim.sidecars);
-            self.closing = Some(Box::pin(async move {
+            Box::pin(async move {
                 let _sidecars = sidecars.lock().await;
                 file.seek(SeekFrom::Start(RESOURCE_FORK_ENTRY_OFFSET))
                     .await?;
                 file.write_all(&entry.encode()).await?;
                 file.shutdown().await
-            }));
-        }
-        self.closing.as_mut().expect("set above").as_mut().poll(cx)
+            })
+        };
+        self.closing.insert(closing).as_mut().poll(cx)
     }
 }
 
@@ -465,11 +467,7 @@ async fn read_at(file: &mut File, offset: u64, len: u64) -> io::Result<Vec<u8>> 
 /// The longest start of `s` of at most `max` bytes, cut at a character
 /// boundary.
 fn cut(s: &str, max: usize) -> &str {
-    let mut end = s.len().min(max);
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    s.get(..s.floor_char_boundary(max)).unwrap_or(s)
 }
 
 #[cfg(test)]

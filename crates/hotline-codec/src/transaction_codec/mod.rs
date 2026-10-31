@@ -2,6 +2,7 @@ mod decode_state;
 mod error;
 mod partial;
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use bytes::{Buf, BytesMut};
@@ -93,14 +94,11 @@ impl Decoder for TransactionCodec {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         loop {
-            match &self.state {
+            match std::mem::take(&mut self.state) {
                 DecodeState::Prefix => {
-                    if src.len() < TransactionHeader::LEN {
+                    let Some(&prefix) = src.first_chunk() else {
                         return Ok(None);
-                    }
-                    let prefix: [u8; TransactionHeader::LEN] = src[..TransactionHeader::LEN]
-                        .try_into()
-                        .expect("slice length checked above");
+                    };
                     src.advance(TransactionHeader::LEN);
                     let header = (self.decode_prefix)(&prefix);
                     let sizes = [header.total_len(), header.data_len()];
@@ -117,12 +115,10 @@ impl Decoder for TransactionCodec {
                 DecodeState::Body(header) => {
                     let need = header.data_len() as usize;
                     if src.len() < need {
+                        self.state = DecodeState::Body(header);
                         return Ok(None);
                     }
                     let part_body = src.split_to(need);
-                    let DecodeState::Body(header) = std::mem::take(&mut self.state) else {
-                        unreachable!("just matched Body above")
-                    };
 
                     let key = (header.is_reply(), header.trans());
 
@@ -135,35 +131,29 @@ impl Decoder for TransactionCodec {
                     // Split transaction: accumulate the parts under one id.
                     let total_len = header.total_len() as usize;
 
-                    if let Some(existing) = self.partials.get_mut(&key) {
-                        existing.header = header;
-                        existing.body.extend_from_slice(&part_body);
-                    } else {
-                        let max = self.max_pending_partials;
-                        if self.partials.len() >= max {
-                            return Err(CodecError::TooManyPendingPartials { max });
+                    let pending = self.partials.len();
+                    let partial = match self.partials.entry(key) {
+                        Entry::Occupied(mut entry) => {
+                            let existing = entry.get_mut();
+                            existing.header = header;
+                            existing.body.extend_from_slice(&part_body);
+                            entry
                         }
-                        self.partials.insert(
-                            key,
-                            Partial {
+                        Entry::Vacant(entry) => {
+                            let max = self.max_pending_partials;
+                            if pending >= max {
+                                return Err(CodecError::TooManyPendingPartials { max });
+                            }
+                            entry.insert_entry(Partial {
                                 header,
                                 body: part_body.to_vec(),
-                            },
-                        );
-                    }
-
-                    let done = self
-                        .partials
-                        .get(&key)
-                        .expect("just inserted or updated above")
-                        .body
-                        .len()
-                        >= total_len;
-                    if !done {
+                            })
+                        }
+                    };
+                    if partial.get().body.len() < total_len {
                         continue;
                     }
-                    let Partial { header, body } =
-                        self.partials.remove(&key).expect("present, just checked");
+                    let Partial { header, body } = partial.remove();
                     return Ok(Some(header.finish_decode(&body, self.encoding())?));
                 }
             }

@@ -1,5 +1,7 @@
 //! No decoder panics on any input.
 
+#![allow(clippy::indexing_slicing)]
+
 use hotline_proto::htxf::{decode_flat_file_prefix, FolderItemHeader};
 use hotline_proto::text_encoding::DEFAULT;
 use hotline_proto::types::{

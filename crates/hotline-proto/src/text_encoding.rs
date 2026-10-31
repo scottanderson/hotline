@@ -69,12 +69,12 @@ pub fn cut<'a>(encoding: &'static Encoding, s: &'a str, max: usize) -> &'a str {
     let mut len = 0;
     let end = s
         .char_indices()
-        .find(|&(i, c)| {
-            len += encode(encoding, &s[i..i + c.len_utf8()]).len();
+        .find(|&(_, c)| {
+            len += encode(encoding, c.encode_utf8(&mut [0; 4])).len();
             len > max
         })
         .map_or(s.len(), |(i, _)| i);
-    &s[..end]
+    s.get(..end).unwrap_or(s)
 }
 
 /// Encode `s` as `encoding`. An unmappable codepoint becomes a single
@@ -93,7 +93,7 @@ pub fn encode(encoding: &'static Encoding, s: &str) -> Vec<u8> {
         );
         let (result, read) =
             encoder.encode_from_utf8_to_vec_without_replacement(remaining, &mut out, true);
-        remaining = &remaining[read..];
+        remaining = remaining.get(read..).unwrap_or_default();
         match result {
             encoding_rs::EncoderResult::InputEmpty => break,
             encoding_rs::EncoderResult::OutputFull => continue,
@@ -110,13 +110,14 @@ pub fn encode_truncated(encoding: &'static Encoding, s: &str, max: usize) -> Vec
     let mut written = 0;
     let mut remaining = s;
     loop {
+        let rest = out.get_mut(written..).unwrap_or_default();
         let (result, read, wrote) =
-            encoder.encode_from_utf8_without_replacement(remaining, &mut out[written..], true);
-        remaining = &remaining[read..];
+            encoder.encode_from_utf8_without_replacement(remaining, rest, true);
+        remaining = remaining.get(read..).unwrap_or_default();
         written += wrote;
-        match result {
-            encoding_rs::EncoderResult::Unmappable(_) if written < max => {
-                out[written] = FALLBACK_BYTE;
+        match (result, out.get_mut(written)) {
+            (encoding_rs::EncoderResult::Unmappable(_), Some(byte)) => {
+                *byte = FALLBACK_BYTE;
                 written += 1;
             }
             _ => break,

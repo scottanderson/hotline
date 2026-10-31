@@ -144,7 +144,7 @@ impl NewsCategoryListEntry {
                 needed: 2,
                 available: buf.len(),
             })?;
-        let name = text_encoding::decode(encoding, &name[..name.len().min(255)]).into();
+        let name = text_encoding::decode(encoding, name.get(..255).unwrap_or(name)).into();
         Ok(match OldNewsItemType::from(kind) {
             OldNewsItemType::Bundle => Some(Self::Bundle { count: 0, name }),
             OldNewsItemType::Category => Some(Self::Category {

@@ -222,17 +222,17 @@ impl Field<Received> {
         r.finish();
 
         let total = Self::PREFIX_LEN + size;
-        if buf.len() < total {
-            return Err(ProtoError::UnexpectedEof {
+        let bytes = buf
+            .get(Self::PREFIX_LEN..total)
+            .ok_or(ProtoError::UnexpectedEof {
                 needed: total,
                 available: buf.len(),
-            });
-        }
+            })?;
         Ok((
             Self {
                 id: FieldId::from(id),
                 state: Received {
-                    bytes: buf[Self::PREFIX_LEN..total].to_vec(),
+                    bytes: bytes.to_vec(),
                     encoding,
                 },
             },

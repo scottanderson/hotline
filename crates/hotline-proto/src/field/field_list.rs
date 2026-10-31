@@ -98,7 +98,8 @@ impl FieldList<Received> {
         let mut offset = Self::COUNT_LEN;
         let mut fields = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            let (field, consumed) = Field::decode(&body[offset..], encoding)?;
+            let (field, consumed) =
+                Field::decode(body.get(offset..).unwrap_or_default(), encoding)?;
             offset += consumed;
             fields.push(field);
         }

@@ -72,7 +72,7 @@ async fn query_until(
                 .or_else(|e| partial.ok_or(e))
                 .context("tracker closed the connection mid-list");
         }
-        buf.extend_from_slice(&chunk[..read]);
+        buf.extend_from_slice(chunk.get(..read).unwrap_or_default());
     }
 }
 

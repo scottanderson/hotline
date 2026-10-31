@@ -143,9 +143,9 @@ fn threaded(articles: Vec<NewsArticleSummary>) -> Vec<NewsThread> {
             0 => None,
             id => rows.iter().position(|row| row.summary.id == id),
         };
-        let (at, depth) = parent.map_or((rows.len(), 0), |p| {
-            let depth = rows[p].depth + 1;
-            let end = rows[p + 1..].iter().position(|row| row.depth < depth);
+        let parent = parent.and_then(|p| rows.get(p).map(|row| (p, row.depth + 1)));
+        let (at, depth) = parent.map_or((rows.len(), 0), |(p, depth)| {
+            let end = rows.iter().skip(p + 1).position(|row| row.depth < depth);
             (end.map_or(rows.len(), |n| p + 1 + n), depth)
         });
         rows.insert(at, NewsThread { summary, depth });
@@ -234,7 +234,10 @@ impl ClientSession {
         let Some(folders) = &mut self.news_folders else {
             return;
         };
-        folders[index].expanded = true;
+        let Some(node) = folders.get_mut(index) else {
+            return;
+        };
+        node.expanded = true;
         let children = entries.into_iter().map(|e| NewsFolderNode::new(&path, e));
         folders.splice(index + 1..index + 1, children);
     }
@@ -249,8 +252,9 @@ impl ClientSession {
         };
         node.expanded = false;
         let depth = node.depth();
-        let end = folders[index + 1..]
+        let end = folders
             .iter()
+            .skip(index + 1)
             .position(|child| child.depth() <= depth)
             .map_or(folders.len(), |n| index + 1 + n);
         folders.drain(index + 1..end);
@@ -260,7 +264,8 @@ impl ClientSession {
     pub fn news_folder_parent(&self, index: usize) -> Option<usize> {
         let folders = self.news_folders.as_ref()?;
         let depth = folders.get(index)?.depth();
-        folders[..index]
+        folders
+            .get(..index)?
             .iter()
             .rposition(|node| node.depth() < depth)
     }

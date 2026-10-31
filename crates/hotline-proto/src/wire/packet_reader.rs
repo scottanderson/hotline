@@ -39,6 +39,10 @@ impl<const N: usize> PacketReader<N> {
     ///
     /// # Panics
     /// Panics if fewer than `L` bytes remain in the buffer.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "a wire struct reads its own fixed size"
+    )]
     pub const fn take<const L: usize>(&mut self) -> [u8; L] {
         let mut out = [0u8; L];
         let mut i = 0;

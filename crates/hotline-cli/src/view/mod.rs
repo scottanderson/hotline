@@ -93,8 +93,8 @@ fn edit_text(text: &mut String, key: KeyEvent) -> bool {
 
 /// Delete the last word of `text` and the spaces after it.
 fn delete_word(text: &mut String) {
-    let end = text.trim_end().len();
-    let start = text[..end]
+    let start = text
+        .trim_end()
         .char_indices()
         .rfind(|&(_, c)| c.is_whitespace())
         .map_or(0, |(i, c)| i + c.len_utf8());
@@ -892,8 +892,10 @@ impl View {
                     ..
                 },
                 KeyCode::Enter,
-            ) if self.may(items[*selected].enabled_by()) => {
-                return self.choose(*user_id, items[*selected], users);
+            ) if let Some(&item) = items.get(*selected)
+                && self.may(item.enabled_by()) =>
+            {
+                return self.choose(*user_id, item, users);
             }
             (modal, _) => {
                 if let Some(input) = modal.input_mut() {
@@ -1442,7 +1444,7 @@ impl View {
             (Some(i), true) => (i + 1).min(last),
             (Some(i), false) => i.saturating_sub(1),
         };
-        self.selected_user = Some(users[next].user_id);
+        self.selected_user = users.get(next).map(|u| u.user_id);
     }
 
     /// `true` when `x`, `y` is in the article preview of the Threaded News tab.

@@ -1,6 +1,6 @@
 //! [`FileNameWithInfo`]: the packed `myField_FileNameWithInfo` (200) record.
 
-use crate::error::{ProtoError, Result};
+use crate::error::Result;
 use crate::text_encoding::{self, Encoding};
 use crate::wire::{PacketReader, SliceReader, VecWriter};
 
@@ -49,8 +49,8 @@ impl FileNameWithInfo {
 
     /// Decode from a field's raw data.
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
-        let fixed: [u8; Self::LEN] = SliceReader::new(buf).array()?;
-        let mut r = PacketReader::new(fixed);
+        let mut slice = SliceReader::new(buf);
+        let mut r = PacketReader::new(slice.array::<{ Self::LEN }>()?);
         let file_type = r.take();
         let creator = r.take();
         let size = r.u32();
@@ -58,15 +58,7 @@ impl FileNameWithInfo {
         let _name_script = r.u16();
         let name_len = r.u16();
         r.finish();
-        let name_len = name_len as usize;
-        let name_end = Self::LEN + name_len;
-        if buf.len() < name_end {
-            return Err(ProtoError::UnexpectedEof {
-                needed: name_end,
-                available: buf.len(),
-            });
-        }
-        let name = text_encoding::decode(encoding, &buf[Self::LEN..name_end]);
+        let name = text_encoding::decode(encoding, slice.bytes(name_len.into())?);
         Ok(Self {
             file_type,
             creator,

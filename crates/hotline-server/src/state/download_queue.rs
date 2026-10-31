@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::TransferRef;
+use crate::sync::lock;
 
 /// A download waiting for a free slot.
 struct Waiting {
@@ -85,7 +86,7 @@ pub(crate) struct DownloadQueue {
 impl DownloadQueue {
     /// Replace the limits. Takes effect at the next admission or release.
     pub(crate) fn set_limits(&self, limits: Limits) {
-        self.inner.lock().unwrap().limits = limits;
+        lock(&self.inner).limits = limits;
     }
 
     /// Admit a newly registered download. Returns the
@@ -94,7 +95,7 @@ impl DownloadQueue {
     ///
     /// [`myField_WaitingCount`]: hotline_proto::FieldId::WaitingCount
     pub(crate) fn admit(&self, reference: TransferRef, user_id: u16) -> u32 {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock(&self.inner);
         inner.cancel.insert(reference, CancellationToken::new());
         let waiting_count = inner.ahead_of(user_id);
         if waiting_count == 0 {
@@ -116,7 +117,7 @@ impl DownloadQueue {
     pub(crate) async fn wait_for_slot(&self, reference: TransferRef) -> bool {
         loop {
             let notify = {
-                let inner = self.inner.lock().unwrap();
+                let inner = lock(&self.inner);
                 if inner.active.contains_key(&reference) {
                     return true;
                 }
@@ -132,7 +133,7 @@ impl DownloadQueue {
     /// Drop `reference`, active or queued, and promote waiting downloads
     /// that now fit, like openline's `ProcessDownloadsWaiting`.
     pub(crate) fn release(&self, reference: TransferRef) -> Vec<QueueUpdate> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock(&self.inner);
         inner.active.remove(&reference);
         inner.waiting.retain(|w| w.reference != reference);
         inner.cancel.remove(&reference);
@@ -142,20 +143,20 @@ impl DownloadQueue {
 
     /// Whether `reference` is waiting for a slot.
     pub(crate) fn is_waiting(&self, reference: TransferRef) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock(&self.inner);
         inner.waiting.iter().any(|w| w.reference == reference)
     }
 
     /// `reference`'s cancel token, `None` once it has left the queue.
     pub(crate) fn cancel_token(&self, reference: TransferRef) -> Option<CancellationToken> {
-        self.inner.lock().unwrap().cancel.get(&reference).cloned()
+        lock(&self.inner).cancel.get(&reference).cloned()
     }
 
     /// Cancel `user_id`'s download `reference`, then release it like
     /// [`Self::release`]. `None` if it isn't `user_id`'s download.
     pub(crate) fn kill(&self, reference: TransferRef, user_id: u16) -> Option<Vec<QueueUpdate>> {
         {
-            let inner = self.inner.lock().unwrap();
+            let inner = lock(&self.inner);
             let owner = inner.active.get(&reference).copied().or_else(|| {
                 inner
                     .waiting
@@ -176,7 +177,7 @@ impl DownloadQueue {
     /// Cancel and drop every active and waiting entry for a disconnected
     /// user, then promote waiting downloads that now fit.
     pub(crate) fn remove_user(&self, user_id: u16) -> Vec<QueueUpdate> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock(&self.inner);
         let removed_refs: Vec<TransferRef> = inner
             .active
             .iter()
@@ -207,14 +208,15 @@ impl DownloadQueue {
 fn recompute(inner: &mut Inner) -> Vec<QueueUpdate> {
     let mut updates = Vec::new();
     let mut i = 0;
-    while i < inner.waiting.len() {
-        let user_id = inner.waiting[i].user_id;
+    while let Some(user_id) = inner.waiting.get(i).map(|w| w.user_id) {
         let mut waiting_count = inner.ahead_of(user_id);
         if waiting_count > 0 {
             waiting_count += i as u32;
         }
         if waiting_count == 0 {
-            let w = inner.waiting.remove(i).unwrap();
+            let Some(w) = inner.waiting.remove(i) else {
+                break;
+            };
             inner.active.insert(w.reference, w.user_id);
             inner.wake(w.reference);
             updates.push(QueueUpdate {
@@ -222,8 +224,7 @@ fn recompute(inner: &mut Inner) -> Vec<QueueUpdate> {
                 reference: w.reference,
                 waiting_count: 0,
             });
-        } else {
-            let entry = &mut inner.waiting[i];
+        } else if let Some(entry) = inner.waiting.get_mut(i) {
             if entry.last_reported != waiting_count {
                 entry.last_reported = waiting_count;
                 updates.push(QueueUpdate {

@@ -27,13 +27,12 @@ fn read_pstring(buf: &[u8], offset: usize, encoding: &'static Encoding) -> Resul
     })? as usize;
     let start = offset + 1;
     let end = start + len;
-    if buf.len() < end {
-        return Err(TrackerError::UnexpectedEof {
+    buf.get(start..end)
+        .map(|bytes| (text_encoding::decode(encoding, bytes), end))
+        .ok_or(TrackerError::UnexpectedEof {
             needed: end,
             available: buf.len(),
-        });
-    }
-    Ok((text_encoding::decode(encoding, &buf[start..end]), end))
+        })
 }
 
 impl TrackedServer {

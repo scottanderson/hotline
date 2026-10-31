@@ -288,16 +288,15 @@ impl ClientSession {
         let Some(user) = tx.user_entry() else {
             return;
         };
-        match self.users.iter().position(|u| u.user_id == user.user_id) {
-            Some(pos) => {
-                let (old_name, name) = (self.users[pos].name.clone(), &user.name);
-                if !old_name.is_empty() && !name.is_empty() && old_name != *name {
-                    self.push(
-                        format!(" <<< {old_name} is now known as {name} >>>"),
-                        LineKind::System,
-                    );
+        match self.users.iter_mut().find(|u| u.user_id == user.user_id) {
+            Some(old) => {
+                let (old_name, name) = (&old.name, &user.name);
+                let renamed = (!old_name.is_empty() && !name.is_empty() && old_name != name)
+                    .then(|| format!(" <<< {old_name} is now known as {name} >>>"));
+                *old = user;
+                if let Some(line) = renamed {
+                    self.push(line, LineKind::System);
                 }
-                self.users[pos] = user;
             }
             None => {
                 self.push(format!("{} joined", user.name), LineKind::System);

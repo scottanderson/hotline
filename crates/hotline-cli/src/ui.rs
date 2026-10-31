@@ -49,12 +49,12 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
     for (i, hint) in hints.iter().enumerate() {
         let len = text_width(hint.key) + text_width(hint.does) + 3;
         if used > 0 && used + len > usize::from(width) {
-            rows.push(&hints[start..i]);
+            rows.push(hints.get(start..i).unwrap_or_default());
             (start, used) = (i, 0);
         }
         used += len;
     }
-    rows.push(&hints[start..]);
+    rows.push(hints.get(start..).unwrap_or_default());
     rows
 }
 
@@ -302,7 +302,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, lines: &[Line], title: &str) {
     let visible = area.height.saturating_sub(2) as usize;
     let start = lines.len().saturating_sub(visible);
 
-    let paragraph = Paragraph::new(lines[start..].to_vec())
+    let paragraph = Paragraph::new(lines.get(start..).unwrap_or_default().to_vec())
         .block(Block::bordered().title(title))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
@@ -488,17 +488,19 @@ fn file_label(file: &FileNameWithInfo) -> String {
 
 /// `bytes` in B, KB, MB, or GB.
 fn size_text(bytes: u32) -> String {
-    const UNITS: [&str; 3] = ["KB", "MB", "GB"];
     if bytes < 1024 {
         return format!("{bytes} B");
     }
     let mut size = f64::from(bytes) / 1024.0;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
+    let mut unit = "KB";
+    for next in ["MB", "GB"] {
+        if size < 1024.0 {
+            break;
+        }
         size /= 1024.0;
-        unit += 1;
+        unit = next;
     }
-    format!("{size:.1} {}", UNITS[unit])
+    format!("{size:.1} {unit}")
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, view: &View) {

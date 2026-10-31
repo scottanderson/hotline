@@ -277,16 +277,9 @@ async fn send_flat_file(
     copy_fork(&mut resource, resource_len, stream).await
 }
 
-/// Discard the first `n` bytes read from `reader`, for starting a resumed
-/// download partway through the file.
-async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), mut n: u64) -> Result<()> {
-    let mut buf = [0u8; 8192];
-    while n > 0 {
-        let want = n.min(buf.len() as u64) as usize;
-        reader.read_exact(&mut buf[..want]).await?;
-        n -= want as u64;
-    }
-    Ok(())
+/// Discard the next `n` bytes of `reader`.
+async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), n: u64) -> Result<()> {
+    copy_fork(reader, n, &mut tokio::io::sink()).await
 }
 
 /// Receive a [`myTran_UploadFile`] (203) upload: parse the client's
@@ -381,12 +374,7 @@ async fn receive_flat_file(
                 remaining -= data.len() as u64;
                 info = Some(FlatFileInfo::decode(&data, encoding));
             }
-            let mut discard_buf = [0u8; 4096];
-            while remaining > 0 {
-                let n = remaining.min(discard_buf.len() as u64) as usize;
-                stream.read_exact(&mut discard_buf[..n]).await?;
-                remaining -= n as u64;
-            }
+            skip_bytes(stream, remaining).await?;
         }
     }
     Ok(info)

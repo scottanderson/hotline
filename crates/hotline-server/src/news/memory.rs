@@ -1,4 +1,4 @@
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, RwLock};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -8,6 +8,7 @@ use crate::news::{
     FlatNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle, NewsItemKind, NewsListKind,
     ThreadedNewsProvider,
 };
+use crate::sync::{read, write};
 
 /// A [`FlatNewsProvider`]/[`ThreadedNewsProvider`] that keeps news in
 /// memory only; nothing survives a restart.
@@ -22,10 +23,7 @@ pub struct InMemoryNewsProvider {
 #[async_trait]
 impl FlatNewsProvider for InMemoryNewsProvider {
     async fn load(&self) -> Arc<str> {
-        self.flat
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        read(&self.flat).clone()
     }
 
     async fn post(&self, entry: &str) {
@@ -34,7 +32,7 @@ impl FlatNewsProvider for InMemoryNewsProvider {
         let mut new_flat = String::with_capacity(entry.len() + flat.len());
         new_flat.push_str(entry);
         new_flat.push_str(&flat);
-        *self.flat.write().unwrap_or_else(PoisonError::into_inner) = new_flat.into();
+        *write(&self.flat) = new_flat.into();
     }
 }
 

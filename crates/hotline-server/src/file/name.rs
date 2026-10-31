@@ -57,8 +57,11 @@ fn windows_name(name: &str) -> String {
     if mapped.starts_with('.') {
         mapped.replace_range(..1, "-");
     }
-    let stem_len = mapped.find('.').unwrap_or(mapped.len());
-    let stem = mapped[..stem_len].trim_end_matches(' ');
+    let stem = mapped
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ');
     if RESERVED
         .iter()
         .any(|reserved| stem.eq_ignore_ascii_case(reserved))

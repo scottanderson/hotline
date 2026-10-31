@@ -5,6 +5,7 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 
 use crate::account::{Account, AccountProvider};
+use crate::sync::{read, write};
 
 /// An [`AccountProvider`] that keeps accounts in memory only; nothing
 /// created at runtime survives a restart. Seeded with `admin`/`admin`
@@ -34,22 +35,20 @@ impl Default for InMemoryAccountProvider {
 #[async_trait]
 impl AccountProvider for InMemoryAccountProvider {
     async fn get(&self, login: &str) -> Option<Account> {
-        self.accounts.read().unwrap().get(login).cloned()
+        read(&self.accounts).get(login).cloned()
     }
 
     async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
-        self.accounts.write().unwrap().insert(login, account);
+        write(&self.accounts).insert(login, account);
         Ok(())
     }
 
     async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>> {
-        Ok(self.accounts.write().unwrap().remove(login).is_some())
+        Ok(write(&self.accounts).remove(login).is_some())
     }
 
     async fn list(&self) -> Vec<(String, Account)> {
-        self.accounts
-            .read()
-            .unwrap()
+        read(&self.accounts)
             .iter()
             .map(|(login, account)| (login.clone(), account.clone()))
             .collect()

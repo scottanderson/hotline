@@ -4,6 +4,8 @@ use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
+use crate::sync::lock;
+
 /// Counts open connections, in total and for each address.
 #[derive(Debug)]
 pub(crate) struct ConnectionLimits {
@@ -41,7 +43,7 @@ impl ConnectionLimits {
 
     /// A place for one more connection from `ip`, or `None` at either limit.
     pub(crate) fn try_acquire(self: &Arc<Self>, ip: IpAddr) -> Option<ConnectionPermit> {
-        let mut open = self.open.lock().unwrap();
+        let mut open = lock(&self.open);
         let from_ip = open.by_address.get(&ip).copied().unwrap_or(0);
         if at_limit(open.total, self.max_total) || at_limit(from_ip, self.max_per_address) {
             return None;
@@ -64,7 +66,7 @@ pub(crate) struct ConnectionPermit {
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        let mut open = self.limits.open.lock().unwrap();
+        let mut open = lock(&self.limits.open);
         open.total -= 1;
         if let Entry::Occupied(mut entry) = open.by_address.entry(self.ip) {
             *entry.get_mut() -= 1;

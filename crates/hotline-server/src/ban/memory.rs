@@ -6,6 +6,7 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 
 use crate::ban::{BanProvider, BanRecord};
+use crate::sync::{read, write};
 
 /// A [`BanProvider`] that keeps bans in memory only; nothing survives a
 /// restart.
@@ -17,17 +18,17 @@ pub struct InMemoryBanProvider {
 #[async_trait]
 impl BanProvider for InMemoryBanProvider {
     async fn is_banned(&self, ip: IpAddr) -> Option<BanRecord> {
-        let record = self.bans.read().unwrap().get(&ip).cloned()?;
+        let record = read(&self.bans).get(&ip).cloned()?;
         record.is_active().then_some(record)
     }
 
     async fn ban(&self, record: BanRecord) -> Result<(), Cow<'static, str>> {
-        self.bans.write().unwrap().insert(record.ip, record);
+        write(&self.bans).insert(record.ip, record);
         Ok(())
     }
 
     async fn unban(&self, ip: IpAddr) -> Result<Option<BanRecord>, Cow<'static, str>> {
-        let record = self.bans.write().unwrap().remove(&ip);
+        let record = write(&self.bans).remove(&ip);
         Ok(record.filter(BanRecord::is_active))
     }
 }

@@ -1290,16 +1290,13 @@ impl SharedState {
     pub async fn post_news(&self, poster: &str, text: &str) -> String {
         use chrono::{Datelike, Timelike};
 
-        const MONTHS: [&str; 12] = [
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-        ];
         const FOOTER_DIVIDER: &str = "__________________________________________________________";
 
         let now = match self.policy().time_zone() {
             TimeZone::Local => chrono::Local::now().naive_local(),
             TimeZone::Utc => chrono::Utc::now().naive_utc(),
         };
-        let month = MONTHS[now.month0() as usize];
+        let month = now.format("%b");
         let entry = format!(
             "From {poster} ({month}{day:02} {hour:02}:{minute:02}):\r\r{text}\r{FOOTER_DIVIDER}\r",
             day = now.day(),
@@ -2542,6 +2539,6 @@ mod tests {
             .ok()
             .and_then(RecipientMessage::into_console_update)
             .expect("expected a console update");
-        assert_eq!(update.name.as_deref(), Some(&long[..31]));
+        assert_eq!(update.name.as_deref(), long.get(..31));
     }
 }

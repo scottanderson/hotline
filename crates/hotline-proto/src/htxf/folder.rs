@@ -61,11 +61,11 @@ impl FolderItemHeader {
     /// Decode `is_folder(2) | path` from `body`, the bytes already read
     /// past the wire form's own leading `size` field.
     pub fn decode_body(body: &[u8], encoding: &'static Encoding) -> Result<Self> {
-        let flag: [u8; Self::LEN] = SliceReader::new(body).array()?;
-        let mut r = PacketReader::new(flag);
+        let mut slice = SliceReader::new(body);
+        let mut r = PacketReader::new(slice.array::<{ Self::LEN }>()?);
         let is_folder = r.u16() & 1 != 0;
         r.finish();
-        let path = HlPath::decode(&body[Self::LEN..], encoding)?;
+        let path = HlPath::decode(slice.rest(), encoding)?;
         Ok(Self { is_folder, path })
     }
 }

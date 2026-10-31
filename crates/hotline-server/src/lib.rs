@@ -33,6 +33,7 @@ mod providers;
 mod server;
 mod session;
 mod state;
+mod sync;
 
 pub use account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
 pub use activity::{AccountAction, Activity, ActivityEntry, ActivityLog, NoActivityLog};

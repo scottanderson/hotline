@@ -79,12 +79,14 @@ impl FlatFileInfo {
     /// a missing byte reads as zero. The comment needs its size field
     /// before the end of `buf`, and stops at the end of `buf`.
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Self {
-        let len = buf.len().min(Self::MAX_LEN);
+        let buf = buf.get(..Self::MAX_LEN).unwrap_or(buf);
+        let len = buf.len();
         // Two more bytes so a comment size at the last byte reads in full.
         let mut data = [0u8; Self::MAX_LEN + 2];
-        data[..len].copy_from_slice(&buf[..len]);
+        data.iter_mut().zip(buf).for_each(|(d, &b)| *d = b);
 
-        let mut r = PacketReader::new(*data.first_chunk::<{ Self::FIXED_LEN }>().unwrap());
+        let fixed = data.first_chunk().copied().unwrap_or([0; Self::FIXED_LEN]);
+        let mut r = PacketReader::new(fixed);
         let platform = r.take();
         let file_type = r.take();
         let creator = r.take();
@@ -102,7 +104,10 @@ impl FlatFileInfo {
             .get(Self::FIXED_LEN..name_end.min(len))
             .unwrap_or_default();
         let comment: &[u8] = if name_end < len {
-            let size = u16::from_be_bytes([data[name_end], data[name_end + 1]]) as usize;
+            let size = data
+                .get(name_end..)
+                .and_then(<[u8]>::first_chunk)
+                .map_or(0, |&size| usize::from(u16::from_be_bytes(size)));
             let start = name_end + 2;
             let end = (start + size.min(Self::MAX_COMMENT_LEN)).min(len);
             data.get(start..end).unwrap_or_default()

@@ -140,8 +140,11 @@ impl Reader<'_> {
 
     /// Text from a fixed-size pstring field.
     fn pstring(&self, field: &[u8]) -> Box<str> {
-        let len = usize::from(field[0]).min(field.len() - 1);
-        text_encoding::decode(self.encoding, &field[1..=len]).into()
+        let Some((&len, text)) = field.split_first() else {
+            return Box::default();
+        };
+        let text = text.get(..usize::from(len)).unwrap_or(text);
+        text_encoding::decode(self.encoding, text).into()
     }
 
     /// Reads the sibling list at block `offset` and its replies. Returns
@@ -218,7 +221,7 @@ impl Reader<'_> {
         let size = r.u32().ok()?;
         let type_len = usize::from(r.u8().ok()?);
         let padded_type = r.bytes((type_len + 1).next_multiple_of(4) - 1).ok()?;
-        let mime_type = String::from_utf8_lossy(&padded_type[..type_len]).into_owned();
+        let mime_type = String::from_utf8_lossy(padded_type.get(..type_len)?).into_owned();
         let body = r.bytes(size as usize).ok()?.to_vec();
         let body = body_from_wire(&mime_type, body, self.encoding);
         Some((next, mime_type, body))

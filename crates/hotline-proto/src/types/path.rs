@@ -2,7 +2,7 @@
 
 use crate::error::{ProtoError, Result};
 use crate::text_encoding::{self, Encoding};
-use crate::wire::{PacketReader, VecWriter};
+use crate::wire::{SliceReader, VecWriter};
 
 /// A file/news path: a sequence of directory-level names from root to leaf.
 /// Wire shape per the older guide: `levels(2)` then, per level,
@@ -49,45 +49,19 @@ impl HlPath {
 
     /// Decode a path from a field's raw data.
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
-        const LEVELS_LEN: usize = 2;
-        let prefix: [u8; LEVELS_LEN] = buf
-            .get(..LEVELS_LEN)
-            .map(TryInto::try_into)
-            .and_then(std::result::Result::ok)
-            .ok_or(ProtoError::UnexpectedEof {
-                needed: LEVELS_LEN,
-                available: buf.len(),
-            })?;
-        let mut r = PacketReader::new(prefix);
-        let levels = r.u16() as usize;
-        r.finish();
+        let mut r = SliceReader::new(buf);
+        let levels = usize::from(r.u16()?);
         if levels > Self::MAX_COMPONENTS {
             return Err(ProtoError::Malformed(format!(
                 "path has {levels} components, more than the max of {}",
                 Self::MAX_COMPONENTS
             )));
         }
-        let mut offset = LEVELS_LEN;
         let mut components = Vec::with_capacity(levels);
         for _ in 0..levels {
-            if buf.len() < offset + 3 {
-                return Err(ProtoError::UnexpectedEof {
-                    needed: offset + 3,
-                    available: buf.len(),
-                });
-            }
             // 2 reserved bytes, then a 1-byte length prefix (pstring-style).
-            let name_len = buf[offset + 2] as usize;
-            offset += 3;
-            if buf.len() < offset + name_len {
-                return Err(ProtoError::UnexpectedEof {
-                    needed: offset + name_len,
-                    available: buf.len(),
-                });
-            }
-            let name = text_encoding::decode(encoding, &buf[offset..offset + name_len]);
-            components.push(name);
-            offset += name_len;
+            let [_, _, name_len] = r.array()?;
+            components.push(text_encoding::decode(encoding, r.bytes(name_len.into())?));
         }
         Ok(Self { components })
     }

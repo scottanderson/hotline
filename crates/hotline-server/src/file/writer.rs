@@ -7,6 +7,7 @@ use tokio::io::AsyncWrite;
 
 use crate::file::memory::Store;
 use crate::file::Node;
+use crate::sync::lock;
 
 /// Writes accumulate directly into the shared tree as they arrive
 /// (rather than being buffered until shutdown), so a provider consumer
@@ -30,7 +31,7 @@ impl AsyncWrite for MemWriter {
         _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let mut guard = self.store.root.lock().unwrap();
+        let mut guard = lock(&self.store.root);
         if let Some(Node::File(data)) = guard
             .get_dir_mut(&self.dir)
             .and_then(|d| d.entries.get_mut(&self.name))
@@ -68,10 +69,7 @@ impl AsyncWrite for ForkWriter {
         _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        self.store
-            .resource_forks
-            .lock()
-            .unwrap()
+        lock(&self.store.resource_forks)
             .entry(self.key.clone())
             .or_default()
             .extend_from_slice(buf);

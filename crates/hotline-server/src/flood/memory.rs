@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use tokio::time::Instant;
 
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy, MAX_CHAT_LINE};
+use crate::sync::lock;
 
 /// Length of each counting window.
 const WINDOW: Duration = Duration::from_secs(60);
@@ -133,14 +134,14 @@ pub struct InMemoryFloodPolicy {
 impl FloodPolicy for InMemoryFloodPolicy {
     async fn check(&self, user_id: u16, event: FloodEvent<'_>) -> FloodDecision {
         let now = Instant::now();
-        let mut users = self.users.lock().unwrap();
+        let mut users = lock(&self.users);
         let user = users.entry(user_id).or_insert_with(|| UserFlood::new(now));
         FloodDecision::ban_if(user.over(now, event))
     }
 
     async fn check_connection(&self, ip: IpAddr) -> FloodDecision {
         let now = Instant::now();
-        let mut last = self.last_connection.lock().unwrap();
+        let mut last = lock(&self.last_connection);
         match last.as_mut() {
             Some(run) if run.ip == ip => {
                 run.count += 1;
@@ -161,7 +162,7 @@ impl FloodPolicy for InMemoryFloodPolicy {
     }
 
     async fn reset(&self, user_id: u16) {
-        self.users.lock().unwrap().remove(&user_id);
+        lock(&self.users).remove(&user_id);
     }
 }
 

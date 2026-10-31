@@ -20,10 +20,17 @@ keywords = ["hotline", "trtp", "chat", "bbs", "protocol"]
 
 [workspace.lints.rust]
 missing_docs = "warn"
-unsafe_code = "forbid"
+unsafe_code = "warn"
 
 [workspace.lints.clippy]
+expect_used = "warn"
+indexing_slicing = "warn"
 missing_const_for_fn = "warn"
+missing_panics_doc = "warn"
+panic = "warn"
+string_slice = "warn"
+unreachable = "warn"
+unwrap_used = "warn"
 
 [workspace.dependencies]
 hotline-proto = { path = "crates/hotline-proto", version = "0.1.0" }

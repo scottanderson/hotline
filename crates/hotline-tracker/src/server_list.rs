@@ -83,28 +83,26 @@ pub fn decode_server_list(buf: &[u8], encoding: &'static Encoding) -> Result<Ser
     let mut servers = Vec::new();
 
     while offset < buf.len() {
-        let header = ChunkHeader::decode(&buf[offset..])?;
+        let header = ChunkHeader::decode(buf.get(offset..).unwrap_or_default())?;
         total = header.total_servers;
 
         let end = offset + DATA_SIZE_END + usize::from(header.data_size);
-        if end > buf.len() {
-            return Err(TrackerError::UnexpectedEof {
-                needed: end,
-                available: buf.len(),
-            });
-        }
-        offset += CHUNK_HEADER_LEN;
+        let mut entries =
+            buf.get(offset + CHUNK_HEADER_LEN..end)
+                .ok_or(TrackerError::UnexpectedEof {
+                    needed: end,
+                    available: buf.len(),
+                })?;
 
         for _ in 0..header.chunk_servers {
-            let (server, consumed) =
-                TrackedServer::decode(&buf[offset..end], encoding).map_err(|_| {
-                    TrackerError::MalformedChunk {
-                        declared: header.data_size,
-                        servers: header.chunk_servers,
-                    }
-                })?;
+            let (server, consumed) = TrackedServer::decode(entries, encoding).map_err(|_| {
+                TrackerError::MalformedChunk {
+                    declared: header.data_size,
+                    servers: header.chunk_servers,
+                }
+            })?;
             servers.push(server);
-            offset += consumed;
+            entries = entries.get(consumed..).unwrap_or_default();
         }
         offset = end;
     }

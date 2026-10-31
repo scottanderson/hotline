@@ -2,10 +2,9 @@
 /// `0x` hex, `0` octal, or decimal number, up to the first other character.
 pub(crate) fn strtoul(s: &str) -> u64 {
     let s = s.trim_start();
-    let (negative, s) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
+    let (negative, s) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
     };
     let (radix, digits) = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         Some(hex) => (16, hex),

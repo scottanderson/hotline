@@ -17,11 +17,7 @@ fn join_flag_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
 
 /// `name` cut to the 31 bytes mhxd's name buffer holds.
 fn truncate_name(name: &str) -> &str {
-    let end = (0..=name.len().min(31))
-        .rev()
-        .find(|&i| name.is_char_boundary(i))
-        .unwrap_or_default();
-    &name[..end]
+    name.get(..name.floor_char_boundary(31)).unwrap_or(name)
 }
 
 /// Every set flag's console config key, or its Rust name if it has none.

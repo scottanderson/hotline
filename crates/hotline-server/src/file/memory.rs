@@ -12,6 +12,7 @@ use crate::file::{
     partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, Dir, FileProvider,
     FileRequester, FinderInfo, Node,
 };
+use crate::sync::lock;
 
 /// Per-item metadata, keyed by the item's directory and name.
 pub(crate) type ItemMap<V> = HashMap<(Vec<String>, String), V>;
@@ -41,14 +42,11 @@ fn rekey<V>(
     let mut new_prefix = new_dir.to_vec();
     new_prefix.push(new_name.to_string());
     let descendants: Vec<_> = map
-        .keys()
-        .filter(|(dir, _)| dir.starts_with(&old_prefix))
-        .cloned()
+        .extract_if(|(dir, _), _| dir.starts_with(&old_prefix))
         .collect();
-    for (dir, name) in descendants {
-        let value = map.remove(&(dir.clone(), name.clone())).unwrap();
+    for ((dir, name), value) in descendants {
         let mut rekeyed_dir = new_prefix.clone();
-        rekeyed_dir.extend_from_slice(&dir[old_prefix.len()..]);
+        rekeyed_dir.extend(dir.into_iter().skip(old_prefix.len()));
         map.insert((rekeyed_dir, name), value);
     }
 }
@@ -92,8 +90,12 @@ pub struct InMemoryFileProvider {
 impl InMemoryFileProvider {
     /// Seed a file at `dir`/`name` with `data`, creating any missing
     /// intermediate directories. For tests/fixtures.
+    ///
+    /// # Panics
+    /// Panics if the path runs through a file.
+    #[expect(clippy::expect_used, reason = "a fixture with a bad path is a bug")]
     pub fn seed(&self, dir: &HlPath, name: &str, data: impl Into<Vec<u8>>) {
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let d = root
             .make_dirs(&dir.components)
             .expect("the seed path runs through a file");
@@ -103,16 +105,12 @@ impl InMemoryFileProvider {
     /// Set the resource fork of `dir`/`name` to `data`. For tests/fixtures.
     pub fn seed_resource_fork(&self, dir: &HlPath, name: &str, data: impl Into<Vec<u8>>) {
         let key = (dir.components.clone(), name.to_string());
-        self.store
-            .resource_forks
-            .lock()
-            .unwrap()
-            .insert(key, data.into());
+        lock(&self.store.resource_forks).insert(key, data.into());
     }
 
     /// Set the bytes that [`FileProvider::free_space`] reports.
     pub fn set_free_space(&self, bytes: Option<u64>) {
-        *self.free_space.lock().unwrap() = bytes;
+        *lock(&self.free_space) = bytes;
     }
 
     /// Make [`FileProvider::set_comment`] fail when `fail` is true.
@@ -128,9 +126,9 @@ impl FileProvider for InMemoryFileProvider {
         _requester: FileRequester<'_>,
         dir: &HlPath,
     ) -> Option<Vec<FileNameWithInfo>> {
-        let root = self.store.root.lock().unwrap();
+        let root = lock(&self.store.root);
         let d = root.get_dir(&dir.components)?;
-        let finder_infos = self.finder_infos.lock().unwrap();
+        let finder_infos = lock(&self.finder_infos);
         let mut entries: Vec<FileNameWithInfo> = d
             .entries
             .iter()
@@ -156,7 +154,7 @@ impl FileProvider for InMemoryFileProvider {
     }
 
     async fn size(&self, _requester: FileRequester<'_>, dir: &HlPath, name: &str) -> Option<u64> {
-        let root = self.store.root.lock().unwrap();
+        let root = lock(&self.store.root);
         let d = root.get_dir(&dir.components)?;
         match d.entries.get(name)? {
             Node::File(data) => Some(data.len() as u64),
@@ -165,11 +163,11 @@ impl FileProvider for InMemoryFileProvider {
     }
 
     async fn free_space(&self, _requester: FileRequester<'_>, _dir: &HlPath) -> Option<u64> {
-        *self.free_space.lock().unwrap()
+        *lock(&self.free_space)
     }
 
     async fn exists(&self, _requester: FileRequester<'_>, dir: &HlPath, name: &str) -> bool {
-        let root = self.store.root.lock().unwrap();
+        let root = lock(&self.store.root);
         root.get_dir(&dir.components)
             .is_some_and(|d| d.entries.contains_key(name))
     }
@@ -180,7 +178,7 @@ impl FileProvider for InMemoryFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> io::Result<BoxedReader> {
-        let root = self.store.root.lock().unwrap();
+        let root = lock(&self.store.root);
         let d = root.get_dir(&dir.components).ok_or_else(not_found)?;
         match d.entries.get(name) {
             Some(Node::File(data)) => Ok(Box::new(io::Cursor::new(data.clone()))),
@@ -196,7 +194,7 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
     ) -> io::Result<BoxedWriter> {
         let partial_name = partial_upload_name(name);
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if let Some(Node::Dir(_)) = d.entries.get(&partial_name) {
             return Err(io::Error::from(io::ErrorKind::IsADirectory));
@@ -204,11 +202,7 @@ impl FileProvider for InMemoryFileProvider {
         d.entries
             .insert(partial_name.clone(), Node::File(Vec::new()));
         drop(root);
-        self.store
-            .resource_forks
-            .lock()
-            .unwrap()
-            .remove(&(dir.components.clone(), partial_name.clone()));
+        lock(&self.store.resource_forks).remove(&(dir.components.clone(), partial_name.clone()));
         Ok(Box::new(MemWriter::appending(
             self.store.clone(),
             dir.components.clone(),
@@ -224,7 +218,7 @@ impl FileProvider for InMemoryFileProvider {
         at: u64,
     ) -> io::Result<BoxedWriter> {
         let partial_name = partial_upload_name(name);
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         match d.entries.get_mut(&partial_name) {
             Some(Node::File(data)) => {
@@ -256,7 +250,7 @@ impl FileProvider for InMemoryFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> Option<FileNameWithInfo> {
-        let root = self.store.root.lock().unwrap();
+        let root = lock(&self.store.root);
         let d = root.get_dir(&dir.components)?;
         Some(match d.entries.get(name)? {
             Node::Dir(_) => FileNameWithInfo {
@@ -266,7 +260,7 @@ impl FileProvider for InMemoryFileProvider {
                 name: name.into(),
             },
             Node::File(data) => {
-                let finder_infos = self.finder_infos.lock().unwrap();
+                let finder_infos = lock(&self.finder_infos);
                 let (file_type, creator) =
                     file_type_and_creator(&finder_infos, &dir.components, name);
                 FileNameWithInfo {
@@ -287,10 +281,7 @@ impl FileProvider for InMemoryFileProvider {
     ) -> Option<FinderInfo> {
         let info = self.info(requester, dir, name).await?;
         let key = (dir.components.clone(), name.to_string());
-        let flags = self
-            .finder_infos
-            .lock()
-            .unwrap()
+        let flags = lock(&self.finder_infos)
             .get(&key)
             .map_or(0, |stored| stored.flags);
         Some(FinderInfo {
@@ -311,7 +302,7 @@ impl FileProvider for InMemoryFileProvider {
             return Err(not_found());
         }
         let key = (dir.components.clone(), name.to_string());
-        self.finder_infos.lock().unwrap().insert(key, info);
+        lock(&self.finder_infos).insert(key, info);
         Ok(())
     }
 
@@ -322,10 +313,7 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
     ) -> u64 {
         let key = (dir.components.clone(), name.to_string());
-        self.store
-            .resource_forks
-            .lock()
-            .unwrap()
+        lock(&self.store.resource_forks)
             .get(&key)
             .map_or(0, |fork| fork.len() as u64)
     }
@@ -338,11 +326,7 @@ impl FileProvider for InMemoryFileProvider {
         at: u64,
     ) -> io::Result<BoxedReader> {
         let key = (dir.components.clone(), name.to_string());
-        let fork = self
-            .store
-            .resource_forks
-            .lock()
-            .unwrap()
+        let fork = lock(&self.store.resource_forks)
             .get(&key)
             .map(|fork| fork.get(at as usize..).unwrap_or_default().to_vec())
             .unwrap_or_default();
@@ -361,10 +345,7 @@ impl FileProvider for InMemoryFileProvider {
             return Err(not_found());
         }
         let key = (dir.components.clone(), partial_name);
-        self.store
-            .resource_forks
-            .lock()
-            .unwrap()
+        lock(&self.store.resource_forks)
             .entry(key.clone())
             .or_default()
             .resize(at as usize, 0);
@@ -378,20 +359,12 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
         _is_dir: bool,
     ) -> io::Result<()> {
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         d.entries.remove(name).ok_or_else(not_found)?;
-        drop_under(&mut self.comments.lock().unwrap(), &dir.components, name);
-        drop_under(
-            &mut self.finder_infos.lock().unwrap(),
-            &dir.components,
-            name,
-        );
-        drop_under(
-            &mut self.store.resource_forks.lock().unwrap(),
-            &dir.components,
-            name,
-        );
+        drop_under(&mut lock(&self.comments), &dir.components, name);
+        drop_under(&mut lock(&self.finder_infos), &dir.components, name);
+        drop_under(&mut lock(&self.store.resource_forks), &dir.components, name);
         Ok(())
     }
 
@@ -401,7 +374,7 @@ impl FileProvider for InMemoryFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> io::Result<()> {
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if d.entries.contains_key(name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
@@ -418,7 +391,7 @@ impl FileProvider for InMemoryFileProvider {
         old_name: &str,
         new_name: &str,
     ) -> io::Result<()> {
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if d.entries.contains_key(new_name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
@@ -426,21 +399,21 @@ impl FileProvider for InMemoryFileProvider {
         let entry = d.entries.remove(old_name).ok_or_else(not_found)?;
         d.entries.insert(new_name.to_string(), entry);
         rekey(
-            &mut self.comments.lock().unwrap(),
+            &mut lock(&self.comments),
             &dir.components,
             old_name,
             &dir.components,
             new_name,
         );
         rekey(
-            &mut self.finder_infos.lock().unwrap(),
+            &mut lock(&self.finder_infos),
             &dir.components,
             old_name,
             &dir.components,
             new_name,
         );
         rekey(
-            &mut self.store.resource_forks.lock().unwrap(),
+            &mut lock(&self.store.resource_forks),
             &dir.components,
             old_name,
             &dir.components,
@@ -456,14 +429,16 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
         to_dir: &HlPath,
     ) -> io::Result<()> {
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let source = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if !source.entries.contains_key(name) {
             return Err(not_found());
         }
-        let into_itself = to_dir.components.len() > dir.components.len()
-            && to_dir.components.starts_with(&dir.components)
-            && to_dir.components[dir.components.len()] == name;
+        let into_itself = to_dir.components.starts_with(&dir.components)
+            && to_dir
+                .components
+                .get(dir.components.len())
+                .is_some_and(|c| c == name);
         if into_itself {
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
@@ -483,21 +458,21 @@ impl FileProvider for InMemoryFileProvider {
             .entries
             .insert(name.to_string(), entry);
         rekey(
-            &mut self.comments.lock().unwrap(),
+            &mut lock(&self.comments),
             &dir.components,
             name,
             &to_dir.components,
             name,
         );
         rekey(
-            &mut self.finder_infos.lock().unwrap(),
+            &mut lock(&self.finder_infos),
             &dir.components,
             name,
             &to_dir.components,
             name,
         );
         rekey(
-            &mut self.store.resource_forks.lock().unwrap(),
+            &mut lock(&self.store.resource_forks),
             &dir.components,
             name,
             &to_dir.components,
@@ -516,7 +491,7 @@ impl FileProvider for InMemoryFileProvider {
         link_dir: &HlPath,
         link_name: &str,
     ) -> io::Result<()> {
-        let mut root = self.store.root.lock().unwrap();
+        let mut root = lock(&self.store.root);
         let entry = match root
             .get_dir(&target_dir.components)
             .and_then(|d| d.entries.get(target_name))
@@ -540,7 +515,7 @@ impl FileProvider for InMemoryFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> Option<String> {
-        let comments = self.comments.lock().unwrap();
+        let comments = lock(&self.comments);
         comments
             .get(&(dir.components.clone(), name.to_string()))
             .cloned()
@@ -556,7 +531,7 @@ impl FileProvider for InMemoryFileProvider {
         if self.comment_writes_fail.load(Ordering::Relaxed) {
             return Err(io::Error::other("comment write failed"));
         }
-        let mut comments = self.comments.lock().unwrap();
+        let mut comments = lock(&self.comments);
         let key = (dir.components.clone(), name.to_string());
         if comment.is_empty() {
             comments.remove(&key);

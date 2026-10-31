@@ -42,20 +42,17 @@ impl<'a, E> SliceReader<'a, E> {
     /// Read the next `len` bytes.
     pub fn bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         let end = self.pos.saturating_add(len);
-        let bytes = self
-            .buf
-            .get(self.pos..end)
-            .ok_or(ProtoError::UnexpectedEof {
-                needed: end,
-                available: self.buf.len(),
-            })?;
+        let bytes = self.buf.get(self.pos..end).ok_or_else(|| self.eof(end))?;
         self.pos = end;
         Ok(bytes)
     }
 
     /// Read exactly `N` bytes.
     pub fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
-        Ok(self.bytes(N)?.try_into().expect("bytes returns N bytes"))
+        let end = self.pos.saturating_add(N);
+        let array = *self.rest().first_chunk().ok_or_else(|| self.eof(end))?;
+        self.pos = end;
+        Ok(array)
     }
 
     /// Read one byte.
@@ -75,7 +72,15 @@ impl<'a, E> SliceReader<'a, E> {
 
     /// The bytes not read yet.
     pub fn rest(&self) -> &'a [u8] {
-        &self.buf[self.pos..]
+        self.buf.get(self.pos..).unwrap_or_default()
+    }
+
+    /// The error for a read that ends at `end`.
+    const fn eof(&self, end: usize) -> ProtoError {
+        ProtoError::UnexpectedEof {
+            needed: end,
+            available: self.buf.len(),
+        }
     }
 }
 

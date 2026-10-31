@@ -194,13 +194,10 @@ impl NewsBundle {
         let category = self
             .category_mut(components)
             .ok_or("no such news category")?;
-        if parent_id != 0 && !category.articles.contains_key(&parent_id) {
-            return Err("no such parent article");
-        }
         if parent_id != 0 && category.depth_of(parent_id) + 1 >= MAX_REPLY_CHAIN_LEN {
             return Err("reply chain is too deep");
         }
-        Ok(category.add_article(parent_id, title, poster, flags, mime_type, data))
+        category.add_article(parent_id, title, poster, flags, mime_type, data)
     }
 
     /// Delete an article from the category at `components`. If
@@ -230,7 +227,11 @@ impl NewsBundle {
         let index = siblings.iter().position(|&sid| sid == id)?;
         Some(NewsArticleView {
             article,
-            prev_id: index.checked_sub(1).map(|i| siblings[i]).unwrap_or(0),
+            prev_id: index
+                .checked_sub(1)
+                .and_then(|i| siblings.get(i))
+                .copied()
+                .unwrap_or(0),
             next_id: siblings.get(index + 1).copied().unwrap_or(0),
         })
     }

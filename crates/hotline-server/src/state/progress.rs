@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::state::{PendingTransfer, TransferDirection, TransferKind, TransferRef};
+use crate::sync::lock;
 
 /// Which section of the client info text a transfer belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +154,7 @@ impl RunningTransfers {
             progress,
             done: done.clone(),
         };
-        self.0.lock().unwrap().insert(reference, running);
+        lock(&self.0).insert(reference, running);
         Some(ProgressGuard {
             running: self.clone(),
             reference,
@@ -163,7 +164,7 @@ impl RunningTransfers {
 
     /// `user_id`'s running transfers, with their byte counts now.
     pub(crate) fn for_user(&self, user_id: u16) -> Vec<(TransferRef, TransferProgress)> {
-        let running = self.0.lock().unwrap();
+        let running = lock(&self.0);
         running
             .iter()
             .filter(|(_, r)| r.user_id == user_id)
@@ -197,7 +198,7 @@ impl ProgressGuard {
 
 impl Drop for ProgressGuard {
     fn drop(&mut self) {
-        self.running.0.lock().unwrap().remove(&self.reference);
+        lock(&self.running.0).remove(&self.reference);
     }
 }
 
