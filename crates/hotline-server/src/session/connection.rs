@@ -799,9 +799,7 @@ impl Session {
     /// [`myField_AutomaticResponse`]: hotline_proto::FieldId::AutomaticResponse
     fn take_options(&mut self, tx: &Transaction<Received>) {
         let options = UserChangeOptions::from_bits_truncate(
-            tx.field(FieldId::Options)
-                .and_then(Field::as_u16)
-                .unwrap_or(0),
+            tx.field(FieldId::Options).map(Field::as_u16).unwrap_or(0),
         );
         self.refuses_pm = options.contains(UserChangeOptions::REFUSE_PM);
         self.refuses_chat = options.contains(UserChangeOptions::REFUSE_CHAT);
@@ -1093,7 +1091,7 @@ mod tests {
             replies[0]
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::Vers)
-                .and_then(Field::as_u16),
+                .map(Field::as_u16),
             Some(190)
         );
     }
@@ -1111,7 +1109,7 @@ mod tests {
             replies[0]
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::CommunityBannerID)
-                .and_then(Field::as_u16),
+                .map(Field::as_u16),
             Some(0)
         );
     }
@@ -1168,7 +1166,7 @@ mod tests {
             notify
                 .received(encoding)
                 .field(FieldId::UserIconID)
-                .and_then(Field::as_u16),
+                .map(Field::as_u16),
             Some(42)
         );
         assert!(
@@ -2180,7 +2178,7 @@ mod tests {
         let color = notify
             .received(text_encoding::DEFAULT)
             .field(FieldId::UserFlags)
-            .and_then(Field::as_u16)
+            .map(Field::as_u16)
             .unwrap_or(0);
         assert!(
             UserFlags::from_bits_truncate(color).contains(UserFlags::ADMIN),
@@ -2220,7 +2218,7 @@ mod tests {
             .expect("expected a UserChange push")
             .received(text_encoding::DEFAULT)
             .field(FieldId::UserFlags)
-            .and_then(Field::as_u16)
+            .map(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
             .unwrap_or_else(UserFlags::empty);
         assert!(color.contains(UserFlags::AWAY));
@@ -2233,7 +2231,7 @@ mod tests {
             .expect("expected a UserChange push")
             .received(text_encoding::DEFAULT)
             .field(FieldId::UserFlags)
-            .and_then(Field::as_u16)
+            .map(Field::as_u16)
             .map(UserFlags::from_bits_truncate)
             .unwrap_or_else(UserFlags::empty);
         assert!(!color.contains(UserFlags::AWAY));

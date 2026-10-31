@@ -229,11 +229,11 @@ impl Transaction<Received> {
     /// [`myField_UserName`]: crate::FieldId::UserName
     pub fn user_entry(&self) -> Option<UserNameWithInfo> {
         Some(UserNameWithInfo {
-            user_id: self.field(FieldId::UserID).and_then(Field::as_u16)?,
+            user_id: self.field(FieldId::UserID).map(Field::as_u16)?,
             icon: self.icon().unwrap_or_default(),
             flags: self
                 .field(FieldId::UserFlags)
-                .and_then(Field::as_u16)
+                .map(Field::as_u16)
                 .map_or_else(UserFlags::empty, UserFlags::from_bits_retain),
             name: self.name().unwrap_or_default().into(),
         })
@@ -286,7 +286,7 @@ impl Transaction<Received> {
     ///
     /// [`myField_UserIconID`]: crate::FieldId::UserIconID
     pub fn icon(&self) -> Option<u16> {
-        self.field(FieldId::UserIconID).and_then(Field::as_u16)
+        self.field(FieldId::UserIconID).map(Field::as_u16)
     }
 
     /// The [`myField_NewsPath`] (325) field, decoded.
@@ -300,7 +300,7 @@ impl Transaction<Received> {
     ///
     /// [`myField_NewsArtID`]: crate::FieldId::NewsArtID
     pub fn news_article_id(&self) -> Option<u32> {
-        self.field(FieldId::NewsArtID).and_then(Field::as_u32)
+        self.field(FieldId::NewsArtID).map(Field::as_u32)
     }
 
     /// The [`myField_NewsCatName`] (322) field, if present.
@@ -328,7 +328,7 @@ impl Transaction<Received> {
     ///
     /// [`myField_NewsArtFlags`]: crate::FieldId::NewsArtFlags
     pub fn news_article_flags(&self) -> Option<u32> {
-        self.field(FieldId::NewsArtFlags).and_then(Field::as_u32)
+        self.field(FieldId::NewsArtFlags).map(Field::as_u32)
     }
 
     /// The [`myField_NewsArtRecurseDel`] (337) field: whether a delete
@@ -337,7 +337,7 @@ impl Transaction<Received> {
     /// [`myField_NewsArtRecurseDel`]: crate::FieldId::NewsArtRecurseDel
     pub fn news_article_recurse_delete(&self) -> bool {
         self.field(FieldId::NewsArtRecurseDel)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap_or(0)
             != 0
     }
@@ -363,7 +363,7 @@ impl Transaction<Received> {
     ///
     /// [`myField_Vers`]: crate::FieldId::Vers
     pub fn client_version(&self) -> Option<u16> {
-        self.field(FieldId::Vers).and_then(Field::as_u16)
+        self.field(FieldId::Vers).map(Field::as_u16)
     }
 
     /// Decode a complete, single-part transaction (prefix + body) from

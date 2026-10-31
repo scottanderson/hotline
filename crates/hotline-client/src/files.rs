@@ -61,7 +61,7 @@ impl HotlineClient {
             name: text(FieldId::FileName).unwrap_or_else(|| name.into()),
             size: reply
                 .field(FieldId::FileSize)
-                .and_then(Field::as_u32)
+                .map(Field::as_u32)
                 .unwrap_or_default(),
             type_text: text(FieldId::FileTypeString),
             creator_text: text(FieldId::FileCreatorString),

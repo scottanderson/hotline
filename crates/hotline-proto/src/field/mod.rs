@@ -156,15 +156,15 @@ impl Field<Received> {
         text_encoding::decode(self.encoding(), &xor_ff(&self.state.bytes))
     }
 
-    /// Interpret this field's data as `u16`. Accepts a 1, 2, or 4 byte
-    /// payload whose value fits in 16 bits.
-    pub fn as_u16(&self) -> Option<u16> {
-        self.as_u32()?.try_into().ok()
+    /// Interpret this field's data as `u16`: the low 16 bits of
+    /// [`Field::as_u32`].
+    pub fn as_u16(&self) -> u16 {
+        self.as_u32() as u16
     }
 
-    /// Interpret this field's data as `u32`. Accepts a 1, 2, or 4 byte
-    /// payload.
-    pub fn as_u32(&self) -> Option<u32> {
+    /// Interpret this field's data as `u32`: a 1 or 2 byte payload, or the
+    /// first 4 bytes of a payload of 4 or more. Any other length reads as 0.
+    pub fn as_u32(&self) -> u32 {
         decode_number(&self.state.bytes)
     }
 
@@ -297,18 +297,18 @@ mod tests {
     fn u16_field_round_trips() {
         let f = Field::u16(FieldId::UserID, 42);
         assert_eq!(*f.value(), FieldValue::U16(42));
-        assert_eq!(f.received(text_encoding::DEFAULT).as_u16(), Some(42));
+        assert_eq!(f.received(text_encoding::DEFAULT).as_u16(), 42);
     }
 
     #[test]
-    fn as_u16_reads_one_and_four_byte_payloads() {
+    fn as_u16_keeps_the_low_16_bits() {
         let encoding = text_encoding::DEFAULT;
         let one = Field::bytes(FieldId::UserID, vec![7]);
-        assert_eq!(one.received(encoding).as_u16(), Some(7));
+        assert_eq!(one.received(encoding).as_u16(), 7);
         let four = Field::bytes(FieldId::UserID, vec![0, 0, 0, 42]);
-        assert_eq!(four.received(encoding).as_u16(), Some(42));
-        let wide = Field::bytes(FieldId::UserID, vec![0, 1, 0, 0]);
-        assert_eq!(wide.received(encoding).as_u16(), None);
+        assert_eq!(four.received(encoding).as_u16(), 42);
+        let wide = Field::bytes(FieldId::UserID, vec![0, 1, 0, 2]);
+        assert_eq!(wide.received(encoding).as_u16(), 2);
     }
 
     #[test]
@@ -322,21 +322,24 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let small = Field::u32(FieldId::ChatID, 7);
         assert_eq!(small.encode(encoding).unwrap().len(), 4 + 2);
-        assert_eq!(small.received(encoding).as_u32(), Some(7));
+        assert_eq!(small.received(encoding).as_u32(), 7);
 
         let large = Field::u32(FieldId::FileSize, u32::MAX);
         assert_eq!(large.encode(encoding).unwrap().len(), 4 + 4);
-        assert_eq!(large.received(encoding).as_u32(), Some(u32::MAX));
+        assert_eq!(large.received(encoding).as_u32(), u32::MAX);
     }
 
     #[test]
-    fn as_u32_accepts_either_a_2_or_4_byte_payload() {
+    fn as_u32_reads_the_first_4_bytes_of_a_longer_payload() {
         let encoding = text_encoding::DEFAULT;
         let short = Field::bytes(FieldId::ChatID, vec![0, 7]);
-        assert_eq!(short.received(encoding).as_u32(), Some(7));
+        assert_eq!(short.received(encoding).as_u32(), 7);
 
         let long = Field::bytes(FieldId::ChatID, vec![0, 0, 0, 7]);
-        assert_eq!(long.received(encoding).as_u32(), Some(7));
+        assert_eq!(long.received(encoding).as_u32(), 7);
+
+        let longer = Field::bytes(FieldId::ChatID, vec![0, 0, 0, 7, 0, 9]);
+        assert_eq!(longer.received(encoding).as_u32(), 7);
     }
 
     #[test]

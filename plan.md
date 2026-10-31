@@ -164,10 +164,6 @@ works this way.
   `ProcessTran_SendInstantMsg` and `ProcessTran_UserBroadcast` handle
   it as an empty message and reply with success. `hls` replies with an
   error (`Silent::MessageWithoutData`).
-- **A number field that does not fit is missing.** openline's
-  `UFieldData::GetInteger` reads the first 4 bytes of a longer field,
-  and a 16-bit value keeps the low 16 bits of a larger number. `hls`
-  handles either field as missing.
 - **A zero uploaded type reads as the type for the name.** openline's
   Mac `_FSSetFlatFileInfo` stores the `INFO` fork's type and creator as
   they are, also a zero type. `hls` stores them too, but a stored zero
@@ -247,26 +243,9 @@ one-shared-room model.
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-3. **Some divergences have no policy.** `ServerPolicy` covers each
-   divergence above that names a `Silent` case. Two divergences are
-   still open:
-   - A number field that does not fit. Most of these reads are in
-     `hotline-proto`, which has no policy. A method needs a design
-     decision first.
-   - A rename onto a taken login. openline writes the record over the
-     other account. Decided: make it a `ServerPolicy` choice. The
-     default copies openline, and `HlsPolicy` refuses the rename.
-     openline's `ProcessTran_SetUserList` catches the error from
-     `RenameUser`, which renames the user folder. It then finds the
-     new login in `ExistsUser` and calls `SetUser`. That writes the
-     record over the other account and keeps the old account.
-     `SetOnlineAccount` then changes the sessions of the old login,
-     and the reply is "Error saving list of accounts." This depends on
-     `SetName` failing when the folder name is taken. Confirm that
-     before the port.
-4. **Chat rooms and online users have no trait.** `SharedState` keeps
+3. **Chat rooms and online users have no trait.** `SharedState` keeps
    them in memory. Put them behind traits, like the storage providers.
-5. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+4. **hlc has no task list.** Ctrl-K lists only the downloads that run,
    and Enter cancels one. hlc does not keep its uploads, and it shows
    no progress. It shows no request that waits for its reply.
    openline's client keeps each transfer as a task
@@ -285,7 +264,7 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-6. **`hlc` has no config file.** Keep the settings in
+5. **`hlc` has no config file.** Keep the settings in
    `$XDG_CONFIG_HOME/hlc/config.toml`, or `~/.config/hlc/config.toml`
    when the variable is not set, on macOS too. The file holds the
    defaults of the command-line options: the name, the icon, the

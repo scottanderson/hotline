@@ -106,12 +106,7 @@ impl HotlineClient {
         fields.push(Field::string(FieldId::NewsArtDataFlav, flavor));
         let reply = self.request(Opcode::GetNewsArtData, fields).await?;
         let text = |id| reply.string(id).unwrap_or_default().into();
-        let article_id = |field| {
-            reply
-                .field(field)
-                .and_then(Field::as_u32)
-                .unwrap_or_default()
-        };
+        let article_id = |field| reply.field(field).map(Field::as_u32).unwrap_or_default();
         Ok(NewsArticle {
             title: text(FieldId::NewsArtTitle),
             poster: text(FieldId::NewsArtPoster),

@@ -52,7 +52,7 @@ impl Session {
         }
 
         let message = tx.string(FieldId::Data).unwrap_or_default();
-        let chat_id = tx.field(FieldId::ChatID).and_then(Field::as_u32);
+        let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32);
         if let Some((prefix, command_line)) = config
             .console_prefix
             .and_then(|prefix| Some((prefix, message.strip_prefix(prefix)?)))
@@ -62,7 +62,7 @@ impl Session {
                 .await;
         }
 
-        let style = tx.field(FieldId::ChatOptions).and_then(Field::as_u16);
+        let style = tx.field(FieldId::ChatOptions).map(Field::as_u16);
 
         let prefix = match style == Some(1) {
             true => format!("\r *** {} ", self.name),
@@ -160,10 +160,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_CHAT) {
             return vec![tx.reply_error(reason)];
         }
-        let target_ids: Vec<u16> = tx
-            .fields(FieldId::UserID)
-            .filter_map(Field::as_u16)
-            .collect();
+        let target_ids: Vec<u16> = tx.fields(FieldId::UserID).map(Field::as_u16).collect();
         if target_ids.is_empty() {
             return vec![tx.reply_error("missing user id")];
         }
@@ -231,13 +228,10 @@ impl Session {
             return Ok(vec![]);
         }
         self.access_extra.require(AccessExtra::CHAT_PRIVATE)?;
-        let chat_id = tx
-            .field(FieldId::ChatID)
-            .and_then(Field::as_u32)
-            .unwrap_or(0);
+        let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32).unwrap_or(0);
         let target_ids: Vec<u16> = tx
             .fields(FieldId::UserID)
-            .filter_map(Field::as_u16)
+            .map(Field::as_u16)
             .filter(|&id| id != 0)
             .collect();
         if chat_id == 0 || target_ids.is_empty() {
@@ -295,7 +289,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return tx.reply_error(reason);
         }
-        let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
+        let Some(chat_id) = tx.field(FieldId::ChatID).map(Field::as_u32) else {
             return tx.reply_error("missing chat id");
         };
         let encoding = self.encoding();
@@ -357,7 +351,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
+        let Some(chat_id) = tx.field(FieldId::ChatID).map(Field::as_u32) else {
             return vec![tx.reply_error("missing chat id")];
         };
         if chat_id == 0 {
@@ -391,7 +385,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return vec![tx.reply_error(reason)];
         }
-        if let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) {
+        if let Some(chat_id) = tx.field(FieldId::ChatID).map(Field::as_u32) {
             state.invite_declined(chat_id, self.user_id).await;
             if let Some(members) = state.chat_room_members(chat_id).await {
                 let notify = Transaction::push(
@@ -433,7 +427,7 @@ impl Session {
         self.access_extra.require(AccessExtra::CHAT_PRIVATE)?;
         let chat_id = tx
             .field(FieldId::ChatID)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .ok_or("missing chat id")?;
         let subject = tx.string(FieldId::ChatSubject).map(|subject| {
             text_encoding::cut(self.encoding(), &subject, MAX_CHAT_SUBJECT).to_string()
@@ -757,7 +751,7 @@ mod tests {
             reply[0]
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::UserID)
-                .and_then(Field::as_u16),
+                .map(Field::as_u16),
             Some(session.user_id)
         );
     }
@@ -785,7 +779,7 @@ mod tests {
             reply[0]
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::ChatID)
-                .and_then(Field::as_u32),
+                .map(Field::as_u32),
             Some(7)
         );
     }
@@ -924,7 +918,7 @@ mod tests {
             reply[0]
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::ChatOptions)
-                .and_then(Field::as_u16),
+                .map(Field::as_u16),
             Some(1)
         );
     }
@@ -986,7 +980,7 @@ mod tests {
                 .field(FieldId::UserIconID)
                 .unwrap()
                 .as_u16(),
-            Some(7)
+            7
         );
         assert_eq!(
             push.received(text_encoding::DEFAULT)
@@ -1091,8 +1085,7 @@ mod tests {
             .received(encoding)
             .field(FieldId::ChatID)
             .unwrap()
-            .as_u32()
-            .unwrap();
+            .as_u32();
 
         let invite = bob_rx
             .try_recv()
@@ -1105,7 +1098,7 @@ mod tests {
                 .field(FieldId::ChatID)
                 .unwrap()
                 .as_u32(),
-            Some(chat_id)
+            chat_id
         );
 
         let bob = test_session("Bob", Access::all());
@@ -1225,7 +1218,7 @@ mod tests {
                 .field(FieldId::ChatID)
                 .unwrap()
                 .as_u32(),
-            Some(chat_id)
+            chat_id
         );
         assert_eq!(
             notify
@@ -1233,7 +1226,7 @@ mod tests {
                 .field(FieldId::UserID)
                 .unwrap()
                 .as_u16(),
-            Some(2)
+            2
         );
 
         let members = state.chat_room_members(chat_id).await.unwrap();
@@ -1495,7 +1488,7 @@ mod tests {
                 .field(FieldId::ChatID)
                 .unwrap()
                 .as_u32(),
-            Some(0)
+            0
         );
         assert_eq!(
             notify
@@ -1503,7 +1496,7 @@ mod tests {
                 .field(FieldId::ChatID)
                 .unwrap()
                 .as_u32(),
-            Some(0)
+            0
         );
         assert_eq!(
             notify.received(encoding).string(FieldId::ChatSubject),
@@ -1704,7 +1697,7 @@ mod tests {
                 .field(FieldId::Options)
                 .unwrap()
                 .as_u16(),
-            Some(MsgOption::RefuseChat.into())
+            u16::from(MsgOption::RefuseChat)
         );
         assert!(
             bob_rx.try_recv().is_err(),
@@ -1743,7 +1736,7 @@ mod tests {
         let chat_id = replies[1]
             .received(text_encoding::DEFAULT)
             .field(FieldId::ChatID)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert!(!state.is_invited(chat_id, 2).await);
         assert!(
@@ -1830,7 +1823,7 @@ mod tests {
                 .field(FieldId::ChatID)
                 .unwrap()
                 .as_u32(),
-            Some(chat_id)
+            chat_id
         );
     }
 }

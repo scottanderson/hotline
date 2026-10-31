@@ -6,7 +6,7 @@
 //! [`crate::field::Field::u32`] uses.
 //!
 //! [`encode`] picks whichever of the 2-byte or 4-byte width is
-//! smaller. [`decode`] takes a 1, 2, or 4 byte body for any value.
+//! smaller. [`decode`] takes a body of any length.
 //! `ACCESS` is the one 64-bit field. Read and write it with
 //! [`crate::field::Field::as_u64`] and [`crate::field::Field::u64`].
 
@@ -55,14 +55,14 @@ pub const fn encode(value: u32) -> EncodedInt {
     }
 }
 
-/// Decode a 1, 2, or 4 byte unsigned integer field body. `None` for
-/// any other length.
-pub const fn decode(bytes: &[u8]) -> Option<u32> {
+/// Decode an unsigned integer field body: 1 or 2 bytes, or the first 4
+/// bytes of a body of 4 or more. Any other length decodes as 0.
+pub const fn decode(bytes: &[u8]) -> u32 {
     match *bytes {
-        [a] => Some(a as u32),
-        [a, b] => Some(u16::from_be_bytes([a, b]) as u32),
-        [a, b, c, d] => Some(u32::from_be_bytes([a, b, c, d])),
-        _ => None,
+        [a] => a as u32,
+        [a, b] => u16::from_be_bytes([a, b]) as u32,
+        [a, b, c, d, ..] => u32::from_be_bytes([a, b, c, d]),
+        _ => 0,
     }
 }
 
@@ -80,19 +80,24 @@ mod tests {
     #[test]
     fn round_trips_both_widths() {
         for v in [0u32, 1, u16::MAX as u32, u16::MAX as u32 + 1, u32::MAX] {
-            assert_eq!(decode(&encode(v)), Some(v));
+            assert_eq!(decode(&encode(v)), v);
         }
     }
 
     #[test]
     fn decodes_one_byte() {
-        assert_eq!(decode(&[7]), Some(7));
+        assert_eq!(decode(&[7]), 7);
     }
 
     #[test]
-    fn rejects_odd_widths() {
-        assert_eq!(decode(&[]), None);
-        assert_eq!(decode(&[0, 0, 0]), None);
+    fn decodes_the_first_four_bytes_of_a_longer_body() {
+        assert_eq!(decode(&[0, 0, 0, 7, 0xff, 0xff]), 7);
+    }
+
+    #[test]
+    fn decodes_an_empty_or_three_byte_body_as_zero() {
+        assert_eq!(decode(&[]), 0);
+        assert_eq!(decode(&[0, 0, 7]), 0);
     }
 
     #[test]

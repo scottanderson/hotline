@@ -24,7 +24,7 @@ impl ClientSession {
     ///
     /// [`myField_ChatID`]: hotline_proto::FieldId::ChatID
     fn push_room(&mut self, tx: &Transaction<Received>) -> Option<&mut ChatRoom> {
-        let chat_id = tx.field(FieldId::ChatID).and_then(Field::as_u32)?;
+        let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32)?;
         self.room_mut(chat_id)
     }
 
@@ -49,7 +49,7 @@ impl ClientSession {
     ///
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     pub(super) fn apply_invite_to_chat(&mut self, tx: &Transaction<Received>) {
-        let Some(chat_id) = tx.field(FieldId::ChatID).and_then(Field::as_u32) else {
+        let Some(chat_id) = tx.field(FieldId::ChatID).map(Field::as_u32) else {
             return;
         };
         if self.invites.len() >= MAX_INVITES
@@ -93,7 +93,7 @@ impl ClientSession {
     ///
     /// [`myTran_NotifyChatDeleteUser`]: hotline_proto::Opcode::NotifyChatDeleteUser
     pub(super) fn apply_notify_chat_delete_user(&mut self, tx: &Transaction<Received>) {
-        let Some(user_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
+        let Some(user_id) = tx.field(FieldId::UserID).map(Field::as_u16) else {
             return;
         };
         let Some(room) = self.push_room(tx) else {

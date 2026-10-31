@@ -207,10 +207,8 @@ impl HotlineClient {
             .await?;
 
         Ok(LoginResult {
-            version: reply.field(FieldId::Vers).and_then(Field::as_u16),
-            banner_id: reply
-                .field(FieldId::CommunityBannerID)
-                .and_then(Field::as_u16),
+            version: reply.field(FieldId::Vers).map(Field::as_u16),
+            banner_id: reply.field(FieldId::CommunityBannerID).map(Field::as_u16),
             server_name: reply.string(FieldId::ServerName).map(Into::into),
         })
     }
@@ -501,7 +499,7 @@ impl HotlineClient {
             ));
         }
         let reply = self.request(Opcode::DownloadFile, fields).await?;
-        let u32_field = |id| reply.field(id).and_then(Field::as_u32);
+        let u32_field = |id| reply.field(id).map(Field::as_u32);
         Ok(FileDownload {
             file_size: u32_field(FieldId::FileSize).unwrap_or_default(),
             waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
@@ -532,7 +530,7 @@ impl HotlineClient {
     pub async fn download_folder(&self, path: &HlPath, name: &str) -> Result<FolderDownload> {
         let fields = self.name_fields(path, name)?;
         let reply = self.request(Opcode::DownloadFldr, fields).await?;
-        let u32_field = |id| reply.field(id).and_then(Field::as_u32);
+        let u32_field = |id| reply.field(id).map(Field::as_u32);
         let item_count = u32_field(FieldId::FldrItemCount).unwrap_or_default();
         Ok(FolderDownload {
             item_count,
@@ -659,7 +657,7 @@ pub(crate) async fn open_transfer(addr: SocketAddr, header: HtxfHeader) -> Resul
 fn chat_id(reply: &Transaction<Received>) -> Result<u32> {
     reply
         .field(FieldId::ChatID)
-        .and_then(Field::as_u32)
+        .map(Field::as_u32)
         .ok_or(ClientError::MissingField(FieldId::ChatID))
 }
 
@@ -669,7 +667,7 @@ fn chat_id(reply: &Transaction<Received>) -> Result<u32> {
 fn reference(reply: &Transaction<Received>) -> Result<u32> {
     reply
         .field(FieldId::RefNum)
-        .and_then(Field::as_u32)
+        .map(Field::as_u32)
         .ok_or(ClientError::MissingField(FieldId::RefNum))
 }
 

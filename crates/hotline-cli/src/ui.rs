@@ -160,7 +160,7 @@ pub fn push_tab(session: &ClientSession, tx: &Transaction<Received>) -> Option<T
     match tx.r#type() {
         TransactionType::Push(Opcode::ChatMsg) => Some(
             tx.field(FieldId::ChatID)
-                .and_then(Field::as_u32)
+                .map(Field::as_u32)
                 .filter(|&id| session.room(id).is_some())
                 .map_or(Tab::Chat, Tab::Room),
         ),

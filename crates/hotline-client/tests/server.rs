@@ -751,7 +751,7 @@ async fn a_private_chat_room_carries_chat_subject_and_leave() {
     let room = alice.invite_new_chat(bob_id).await.unwrap();
     assert_eq!(room.users.len(), 1);
     let invite = next_push(&mut bob_events, Opcode::InviteToChat).await;
-    let chat_id = invite.field(FieldId::ChatID).unwrap().as_u32().unwrap();
+    let chat_id = invite.field(FieldId::ChatID).unwrap().as_u32();
     assert_eq!(chat_id, room.id);
 
     let joined = bob.join_chat(chat_id).await.unwrap();
@@ -762,7 +762,7 @@ async fn a_private_chat_room_carries_chat_subject_and_leave() {
 
     alice.send_room_chat(chat_id, "hi room").await.unwrap();
     let msg = next_push(&mut bob_events, Opcode::ChatMsg).await;
-    assert_eq!(msg.field(FieldId::ChatID).unwrap().as_u32(), Some(chat_id));
+    assert_eq!(msg.field(FieldId::ChatID).unwrap().as_u32(), chat_id);
     let text = msg.string(FieldId::Data).unwrap();
     assert!(text.contains("hi room"), "{text:?}");
 
@@ -775,5 +775,5 @@ async fn a_private_chat_room_carries_chat_subject_and_leave() {
 
     bob.leave_chat(chat_id).await.unwrap();
     let left = next_push(&mut alice_events, Opcode::NotifyChatDeleteUser).await;
-    assert_eq!(left.field(FieldId::UserID).unwrap().as_u16(), Some(bob_id));
+    assert_eq!(left.field(FieldId::UserID).unwrap().as_u16(), bob_id);
 }

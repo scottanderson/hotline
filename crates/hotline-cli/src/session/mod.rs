@@ -268,11 +268,11 @@ impl ClientSession {
     fn apply_download_info(&mut self, tx: &Transaction<Received>) {
         let waiting = tx
             .field(FieldId::WaitingCount)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap_or_default();
         let name = tx
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .and_then(|reference| self.set_queue_place(reference, waiting));
         let name = name.as_deref().unwrap_or("a download");
         self.push(
@@ -309,7 +309,7 @@ impl ClientSession {
     ///
     /// [`myTran_NotifyDeleteUser`]: hotline_proto::Opcode::NotifyDeleteUser
     fn apply_notify_delete_user(&mut self, tx: &Transaction<Received>) {
-        let Some(user_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
+        let Some(user_id) = tx.field(FieldId::UserID).map(Field::as_u16) else {
             return;
         };
         if let Some(pos) = self.users.iter().position(|u| u.user_id == user_id) {

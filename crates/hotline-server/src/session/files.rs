@@ -142,7 +142,7 @@ impl Session {
 
         // `myField_FileXferOptions` (204) == 2 requests the raw file bytes with
         // no resume support.
-        let raw = tx.field(FieldId::FileXferOptions).and_then(Field::as_u32) == Some(2);
+        let raw = tx.field(FieldId::FileXferOptions).map(Field::as_u32) == Some(2);
         if raw && data_size == 0 {
             return vec![tx.reply(vec![Field::u32(FieldId::TransferSize, 0)])];
         }
@@ -288,10 +288,10 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u32) == Some(1);
+        let resume = tx.field(FieldId::FileXferOptions).map(Field::as_u32) == Some(1);
         let size = tx
             .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap_or(0);
         let resume_offset = match state
             .authorize_upload(requester, &dir, &name, self.access, resume, size.into())
@@ -424,10 +424,10 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let resume = tx.field(FieldId::FileXferOptions).and_then(Field::as_u32) == Some(1);
+        let resume = tx.field(FieldId::FileXferOptions).map(Field::as_u32) == Some(1);
         let size = tx
             .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap_or(0);
         if let Err(reason) = state
             .start_folder_upload(requester, &dir, &name, self.access, resume, size.into())
@@ -438,7 +438,7 @@ impl Session {
 
         let item_count = tx
             .field(FieldId::FldrItemCount)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap_or(0);
         if item_count == 0 {
             self.record_activity(Activity::Upload { name: name.into() }, state)
@@ -480,7 +480,7 @@ impl Session {
     ) -> Vec<Transaction> {
         if let Some(reference) = tx
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .map(TransferRef)
         {
             state.kill_download(reference, self.user_id).await;
@@ -761,12 +761,12 @@ mod tests {
         let reference = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         let size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert_eq!(size, 5);
 
@@ -863,18 +863,18 @@ mod tests {
         let reference = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         let total_size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert_eq!(total_size, 5 + A_TXT_HEADER_LEN);
         let file_size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::FileSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert_eq!(file_size, 5);
         assert_ne!(file_size, total_size);
@@ -920,9 +920,9 @@ mod tests {
             .unwrap();
 
         let reply = reply.received(text_encoding::DEFAULT);
-        let total_size = reply.field(FieldId::TransferSize).and_then(Field::as_u32);
+        let total_size = reply.field(FieldId::TransferSize).map(Field::as_u32);
         assert_eq!(total_size, Some(5 + A_TXT_HEADER_LEN + 6));
-        let reference = reply.field(FieldId::RefNum).and_then(Field::as_u32);
+        let reference = reply.field(FieldId::RefNum).map(Field::as_u32);
         let transfer = state
             .take_transfer(TransferRef(reference.unwrap()))
             .await
@@ -978,7 +978,7 @@ mod tests {
         let reference = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
 
         let kill = request(
@@ -1033,7 +1033,7 @@ mod tests {
         let waiting_count = second_reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::WaitingCount)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert_eq!(waiting_count, 1);
 
@@ -1042,7 +1042,7 @@ mod tests {
         let first_reference = first_reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         state
             .release_download_slot(TransferRef(first_reference))
@@ -1051,7 +1051,7 @@ mod tests {
         let second_reference = second_reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
 
         let push = match second_recipient.recv().await.unwrap() {
@@ -1065,13 +1065,13 @@ mod tests {
         assert_eq!(
             push.received(text_encoding::DEFAULT)
                 .field(FieldId::RefNum)
-                .and_then(Field::as_u32),
+                .map(Field::as_u32),
             Some(second_reference)
         );
         assert_eq!(
             push.received(text_encoding::DEFAULT)
                 .field(FieldId::WaitingCount)
-                .and_then(Field::as_u32),
+                .map(Field::as_u32),
             Some(0)
         );
 
@@ -1117,20 +1117,20 @@ mod tests {
         let total_size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert_eq!(total_size, 5 + A_TXT_HEADER_LEN);
         let file_size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::FileSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert_eq!(file_size, 11);
 
         let reference = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
         assert_eq!(transfer.size, 11);
@@ -1164,9 +1164,9 @@ mod tests {
             .unwrap();
 
         let reply = reply.received(text_encoding::DEFAULT);
-        let total_size = reply.field(FieldId::TransferSize).and_then(Field::as_u32);
+        let total_size = reply.field(FieldId::TransferSize).map(Field::as_u32);
         assert_eq!(total_size, Some(5 + A_TXT_HEADER_LEN + 3));
-        let reference = reply.field(FieldId::RefNum).and_then(Field::as_u32);
+        let reference = reply.field(FieldId::RefNum).map(Field::as_u32);
         let transfer = state
             .take_transfer(TransferRef(reference.unwrap()))
             .await
@@ -1210,7 +1210,7 @@ mod tests {
         let total_size = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::TransferSize)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         assert_eq!(total_size, A_TXT_HEADER_LEN);
     }
@@ -1682,7 +1682,7 @@ mod tests {
             reply
                 .received(text_encoding::DEFAULT)
                 .field(id)
-                .and_then(Field::as_u32)
+                .map(Field::as_u32)
                 .unwrap()
         };
         assert_eq!(u32_field(FieldId::TransferSize), 7);
@@ -1724,7 +1724,7 @@ mod tests {
             reply
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::FldrItemCount)
-                .and_then(Field::as_u32),
+                .map(Field::as_u32),
             Some(0)
         );
         assert!(reply.field(FieldId::RefNum).is_none());
@@ -1755,7 +1755,7 @@ mod tests {
             reply
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::TransferSize)
-                .and_then(Field::as_u32),
+                .map(Field::as_u32),
             Some(0)
         );
         assert!(reply.field(FieldId::RefNum).is_none());
@@ -1950,7 +1950,7 @@ mod tests {
         let reference = reply
             .received(text_encoding::DEFAULT)
             .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
+            .map(Field::as_u32)
             .unwrap();
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
         assert_eq!(transfer.direction, TransferDirection::Put);
@@ -2215,10 +2215,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         let reply = reply.received(text_encoding::DEFAULT);
-        let reference = reply
-            .field(FieldId::RefNum)
-            .and_then(Field::as_u32)
-            .unwrap();
+        let reference = reply.field(FieldId::RefNum).map(Field::as_u32).unwrap();
 
         let resume_field = reply.field(FieldId::FileResumeData).unwrap();
         let already_have = types::ResumeData::decode(resume_field.as_bytes())
@@ -2285,7 +2282,7 @@ mod tests {
                 resource: 2
             }
         );
-        let reference = reply.field(FieldId::RefNum).and_then(Field::as_u32);
+        let reference = reply.field(FieldId::RefNum).map(Field::as_u32);
         let transfer = state
             .take_transfer(TransferRef(reference.unwrap()))
             .await
@@ -2686,7 +2683,7 @@ mod tests {
             reply
                 .received(encoding)
                 .field(FieldId::FileSize)
-                .and_then(Field::as_u32),
+                .map(Field::as_u32),
             Some(5)
         );
         let reply = reply.received(encoding);

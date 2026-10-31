@@ -75,7 +75,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(target_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
+        let Some(target_id) = tx.field(FieldId::UserID).map(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
         let Some(target) = state.user(target_id).await else {
@@ -156,18 +156,11 @@ impl Session {
         if let Err(reason) = self.access.require(Access::DISCON_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let target_id = tx
-            .field(FieldId::UserID)
-            .and_then(Field::as_u16)
-            .unwrap_or(0);
+        let target_id = tx.field(FieldId::UserID).map(Field::as_u16).unwrap_or(0);
         if let Err(reason) = state.authorize_kick(target_id).await {
             return vec![tx.reply_error(reason)];
         }
-        let ban = KickBan::from(
-            tx.field(FieldId::Options)
-                .and_then(Field::as_u16)
-                .unwrap_or(0),
-        );
+        let ban = KickBan::from(tx.field(FieldId::Options).map(Field::as_u16).unwrap_or(0));
         let target_ip = state.user(target_id).await.map(|u| u.remote_addr.ip());
 
         let notice = match (ban, target_ip) {
@@ -240,17 +233,14 @@ impl Session {
                 return vec![tx.reply_error(reason)];
             }
         }
-        let Some(target_id) = tx.field(FieldId::UserID).and_then(Field::as_u16) else {
+        let Some(target_id) = tx.field(FieldId::UserID).map(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
         };
         let message = match Self::message_data(tx, state) {
             Ok(message) => message,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let options = tx
-            .field(FieldId::Options)
-            .and_then(Field::as_u16)
-            .unwrap_or(0);
+        let options = tx.field(FieldId::Options).map(Field::as_u16).unwrap_or(0);
         let option = MsgOption::from(options);
         let is_user_message = option == MsgOption::UserMessage;
         let message = match option {
@@ -912,7 +902,7 @@ mod tests {
                 .field(FieldId::Options)
                 .unwrap()
                 .as_u16(),
-            Some(MsgOption::UserMessage.into())
+            u16::from(MsgOption::UserMessage)
         );
     }
 
@@ -951,7 +941,7 @@ mod tests {
                 .field(FieldId::Options)
                 .unwrap()
                 .as_u16(),
-            Some(MsgOption::RefuseMessage.into())
+            u16::from(MsgOption::RefuseMessage)
         );
         assert!(!replies[1].is_error());
         assert!(
@@ -995,7 +985,7 @@ mod tests {
                 .field(FieldId::Options)
                 .unwrap()
                 .as_u16(),
-            Some(MsgOption::AutomaticResponse.into())
+            u16::from(MsgOption::AutomaticResponse)
         );
         let delivered = target_rx
             .try_recv()

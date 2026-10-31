@@ -825,7 +825,7 @@ mod tests {
             notify
                 .received(text_encoding::DEFAULT)
                 .field(FieldId::UserID)
-                .and_then(Field::as_u16),
+                .map(Field::as_u16),
             Some(bob.user_id)
         );
     }
@@ -1501,7 +1501,7 @@ mod tests {
             .received(text_encoding::DEFAULT);
         assert_eq!(notice.r#type(), TransactionType::Push(Opcode::ServerMsg));
         assert_eq!(
-            notice.field(FieldId::ChatOptions).and_then(Field::as_u16),
+            notice.field(FieldId::ChatOptions).map(Field::as_u16),
             Some(1)
         );
         assert_eq!(state.account("bob").await.unwrap(), Account::guest());
