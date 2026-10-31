@@ -1285,6 +1285,58 @@ mod tests {
         assert!(state.account("bobby").await.is_none());
     }
 
+    /// Account storage whose `delete` always fails.
+    struct FailingDeleteAccounts(crate::account::InMemoryAccountProvider);
+
+    #[async_trait::async_trait]
+    impl AccountProvider for FailingDeleteAccounts {
+        async fn get(&self, login: &str) -> Option<Account> {
+            self.0.get(login).await
+        }
+
+        async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
+            self.0.put(login, account).await
+        }
+
+        async fn delete(&self, _login: &str) -> Result<bool, Cow<'static, str>> {
+            Err("disk full")?
+        }
+
+        async fn list(&self) -> Vec<(String, Account)> {
+            self.0.list().await
+        }
+    }
+
+    #[tokio::test]
+    async fn set_user_list_keeps_both_logins_when_a_rename_fails_to_delete() {
+        let admin = test_session("Admin", Access::all());
+        let accounts = crate::account::InMemoryAccountProvider::default();
+        let bob = Account {
+            access_extra: AccessExtra::default(),
+            password: "secret".into(),
+            name: "Bob".into(),
+            access: Access::SEND_CHAT,
+        };
+        accounts.put("bob".to_string(), bob).await.unwrap();
+        let state = state_with_accounts(std::sync::Arc::new(FailingDeleteAccounts(accounts)));
+        let mut bob_rx = state.register_recipient(2).await;
+
+        let record = user_list_record(
+            Some("bob"),
+            "Bobby",
+            "bobby",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::SEND_CHAT,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        let replies = admin.on_set_user_list(&request, &state).await;
+
+        assert!(replies[0].is_error());
+        assert!(state.account("bob").await.is_some());
+        assert!(state.account("bobby").await.is_some());
+        assert!(bob_rx.try_recv().is_err());
+    }
+
     #[tokio::test]
     async fn set_user_list_rename_updates_sessions_under_the_old_login() {
         let admin = test_session("Admin", Access::all());

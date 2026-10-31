@@ -1701,10 +1701,10 @@ impl SharedState {
 
     /// Save `edit` of the account at `old_login` under `login`. `Err` if
     /// `old_login` is gone, or if a rename's `login` is taken and the policy
-    /// gives [`TakenLogin::Refuse`]. A rename deletes `old_login` after it
-    /// saves `login`. With [`TakenLogin::Overwrite`], a rename onto a taken
-    /// login writes `edit` of the `old_login` account over that account, and
-    /// keeps `old_login`.
+    /// gives [`TakenLogin::Refuse`]. A rename goes through
+    /// [`AccountProvider::rename`]. With [`TakenLogin::Overwrite`], a rename
+    /// onto a taken login writes `edit` of the `old_login` account over that
+    /// account, and keeps `old_login`.
     pub(crate) async fn replace_account(
         &self,
         old_login: &str,
@@ -1721,11 +1721,12 @@ impl SharedState {
             Err("that login is taken")?;
         }
         let account = edit(existing);
-        self.accounts().put(login, account.clone()).await?;
         if renamed && !over_taken_login {
-            if let Err(error) = self.accounts().delete(old_login).await {
-                tracing::warn!(%error, old_login, "could not delete a renamed account's old login");
-            }
+            self.accounts()
+                .rename(old_login, login, account.clone())
+                .await?;
+        } else {
+            self.accounts().put(login, account.clone()).await?;
         }
         Ok(ReplacedAccount {
             account,

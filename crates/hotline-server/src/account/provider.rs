@@ -20,6 +20,19 @@ pub trait AccountProvider: Send + Sync {
     async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>>;
     /// Delete an account. `false` if it didn't exist.
     async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>>;
+    /// Store `account` under `login`, a login that is free, and remove
+    /// `old_login`. The default puts `login`, then deletes `old_login`. An
+    /// error after the put leaves both accounts.
+    async fn rename(
+        &self,
+        old_login: &str,
+        login: String,
+        account: Account,
+    ) -> Result<(), Cow<'static, str>> {
+        self.put(login, account).await?;
+        self.delete(old_login).await?;
+        Ok(())
+    }
     /// Every account, login and details together, for bulk listing,
     /// [`myTran_GetUserList`] (348).
     ///
