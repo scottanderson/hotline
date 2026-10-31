@@ -143,6 +143,12 @@ nothing on a request that changes the server. A cancelled download
 that waits in the server's queue leaves the queue. A cancelled upload
 closes its connection.
 
+Each transfer waits until each older transfer ends. A waiting transfer
+shows `(queued)`, and the box title counts these transfers. `s` starts
+the selected transfer at once. The `queue transfers` row of the options
+form (Alt-O) turns the queue off, and then each transfer starts at
+once. The queue is on when `hlc` starts.
+
 The Threaded News tab has no user list. It has three panes: a tree of
 bundles (🗞️) and categories (📰) on the left, the threads of the
 selected category on the top right, and the selected article on the

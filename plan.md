@@ -258,8 +258,9 @@ one-shared-room model.
    `$XDG_CONFIG_HOME/hlc/config.toml`, or `~/.config/hlc/config.toml`
    when the variable is not set, on macOS too. The file holds the
    defaults of the command-line options: the name, the icon, the
-   server, the options bits, and the bell. A flag overrides the file,
-   and the file overrides the built-in default. `--bell` and
+   server, the options bits, and the bell. It also holds the `queue
+   transfers` option. A flag overrides the file, and the file
+   overrides the built-in default. `--bell` and
    `--no-bell` turn the bell on and off. The file chooses the events
    that ring it. On the first run with no name in the file and no
    `--name`, `hlc` asks for a name and saves it. A change in the

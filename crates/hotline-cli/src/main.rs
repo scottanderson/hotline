@@ -353,9 +353,16 @@ async fn perform(
             tasks.run(Task::change("Broadcasting..."), request);
         }
         Action::EditOptions => {
-            view.modal = Some(Modal::Options(OptionsForm::edit(&session.user_info())));
+            let form = OptionsForm::edit(&session.user_info(), session.queue_transfers);
+            view.modal = Some(Modal::Options(form));
         }
-        Action::SetClientUserInfo(info) => session.set_client_user_info(client, info).await,
+        Action::SetOptions {
+            info,
+            queue_transfers,
+        } => {
+            session.queue_transfers = queue_transfers;
+            session.set_client_user_info(client, info).await;
+        }
         Action::GetMsgs => {
             tasks.run(
                 Task::read("Transferring messages..."),
@@ -391,6 +398,7 @@ async fn perform(
             );
         }
         Action::CancelTask(TaskId::Request(id)) => tasks.cancel(id),
+        Action::StartTransfer(id) => session.start_transfer(id),
         Action::CancelTask(TaskId::Transfer(id)) => {
             tasks.forget(TaskId::Transfer(id));
             let request = session.cancel_transfer(client, id);

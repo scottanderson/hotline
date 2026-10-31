@@ -45,7 +45,12 @@ pub enum Action {
     },
     /// Ask for this user's new name, icon, and options.
     EditOptions,
-    SetClientUserInfo(ClientUserInfo),
+    /// Send this user's new name, icon, and options, and keep whether
+    /// transfers wait in `hlc`'s queue.
+    SetOptions {
+        info: ClientUserInfo,
+        queue_transfers: bool,
+    },
     /// Send a message to every connected user.
     UserBroadcast(String),
     GetMsgs,
@@ -69,6 +74,8 @@ pub enum Action {
     },
     /// Cancel the task with this ID.
     CancelTask(TaskId),
+    /// Start the transfer with this ID, which waits in `hlc`'s queue.
+    StartTransfer(u64),
     /// Upload the local file or folder at `path` to the current folder.
     Upload {
         path: String,

@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use hotline_client::HotlineClient;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
 use super::{ClientSession, Request};
@@ -166,6 +167,18 @@ impl Kind {
     }
 }
 
+/// The wait of a transfer for its turn in `hlc`'s queue.
+pub(super) struct Turn(Option<oneshot::Receiver<()>>);
+
+impl Turn {
+    /// Wait until the transfer may start.
+    pub(super) async fn wait(self) {
+        if let Some(turn) = self.0 {
+            let _ = turn.await;
+        }
+    }
+}
+
 /// One transfer that runs on its own task.
 pub struct RunningTransfer {
     id: u64,
@@ -175,6 +188,8 @@ pub struct RunningTransfer {
     started: Instant,
     progress: Arc<Progress>,
     task: AbortHandle,
+    /// Starts the transfer, `None` after it starts.
+    turn: Option<oneshot::Sender<()>>,
 }
 
 impl ClientSession {
@@ -183,8 +198,18 @@ impl ClientSession {
         self.server_at_least(QUEUE_VERSION)
     }
 
+    /// A turn in `hlc`'s queue, and what starts it. With
+    /// [`Self::queue_transfers`] off, the transfer starts at once.
+    pub(super) fn turn(&self) -> (Option<oneshot::Sender<()>>, Turn) {
+        if !self.queue_transfers {
+            return (None, Turn(None));
+        }
+        let (start, turn) = oneshot::channel();
+        (Some(start), Turn(Some(turn)))
+    }
+
     /// Keep the transfer of `name` that the user started at `started` and
-    /// that runs on `task`.
+    /// that runs on `task`, and start the first transfer.
     pub(super) fn track(
         &mut self,
         kind: Kind,
@@ -192,6 +217,7 @@ impl ClientSession {
         started: Instant,
         progress: Arc<Progress>,
         task: AbortHandle,
+        turn: Option<oneshot::Sender<()>>,
     ) {
         self.next_transfer_id = self.next_transfer_id.wrapping_add(1);
         self.transfers.push(RunningTransfer {
@@ -201,7 +227,25 @@ impl ClientSession {
             started,
             progress,
             task,
+            turn,
         });
+        self.start_first_transfer();
+    }
+
+    /// Start the oldest transfer if it waits in `hlc`'s queue. Each newer
+    /// one waits until each older one ends.
+    fn start_first_transfer(&mut self) {
+        if let Some(turn) = self.transfers.first_mut().and_then(|t| t.turn.take()) {
+            let _ = turn.send(());
+        }
+    }
+
+    /// Start the transfer `id` now, if it waits in `hlc`'s queue.
+    pub fn start_transfer(&mut self, id: u64) {
+        let transfer = self.transfers.iter_mut().find(|t| t.id == id);
+        if let Some(turn) = transfer.and_then(|t| t.turn.take()) {
+            let _ = turn.send(());
+        }
     }
 
     /// Note that the server holds the download `reference` behind `waiting`
@@ -215,7 +259,8 @@ impl ClientSession {
         Some(download.name.clone())
     }
 
-    /// Forget each transfer that ended. Returns each transfer that failed.
+    /// Forget each transfer that ended, and start the next one. Returns
+    /// each transfer that failed.
     pub fn end_transfers(&mut self) -> Vec<TaskId> {
         let mut failed = Vec::new();
         self.transfers.retain(|t| {
@@ -225,6 +270,7 @@ impl ClientSession {
             }
             !ended
         });
+        self.start_first_transfer();
         failed
     }
 
@@ -240,9 +286,12 @@ impl ClientSession {
         let now = Instant::now();
         self.transfers.iter().map(move |t| {
             let progress = &t.progress;
+            let queued = t.turn.is_some();
             let waiting = progress.waiting.load(Ordering::Relaxed);
             let mut label = format!("{} “{}”", t.kind.does(), t.name);
-            if waiting > 0 {
+            if queued {
+                label.push_str(" (queued)");
+            } else if waiting > 0 {
                 label = format!(
                     "All downloads slots are full. “{}” is number {waiting} in the server queue. Please wait...",
                     t.name
@@ -259,16 +308,17 @@ impl ClientSession {
                 id: TaskId::Transfer(t.id),
                 label,
                 cancellable: true,
-                ratio: progress.ratio(),
+                queued,
+                ratio: progress.ratio().filter(|_| !queued),
             };
             (t.started, row)
         })
     }
 
-    /// Stop the transfer `id`. A download that the server still holds in its
-    /// queue also leaves the queue, [`myTran_KillDownload`] (214). The `.hpf`
-    /// file of a download stays for a resume. An upload closes its transfer
-    /// connection.
+    /// Stop the transfer `id`, and start the next one. A download that the
+    /// server still holds in its queue also leaves the queue,
+    /// [`myTran_KillDownload`] (214). The `.hpf` file of a download stays for
+    /// a resume. An upload closes its transfer connection.
     ///
     /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
     pub fn cancel_transfer(&mut self, client: &HotlineClient, id: u64) -> Request<()> {
@@ -277,6 +327,7 @@ impl ClientSession {
         };
         let transfer = self.transfers.remove(pos);
         transfer.task.abort();
+        self.start_first_transfer();
         if !transfer.kind.is_download() {
             let text = format!("cancelled the upload of {}", transfer.name);
             self.push(text, LineKind::System);
@@ -395,8 +446,9 @@ mod tests {
 
     /// Track a transfer that never ends.
     fn track(session: &mut ClientSession, kind: Kind, progress: Arc<Progress>) -> AbortHandle {
+        let (start, _) = session.turn();
         let task = tokio::spawn(std::future::pending::<()>()).abort_handle();
-        session.track(kind, "f", Instant::now(), progress, task.clone());
+        session.track(kind, "f", Instant::now(), progress, task.clone(), start);
         task
     }
 
@@ -453,11 +505,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_transfer_stops_an_upload() {
+    async fn cancel_transfer_stops_an_upload_and_starts_the_next() {
         let addr = test_support::start_server(Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let mut session = ClientSession::new("me", 0, client.encoding());
         let task = track(&mut session, Kind::Upload, Arc::default());
+        let _ = track(&mut session, Kind::Upload, Arc::default());
+        assert!(session.running_transfers()[1].queued);
 
         session.cancel_transfer(&client, 1).run(&mut session).await;
         assert_eq!(
@@ -466,18 +520,48 @@ mod tests {
         );
         tokio::task::yield_now().await;
         assert!(task.is_finished());
-        assert!(session.running_transfers().is_empty());
+        assert!(!session.running_transfers()[0].queued);
     }
 
     #[tokio::test]
-    async fn end_transfers_gives_each_transfer_that_failed() {
+    async fn a_transfer_waits_for_each_older_one() {
         let mut session = ClientSession::new("me", 0, Default::default());
         let first = track(&mut session, Kind::Download, Arc::default());
         let _ = track(&mut session, Kind::Upload, Arc::default());
+        let labels = |session: &ClientSession| {
+            session
+                .running_transfers()
+                .into_iter()
+                .map(|row| row.label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(&session),
+            ["Downloading “f”", "Uploading “f” (queued)"]
+        );
+
         first.abort();
         tokio::task::yield_now().await;
         assert_eq!(session.end_transfers(), [TaskId::Transfer(1)]);
-        assert_eq!(session.running_transfers()[0].label, "Uploading “f”");
+        assert_eq!(labels(&session), ["Uploading “f”"]);
+    }
+
+    #[tokio::test]
+    async fn start_transfer_starts_a_queued_one_now() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let _ = track(&mut session, Kind::Download, Arc::default());
+        let _ = track(&mut session, Kind::Download, Arc::default());
+        session.start_transfer(2);
+        assert!(session.running_transfers().iter().all(|row| !row.queued));
+    }
+
+    #[tokio::test]
+    async fn without_the_queue_each_transfer_starts_at_once() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        session.queue_transfers = false;
+        let _ = track(&mut session, Kind::Download, Arc::default());
+        let _ = track(&mut session, Kind::Download, Arc::default());
+        assert!(session.running_transfers().iter().all(|row| !row.queued));
     }
 
     #[tokio::test]
@@ -517,6 +601,7 @@ mod tests {
                 id: TaskId::Transfer(1),
                 label: "Uploading folder “f” (1K/sec 2K/4K 0:02) [1 of 2]".into(),
                 cancellable: true,
+                queued: false,
                 ratio: Some(0.5),
             }]
         );

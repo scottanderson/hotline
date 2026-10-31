@@ -76,6 +76,8 @@ pub struct ClientSession {
     transfers: Vec<RunningTransfer>,
     /// The ID of the last transfer kept in `transfers`.
     next_transfer_id: u64,
+    /// `true` if each transfer waits until each older one ends.
+    pub queue_transfers: bool,
     /// The error lines shown in the chat.
     error_count: u64,
     /// This connection's active text encoding, shared with the client's codec.
@@ -110,6 +112,7 @@ impl ClientSession {
             invites: VecDeque::new(),
             transfers: Vec::new(),
             next_transfer_id: 0,
+            queue_transfers: true,
             error_count: 0,
             encoding,
         }
@@ -766,6 +769,7 @@ mod tests {
             std::time::Instant::now(),
             progress,
             task.abort_handle(),
+            None,
         );
         let info = test_support::push(
             Opcode::DownloadInfo,

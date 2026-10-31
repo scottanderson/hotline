@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
 use super::{contains, Action, Focus, Hint, View};
-use crate::tasks::TaskRow;
+use crate::tasks::{TaskId, TaskRow};
 use crate::ui;
 
 impl View {
@@ -74,9 +74,21 @@ impl View {
                     return Action::CancelTask(row.id);
                 }
             }
+            KeyCode::Char('s') => {
+                if let Some(TaskId::Transfer(id)) = self.queued_task() {
+                    return Action::StartTransfer(id);
+                }
+            }
             _ => {}
         }
         Action::None
+    }
+
+    /// The selected task, if it waits for its turn in `hlc`'s queue.
+    fn queued_task(&self) -> Option<TaskId> {
+        self.selected_task()
+            .filter(|row| row.queued)
+            .map(|row| row.id)
     }
 
     /// The keys of the tasks box.
@@ -86,6 +98,7 @@ impl View {
         vec![
             Hint::new("↑↓", "select"),
             Hint::new("Enter", "cancel").only_if(cancellable),
+            Hint::new("s", "start").only_if(self.queued_task().is_some()),
             Hint::new("Tab", main),
             Hint::new("Esc", main),
         ]
@@ -108,6 +121,7 @@ mod tests {
             id,
             label: "a task".into(),
             cancellable,
+            queued: false,
             ratio: None,
         }
     }
@@ -177,6 +191,23 @@ mod tests {
         let hint = view.tasks_hints()[1];
         assert!(!hint.on);
         assert_eq!(press(&mut view, KeyCode::Enter), Action::None);
+    }
+
+    #[test]
+    fn s_starts_a_queued_transfer() {
+        let mut view = View::default();
+        let mut queued = row(TaskId::Transfer(2), true);
+        queued.queued = true;
+        view.set_tasks(vec![row(TaskId::Transfer(1), true), queued]);
+        view.focus = Focus::Tasks;
+        assert!(!view.tasks_hints()[2].on);
+        assert_eq!(press(&mut view, KeyCode::Char('s')), Action::None);
+        let _ = press(&mut view, KeyCode::Down);
+        assert!(view.tasks_hints()[2].on);
+        assert_eq!(
+            press(&mut view, KeyCode::Char('s')),
+            Action::StartTransfer(2)
+        );
     }
 
     #[test]

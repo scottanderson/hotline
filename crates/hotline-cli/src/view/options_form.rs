@@ -13,33 +13,39 @@ pub const OPTIONS: [(&str, UserChangeOptions); 3] = [
     ("send automatic response", UserChangeOptions::AUTO_RESPONSE),
 ];
 
-/// This user's name, icon, and options being edited: three text rows, then
-/// one row for each option.
+/// The label of the last row, which only `hlc` keeps.
+pub const QUEUE_TRANSFERS: &str = "queue transfers";
+
+/// This user's name, icon, and options being edited: three text rows, one
+/// row for each option, and a row for [`QUEUE_TRANSFERS`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OptionsForm {
     pub name: TextBox,
     pub icon: TextBox,
     pub automatic_response: TextBox,
     pub options: UserChangeOptions,
+    /// `true` if each transfer waits until each older one ends.
+    pub queue_transfers: bool,
     /// The selected row.
     pub row: usize,
 }
 
 impl OptionsForm {
-    /// A form that edits `info`.
-    pub fn edit(info: &ClientUserInfo) -> Self {
+    /// A form that edits `info` and `queue_transfers`.
+    pub fn edit(info: &ClientUserInfo, queue_transfers: bool) -> Self {
         Self {
             name: info.name.as_ref().into(),
             icon: info.icon.to_string().into(),
             automatic_response: info.automatic_response.as_ref().into(),
             options: info.options,
+            queue_transfers,
             row: 0,
         }
     }
 
     /// The number of rows.
     pub const fn rows() -> usize {
-        TEXT_ROWS.saturating_add(OPTIONS.len())
+        TEXT_ROWS.saturating_add(OPTIONS.len()).saturating_add(1)
     }
 
     /// The text of the selected row, `None` on an option row.
@@ -54,8 +60,12 @@ impl OptionsForm {
 
     /// Turn the option on the selected row on or off.
     pub fn toggle(&mut self) {
-        if let Some((_, flag)) = OPTIONS.get(self.row.wrapping_sub(TEXT_ROWS)) {
-            self.options.toggle(*flag);
+        match OPTIONS.get(self.row.wrapping_sub(TEXT_ROWS)) {
+            Some((_, flag)) => self.options.toggle(*flag),
+            None if self.row == Self::rows().saturating_sub(1) => {
+                self.queue_transfers = !self.queue_transfers;
+            }
+            None => {}
         }
     }
 
@@ -76,7 +86,7 @@ mod tests {
 
     #[test]
     fn info_needs_a_numeric_icon() {
-        let mut form = OptionsForm::edit(&ClientUserInfo::default());
+        let mut form = OptionsForm::edit(&ClientUserInfo::default(), true);
         form.row = TEXT_ROWS + 2;
         form.toggle();
         assert_eq!(
@@ -85,5 +95,14 @@ mod tests {
         );
         form.icon.insert('x');
         assert_eq!(form.info(), None);
+    }
+
+    #[test]
+    fn the_last_row_turns_the_queue_on_or_off() {
+        let mut form = OptionsForm::edit(&ClientUserInfo::default(), true);
+        form.row = OptionsForm::rows() - 1;
+        form.toggle();
+        assert!(!form.queue_transfers);
+        assert_eq!(form.options, UserChangeOptions::empty());
     }
 }

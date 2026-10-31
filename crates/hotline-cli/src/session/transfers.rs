@@ -39,8 +39,8 @@ impl ClientSession {
     /// Start to download the file `name` in the current folder into
     /// `download_dir` as `save_as`, [`myTran_DownloadFile`] (202). The data
     /// goes into `save_as.hpf`, which becomes `save_as` when the download
-    /// ends. The transfer runs on its own task, and sends its lines to
-    /// `lines`. With [`Start::Ask`], a local `save_as` or
+    /// ends. The transfer runs on its own task when its turn comes, and sends
+    /// its lines to `lines`. With [`Start::Ask`], a local `save_as` or
     /// `save_as.hpf` stops the download and comes back as a [`Conflict`].
     ///
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
@@ -83,9 +83,11 @@ impl ClientSession {
                 let progress = Arc::new(Progress::default());
                 let task_progress = progress.clone();
                 let queues = session.server_queues();
+                let (start_turn, turn) = session.turn();
                 let task_name = name.clone();
                 let task = tokio::spawn(async move {
                     let (name, progress) = (task_name, task_progress);
+                    turn.wait().await;
                     let download = match client.download_file(&path, &name, offset).await {
                         Ok(download) => download,
                         Err(e) => {
@@ -130,6 +132,7 @@ impl ClientSession {
                     started_at,
                     progress,
                     task.abort_handle(),
+                    start_turn,
                 );
                 None
             }
@@ -138,10 +141,10 @@ impl ClientSession {
 
     /// Start to download the folder `name` in the current folder, with
     /// everything inside it, into `download_dir`, [`myTran_DownloadFldr`] (210).
-    /// The transfer runs on its own task, and sends its lines to `lines`.
-    /// With [`Start::Ask`], an existing local folder stops the download and
-    /// comes back as a [`Conflict`]. [`Start::Resume`] skips each file that
-    /// is there and continues each `.hpf` file.
+    /// The transfer runs on its own task when its turn comes, and sends its
+    /// lines to `lines`. With [`Start::Ask`], an existing local folder stops
+    /// the download and comes back as a [`Conflict`]. [`Start::Resume`] skips
+    /// each file that is there and continues each `.hpf` file.
     ///
     /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
     pub fn download_folder(
@@ -177,9 +180,11 @@ impl ClientSession {
                 let progress = Arc::new(Progress::default());
                 let task_progress = progress.clone();
                 let queues = session.server_queues();
+                let (start_turn, turn) = session.turn();
                 let task_name = name.clone();
                 let task = tokio::spawn(async move {
                     let (name, progress) = (task_name, task_progress);
+                    turn.wait().await;
                     let download = match client.download_folder(&path, &name).await {
                         Ok(download) => download,
                         Err(e) => {
@@ -215,12 +220,14 @@ impl ClientSession {
                     };
                     let _ = lines.send(TransferLine::Ended(line));
                 });
+                let kind = Kind::DownloadFolder;
                 session.track(
-                    Kind::DownloadFolder,
+                    kind,
                     &name,
                     started_at,
                     progress,
                     task.abort_handle(),
+                    start_turn,
                 );
                 None
             }
@@ -239,8 +246,8 @@ impl ClientSession {
     }
 
     /// Start to upload the local file or folder at `local` to the current
-    /// folder under its own name. The transfer runs on its own task, and
-    /// sends its lines to `lines`. With [`Start::Ask`], a
+    /// folder under its own name. The transfer runs on its own task when its
+    /// turn comes, and sends its lines to `lines`. With [`Start::Ask`], a
     /// partial upload or a folder of that name in the listing stops the
     /// upload and comes back as a [`Conflict`].
     pub fn upload(
@@ -300,9 +307,11 @@ impl ClientSession {
                 };
                 let progress = Arc::new(Progress::default());
                 let task_progress = progress.clone();
+                let (start_turn, turn) = session.turn();
                 let task_name = name.clone();
                 let task = tokio::spawn(async move {
                     let (name, progress) = (task_name, task_progress);
+                    turn.wait().await;
                     let upload = match kind {
                         Kind::UploadFolder => {
                             start_folder_upload(&client, &path, &local, &name, start, progress)
@@ -321,7 +330,14 @@ impl ClientSession {
                     };
                     let _ = lines.send(TransferLine::Ended(line));
                 });
-                session.track(kind, &name, started_at, progress, task.abort_handle());
+                session.track(
+                    kind,
+                    &name,
+                    started_at,
+                    progress,
+                    task.abort_handle(),
+                    start_turn,
+                );
                 None
             }
         })

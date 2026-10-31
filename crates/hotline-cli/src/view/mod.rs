@@ -34,7 +34,7 @@ pub use action::Action;
 pub use command::{Command, Palette};
 pub use hint::Hint;
 pub use modal::{MenuItem, Modal};
-pub use options_form::{OptionsForm, OPTIONS};
+pub use options_form::{OptionsForm, OPTIONS, QUEUE_TRANSFERS};
 pub use tab::Tab;
 pub use text_box::TextBox;
 
@@ -1093,7 +1093,11 @@ impl View {
             KeyCode::Esc => return Action::None,
             KeyCode::Enter => {
                 if let Some(info) = form.info() {
-                    return Action::SetClientUserInfo(info);
+                    let queue_transfers = form.queue_transfers;
+                    return Action::SetOptions {
+                        info,
+                        queue_transfers,
+                    };
                 }
             }
             KeyCode::Up => form.row = form.row.saturating_sub(1),
@@ -2102,7 +2106,7 @@ mod tests {
             name: "me".into(),
             ..ClientUserInfo::default()
         };
-        view.modal = Some(Modal::Options(OptionsForm::edit(&info)));
+        view.modal = Some(Modal::Options(OptionsForm::edit(&info, true)));
         type_text(&mut view, "w");
         for _ in 0..3 {
             let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
@@ -2110,11 +2114,14 @@ mod tests {
         type_text(&mut view, " ");
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::SetClientUserInfo(ClientUserInfo {
-                name: "mew".into(),
-                options: UserChangeOptions::REFUSE_PM,
-                ..ClientUserInfo::default()
-            })
+            Action::SetOptions {
+                info: ClientUserInfo {
+                    name: "mew".into(),
+                    options: UserChangeOptions::REFUSE_PM,
+                    ..ClientUserInfo::default()
+                },
+                queue_transfers: true,
+            }
         );
     }
 

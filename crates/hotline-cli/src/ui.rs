@@ -19,7 +19,7 @@ use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::transfer::file_size_text;
 use crate::view::{
     allows, contains, privileges, AccountForm, Focus, Hint, MenuItem, Modal, OptionsForm, Tab,
-    TextBox, View, OPTIONS,
+    TextBox, View, OPTIONS, QUEUE_TRANSFERS,
 };
 
 /// Where each part of the main screen is drawn.
@@ -562,7 +562,11 @@ fn options_form_rows(form: &OptionsForm) -> Vec<String> {
     let checks = OPTIONS
         .iter()
         .map(|(label, flag)| check_row(form.options.contains(*flag), label));
-    text.into_iter().chain(checks).collect()
+    let queue = check_row(form.queue_transfers, QUEUE_TRANSFERS);
+    text.into_iter()
+        .chain(checks)
+        .chain(std::iter::once(queue))
+        .collect()
 }
 
 /// A form row with `label`, then `text`.
@@ -721,7 +725,8 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
     view.users_offset = state.offset();
 }
 
-/// Draw the tasks box.
+/// Draw the tasks box. The title counts the tasks, and the transfers that
+/// wait in `hlc`'s queue.
 fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
     let items: Vec<ListItem> = view
         .tasks
@@ -733,7 +738,11 @@ fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
         })
         .collect();
     let focused = view.focus == Focus::Tasks;
-    let title = format!("tasks ({})", view.tasks.len());
+    let queued = view.tasks.iter().filter(|row| row.queued).count();
+    let title = match queued {
+        0 => format!("tasks ({})", view.tasks.len()),
+        queued => format!("tasks ({}, {queued} queued)", view.tasks.len()),
+    };
     let list = List::new(items)
         .block(Block::bordered().border_style(border(focused)).title(title))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -1067,12 +1076,14 @@ mod tests {
                 id: TaskId::Transfer(1),
                 label: "up".into(),
                 cancellable: true,
+                queued: false,
                 ratio: Some(0.3),
             },
             TaskRow {
                 id: TaskId::Request(2),
                 label: "list".into(),
                 cancellable: true,
+                queued: false,
                 ratio: None,
             },
         ]);

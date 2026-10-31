@@ -76,6 +76,8 @@ pub struct TaskRow {
     pub id: TaskId,
     pub label: String,
     pub cancellable: bool,
+    /// `true` while a transfer waits for its turn in `hlc`'s queue.
+    pub queued: bool,
     /// The part that is done, from 0 to 1, when the size is known.
     pub ratio: Option<f64>,
 }
@@ -90,6 +92,7 @@ impl TaskRow {
     fn finished(self) -> Self {
         Self {
             cancellable: false,
+            queued: false,
             ratio: Some(1.0),
             ..self
         }
@@ -233,6 +236,7 @@ impl Tasks {
                 id: TaskId::Request(r.id),
                 label: r.task.label.as_deref()?.to_string(),
                 cancellable: r.task.cancellable,
+                queued: false,
                 ratio: None,
             };
             Some((r.started, row))
@@ -422,6 +426,7 @@ mod tests {
             id: TaskId::Transfer(1),
             label: "Downloading".into(),
             cancellable: true,
+            queued: false,
             ratio: None,
         };
         let finished = row.finished();
@@ -442,6 +447,7 @@ mod tests {
                 id: TaskId::Request(1),
                 label: "Logging in...".into(),
                 cancellable: false,
+                queued: false,
                 ratio: None,
             }]
         );
