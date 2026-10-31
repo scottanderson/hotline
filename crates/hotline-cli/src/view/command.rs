@@ -1,3 +1,5 @@
+use hotline_proto::Access;
+
 use super::{MenuItem, Tab};
 
 /// One entry in the command palette.
@@ -51,6 +53,15 @@ impl Command {
             Self::User(_, MenuItem::GetInfo) => "i",
             Self::User(_, MenuItem::Disconnect) => "k",
             Self::OpenTab(_) | Self::CancelDownload | Self::User(_, MenuItem::PrivateChat) => "",
+        }
+    }
+
+    /// The privileges that turn the command on. Any one of them is enough.
+    pub const fn enabled_by(self) -> Access {
+        match self {
+            Self::Broadcast => Access::BROADCAST,
+            Self::User(_, item) => item.enabled_by(),
+            _ => Access::empty(),
         }
     }
 }

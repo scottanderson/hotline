@@ -1,4 +1,5 @@
 use hotline_client::{ClientInfoText, FileInfo};
+use hotline_proto::Access;
 
 use super::{AccountForm, OptionsForm, Palette};
 use crate::file_edit::FileEdit;
@@ -138,12 +139,13 @@ impl MenuItem {
         Self::Disconnect,
     ];
 
-    /// The menu items, with [`Self::Disconnect`] only if `can_disconnect`.
-    pub const fn items(can_disconnect: bool) -> &'static [Self] {
-        if can_disconnect {
-            &Self::ALL
-        } else {
-            &[Self::SendMessage, Self::GetInfo, Self::PrivateChat]
+    /// The privileges, any one of which turns the item on.
+    pub const fn enabled_by(self) -> Access {
+        match self {
+            Self::SendMessage => Access::SEND_MESSAGE,
+            Self::GetInfo => Access::GET_CLIENT_INFO,
+            Self::PrivateChat => Access::CREATE_CHAT,
+            Self::Disconnect => Access::DISCON_USER,
         }
     }
 

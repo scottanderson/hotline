@@ -148,9 +148,9 @@ async fn run(
                         view.handle_key(key, users, files)
                     }
                     Event::Mouse(mouse) if !matches!(session.mode, Mode::Agreement(_)) => {
-                        let areas = ui::areas(terminal.size()?.into(), view.input(), &view.hints(), view.shows_users());
                         let users = ui::tab_users(session, view.tab);
                         let files = session.files.as_deref().unwrap_or_default();
+                        let areas = ui::areas(terminal.size()?.into(), view.input(), &view.hints(files), view.shows_users());
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())
                     }
                     _ => Action::None,
@@ -162,8 +162,7 @@ async fn run(
         view.news_folder_count = session.news_folders.as_ref().map_or(0, Vec::len);
         view.news_count = session.news_threads.len();
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
-        view.can_broadcast = session.can_broadcast();
-        view.can_disconnect = session.can_disconnect();
+        view.access = session.granted();
         view.note_revisions(ui::tab_revisions(session));
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(Modal::Invite);
@@ -370,6 +369,11 @@ async fn perform(
             reselect_news_thread(session, view, client).await;
         }
         Action::AskDeleteNews(target) => {
+            if let NewsTarget::Folder(index) = target {
+                if !session.may_delete_news_folder(index) {
+                    return false;
+                }
+            }
             view.modal = session.news_name(target).map(|name| Modal::DeleteNews {
                 target,
                 name: name.into(),

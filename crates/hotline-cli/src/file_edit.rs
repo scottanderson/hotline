@@ -1,5 +1,7 @@
 //! The text a file operation asks for.
 
+use hotline_proto::Access;
+
 /// A file operation that takes one line of text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileEdit {
@@ -24,6 +26,21 @@ impl FileEdit {
             Self::Comment => format!("comment of {name}"),
             Self::Move => format!("move {name} into the folder"),
             Self::Alias => format!("make an alias of {name} in the folder"),
+        }
+    }
+
+    /// The privilege that turns on the operation on a file, or on a folder
+    /// if `folder`.
+    pub const fn enabled_by(self, folder: bool) -> Access {
+        match (self, folder) {
+            (Self::NewFolder, _) => Access::CREATE_FOLDER,
+            (Self::Rename, false) => Access::RENAME_FILE,
+            (Self::Rename, true) => Access::RENAME_FOLDER,
+            (Self::Comment, false) => Access::SET_FILE_COMMENT,
+            (Self::Comment, true) => Access::SET_FOLDER_COMMENT,
+            (Self::Move, false) => Access::MOVE_FILE,
+            (Self::Move, true) => Access::MOVE_FOLDER,
+            (Self::Alias, _) => Access::MAKE_ALIAS,
         }
     }
 

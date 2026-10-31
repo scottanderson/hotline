@@ -4,6 +4,7 @@
 mod account_form;
 mod action;
 mod command;
+mod hint;
 mod modal;
 mod options_form;
 mod tab;
@@ -13,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use hotline_client::Ban;
 use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
+use hotline_proto::Access;
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -27,6 +29,7 @@ use crate::ui::{self, Areas};
 pub use account_form::{privileges, AccountForm};
 pub use action::Action;
 pub use command::{Command, Palette};
+pub use hint::Hint;
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OptionsForm, OPTIONS};
 pub use tab::Tab;
@@ -98,6 +101,11 @@ fn delete_word(text: &mut String) {
     text.truncate(start);
 }
 
+/// `true` if `enabled_by` is empty, or `access` has one of its privileges.
+pub const fn allows(access: Access, enabled_by: Access) -> bool {
+    enabled_by.is_empty() || access.intersects(enabled_by)
+}
+
 /// The pane that takes keys when no modal is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -167,10 +175,8 @@ pub struct View {
     pub accounts: ListState,
     /// The number of accounts listed.
     pub account_count: usize,
-    /// `true` if the user may send a broadcast.
-    pub can_broadcast: bool,
-    /// `true` if the user may disconnect users.
-    pub can_disconnect: bool,
+    /// The privileges from [`crate::session::ClientSession::granted`].
+    pub access: Access,
     /// The tabs that changed since the user last showed them.
     pub updated: HashSet<Tab>,
     /// The revision of each tab when the user last showed it.
@@ -202,8 +208,7 @@ impl Default for View {
             preview_scroll: 0,
             accounts: ListState::default().with_selected(Some(0)),
             account_count: 0,
-            can_broadcast: false,
-            can_disconnect: false,
+            access: Access::empty(),
             updated: HashSet::new(),
             seen: HashMap::new(),
             selected_user: None,
@@ -266,85 +271,176 @@ impl View {
         }
     }
 
+    /// `true` if `enabled_by` is empty, or the user has one of its
+    /// privileges.
+    pub const fn may(&self, enabled_by: Access) -> bool {
+        allows(self.access, enabled_by)
+    }
+
     /// Show the room tab `chat_id`.
     pub fn show_room(&mut self, chat_id: u32) {
         let _ = self.set_tab(Tab::Room(chat_id));
     }
 
-    /// The keys that work now, as `(key, what it does)`.
-    pub fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        if self.modal.is_none() && self.focus == Focus::Users {
-            return self.users_hints();
+    /// The keys of the modal or the focused pane.
+    pub fn hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint> {
+        match (&self.modal, self.focus, self.tab) {
+            (None, Focus::Users, _) => self.users_hints(),
+            (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => self.files_hints(files),
+            _ => self.focus_hints(),
         }
-        self.focus_hints().to_vec()
+    }
+
+    /// The keys of the file list, with the privileges for the selected item.
+    fn files_hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint> {
+        let folder = self
+            .selected_file(files)
+            .is_some_and(FileNameWithInfo::is_folder);
+        let edit =
+            |key, does, edit: FileEdit| Hint::new(key, does).enabled_by(edit.enabled_by(folder));
+        let (open, download, delete) = if folder {
+            (
+                Access::empty(),
+                Access::DOWNLOAD_FOLDER,
+                Access::DELETE_FOLDER,
+            )
+        } else {
+            (
+                Access::DOWNLOAD_FILE,
+                Access::DOWNLOAD_FILE,
+                Access::DELETE_FILE,
+            )
+        };
+        vec![
+            Hint::new("↑↓", "select"),
+            Hint::new("Enter", "open or download").enabled_by(open),
+            Hint::new("⌫", "up"),
+            Hint::new("d", "download").enabled_by(download),
+            Hint::new("u", "upload").enabled_by(Access::UPLOAD_FILE | Access::UPLOAD_FOLDER),
+            edit("n", "new folder", FileEdit::NewFolder),
+            Hint::new("x", "delete").enabled_by(delete),
+            Hint::new("i", "info"),
+            edit("r", "rename", FileEdit::Rename),
+            edit("c", "comment", FileEdit::Comment),
+            edit("m", "move", FileEdit::Move),
+            edit("a", "alias", FileEdit::Alias),
+            Hint::new("Tab", "users"),
+            Hint::new("Esc", "chat"),
+        ]
+    }
+
+    /// The selected item of the file list.
+    fn selected_file<'a>(&self, files: &'a [FileNameWithInfo]) -> Option<&'a FileNameWithInfo> {
+        files.get(selected(self.files.selected(), files.len()))
     }
 
     /// The keys of the user list.
-    fn users_hints(&self) -> Vec<(&'static str, &'static str)> {
+    fn users_hints(&self) -> Vec<Hint> {
         let main = match Focus::main(self.tab) {
             Focus::Files => "files",
             Focus::NewsFolders | Focus::NewsThreads | Focus::NewsPreview => "news",
             Focus::Accounts => "accounts",
             Focus::Input | Focus::Users => "input",
         };
-        let mut hints = vec![
-            ("↑↓", "select"),
-            ("^O", "actions"),
-            ("Enter", "message"),
-            ("i", "info"),
-        ];
-        if self.can_disconnect {
-            hints.push(("k", "disconnect"));
-        }
-        hints.extend([("Tab", main), ("Esc", main)]);
-        hints
+        vec![
+            Hint::new("↑↓", "select"),
+            Hint::new("^O", "actions"),
+            Hint::new("Enter", "message").enabled_by(MenuItem::SendMessage.enabled_by()),
+            Hint::new("i", "info").enabled_by(MenuItem::GetInfo.enabled_by()),
+            Hint::new("k", "disconnect").enabled_by(MenuItem::Disconnect.enabled_by()),
+            Hint::new("Tab", main),
+            Hint::new("Esc", main),
+        ]
     }
 
     /// The keys of the modal or the focused area, other than the user list.
-    const fn focus_hints(&self) -> &'static [(&'static str, &'static str)] {
+    fn focus_hints(&self) -> Vec<Hint> {
         match (&self.modal, self.focus, self.tab) {
             (Some(Modal::InstantMsg { .. } | Modal::Broadcast { .. }), ..) => {
-                &[("Enter", "send"), ("⇧Enter", "new line"), ("Esc", "cancel")]
+                vec![
+                    Hint::new("Enter", "send"),
+                    Hint::new("⇧Enter", "new line"),
+                    Hint::new("Esc", "cancel"),
+                ]
             }
             (Some(Modal::Palette(_)), ..) => {
-                &[("↑↓", "choose"), ("Enter", "run"), ("Esc", "close")]
+                vec![
+                    Hint::new("↑↓", "choose"),
+                    Hint::new("Enter", "run"),
+                    Hint::new("Esc", "close"),
+                ]
             }
             (Some(Modal::UserMenu { .. }), ..) => {
-                &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "close")]
+                vec![
+                    Hint::new("↑↓", "choose"),
+                    Hint::new("Enter", "select"),
+                    Hint::new("Esc", "close"),
+                ]
             }
-            (Some(Modal::Info(_) | Modal::FileInfo(_)), ..) => &[("Esc", "close")],
-            (Some(Modal::FileEdit { .. }), ..) => &[("Enter", "save"), ("Esc", "cancel")],
-            (Some(Modal::Disconnect { .. }), ..) => &[
-                ("d", "disconnect"),
-                ("t", "ban for a while"),
-                ("p", "ban for good"),
-                ("Esc", "cancel"),
+            (Some(Modal::Info(_) | Modal::FileInfo(_)), ..) => vec![Hint::new("Esc", "close")],
+            (Some(Modal::FileEdit { .. }), ..) => {
+                vec![Hint::new("Enter", "save"), Hint::new("Esc", "cancel")]
+            }
+            (Some(Modal::Disconnect { .. }), ..) => vec![
+                Hint::new("d", "disconnect"),
+                Hint::new("t", "ban for a while"),
+                Hint::new("p", "ban for good"),
+                Hint::new("Esc", "cancel"),
             ],
-            (Some(Modal::Upload { .. }), ..) => &[("Enter", "upload"), ("Esc", "cancel")],
-            (Some(Modal::SaveAs { .. }), ..) => &[("Enter", "save"), ("Esc", "cancel")],
+            (Some(Modal::Upload { .. }), ..) => {
+                vec![Hint::new("Enter", "upload"), Hint::new("Esc", "cancel")]
+            }
+            (Some(Modal::SaveAs { .. }), ..) => {
+                vec![Hint::new("Enter", "save"), Hint::new("Esc", "cancel")]
+            }
             (
                 Some(Modal::Confirm(
                     Conflict::PartialDownload { .. } | Conflict::LocalFolderExists { .. },
                 )),
                 ..,
-            ) => &[("r", "resume"), ("o", "replace"), ("Esc", "cancel")],
-            (Some(Modal::Confirm(_)), ..) => &[("r", "resume"), ("Esc", "cancel")],
-            (Some(Modal::Invite(_)), ..) => &[("Enter", "join"), ("Esc", "decline")],
-            (Some(Modal::Subject { .. }), ..) => &[("Enter", "set"), ("Esc", "cancel")],
+            ) => vec![
+                Hint::new("r", "resume"),
+                Hint::new("o", "replace"),
+                Hint::new("Esc", "cancel"),
+            ],
+            (Some(Modal::Confirm(_)), ..) => {
+                vec![Hint::new("r", "resume"), Hint::new("Esc", "cancel")]
+            }
+            (Some(Modal::Invite(_)), ..) => {
+                vec![Hint::new("Enter", "join"), Hint::new("Esc", "decline")]
+            }
+            (Some(Modal::Subject { .. }), ..) => {
+                vec![Hint::new("Enter", "set"), Hint::new("Esc", "cancel")]
+            }
             (Some(Modal::PickDownload { .. }), ..) => {
-                &[("↑↓", "choose"), ("Enter", "cancel it"), ("Esc", "close")]
+                vec![
+                    Hint::new("↑↓", "choose"),
+                    Hint::new("Enter", "cancel it"),
+                    Hint::new("Esc", "close"),
+                ]
             }
             (Some(Modal::PickUser { .. }), ..) => {
-                &[("↑↓", "choose"), ("Enter", "invite"), ("Esc", "cancel")]
+                vec![
+                    Hint::new("↑↓", "choose"),
+                    Hint::new("Enter", "invite"),
+                    Hint::new("Esc", "cancel"),
+                ]
             }
-            (Some(Modal::Article(_)), ..) => &[("r", "reply"), ("Esc", "close")],
-            (Some(Modal::Post { .. }), ..) => &[
-                ("Tab", "title or text"),
-                ("Enter", "post"),
-                ("⇧Enter", "new line"),
-                ("Esc", "cancel"),
+            (Some(Modal::Article(_)), ..) => {
+                vec![
+                    Hint::new("r", "reply").enabled_by(Access::POST_NEWS_ART),
+                    Hint::new("Esc", "close"),
+                ]
+            }
+            (Some(Modal::Post { .. }), ..) => vec![
+                Hint::new("Tab", "title or text"),
+                Hint::new("Enter", "post"),
+                Hint::new("⇧Enter", "new line"),
+                Hint::new("Esc", "cancel"),
             ],
-            (Some(Modal::NewsName { .. }), ..) => &[("Enter", "create"), ("Esc", "cancel")],
+            (Some(Modal::NewsName { .. }), ..) => {
+                vec![Hint::new("Enter", "create"), Hint::new("Esc", "cancel")]
+            }
             (
                 Some(
                     Modal::DeleteNews { .. }
@@ -352,89 +448,81 @@ impl View {
                     | Modal::DeleteFile { .. },
                 ),
                 ..,
-            ) => &[("y", "delete"), ("Esc", "cancel")],
-            (Some(Modal::Account(_) | Modal::Options(_)), ..) => &[
-                ("↑↓", "row"),
-                ("Space", "toggle"),
-                ("Enter", "save"),
-                ("Esc", "cancel"),
+            ) => vec![Hint::new("y", "delete"), Hint::new("Esc", "cancel")],
+            (Some(Modal::Account(form)), ..) => vec![
+                Hint::new("↑↓", "row"),
+                Hint::new("Space", "toggle"),
+                Hint::new("Enter", "save").enabled_by(form.saved_by()),
+                Hint::new("Esc", "cancel"),
             ],
-            (Some(Modal::Quit), ..) => &[("y", "quit"), ("Esc", "cancel")],
-            (Some(Modal::OpenAccount { .. }), ..) => &[("Enter", "open"), ("Esc", "cancel")],
-            (None, Focus::Accounts, _) | (None, Focus::Input, Tab::Admin) => &[
-                ("↑↓", "select"),
-                ("Enter", "edit"),
-                ("n", "new"),
-                ("o", "open"),
-                ("x", "delete"),
-                ("Tab", "users"),
-                ("Esc", "chat"),
+            (Some(Modal::Options(_)), ..) => vec![
+                Hint::new("↑↓", "row"),
+                Hint::new("Space", "toggle"),
+                Hint::new("Enter", "save"),
+                Hint::new("Esc", "cancel"),
             ],
-            (None, Focus::NewsFolders, _) | (None, Focus::Input, Tab::Threaded) => &[
-                ("↑↓", "select"),
-                ("Enter", "open"),
-                ("←→", "close/open"),
-                ("p", "post"),
-                ("x", "delete"),
-                ("b", "new bundle"),
-                ("c", "new category"),
-                ("Tab", "threads"),
-                ("Esc", "chat"),
+            (Some(Modal::Quit), ..) => vec![Hint::new("y", "quit"), Hint::new("Esc", "cancel")],
+            (Some(Modal::OpenAccount { .. }), ..) => {
+                vec![Hint::new("Enter", "open"), Hint::new("Esc", "cancel")]
+            }
+            (None, Focus::Accounts, _) | (None, Focus::Input, Tab::Admin) => vec![
+                Hint::new("↑↓", "select"),
+                Hint::new("Enter", "edit").enabled_by(Access::OPEN_USER | Access::CREATE_USER),
+                Hint::new("n", "new").enabled_by(Access::CREATE_USER),
+                Hint::new("o", "open").enabled_by(Access::OPEN_USER),
+                Hint::new("x", "delete").enabled_by(Access::DELETE_USER),
+                Hint::new("Tab", "users"),
+                Hint::new("Esc", "chat"),
             ],
-            (None, Focus::NewsThreads, _) => &[
-                ("↑↓", "select"),
-                ("Enter", "read"),
-                ("←", "folders"),
-                ("p", "post"),
-                ("x", "delete"),
-                ("Tab", "preview"),
-                ("Esc", "chat"),
+            (None, Focus::NewsFolders, _) | (None, Focus::Input, Tab::Threaded) => vec![
+                Hint::new("↑↓", "select"),
+                Hint::new("Enter", "open"),
+                Hint::new("←→", "close/open"),
+                Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
+                Hint::new("x", "delete").enabled_by(Access::NEWS_DELETE_CAT),
+                Hint::new("b", "new bundle").enabled_by(Access::NEWS_CREATE_FLDR),
+                Hint::new("c", "new category").enabled_by(Access::NEWS_CREATE_CAT),
+                Hint::new("Tab", "threads"),
+                Hint::new("Esc", "chat"),
             ],
-            (None, Focus::NewsPreview, _) => &[
-                ("↑↓", "scroll"),
-                ("p", "post"),
-                ("Tab", "folders"),
-                ("Esc", "chat"),
+            (None, Focus::NewsThreads, _) => vec![
+                Hint::new("↑↓", "select"),
+                Hint::new("Enter", "read"),
+                Hint::new("←", "folders"),
+                Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
+                Hint::new("x", "delete").enabled_by(Access::NEWS_DELETE_ART),
+                Hint::new("Tab", "preview"),
+                Hint::new("Esc", "chat"),
             ],
-            (None, Focus::Input, Tab::Chat) => &[
-                ("Enter", "send"),
-                ("⇧Enter", "new line"),
-                ("Tab", "users"),
-                ("F1-F9", "tab"),
-                ("^P", "commands"),
-                ("Esc", "quit"),
+            (None, Focus::NewsPreview, _) => vec![
+                Hint::new("↑↓", "scroll"),
+                Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
+                Hint::new("Tab", "folders"),
+                Hint::new("Esc", "chat"),
             ],
-            (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => &[
-                ("↑↓", "select"),
-                ("Enter", "open or download"),
-                ("⌫", "up"),
-                ("d", "download"),
-                ("u", "upload"),
-                ("n", "new folder"),
-                ("x", "delete"),
-                ("i", "info"),
-                ("r", "rename"),
-                ("c", "comment"),
-                ("m", "move"),
-                ("a", "alias"),
-                ("Tab", "users"),
-                ("Esc", "chat"),
+            (None, Focus::Input, Tab::Chat) => vec![
+                Hint::new("Enter", "send").enabled_by(Access::SEND_CHAT),
+                Hint::new("⇧Enter", "new line"),
+                Hint::new("Tab", "users"),
+                Hint::new("F1-F9", "tab"),
+                Hint::new("^P", "commands"),
+                Hint::new("Esc", "quit"),
             ],
-            (None, Focus::Input, Tab::Room(_)) => &[
-                ("Enter", "send"),
-                ("Tab", "users"),
-                ("^P", "commands"),
-                ("^O", "actions"),
-                ("Esc", "chat"),
+            (None, Focus::Input, Tab::Room(_)) => vec![
+                Hint::new("Enter", "send").enabled_by(Access::SEND_CHAT),
+                Hint::new("Tab", "users"),
+                Hint::new("^P", "commands"),
+                Hint::new("^O", "actions"),
+                Hint::new("Esc", "chat"),
             ],
-            (None, Focus::Input, Tab::News) => &[
-                ("Enter", "post"),
-                ("⇧Enter", "new line"),
-                ("↑↓", "scroll"),
-                ("Tab", "users"),
-                ("Esc", "chat"),
+            (None, Focus::Input, Tab::News) => vec![
+                Hint::new("Enter", "post").enabled_by(Access::POST_NEWS_ART),
+                Hint::new("⇧Enter", "new line"),
+                Hint::new("↑↓", "scroll"),
+                Hint::new("Tab", "users"),
+                Hint::new("Esc", "chat"),
             ],
-            (None, Focus::Users, _) => &[],
+            (None, Focus::Users | Focus::Files, _) | (None, Focus::Input, Tab::Files) => Vec::new(),
         }
     }
 
@@ -504,10 +592,12 @@ impl View {
         if self.focus == Focus::Users {
             commands.extend(self.user_commands(users));
         }
-        if self.can_broadcast {
-            commands.push(Command::Broadcast);
-        }
-        commands.extend([Command::Options, Command::CancelDownload, Command::Quit]);
+        commands.extend([
+            Command::Broadcast,
+            Command::Options,
+            Command::CancelDownload,
+            Command::Quit,
+        ]);
         commands
     }
 
@@ -526,7 +616,7 @@ impl View {
     /// The commands of the user menu on the selected user, if one is selected.
     fn user_commands(&self, users: &[UserNameWithInfo]) -> Vec<Command> {
         self.selected_user(users).map_or_else(Vec::new, |user_id| {
-            MenuItem::items(self.can_disconnect)
+            MenuItem::ALL
                 .iter()
                 .map(|&item| Command::User(user_id, item))
                 .collect()
@@ -562,8 +652,11 @@ impl View {
         self.commands(users).contains(&command).then_some(command)
     }
 
-    /// Run `command`.
+    /// Run `command`, if the user may.
     fn run(&mut self, command: Command, users: &[UserNameWithInfo]) -> Action {
+        if !self.may(command.enabled_by()) {
+            return Action::None;
+        }
         match command {
             Command::OpenTab(tab) => self.set_tab(tab),
             Command::Broadcast => {
@@ -593,11 +686,10 @@ impl View {
     ) -> Action {
         match key.code {
             KeyCode::Esc => return Action::None,
-            KeyCode::Enter => {
-                return palette
-                    .chosen()
-                    .map_or(Action::None, |command| self.run(command, users));
-            }
+            KeyCode::Enter => match palette.chosen() {
+                Some(command) if self.may(command.enabled_by()) => return self.run(command, users),
+                _ => {}
+            },
             KeyCode::Up => palette.select_previous(),
             KeyCode::Down => palette.select_next(),
             _ => palette.edit(|input| edit_text(input, key)),
@@ -620,7 +712,7 @@ impl View {
             return self.options_form_key(form, key);
         }
         match (&mut modal, plain_code(key)) {
-            (Modal::Article(article), KeyCode::Char('r')) => {
+            (Modal::Article(article), KeyCode::Char('r')) if self.may(Access::POST_NEWS_ART) => {
                 let title = match article.title.strip_prefix("Re: ") {
                     Some(_) => article.title.to_string(),
                     None => format!("Re: {}", article.title),
@@ -800,7 +892,7 @@ impl View {
                     ..
                 },
                 KeyCode::Enter,
-            ) => {
+            ) if self.may(items[*selected].enabled_by()) => {
                 return self.choose(*user_id, items[*selected], users);
             }
             (modal, _) => {
@@ -840,7 +932,7 @@ impl View {
                     return self.choose(user_id, MenuItem::GetInfo, users);
                 }
             }
-            KeyCode::Char('k') if self.can_disconnect => {
+            KeyCode::Char('k') => {
                 if let Some(user_id) = self.selected_user(users) {
                     return self.choose(user_id, MenuItem::Disconnect, users);
                 }
@@ -852,6 +944,8 @@ impl View {
 
     fn input_key(&mut self, key: KeyEvent) -> Action {
         let tab = self.tab;
+        let may_chat = self.may(Access::SEND_CHAT);
+        let may_post = self.may(Access::POST_NEWS_ART);
         let Some(input) = self.input_mut() else {
             return Action::None;
         };
@@ -860,13 +954,13 @@ impl View {
             return Action::None;
         }
         match (key.code, tab) {
-            (KeyCode::Enter, Tab::Chat) if !input.is_empty() => {
+            (KeyCode::Enter, Tab::Chat) if may_chat && !input.is_empty() => {
                 return Action::SendChat(std::mem::take(input));
             }
-            (KeyCode::Enter, Tab::News) if !input.is_empty() => {
+            (KeyCode::Enter, Tab::News) if may_post && !input.is_empty() => {
                 return Action::OldPostNews(std::mem::take(input));
             }
-            (KeyCode::Enter, Tab::Room(chat_id)) if !input.is_empty() => {
+            (KeyCode::Enter, Tab::Room(chat_id)) if may_chat && !input.is_empty() => {
                 return Action::SendRoomChat {
                     chat_id,
                     text: std::mem::take(input),
@@ -892,31 +986,39 @@ impl View {
             KeyCode::Up => self.files.select_previous(),
             KeyCode::Down => self.files.select_next(),
             KeyCode::Enter => {
-                return open_file(selected(self.files.selected(), files.len()), files)
+                return self.open_file(selected(self.files.selected(), files.len()), files)
             }
             KeyCode::Backspace | KeyCode::Left => return Action::ParentFolder,
             KeyCode::Char('d') => {
-                return download(selected(self.files.selected(), files.len()), files)
+                return self.download(selected(self.files.selected(), files.len()), files)
             }
-            KeyCode::Char('u') => {
+            KeyCode::Char('u') if self.may(Access::UPLOAD_FILE | Access::UPLOAD_FOLDER) => {
                 self.modal = Some(Modal::Upload {
                     input: String::new(),
                 });
             }
-            KeyCode::Char('n') => {
+            KeyCode::Char('n') if self.may(FileEdit::NewFolder.enabled_by(false)) => {
                 return Action::AskFileEdit {
                     edit: FileEdit::NewFolder,
                     name: Box::default(),
                 };
             }
             KeyCode::Char(c @ ('x' | 'i' | 'r' | 'c' | 'm' | 'a')) => {
-                let Some(file) = files.get(selected(self.files.selected(), files.len())) else {
+                let Some(file) = self.selected_file(files) else {
                     return Action::None;
                 };
                 let name = file.name.clone();
+                let folder = file.is_folder();
                 let edit = match c {
                     'x' => {
-                        self.modal = Some(Modal::DeleteFile { name });
+                        let delete = if folder {
+                            Access::DELETE_FOLDER
+                        } else {
+                            Access::DELETE_FILE
+                        };
+                        if self.may(delete) {
+                            self.modal = Some(Modal::DeleteFile { name });
+                        }
                         return Action::None;
                     }
                     'i' => return Action::GetFileInfo(name),
@@ -925,6 +1027,9 @@ impl View {
                     'm' => FileEdit::Move,
                     _ => FileEdit::Alias,
                 };
+                if !self.may(edit.enabled_by(folder)) {
+                    return Action::None;
+                }
                 return Action::AskFileEdit { edit, name };
             }
             _ => {}
@@ -936,7 +1041,7 @@ impl View {
         let last = AccountForm::rows() - 1;
         match key.code {
             KeyCode::Esc => return Action::None,
-            KeyCode::Enter if !form.login.is_empty() => {
+            KeyCode::Enter if !form.login.is_empty() && self.may(form.saved_by()) => {
                 return Action::SaveAccount {
                     old_login: form.old_login.clone(),
                     account: form.account(),
@@ -979,16 +1084,20 @@ impl View {
             KeyCode::Esc => return self.set_tab(Tab::Chat),
             KeyCode::Up => self.accounts.select_previous(),
             KeyCode::Down => self.accounts.select_next(),
-            KeyCode::Enter if self.account_count > 0 => {
+            KeyCode::Enter
+                if self.account_count > 0 && self.may(Access::OPEN_USER | Access::CREATE_USER) =>
+            {
                 return Action::EditAccount(selected(self.accounts.selected(), self.account_count));
             }
-            KeyCode::Char('n') => self.modal = Some(Modal::Account(AccountForm::blank())),
-            KeyCode::Char('o') => {
+            KeyCode::Char('n') if self.may(Access::CREATE_USER) => {
+                self.modal = Some(Modal::Account(AccountForm::blank()));
+            }
+            KeyCode::Char('o') if self.may(Access::OPEN_USER) => {
                 self.modal = Some(Modal::OpenAccount {
                     input: String::new(),
                 });
             }
-            KeyCode::Char('x') if self.account_count > 0 => {
+            KeyCode::Char('x') if self.account_count > 0 && self.may(Access::DELETE_USER) => {
                 return Action::AskDeleteAccount(selected(
                     self.accounts.selected(),
                     self.account_count,
@@ -1015,11 +1124,17 @@ impl View {
             KeyCode::Left | KeyCode::Backspace if count > 0 => {
                 return Action::CollapseNewsFolder(index);
             }
-            KeyCode::Char('p') => return Action::NewPost,
-            KeyCode::Char('x') if count > 0 => {
+            KeyCode::Char('p') if self.may(Access::POST_NEWS_ART) => return Action::NewPost,
+            KeyCode::Char('x') if count > 0 && self.may(Access::NEWS_DELETE_CAT) => {
                 return Action::AskDeleteNews(NewsTarget::Folder(index));
             }
-            KeyCode::Char(c @ ('b' | 'c')) => {
+            KeyCode::Char(c @ ('b' | 'c'))
+                if self.may(if c == 'c' {
+                    Access::NEWS_CREATE_CAT
+                } else {
+                    Access::NEWS_CREATE_FLDR
+                }) =>
+            {
                 self.modal = Some(Modal::NewsName {
                     kind: if c == 'c' {
                         NewsFolder::Category
@@ -1047,8 +1162,8 @@ impl View {
                 return Action::PreviewArticle(index);
             }
             KeyCode::Enter if count > 0 => return Action::OpenArticle(index),
-            KeyCode::Char('p') => return Action::NewPost,
-            KeyCode::Char('x') if count > 0 => {
+            KeyCode::Char('p') if self.may(Access::POST_NEWS_ART) => return Action::NewPost,
+            KeyCode::Char('x') if count > 0 && self.may(Access::NEWS_DELETE_ART) => {
                 return Action::AskDeleteNews(NewsTarget::Article(index));
             }
             _ => {}
@@ -1064,7 +1179,7 @@ impl View {
             KeyCode::Down => self.scroll_preview(1),
             KeyCode::PageUp => self.scroll_preview(-10),
             KeyCode::PageDown => self.scroll_preview(10),
-            KeyCode::Char('p') => return Action::NewPost,
+            KeyCode::Char('p') if self.may(Access::POST_NEWS_ART) => return Action::NewPost,
             _ => {}
         }
         Action::None
@@ -1149,7 +1264,7 @@ impl View {
                     self.modal = Some(Modal::UserMenu {
                         user_id,
                         at: (x, y),
-                        items: MenuItem::items(self.can_disconnect),
+                        items: &MenuItem::ALL,
                         selected: 0,
                     });
                 }
@@ -1177,12 +1292,38 @@ impl View {
         Action::None
     }
 
+    /// Open the folder at `index`, or download the file there, if the user
+    /// may.
+    fn open_file(&self, index: usize, files: &[FileNameWithInfo]) -> Action {
+        match files.get(index) {
+            Some(file) if file.is_folder() => Action::OpenFolder(file.name.clone()),
+            Some(file) if self.may(Access::DOWNLOAD_FILE) => download_file(file),
+            _ => Action::None,
+        }
+    }
+
+    /// Download the file or folder at `index`, if the user may.
+    fn download(&self, index: usize, files: &[FileNameWithInfo]) -> Action {
+        match files.get(index) {
+            Some(file) if file.is_folder() && self.may(Access::DOWNLOAD_FOLDER) => {
+                Action::DownloadFolder {
+                    name: file.name.clone(),
+                    start: Start::Ask,
+                }
+            }
+            Some(file) if !file.is_folder() && self.may(Access::DOWNLOAD_FILE) => {
+                download_file(file)
+            }
+            _ => Action::None,
+        }
+    }
+
     /// Select the file at `index`, or open it on the second click of a double click.
     fn click_file(&mut self, index: usize, files: &[FileNameWithInfo], now: Instant) -> Action {
         self.files.select(Some(index));
         self.focus = Focus::Files;
         if self.double_click(Clicked::File(index), now) {
-            return open_file(index, files);
+            return self.open_file(index, files);
         }
         Action::None
     }
@@ -1235,7 +1376,11 @@ impl View {
         double
     }
 
+    /// Run the menu `item` on the user `user_id`, if the user may.
     fn choose(&mut self, user_id: u16, item: MenuItem, users: &[UserNameWithInfo]) -> Action {
+        if !self.may(item.enabled_by()) {
+            return Action::None;
+        }
         match item {
             MenuItem::SendMessage => {
                 if let Some(user) = users.iter().find(|u| u.user_id == user_id) {
@@ -1268,6 +1413,9 @@ impl View {
         self.tab = tab;
         if self.focus != Focus::Users || !self.shows_users() {
             self.focus = Focus::main(tab);
+        }
+        if !self.may(tab.enabled_by()) {
+            return Action::None;
         }
         match tab {
             Tab::Chat | Tab::Room(_) => Action::None,
@@ -1391,27 +1539,6 @@ fn row_at(offset: usize, row: u16, len: usize) -> Option<usize> {
     Some(offset + usize::from(row)).filter(|&index| index < len)
 }
 
-/// Open the folder at `index`, or download the file there.
-fn open_file(index: usize, files: &[FileNameWithInfo]) -> Action {
-    match files.get(index) {
-        Some(file) if file.is_folder() => Action::OpenFolder(file.name.clone()),
-        Some(file) => download_file(file),
-        None => Action::None,
-    }
-}
-
-/// Download the file or folder at `index`.
-fn download(index: usize, files: &[FileNameWithInfo]) -> Action {
-    match files.get(index) {
-        Some(file) if file.is_folder() => Action::DownloadFolder {
-            name: file.name.clone(),
-            start: Start::Ask,
-        },
-        Some(file) => download_file(file),
-        None => Action::None,
-    }
-}
-
 /// Download `file` under its own name.
 fn download_file(file: &FileNameWithInfo) -> Action {
     Action::DownloadFile {
@@ -1451,7 +1578,6 @@ mod tests {
     use super::*;
     use hotline_client::{ClientUserInfo, Password, UserAccount};
     use hotline_proto::types::{HlDate, UserChangeOptions, UserFlags};
-    use hotline_proto::Access;
 
     use crate::session::{ArticleText, ChatInvite};
 
@@ -1511,7 +1637,7 @@ mod tests {
 
     #[test]
     fn a_line_starting_with_a_slash_is_sent_as_chat() {
-        let mut view = View::default();
+        let mut view = granted();
         type_text(&mut view, "/users");
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
@@ -1521,7 +1647,7 @@ mod tests {
 
     #[test]
     fn shift_enter_starts_a_new_line() {
-        let mut view = View::default();
+        let mut view = granted();
         type_text(&mut view, "one");
         let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
         assert_eq!(
@@ -1552,7 +1678,7 @@ mod tests {
 
     #[test]
     fn a_double_click_opens_a_message_to_the_user() {
-        let mut view = View::default();
+        let mut view = granted();
         let (x, y) = user_row(1);
         let left = click(MouseEventKind::Down(MouseButton::Left), x, y);
         let now = Instant::now();
@@ -1606,7 +1732,7 @@ mod tests {
 
     #[test]
     fn the_right_click_menu_gets_a_users_info() {
-        let mut view = View::default();
+        let mut view = granted();
         let (x, y) = user_row(0);
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
         let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
@@ -1625,12 +1751,12 @@ mod tests {
 
     #[test]
     fn a_click_on_a_menu_item_chooses_it() {
-        let mut view = View::default();
+        let mut view = granted();
         let (x, y) = user_row(0);
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
         let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
 
-        let menu = ui::menu_rect((x, y), MenuItem::items(false), areas().screen);
+        let menu = ui::menu_rect((x, y), &MenuItem::ALL, areas().screen);
         let inner = ui::inner(menu);
         let left = click(
             MouseEventKind::Down(MouseButton::Left),
@@ -1676,6 +1802,7 @@ mod tests {
     #[test]
     fn alt_keys_run_the_commands_that_work_now() {
         let mut view = view_with_rooms();
+        view.access = Access::empty();
         let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
         assert_eq!(view.handle_key(alt('a'), &users(), &files()), Action::None);
         assert_eq!(view.modal, None);
@@ -1700,7 +1827,7 @@ mod tests {
             Action::EditChatSubject(9)
         );
 
-        view.can_broadcast = true;
+        view.access = Access::BROADCAST;
         assert_eq!(view.handle_key(alt('a'), &users(), &files()), Action::None);
         assert!(matches!(view.modal, Some(Modal::Broadcast { .. })));
     }
@@ -1797,7 +1924,7 @@ mod tests {
     fn ctrl_p_lists_only_the_commands_that_work_now() {
         let mut view = View::default();
         let _ = view.handle_key(ctrl('p'), &users(), &files());
-        type_text(&mut view, "broadcast");
+        type_text(&mut view, "leave");
         let Some(Modal::Palette(palette)) = &view.modal else {
             panic!("no palette");
         };
@@ -1821,7 +1948,7 @@ mod tests {
     fn ctrl_o_opens_the_actions_of_the_selected_user() {
         let mut view = View {
             focus: Focus::Users,
-            ..View::default()
+            ..granted()
         };
         let _ = view.handle_key(ctrl('o'), &users(), &files());
         assert_eq!(view.modal, None);
@@ -1856,9 +1983,10 @@ mod tests {
     fn broadcast_needs_the_privilege() {
         let mut view = View::default();
         assert_eq!(run_command(&mut view, "broadcast"), Action::None);
-        assert_eq!(view.modal, None);
+        assert!(matches!(view.modal, Some(Modal::Palette(_))));
 
-        view.can_broadcast = true;
+        view.modal = None;
+        view.access = Access::BROADCAST;
         let _ = run_command(&mut view, "broadcast");
         type_text(&mut view, "bye");
         assert_eq!(
@@ -1905,7 +2033,7 @@ mod tests {
         let _ = view.handle_key(key(KeyCode::Char('k')), &users(), &files());
         assert_eq!(view.modal, None);
 
-        view.can_disconnect = true;
+        view.access = Access::DISCON_USER;
         let _ = view.handle_key(key(KeyCode::Char('k')), &users(), &files());
         assert_eq!(
             view.modal,
@@ -1924,11 +2052,8 @@ mod tests {
     }
 
     #[test]
-    fn the_user_menu_offers_disconnect_only_with_the_privilege() {
-        let mut view = View {
-            can_disconnect: true,
-            ..View::default()
-        };
+    fn the_user_menu_runs_disconnect_only_with_the_privilege() {
+        let mut view = View::default();
         let (x, y) = user_row(1);
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
         let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
@@ -1936,16 +2061,48 @@ mod tests {
             let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         }
         let _ = view.handle_key(key(KeyCode::Enter), &users(), &files());
+        assert!(matches!(view.modal, Some(Modal::UserMenu { .. })));
+
+        view.access = Access::DISCON_USER;
+        let _ = view.handle_key(key(KeyCode::Enter), &users(), &files());
         assert!(matches!(
             view.modal,
             Some(Modal::Disconnect { user_id: 2, .. })
         ));
-        assert_eq!(MenuItem::items(false).len(), 3);
+    }
+
+    #[test]
+    fn file_keys_need_the_privilege_for_the_selected_kind() {
+        let mut view = View {
+            tab: Tab::Files,
+            focus: Focus::Files,
+            access: Access::DOWNLOAD_FILE | Access::DELETE_FOLDER | Access::RENAME_FILE,
+            ..View::default()
+        };
+        let press = |view: &mut View, c| view.handle_key(key(KeyCode::Char(c)), &users(), &files());
+        assert_eq!(press(&mut view, 'd'), Action::None);
+        assert_eq!(press(&mut view, 'r'), Action::None);
+        let _ = press(&mut view, 'x');
+        assert!(matches!(view.modal, Some(Modal::DeleteFile { .. })));
+        view.modal = None;
+        assert_eq!(hint_enabled(&view, "d", "download"), Some(false));
+        assert_eq!(hint_enabled(&view, "Enter", "open or download"), Some(true));
+
+        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+        assert!(matches!(press(&mut view, 'd'), Action::DownloadFile { .. }));
+        assert!(matches!(press(&mut view, 'r'), Action::AskFileEdit { .. }));
+        let _ = press(&mut view, 'x');
+        assert_eq!(view.modal, None);
+        assert_eq!(hint_enabled(&view, "x", "delete"), Some(false));
+        for c in ['u', 'n', 'c', 'm', 'a'] {
+            assert_eq!(press(&mut view, c), Action::None);
+            assert_eq!(view.modal, None);
+        }
     }
 
     #[test]
     fn file_keys_ask_for_text_info_or_a_delete_check() {
-        let mut view = View::default();
+        let mut view = granted();
         let _ = view.handle_key(key(KeyCode::F(3)), &users(), &files());
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         assert_eq!(
@@ -1998,8 +2155,56 @@ mod tests {
     }
 
     #[test]
-    fn f2_opens_the_news_tab_and_fetches_the_news() {
+    fn news_tabs_fetch_nothing_without_the_read_privilege() {
         let mut view = View::default();
+        assert_eq!(
+            view.handle_key(key(KeyCode::F(2)), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.tab, Tab::News);
+        type_text(&mut view, "hello");
+        assert_eq!(hint_enabled(&view, "Enter", "post"), Some(false));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::F(4)), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.tab, Tab::Threaded);
+    }
+
+    #[test]
+    fn threaded_news_keys_need_their_privileges() {
+        let mut view = View {
+            tab: Tab::Threaded,
+            focus: Focus::NewsFolders,
+            news_folder_count: 1,
+            access: Access::NEWS_READ_ART,
+            ..View::default()
+        };
+        for c in ['p', 'x', 'b', 'c'] {
+            assert_eq!(
+                view.handle_key(key(KeyCode::Char(c)), &users(), &files()),
+                Action::None
+            );
+            assert_eq!(view.modal, None);
+        }
+        view.access |= Access::NEWS_DELETE_CAT | Access::POST_NEWS_ART;
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('x')), &users(), &files()),
+            Action::AskDeleteNews(NewsTarget::Folder(0))
+        );
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('p')), &users(), &files()),
+            Action::NewPost
+        );
+    }
+
+    #[test]
+    fn f2_opens_the_news_tab_and_fetches_the_news() {
+        let mut view = granted();
         let f2 = key(KeyCode::F(2));
         assert_eq!(view.handle_key(f2, &users(), &files()), Action::GetMsgs);
         assert_eq!(view.tab, Tab::News);
@@ -2018,7 +2223,7 @@ mod tests {
 
     #[test]
     fn a_click_on_the_news_tab_fetches_the_news() {
-        let mut view = View::default();
+        let mut view = granted();
         let tabs = areas().tabs;
         let x = (tabs.x..tabs.right())
             .find(|&x| ui::tab_at(tabs, x, tabs.y, &view.tabs) == Some(Tab::News))
@@ -2030,21 +2235,54 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hints_follow_the_focus() {
-        let mut view = View::default();
-        assert!(view.hints().contains(&("Enter", "send")));
-        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
-        assert!(view.hints().contains(&("Enter", "message")));
+    /// A view with every privilege.
+    fn granted() -> View {
+        View {
+            access: Access::all(),
+            ..View::default()
+        }
+    }
+
+    /// `Some(true)` if `view` shows the hint `key` `does` turned on,
+    /// `Some(false)` if it shows it grayed, and `None` if it does not show it.
+    fn hint_enabled(view: &View, key: &str, does: &str) -> Option<bool> {
+        view.hints(&files())
+            .iter()
+            .find(|hint| hint.key == key && hint.does == does)
+            .map(|hint| view.may(hint.enabled_by))
     }
 
     #[test]
-    fn hints_show_disconnect_only_with_the_privilege() {
+    fn hints_follow_the_focus() {
+        let mut view = View::default();
+        assert!(hint_enabled(&view, "Enter", "send").is_some());
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert!(hint_enabled(&view, "Enter", "message").is_some());
+    }
+
+    #[test]
+    fn hints_gray_disconnect_without_the_privilege() {
         let mut view = View::default();
         let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
-        assert!(!view.hints().contains(&("k", "disconnect")));
-        view.can_disconnect = true;
-        assert!(view.hints().contains(&("k", "disconnect")));
+        assert_eq!(hint_enabled(&view, "k", "disconnect"), Some(false));
+        view.access = Access::DISCON_USER;
+        assert_eq!(hint_enabled(&view, "k", "disconnect"), Some(true));
+    }
+
+    #[test]
+    fn chat_enter_needs_send_chat() {
+        let mut view = View::default();
+        view.input_mut().unwrap().push_str("hi");
+        assert_eq!(hint_enabled(&view, "Enter", "send"), Some(false));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::None
+        );
+        view.access = Access::SEND_CHAT;
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::SendChat("hi".into())
+        );
     }
 
     #[test]
@@ -2057,7 +2295,7 @@ mod tests {
 
     #[test]
     fn f3_opens_the_files_tab_and_walks_the_folders() {
-        let mut view = View::default();
+        let mut view = granted();
         let f3 = key(KeyCode::F(3));
         assert_eq!(view.handle_key(f3, &users(), &files()), Action::ListFiles);
         assert_eq!((view.tab, view.focus), (Tab::Files, Focus::Files));
@@ -2122,7 +2360,7 @@ mod tests {
 
     #[test]
     fn d_on_the_file_list_downloads_a_folder_or_a_file() {
-        let mut view = View::default();
+        let mut view = granted();
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
         assert_eq!(
@@ -2145,7 +2383,7 @@ mod tests {
 
     #[test]
     fn u_on_the_file_list_asks_for_a_file_to_upload() {
-        let mut view = View::default();
+        let mut view = granted();
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
         let _ = view.handle_key(key(KeyCode::Char('u')), &users(), &files());
@@ -2194,7 +2432,7 @@ mod tests {
 
     /// A view whose tab bar has rooms 7 and 9.
     fn view_with_rooms() -> View {
-        let mut view = View::default();
+        let mut view = granted();
         let mut tabs = view.tabs.clone();
         tabs.push((Tab::Room(7), "Chat 7".to_string()));
         tabs.push((Tab::Room(9), "plans".to_string()));
@@ -2310,10 +2548,10 @@ mod tests {
             modal: Some(Modal::UserMenu {
                 user_id: 2,
                 at: (0, 0),
-                items: MenuItem::items(false),
+                items: &MenuItem::ALL,
                 selected: 0,
             }),
-            ..View::default()
+            ..granted()
         };
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
@@ -2457,7 +2695,7 @@ mod tests {
 
     #[test]
     fn f4_opens_threaded_news_and_walks_its_panes() {
-        let mut view = View::default();
+        let mut view = granted();
         assert_eq!(
             view.handle_key(key(KeyCode::F(4)), &users(), &files()),
             Action::ListThreadedNews
@@ -2539,7 +2777,7 @@ mod tests {
                 date: HlDate::default(),
                 text: "hi".into(),
             })),
-            ..View::default()
+            ..granted()
         };
         let _ = view.handle_key(key(KeyCode::Char('r')), &users(), &files());
         type_text(&mut view, "a");
@@ -2560,7 +2798,7 @@ mod tests {
 
     #[test]
     fn a_new_category_takes_its_name_and_a_delete_takes_y() {
-        let mut view = View::default();
+        let mut view = granted();
         let _ = view.handle_key(key(KeyCode::F(4)), &users(), &files());
         let _ = view.handle_key(key(KeyCode::Char('c')), &users(), &files());
         type_text(&mut view, "Gen");
@@ -2583,8 +2821,42 @@ mod tests {
     }
 
     #[test]
+    fn account_keys_need_their_privileges() {
+        let mut view = View {
+            tab: Tab::Admin,
+            focus: Focus::Accounts,
+            account_count: 1,
+            access: Access::CREATE_USER,
+            ..View::default()
+        };
+        for c in ['o', 'x'] {
+            assert_eq!(
+                view.handle_key(key(KeyCode::Char(c)), &users(), &files()),
+                Action::None
+            );
+            assert_eq!(view.modal, None);
+        }
+        let _ = view.handle_key(key(KeyCode::Char('n')), &users(), &files());
+        let Some(Modal::Account(form)) = &mut view.modal else {
+            panic!("no account form");
+        };
+        form.login = "bo".into();
+        form.old_login = Some("bo".into());
+        assert_eq!(hint_enabled(&view, "Enter", "save"), Some(false));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::None
+        );
+        view.access = Access::MODIFY_USER;
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::SaveAccount { .. }
+        ));
+    }
+
+    #[test]
     fn f5_opens_the_admin_tab_only_when_it_is_shown() {
-        let mut view = View::default();
+        let mut view = granted();
         assert_eq!(
             view.handle_key(key(KeyCode::F(5)), &users(), &files()),
             Action::None
@@ -2621,7 +2893,7 @@ mod tests {
     fn a_new_account_saves_its_text_and_toggled_privileges() {
         let mut view = View {
             modal: Some(Modal::Account(AccountForm::blank())),
-            ..View::default()
+            ..granted()
         };
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),

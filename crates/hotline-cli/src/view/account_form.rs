@@ -42,6 +42,16 @@ impl AccountForm {
         }
     }
 
+    /// The privilege that saves the form: create user for a new account,
+    /// or modify user for one that exists.
+    pub const fn saved_by(&self) -> Access {
+        if self.old_login.is_none() {
+            Access::CREATE_USER
+        } else {
+            Access::MODIFY_USER
+        }
+    }
+
     /// A form that edits `account`.
     pub fn edit(account: &UserAccount) -> Self {
         Self {

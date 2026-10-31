@@ -21,19 +21,18 @@ use crate::line::LineKind;
 const BULK_ACCOUNTS_VERSION: u16 = 184;
 
 impl ClientSession {
-    /// `true` if the user may administer accounts.
-    pub const fn can_administer(&self) -> bool {
-        self.access
-            .intersects(Access::OPEN_USER.union(Access::CREATE_USER))
-    }
-
     /// `true` if the server lists and saves accounts in bulk.
     fn bulk_accounts(&self) -> bool {
         self.server_at_least(BULK_ACCOUNTS_VERSION)
     }
 
-    /// List every account, or keep the accounts opened so far on an older server.
+    /// List every account, or keep the accounts opened so far on an older
+    /// server. Without the open user privilege, it lists none.
     pub async fn list_accounts(&mut self, client: &HotlineClient) {
+        if !self.granted().contains(Access::OPEN_USER) {
+            self.accounts.get_or_insert_default();
+            return;
+        }
         if !self.bulk_accounts() {
             if self.accounts.is_none() {
                 self.accounts = Some(Vec::new());
@@ -158,7 +157,16 @@ mod tests {
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
         session.server_version = Some(version);
+        session.access = Access::all();
         (session, client)
+    }
+
+    #[tokio::test]
+    async fn list_accounts_lists_none_without_open_user() {
+        let (mut session, client) = session(190).await;
+        session.access = Access::CREATE_USER;
+        session.list_accounts(&client).await;
+        assert_eq!(session.accounts, Some(Vec::new()));
     }
 
     #[tokio::test]

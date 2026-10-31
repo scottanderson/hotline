@@ -2,8 +2,8 @@
 //! one category, and a preview of one article.
 
 use hotline_client::{HotlineClient, TEXT_PLAIN};
-use hotline_proto::text_encoding;
 use hotline_proto::types::{HlDate, HlPath, NewsArticleSummary, NewsCategoryListEntry};
+use hotline_proto::{text_encoding, Access};
 
 use super::ClientSession;
 use crate::line::LineKind;
@@ -344,6 +344,31 @@ impl ClientSession {
         }
     }
 
+    /// `true` if the user may delete the folder at `index`. A bundle needs
+    /// the delete bundle and the delete category privileges. Else it shows
+    /// an error line.
+    pub fn may_delete_news_folder(&mut self, index: usize) -> bool {
+        let bundle = self
+            .news_folder(index)
+            .is_some_and(|node| node.kind == NewsFolder::Bundle);
+        let access = self.granted();
+        if bundle && !access.contains(Access::NEWS_DELETE_FLDR) {
+            self.push(
+                "You are not allowed to delete news bundles.",
+                LineKind::Error,
+            );
+            return false;
+        }
+        if !access.contains(Access::NEWS_DELETE_CAT) {
+            self.push(
+                "You are not allowed to delete news categories.",
+                LineKind::Error,
+            );
+            return false;
+        }
+        true
+    }
+
     /// The name of the folder or the title of the article at `target`.
     pub fn news_name(&self, target: NewsTarget) -> Option<&str> {
         match target {
@@ -440,6 +465,7 @@ impl ClientSession {
 
 #[cfg(test)]
 mod tests {
+    use hotline_proto::text_encoding::EncodingHandle;
     use hotline_proto::types::HlPath;
 
     use super::*;
@@ -519,6 +545,29 @@ mod tests {
             node.cells(),
             [format!("  \u{25b8} {icon} Sub"), "3".to_string()]
         );
+    }
+
+    #[test]
+    fn may_delete_news_folder_needs_both_privileges_for_a_bundle() {
+        let mut session = ClientSession::new("me".into(), 0, EncodingHandle::default());
+        session.server_version = Some(190);
+        session.news_folders = Some(
+            [NewsFolder::Bundle, NewsFolder::Category]
+                .map(|kind| NewsFolderNode {
+                    kind,
+                    path: HlPath::new(["A"]),
+                    count: 0,
+                    expanded: false,
+                })
+                .into(),
+        );
+        session.access = Access::NEWS_DELETE_CAT;
+        assert!(!session.may_delete_news_folder(0));
+        assert!(session.may_delete_news_folder(1));
+        session.access = Access::NEWS_DELETE_FLDR;
+        assert!(!session.may_delete_news_folder(0));
+        session.access |= Access::NEWS_DELETE_CAT;
+        assert!(session.may_delete_news_folder(0));
     }
 
     #[tokio::test]

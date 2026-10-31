@@ -1,3 +1,5 @@
+use hotline_proto::Access;
+
 /// The screen shown in the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tab {
@@ -23,6 +25,16 @@ impl Tab {
 
     /// The label of [`Tab::Admin`].
     pub const ADMIN_LABEL: &'static str = "Admin";
+
+    /// The privileges that turn the tab on. Any one of them is enough.
+    pub const fn enabled_by(self) -> Access {
+        match self {
+            Self::Chat => Access::READ_CHAT.union(Access::SEND_CHAT),
+            Self::News | Self::Threaded => Access::NEWS_READ_ART,
+            Self::Admin => Access::OPEN_USER.union(Access::CREATE_USER),
+            _ => Access::empty(),
+        }
+    }
 
     /// The ID of the private chat room, for [`Tab::Room`].
     pub const fn chat_id(self) -> Option<u32> {

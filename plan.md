@@ -184,6 +184,24 @@ works this way.
 - **A repeated resume entry replaces the earlier one.** openline's Mac
   `ResumeFlatten` seeks a fork to its last `RFLT` entry, but reduces the
   fork's size by each entry. `hls` uses the last entry for both.
+- **`hlc` grays out an action that needs a privilege.** openline's
+  client hides the disconnect, broadcast, new user, and open user
+  buttons without the privilege (`CMyUserListWin::SetAccess` and
+  `CMyToolbar::SetAccess`), and disables the others. `hlc` shows each
+  key, command, and menu item in gray, so the layout stays the same.
+- **`hlc` offers an upload in every folder.** openline's client turns
+  off its upload button at the root (`CMyFileWin::SetFileAccess` in
+  `HotlineWindows.cp`). `hlc` turns on `u` with the upload privilege in
+  every folder. The server decides, and `hlc` shows its error.
+- **`hlc` reads news only with `myAcc_NewsReadArt`.** openline's
+  client opens the message board and the news window with no check
+  (`DoShowMsgBoardWin` and `DoShowNewsWin` in `Hotline.cp`). openline's
+  server refuses `myTran_GetMsgs` (101) without the privilege, but
+  answers `myTran_GetNewsCatNameList` (370) and
+  `myTran_GetNewsArtNameList` (371) with no check. Its client checks
+  the privilege only to read an article. `hlc` grays out the News and
+  Threaded News tabs without the privilege, and sends none of these
+  requests.
 
 ## Openline vs. mhxd divergences (resolved)
 

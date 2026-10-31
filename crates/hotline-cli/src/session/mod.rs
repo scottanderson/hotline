@@ -360,9 +360,23 @@ impl ClientSession {
         );
     }
 
-    /// `true` if the user may send a broadcast.
-    pub const fn can_broadcast(&self) -> bool {
-        self.access.contains(Access::BROADCAST)
+    /// The privileges that the client applies. Before server version 182,
+    /// a private chat and a private message need no privilege, and a folder
+    /// download or upload needs the privilege for a file.
+    pub fn granted(&self) -> Access {
+        if self.server_at_least(182) {
+            return self.access;
+        }
+        let mut access = self.access | Access::CREATE_CHAT | Access::SEND_MESSAGE;
+        access.set(
+            Access::DOWNLOAD_FOLDER,
+            self.access.contains(Access::DOWNLOAD_FILE),
+        );
+        access.set(
+            Access::UPLOAD_FOLDER,
+            self.access.contains(Access::UPLOAD_FILE),
+        );
+        access
     }
 
     /// [`myTran_UserBroadcast`] (355), showing an error line if it fails.
@@ -487,11 +501,6 @@ impl ClientSession {
         }
     }
 
-    /// `true` if the user may disconnect users.
-    pub const fn can_disconnect(&self) -> bool {
-        self.access.contains(Access::DISCON_USER)
-    }
-
     pub async fn send_instant_msg(&mut self, client: &HotlineClient, user_id: u16, text: &str) {
         let text = to_wire_lines(text);
         match client.send_instant_msg(user_id, &text).await {
@@ -514,6 +523,24 @@ fn display_text(s: &str) -> String {
 mod tests {
     use super::*;
     use hotline_proto::types::UserFlags;
+
+    #[test]
+    fn granted_adds_the_old_server_privileges() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        session.access = Access::DOWNLOAD_FILE | Access::UPLOAD_FOLDER;
+        assert_eq!(
+            session.granted(),
+            Access::DOWNLOAD_FILE
+                | Access::DOWNLOAD_FOLDER
+                | Access::CREATE_CHAT
+                | Access::SEND_MESSAGE
+        );
+        session.server_version = Some(182);
+        assert_eq!(
+            session.granted(),
+            Access::DOWNLOAD_FILE | Access::UPLOAD_FOLDER
+        );
+    }
 
     #[test]
     fn new_msg_adds_the_post_to_the_top_of_the_news() {

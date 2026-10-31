@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use hotline_client::{FolderDownload, FolderUpload, HotlineClient};
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
+use hotline_proto::Access;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;
@@ -181,6 +182,10 @@ impl ClientSession {
         let conflict_local = || local.to_string_lossy().into();
         match tokio::fs::metadata(local).await {
             Ok(metadata) if metadata.is_dir() => {
+                if !self.granted().contains(Access::UPLOAD_FOLDER) {
+                    self.push("You are not allowed to upload folders.", LineKind::Error);
+                    return None;
+                }
                 if start == Start::Ask && self.lists_folder(&name) {
                     return Some(Conflict::RemoteFolderExists {
                         local: conflict_local(),
@@ -189,6 +194,10 @@ impl ClientSession {
                 self.upload_folder(client, local, name, start, done).await;
             }
             Ok(_) => {
+                if !self.granted().contains(Access::UPLOAD_FILE) {
+                    self.push("You are not allowed to upload files.", LineKind::Error);
+                    return None;
+                }
                 let partial = self
                     .files
                     .as_deref()
@@ -536,6 +545,7 @@ mod tests {
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
         session.download_dir = dir.to_path_buf();
+        session.access = Access::all();
         (session, client)
     }
 
@@ -638,6 +648,33 @@ mod tests {
         assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"bbbb");
         assert_eq!(std::fs::read(root.join("c.txt")).unwrap(), b"cccc");
         assert!(!root.join("b.txt.hpf").exists());
+    }
+
+    #[tokio::test]
+    async fn upload_needs_the_privilege_for_a_file_or_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a.txt");
+        std::fs::write(&local, b"hello").unwrap();
+        let files = hotline_server::InMemoryFileProvider::default();
+        let (mut session, client) = file_session(files, dir.path()).await;
+        session.server_version = Some(190);
+        session.access = Access::UPLOAD_FOLDER;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        assert_eq!(session.upload(&client, &local, Start::Ask, &tx).await, None);
+        assert_eq!(
+            &*session.lines.last().unwrap().text,
+            "You are not allowed to upload files."
+        );
+        session.access = Access::UPLOAD_FILE;
+        assert_eq!(
+            session.upload(&client, dir.path(), Start::Ask, &tx).await,
+            None
+        );
+        assert_eq!(
+            &*session.lines.last().unwrap().text,
+            "You are not allowed to upload folders."
+        );
     }
 
     #[tokio::test]

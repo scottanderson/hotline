@@ -36,7 +36,8 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --nick Alice
 Use `HLC_PASSWORD` in place of `--password` when other users share the
 host, because they can read a command line.
 
-The line at the bottom of the screen shows the keys that work now.
+The line at the bottom of the screen shows the keys of the focused
+pane.
 The tabs are Chat, News, Files, and Threaded News, then Admin with the
 account privileges, then one for each private chat room. Each tab has
 a number, which the tab bar shows. F1 to F9, or Alt with
@@ -50,11 +51,24 @@ The Chat tab and each room tab change with each new line, and the News
 tab changes with each new post. The label turns back when you open the
 tab.
 
+A key, a command, a menu item, or a tab that needs a privilege you do
+not have shows in gray, and it does nothing. hlc gets the privileges
+from the server. A server older than version 1.8.2 has no privileges
+for private chat, messages, or folder downloads. With such a server,
+hlc allows private chat and messages, and the file download privilege
+also allows folder downloads. The Chat tab needs
+the read chat or the send chat privilege, and Enter in a chat needs
+the send chat privilege. The News and Threaded News tabs need the
+read news privilege, and hlc asks the server for nothing without it.
+To delete a news bundle, a user needs the delete bundle and the delete
+category privileges. On the Files tab, a key needs the file privilege
+or the folder privilege, for the kind of the selected item.
+
 | Key    | Where                | Effect                                          |
 |--------|----------------------|-------------------------------------------------|
-| Ctrl-P | outside a dialog     | the commands that work now; type to filter      |
+| Ctrl-P | outside a dialog     | the commands for this place; type to filter     |
 | Ctrl-O | a room, user list    | the actions of the room or the selected user    |
-| Alt-A  | outside a dialog     | a broadcast, with the broadcast privilege       |
+| Alt-A  | outside a dialog     | a broadcast                                     |
 | Alt-O  | outside a dialog     | your name, icon, and options                    |
 | Alt-I  | a room               | invite a user                                   |
 | Alt-S  | a room               | set the subject                                 |
@@ -64,7 +78,7 @@ tab.
 | Ctrl-U | a text box           | delete the whole text                           |
 | Enter  | user list            | send a private message                          |
 | `i`    | user list            | the user's info                                 |
-| `k`    | user list            | disconnect the user, with the privilege         |
+| `k`    | user list            | disconnect the user                             |
 
 Alt-X also opens the palette, for a terminal that takes Ctrl-P.
 Shift-F10 and the Menu key also open the actions. The palette and
@@ -95,7 +109,12 @@ the bundle that holds the selected category.
 
 On the Admin tab, Enter edits an account, `n` creates one, `o` opens
 one by login, and `x` deletes one. In the account form, Space turns
-the selected privilege on or off.
+the selected privilege on or off. The tab shows with the open user or
+the create user privilege. Without the open user privilege, it lists
+no accounts and `o` is gray. `n` needs the create user privilege, and
+`x` needs the delete user privilege. The form saves a new account with
+the create user privilege, and a changed account with the modify user
+privilege.
 
 ## License
 

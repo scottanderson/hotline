@@ -3,6 +3,7 @@
 use hotline_client::FileInfo;
 use hotline_proto::text_encoding;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
+use hotline_proto::Access;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span, Text};
@@ -12,7 +13,8 @@ use ratatui::Frame;
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::view::{
-    contains, privileges, AccountForm, Focus, MenuItem, Modal, OptionsForm, Tab, View, OPTIONS,
+    allows, contains, privileges, AccountForm, Focus, Hint, MenuItem, Modal, OptionsForm, Tab,
+    View, OPTIONS,
 };
 
 /// Where each part of the main screen is drawn.
@@ -39,15 +41,12 @@ fn input_rows(text: &str) -> u16 {
     text.split('\n').count().min(MAX_INPUT_ROWS) as u16
 }
 
-/// A key hint: the key, and what it does.
-pub type Hint = (&'static str, &'static str);
-
 /// `hints` laid out in rows no wider than `width`, keeping each hint whole.
 fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
     let mut rows = Vec::new();
     let (mut start, mut used) = (0, 0);
-    for (i, (key, action)) in hints.iter().enumerate() {
-        let len = text_width(key) + text_width(action) + 3;
+    for (i, hint) in hints.iter().enumerate() {
+        let len = text_width(hint.key) + text_width(hint.does) + 3;
         if used > 0 && used + len > usize::from(width) {
             rows.push(&hints[start..i]);
             (start, used) = (i, 0);
@@ -111,8 +110,7 @@ pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
     let fixed = Tab::FIXED
         .iter()
         .map(|&(tab, label)| (tab, label.to_string()));
-    let admin = session
-        .can_administer()
+    let admin = allows(session.granted(), Tab::Admin.enabled_by())
         .then(|| (Tab::Admin, Tab::ADMIN_LABEL.to_string()));
     let rooms = session
         .rooms
@@ -210,15 +208,16 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         return;
     }
 
-    let areas = areas(
-        frame.area(),
-        view.input(),
-        &view.hints(),
-        view.shows_users(),
-    );
+    let hints = view.hints(session.files.as_deref().unwrap_or_default());
+    let areas = areas(frame.area(), view.input(), &hints, view.shows_users());
     draw_tabs(frame, areas.tabs, view);
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
+        Tab::News | Tab::Threaded if !view.may(view.tab.enabled_by()) => {
+            let block = Block::bordered().title("news");
+            let text = Paragraph::new("You are not allowed to read news.").block(block);
+            frame.render_widget(text, areas.body);
+        }
         Tab::News => draw_news(frame, areas.body, session, view.news_scroll),
         Tab::Files => draw_files(frame, areas.body, session, view),
         Tab::Threaded => draw_threaded_news(frame, areas.body, session, view),
@@ -233,9 +232,9 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     if view.shows_users() {
         draw_users(frame, areas.users, session, view);
     }
-    draw_hints(frame, areas.hints, view);
+    draw_hints(frame, areas.hints, view, &hints);
     if let Some(modal) = &view.modal {
-        draw_modal(frame, areas.screen, modal);
+        draw_modal(frame, areas.screen, modal, view.access);
     }
 }
 
@@ -261,7 +260,8 @@ fn draw_tabs(frame: &mut Frame, area: Rect, view: &View) {
             spans.push(Span::raw("│"));
         }
         let style = match (tab == view.tab, view.updated.contains(&tab)) {
-            (true, _) => Style::default().add_modifier(Modifier::REVERSED),
+            (true, _) => enabled_style(view.may(tab.enabled_by())).add_modifier(Modifier::REVERSED),
+            _ if !view.may(tab.enabled_by()) => enabled_style(false),
             (false, true) => Style::default().fg(Color::Yellow),
             (false, false) => Style::default(),
         };
@@ -560,15 +560,15 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
     view.users_offset = state.offset();
 }
 
-fn draw_hints(frame: &mut Frame, area: Rect, view: &View) {
-    let hints = view.hints();
-    let lines: Vec<UiLine> = hint_rows(&hints, area.width)
+fn draw_hints(frame: &mut Frame, area: Rect, view: &View, hints: &[Hint]) {
+    let lines: Vec<UiLine> = hint_rows(hints, area.width)
         .into_iter()
         .map(|row| {
-            let spans = row.iter().flat_map(|(key, action)| {
+            let spans = row.iter().flat_map(|hint| {
+                let style = enabled_style(allows(view.access, hint.enabled_by));
                 [
-                    Span::styled(*key, Style::default().add_modifier(Modifier::BOLD)),
-                    Span::raw(format!(" {action}  ")),
+                    Span::styled(hint.key, style.add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}  ", hint.does), style),
                 ]
             });
             UiLine::from(spans.collect::<Vec<_>>())
@@ -577,7 +577,16 @@ fn draw_hints(frame: &mut Frame, area: Rect, view: &View) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
+/// The plain style, or gray for a key or an item that is turned off.
+fn enabled_style(enabled: bool) -> Style {
+    if enabled {
+        Style::default()
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
+fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
     match modal {
         Modal::InstantMsg { name, input, .. } => {
             draw_input_modal(frame, screen, format!("message to {name}"), input);
@@ -643,9 +652,12 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             draw_list_modal(frame, area, block, items, *selected);
         }
         Modal::Palette(palette) => {
-            let rows: Vec<String> = palette
+            let rows: Vec<ListItem> = palette
                 .matches()
-                .map(|(command, label)| format!("{label:<38}{}", command.key()))
+                .map(|(command, label)| {
+                    let style = enabled_style(allows(access, command.enabled_by()));
+                    ListItem::new(format!("{label:<38}{}", command.key())).style(style)
+                })
                 .collect();
             let area = screen.centered(
                 Constraint::Length(46),
@@ -664,7 +676,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal) {
             ..
         } => {
             let area = menu_rect(*at, items, screen);
-            let items = items.iter().map(|item| ListItem::new(item.label()));
+            let items = items.iter().map(|item| {
+                let style = enabled_style(allows(access, item.enabled_by()));
+                ListItem::new(item.label()).style(style)
+            });
             let block = Block::bordered().border_style(border(true));
             draw_list_modal(frame, area, block, items, *selected);
         }
@@ -806,7 +821,7 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(70, 10);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw_modal(frame, frame.area(), modal))
+            .draw(|frame| draw_modal(frame, frame.area(), modal, Access::all()))
             .unwrap();
         let buffer = terminal.backend().buffer();
         buffer.content.iter().map(|cell| cell.symbol()).collect()
@@ -855,7 +870,11 @@ mod tests {
 
     #[test]
     fn hint_rows_keep_each_hint_whole() {
-        let hints = [("Enter", "send"), ("Tab", "users"), ("Esc", "quit")];
+        let hints = [
+            Hint::new("Enter", "send"),
+            Hint::new("Tab", "users"),
+            Hint::new("Esc", "quit"),
+        ];
         assert_eq!(hint_rows(&hints, 80), [&hints[..]]);
         assert_eq!(hint_rows(&hints, 23), [&hints[..2], &hints[2..]]);
         assert_eq!(hint_rows(&hints, 1).len(), 3);
