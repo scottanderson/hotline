@@ -413,8 +413,10 @@ impl ClientSession {
     pub async fn get_msgs(&mut self, client: &HotlineClient) {
         match client.get_msgs().await {
             Ok(news) => {
+                if self.news.as_ref() != Some(&news) {
+                    self.news_revision += 1;
+                }
                 self.news = Some(news);
-                self.news_revision += 1;
             }
             Err(e) => self.push(format!("failed to get news: {e}"), LineKind::Error),
         }
@@ -557,6 +559,17 @@ mod tests {
             Some("From alice\rhelloFrom bob\rold")
         );
         assert_eq!(&*session.lines.last().unwrap().text, "new news post");
+        assert_eq!(session.news_revision, 1);
+    }
+
+    #[tokio::test]
+    async fn get_msgs_counts_only_a_change() {
+        let addr = test_support::start_server(hotline_server::Providers::default()).await;
+        let (client, _events) = test_support::join_admin(addr, "me").await;
+        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        for _ in 0..2 {
+            session.get_msgs(&client).await;
+        }
         assert_eq!(session.news_revision, 1);
     }
 
