@@ -117,6 +117,37 @@ impl AccountProvider for FileAccountProvider {
         Ok(true)
     }
 
+    /// Moves the account file, then writes `account` into it, so a rename
+    /// works when the file system sees both logins as one name, such as a
+    /// change of only the letter case. A failed write leaves the old account
+    /// under `login`.
+    async fn rename(
+        &self,
+        old_login: &str,
+        login: String,
+        account: Account,
+    ) -> Result<(), Cow<'static, str>> {
+        let (Some(old_path), Some(path)) = (self.path_for(old_login), self.path_for(&login)) else {
+            Err("invalid login")?
+        };
+        tokio::fs::rename(&old_path, &path)
+            .await
+            .map_err(|e| e.to_string())?;
+        let written = self.write_account(&login, &account).await;
+        let mut cache = self.cache.write().await;
+        let old = cache.remove(old_login);
+        match written {
+            Ok(()) => {
+                cache.insert(login, account);
+                Ok(())
+            }
+            Err(error) => {
+                cache.extend(old.map(|old| (login, old)));
+                Err(error.to_string().into())
+            }
+        }
+    }
+
     async fn list(&self) -> Vec<(String, Account)> {
         self.cache
             .read()
@@ -219,5 +250,38 @@ mod tests {
             .put("../escape".to_string(), alice())
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn rename_that_changes_only_the_case_keeps_the_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        provider.put("bob".to_string(), alice()).await.unwrap();
+
+        provider
+            .rename("bob", "Bob".to_string(), alice())
+            .await
+            .unwrap();
+
+        assert_eq!(provider.get("bob").await, None);
+        assert_eq!(provider.get("Bob").await, Some(alice()));
+        let reopened = FileAccountProvider::open(dir.path()).await.unwrap();
+        assert_eq!(reopened.get("Bob").await, Some(alice()));
+    }
+
+    #[tokio::test]
+    async fn rename_that_fails_keeps_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        provider.put("alice".to_string(), alice()).await.unwrap();
+        std::fs::create_dir(dir.path().join("bob.json")).unwrap();
+
+        assert!(provider
+            .rename("alice", "bob".to_string(), alice())
+            .await
+            .is_err());
+
+        assert_eq!(provider.get("alice").await, Some(alice()));
+        assert!(dir.path().join("alice.json").is_file());
     }
 }

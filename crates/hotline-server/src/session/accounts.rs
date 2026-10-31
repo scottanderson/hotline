@@ -10,7 +10,7 @@ use hotline_proto::{Field, FieldList, Received, Transaction};
 use crate::account::{AccessExtra, Account};
 use crate::activity::{AccountAction, Activity};
 use crate::policy::TakenLogin;
-use crate::state::{AccessUpdate, ReplacedAccount, SharedState};
+use crate::state::{AccessUpdate, NotReplaced, ReplacedAccount, SharedState};
 
 use super::connection::Session;
 
@@ -155,7 +155,7 @@ impl Session {
         };
         let account = match state.replace_account(&login, login.clone(), edit).await {
             Ok(ReplacedAccount { account, .. }) => account,
-            Err(reason) => return vec![tx.reply_error(reason)],
+            Err(NotReplaced { reason, .. }) => return vec![tx.reply_error(reason)],
         };
         state
             .push_access_update(AccessUpdate {
@@ -382,7 +382,15 @@ impl Session {
                         .await;
                     Ok(!over_taken_login)
                 }
-                Err(_) => Ok(false),
+                Err(NotReplaced { moved, .. }) => {
+                    if moved {
+                        let action = AccountAction::Rename {
+                            from: old_login.into(),
+                        };
+                        self.record_account_change(action, login, state).await;
+                    }
+                    Ok(false)
+                }
             };
         }
 
@@ -1335,6 +1343,112 @@ mod tests {
         assert!(state.account("bob").await.is_some());
         assert!(state.account("bobby").await.is_some());
         assert!(bob_rx.try_recv().is_err());
+    }
+
+    /// Account storage whose `rename` moves the account, then fails to
+    /// write the edit.
+    struct FailingWriteAccounts(crate::account::InMemoryAccountProvider);
+
+    #[async_trait::async_trait]
+    impl AccountProvider for FailingWriteAccounts {
+        async fn get(&self, login: &str) -> Option<Account> {
+            self.0.get(login).await
+        }
+
+        async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
+            self.0.put(login, account).await
+        }
+
+        async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>> {
+            self.0.delete(login).await
+        }
+
+        async fn rename(
+            &self,
+            old_login: &str,
+            login: String,
+            _account: Account,
+        ) -> Result<(), Cow<'static, str>> {
+            let old = self.0.get(old_login).await.ok_or("no account")?;
+            self.0.put(login, old).await?;
+            self.0.delete(old_login).await?;
+            Err("disk full")?
+        }
+
+        async fn list(&self) -> Vec<(String, Account)> {
+            self.0.list().await
+        }
+    }
+
+    #[tokio::test]
+    async fn set_user_list_records_a_rename_whose_edit_fails_to_save() {
+        let admin = test_session("Admin", Access::all());
+        let accounts = crate::account::InMemoryAccountProvider::default();
+        let bob = Account {
+            access_extra: AccessExtra::default(),
+            password: "secret".into(),
+            name: "Bob".into(),
+            access: Access::SEND_CHAT,
+        };
+        accounts.put("bob".to_string(), bob).await.unwrap();
+        let log = Arc::new(RecordingActivityLog::default());
+        let state = SharedState::new(crate::Providers {
+            accounts: Arc::new(FailingWriteAccounts(accounts)),
+            activity: log.clone(),
+            ..Default::default()
+        });
+        let mut bob_rx = state.register_recipient(2).await;
+
+        let record = user_list_record(
+            Some("bob"),
+            "Bobby",
+            "bobby",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::SEND_CHAT,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        let replies = admin.on_set_user_list(&request, &state).await;
+
+        assert!(replies[0].is_error());
+        assert_eq!(state.account("bobby").await.unwrap().name, "Bob".into());
+        assert_eq!(
+            log.activities(),
+            [Activity::AccountChange {
+                action: AccountAction::Rename { from: "bob".into() },
+                account: "bobby".into(),
+            }]
+        );
+        assert!(bob_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_logs_no_rename_of_a_login_that_is_gone() {
+        let admin = test_session("Admin", Access::all());
+        let accounts = crate::account::InMemoryAccountProvider::default();
+        accounts
+            .put("bobby".to_string(), Account::guest())
+            .await
+            .unwrap();
+        let log = Arc::new(RecordingActivityLog::default());
+        let state = SharedState::new(crate::Providers {
+            accounts: Arc::new(accounts),
+            activity: log.clone(),
+            ..Default::default()
+        });
+
+        let record = user_list_record(
+            Some("bob"),
+            "Bobby",
+            "bobby",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::SEND_CHAT,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        let replies = admin.on_set_user_list(&request, &state).await;
+
+        assert!(replies[0].is_error());
+        assert_eq!(state.account("bobby").await, Some(Account::guest()));
+        assert_eq!(log.activities(), []);
     }
 
     #[tokio::test]

@@ -22,7 +22,9 @@ pub trait AccountProvider: Send + Sync {
     async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>>;
     /// Store `account` under `login`, a login that is free, and remove
     /// `old_login`. The default puts `login`, then deletes `old_login`. An
-    /// error after the put leaves both accounts.
+    /// error after the put leaves both accounts. A provider can instead move
+    /// the account in one step, then fail to write `account`. The old
+    /// account then stays under `login`.
     async fn rename(
         &self,
         old_login: &str,

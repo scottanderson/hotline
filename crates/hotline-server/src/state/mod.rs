@@ -31,7 +31,7 @@ pub(crate) use progress::ProgressGuard;
 pub use progress::{TransferProgress, TransferReport, TransferSection};
 pub(crate) use recipient::QUEUE_LEN;
 pub use recipient::{Inbox, RecipientMessage};
-pub(crate) use replaced_account::ReplacedAccount;
+pub(crate) use replaced_account::{NotReplaced, ReplacedAccount};
 pub use room::ChatRoom;
 pub use shared::SharedState;
 pub use transfer::{PendingTransfer, TransferDirection, TransferKind};

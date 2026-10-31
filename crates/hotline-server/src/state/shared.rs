@@ -44,8 +44,9 @@ use crate::state::progress::RunningTransfers;
 use crate::state::recipient::{self, Recipient};
 use crate::state::{
     dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom,
-    ConsoleUpdate, Inbox, PendingTransfer, ProgressGuard, RecipientMessage, ReplacedAccount,
-    TransferDirection, TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
+    ConsoleUpdate, Inbox, NotReplaced, PendingTransfer, ProgressGuard, RecipientMessage,
+    ReplacedAccount, TransferDirection, TransferKind, TransferProgress, TransferRef,
+    TransferReport, UserEntry,
 };
 
 /// How long an active download or an upload may wait for its `HTXF`
@@ -1702,15 +1703,16 @@ impl SharedState {
     /// Save `edit` of the account at `old_login` under `login`. `Err` if
     /// `old_login` is gone, or if a rename's `login` is taken and the policy
     /// gives [`TakenLogin::Refuse`]. A rename goes through
-    /// [`AccountProvider::rename`]. With [`TakenLogin::Overwrite`], a rename
-    /// onto a taken login writes `edit` of the `old_login` account over that
-    /// account, and keeps `old_login`.
+    /// [`AccountProvider::rename`], and its error tells whether the account
+    /// moved. With [`TakenLogin::Overwrite`], a rename onto a taken login
+    /// writes `edit` of the `old_login` account over that account, and keeps
+    /// `old_login`.
     pub(crate) async fn replace_account(
         &self,
         old_login: &str,
         login: String,
         edit: impl FnOnce(Account) -> Account,
-    ) -> Result<ReplacedAccount, Cow<'static, str>> {
+    ) -> Result<ReplacedAccount, NotReplaced> {
         let _writes = self.account_writes.lock().await;
         let Some(existing) = self.accounts().get(old_login).await else {
             Err(format!("No account with login \"{old_login}\"."))?
@@ -1722,9 +1724,15 @@ impl SharedState {
         }
         let account = edit(existing);
         if renamed && !over_taken_login {
-            self.accounts()
-                .rename(old_login, login, account.clone())
-                .await?;
+            if let Err(reason) = self
+                .accounts()
+                .rename(old_login, login.clone(), account.clone())
+                .await
+            {
+                let moved = self.accounts().get(old_login).await.is_none()
+                    && self.accounts().get(&login).await.is_some();
+                return Err(NotReplaced { reason, moved });
+            }
         } else {
             self.accounts().put(login, account.clone()).await?;
         }
