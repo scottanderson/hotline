@@ -36,7 +36,7 @@ use crate::news::{
     body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
     ThreadedNewsProvider,
 };
-use crate::policy::{ServerPolicy, Silent, TimeZone};
+use crate::policy::{ServerPolicy, Silent, TakenLogin, TimeZone};
 use crate::providers::Providers;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
@@ -44,8 +44,8 @@ use crate::state::progress::RunningTransfers;
 use crate::state::recipient::{self, Recipient};
 use crate::state::{
     dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom,
-    ConsoleUpdate, Inbox, PendingTransfer, ProgressGuard, RecipientMessage, TransferDirection,
-    TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
+    ConsoleUpdate, Inbox, PendingTransfer, ProgressGuard, RecipientMessage, ReplacedAccount,
+    TransferDirection, TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
 };
 
 /// How long an active download or an upload may wait for its `HTXF`
@@ -1702,31 +1702,38 @@ impl SharedState {
         self.accounts().put(login, account).await
     }
 
-    /// Save `edit` of the account at `old_login` under `login`, and return
-    /// the saved account. `Err` if `old_login` is gone, or if a rename's
-    /// `login` is taken. A rename deletes `old_login` after it saves `login`.
-    pub async fn replace_account(
+    /// Save `edit` of the account at `old_login` under `login`. `Err` if
+    /// `old_login` is gone, or if a rename's `login` is taken and the policy
+    /// gives [`TakenLogin::Refuse`]. A rename deletes `old_login` after it
+    /// saves `login`. With [`TakenLogin::Overwrite`], a rename onto a taken
+    /// login writes `edit` of the `old_login` account over that account, and
+    /// keeps `old_login`.
+    pub(crate) async fn replace_account(
         &self,
         old_login: &str,
         login: String,
         edit: impl FnOnce(Account) -> Account,
-    ) -> Result<Account, Cow<'static, str>> {
+    ) -> Result<ReplacedAccount, Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
         let Some(existing) = self.accounts().get(old_login).await else {
             Err(format!("No account with login \"{old_login}\"."))?
         };
         let renamed = old_login != login;
-        if renamed && self.accounts().get(&login).await.is_some() {
+        let over_taken_login = renamed && self.accounts().get(&login).await.is_some();
+        if over_taken_login && self.policy().taken_login() == TakenLogin::Refuse {
             Err("that login is taken")?;
         }
         let account = edit(existing);
         self.accounts().put(login, account.clone()).await?;
-        if renamed {
+        if renamed && !over_taken_login {
             if let Err(error) = self.accounts().delete(old_login).await {
                 tracing::warn!(%error, old_login, "could not delete a renamed account's old login");
             }
         }
-        Ok(account)
+        Ok(ReplacedAccount {
+            account,
+            over_taken_login,
+        })
     }
 
     /// The active ban on `ip`, if any; see [`crate::BanProvider::is_banned`].
@@ -2083,7 +2090,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replace_account_refuses_a_deleted_login_and_a_taken_rename() {
+    async fn replace_account_refuses_a_deleted_login_and_writes_a_taken_rename_over_it() {
         let state = Arc::<SharedState>::default();
         assert!(state
             .replace_account("bob", "bob".to_string(), |_| Account::guest())
@@ -2092,23 +2099,35 @@ mod tests {
         assert!(state.account("bob").await.is_none());
 
         state
-            .put_account("bob".to_string(), Account::guest())
+            .put_account("bob".to_string(), Account::admin("bob's"))
             .await
             .unwrap();
         state
             .put_account("amy".to_string(), Account::guest())
             .await
             .unwrap();
-        assert!(state
-            .replace_account("bob", "amy".to_string(), |_| Account::guest())
+        let replaced = state
+            .replace_account("bob", "amy".to_string(), |bob| Account {
+                name: "Edited".into(),
+                ..bob
+            })
             .await
-            .is_err());
+            .unwrap();
+        assert!(replaced.over_taken_login);
         assert!(state.account("bob").await.is_some());
+        assert_eq!(
+            state.account("amy").await.unwrap(),
+            Account {
+                name: "Edited".into(),
+                ..Account::admin("bob's")
+            }
+        );
 
-        state
+        let replaced = state
             .replace_account("bob", "bobby".to_string(), |_| Account::guest())
             .await
             .unwrap();
+        assert!(!replaced.over_taken_login);
         assert!(state.account("bob").await.is_none());
         assert!(state.account("bobby").await.is_some());
     }

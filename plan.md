@@ -77,11 +77,14 @@ works this way.
   scrambles each password byte with bitwise NOT in its data file
   (`HotlineServTrans.cp`). This hides a password only from a casual
   reader, so `hls` does not scramble them.
-- **A rename onto a taken login changes nothing.** openline's
+- **`hls` refuses a rename onto a taken login.** openline's
   `ProcessTran_SetUserList` fails the folder rename, then still writes
-  the record over the other account with `SetUser`. This server skips
-  the record and leaves both accounts as they were. Both reply
-  "Error saving list of accounts."
+  the record over the other account with `SetUser`. The `ServerPolicy`
+  default `TakenLogin::Overwrite` does the same. `HlsPolicy` picks
+  `TakenLogin::Refuse`, which leaves both accounts as they were, so
+  a typo in a login change cannot destroy another account. It also
+  sends a `myTran_ServerMsg` (104) notice that names the taken login.
+  Both reply "Error saving list of accounts."
 - **Activity logs use a different date and line format.** openline
   writes the Mac short date and `\r` line endings in the classic Mac
   text encoding. `hls` writes `YYYY-MM-DD HH:MM:SS` in local time with

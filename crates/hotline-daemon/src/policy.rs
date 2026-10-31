@@ -2,10 +2,11 @@
 
 use std::borrow::Cow;
 
-use hotline_server::{ServerPolicy, Silent, TimeZone};
+use hotline_server::{ServerPolicy, Silent, TakenLogin, TimeZone};
 
 /// `hls` replies with an error in each case where openline sends none,
-/// and sends dates in [`TimeZone::Utc`].
+/// sends dates in [`TimeZone::Utc`], and refuses a rename onto a taken
+/// login.
 pub struct HlsPolicy;
 
 impl ServerPolicy for HlsPolicy {
@@ -20,5 +21,9 @@ impl ServerPolicy for HlsPolicy {
 
     fn time_zone(&self) -> TimeZone {
         TimeZone::Utc
+    }
+
+    fn taken_login(&self) -> TakenLogin {
+        TakenLogin::Refuse
     }
 }

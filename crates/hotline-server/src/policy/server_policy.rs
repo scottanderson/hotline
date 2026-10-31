@@ -44,6 +44,24 @@ pub enum Silent {
     },
 }
 
+/// What [`myTran_SetUserList`] (349) does with a rename onto a taken login.
+///
+/// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TakenLogin {
+    /// Write the edit over the account with that login, keep the old
+    /// account, and move the old login's sessions to the new login. The
+    /// sessions of the taken login keep their access and name. The reply
+    /// is an error.
+    #[default]
+    Overwrite,
+    /// Change nothing, send a [`myTran_ServerMsg`] (104) notice that names
+    /// the taken login, and reply with an error.
+    ///
+    /// [`myTran_ServerMsg`]: hotline_proto::Opcode::ServerMsg
+    Refuse,
+}
+
 /// The choices where a server differs from openline.
 pub trait ServerPolicy: Send + Sync {
     /// The error reply for `case`, which stops the request. `None` sends no
@@ -54,6 +72,11 @@ pub trait ServerPolicy: Send + Sync {
 
     /// The time zone of each date that the server sends.
     fn time_zone(&self) -> TimeZone {
-        TimeZone::Local
+        TimeZone::default()
+    }
+
+    /// What a rename onto a taken login does.
+    fn taken_login(&self) -> TakenLogin {
+        TakenLogin::default()
     }
 }

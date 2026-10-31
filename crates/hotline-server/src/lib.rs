@@ -50,7 +50,7 @@ pub use news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle,
     NewsCategory, NewsItemKind, NewsListKind, ThreadedNewsProvider, HLNZ_MAGIC,
 };
-pub use policy::{OpenlinePolicy, ServerPolicy, Silent, TimeZone};
+pub use policy::{OpenlinePolicy, ServerPolicy, Silent, TakenLogin, TimeZone};
 pub use providers::Providers;
 pub use server::{
     Server, ServerConfig, DEFAULT_LOGIN_TIMEOUT, DEFAULT_MAX_CONNECTIONS,

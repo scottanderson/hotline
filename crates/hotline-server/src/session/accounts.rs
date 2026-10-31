@@ -9,7 +9,8 @@ use hotline_proto::{Field, FieldList, Received, Transaction};
 
 use crate::account::{AccessExtra, Account};
 use crate::activity::{AccountAction, Activity};
-use crate::state::{AccessUpdate, SharedState};
+use crate::policy::TakenLogin;
+use crate::state::{AccessUpdate, ReplacedAccount, SharedState};
 
 use super::connection::Session;
 
@@ -153,7 +154,7 @@ impl Session {
             access_extra: existing.access_extra,
         };
         let account = match state.replace_account(&login, login.clone(), edit).await {
-            Ok(account) => account,
+            Ok(ReplacedAccount { account, .. }) => account,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         state
@@ -286,9 +287,10 @@ impl Session {
     /// (login changed), a plain modify, or a create, depending on whether
     /// the old login was given and whether the new login already exists.
     ///
-    /// `Ok(true)` if applied, `Ok(false)` for a soft (storage) failure
-    /// that shouldn't stop the rest of the list from applying, `Err` for
-    /// a hard (permission) failure that aborts the whole request.
+    /// `Ok(true)` if applied, `Ok(false)` for a soft failure, such as a
+    /// storage error or a rename onto a taken login, that shouldn't stop the
+    /// rest of the list from applying, `Err` for a hard (permission) failure
+    /// that aborts the whole request.
     ///
     /// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
     /// [`myField_Data`]: hotline_proto::FieldId::Data
@@ -338,6 +340,19 @@ impl Session {
             // Modify (and rename, if the login changed).
             self.access.require(Access::MODIFY_USER)?;
             let renamed = old_login != login;
+            if renamed
+                && state.policy().taken_login() == TakenLogin::Refuse
+                && state.account(&login).await.is_some()
+            {
+                self.notify_login_taken(
+                    format!(
+                        "Cannot rename account \"{old_login}\" to \"{login}\" because there is already an account with that login."
+                    ),
+                    state,
+                )
+                .await;
+                return Ok(false);
+            }
             let edit = |existing: Account| Account {
                 password: password.unwrap_or(existing.password),
                 name: name.as_str().into(),
@@ -345,7 +360,9 @@ impl Session {
                 access_extra: existing.access_extra,
             };
             return match state.replace_account(&old_login, login.clone(), edit).await {
-                Ok(_) => {
+                Ok(ReplacedAccount {
+                    over_taken_login, ..
+                }) => {
                     state
                         .push_access_update(AccessUpdate {
                             login: old_login.as_str().into(),
@@ -354,7 +371,7 @@ impl Session {
                             name: (!name.is_empty()).then(|| name.into()),
                         })
                         .await;
-                    if renamed {
+                    if renamed && !over_taken_login {
                         let action = AccountAction::Rename {
                             from: old_login.into(),
                         };
@@ -363,7 +380,7 @@ impl Session {
                     }
                     self.record_account_change(AccountAction::Modify, login, state)
                         .await;
-                    Ok(true)
+                    Ok(!over_taken_login)
                 }
                 Err(_) => Ok(false),
             };
@@ -371,23 +388,13 @@ impl Session {
 
         // A new record whose login is taken gets a notice and is skipped.
         if state.account(&login).await.is_some() {
-            state
-                .send_to(
-                    self.user_id,
-                    Transaction::push(
-                        Opcode::ServerMsg,
-                        vec![
-                            Field::string(
-                                FieldId::Data,
-                                format!(
-                                    "Cannot create account \"{login}\" because there is already an account with that login."
-                                ),
-                            ),
-                            Field::u16(FieldId::ChatOptions, 1),
-                        ],
-                    ),
-                )
-                .await;
+            self.notify_login_taken(
+                format!(
+                    "Cannot create account \"{login}\" because there is already an account with that login."
+                ),
+                state,
+            )
+            .await;
             return Ok(true);
         }
 
@@ -413,6 +420,20 @@ impl Session {
             Err(_) => Ok(false),
         }
     }
+
+    /// Send `text`, which names a taken login, to this session as a
+    /// [`myTran_ServerMsg`] (104) notice.
+    ///
+    /// [`myTran_ServerMsg`]: hotline_proto::Opcode::ServerMsg
+    async fn notify_login_taken(&self, text: String, state: &SharedState) {
+        let fields = vec![
+            Field::string(FieldId::Data, text),
+            Field::u16(FieldId::ChatOptions, 1),
+        ];
+        state
+            .send_to(self.user_id, Transaction::push(Opcode::ServerMsg, fields))
+            .await;
+    }
 }
 
 #[cfg(test)]
@@ -421,7 +442,7 @@ mod tests {
 
     use super::*;
     use crate::account::AccountProvider;
-    use crate::state::{RecipientMessage, UserEntry};
+    use crate::state::{Inbox, RecipientMessage, UserEntry};
     use hotline_proto::opcode::TransactionType;
     use std::time::Instant;
 
@@ -1297,35 +1318,159 @@ mod tests {
         assert_eq!(state.user_ids_for_login("bobby").await, [bob.user_id]);
     }
 
-    #[tokio::test]
-    async fn set_user_list_rename_onto_a_taken_login_changes_nothing() {
-        let session = test_session("Admin", Access::all());
-        let state = Arc::<SharedState>::default();
-        for (login, password) in [("bob", "bob's"), ("alice", "alice's")] {
+    /// `bob` and `alice` accounts, and a record that renames `bob` to `alice`.
+    async fn rename_onto_alice(state: &SharedState) -> Field {
+        for (login, name, password, access_extra) in [
+            ("bob", "Bob Smith", "bob's", AccessExtra::MSG_OVERRIDE),
+            ("alice", "Alice Jones", "alice's", AccessExtra::CHAT_PRIVATE),
+        ] {
             let account = Account {
-                access_extra: AccessExtra::default(),
+                access_extra,
                 password: password.into(),
-                name: login.into(),
+                name: name.into(),
                 access: Access::SEND_CHAT,
             };
             state.put_account(login.to_string(), account).await.unwrap();
         }
-
-        let record = user_list_record(
+        user_list_record(
             Some("bob"),
-            "Bob",
+            "Robert",
             "alice",
             Field::bytes(FieldId::UserPassword, vec![0u8]),
-            Access::all(),
-        );
+            Access::BROADCAST,
+        )
+    }
+
+    /// An online session of `login` with `user_id`, and its inbox.
+    async fn online(user_id: u16, login: &str, state: &SharedState) -> (Session, Inbox) {
+        let mut session = test_session(login, Access::SEND_CHAT);
+        session.user_id = user_id;
+        session.login = login.into();
+        let rx = state.register_recipient(session.user_id).await;
+        (session, rx)
+    }
+
+    /// State with the [`crate::TakenLogin::Refuse`] policy, and its activity log.
+    fn state_refusing_a_taken_login() -> (Arc<SharedState>, Arc<RecordingActivityLog>) {
+        struct Refuse;
+        impl crate::ServerPolicy for Refuse {
+            fn taken_login(&self) -> crate::TakenLogin {
+                crate::TakenLogin::Refuse
+            }
+        }
+        let log = Arc::new(RecordingActivityLog::default());
+        let state = SharedState::new(crate::Providers {
+            policy: Arc::new(Refuse),
+            activity: log.clone(),
+            ..Default::default()
+        });
+        (state, log)
+    }
+
+    #[tokio::test]
+    async fn set_user_list_rename_onto_a_taken_login_writes_over_it() {
+        let admin = test_session("Admin", Access::all());
+        let (state, log) = state_recording_activity(Default::default());
+        let record = rename_onto_alice(&state).await;
         let request = request(Opcode::SetUserList, 1, vec![record]);
-        let replies = session.on_set_user_list(&request, &state).await;
+        let (mut bob, mut bob_rx) = online(2, "bob", &state).await;
+
+        let replies = admin.on_set_user_list(&request, &state).await;
+        let update = next_access_update(&mut bob_rx);
+        bob.apply_access_update(update, &state).await;
+
+        assert_eq!(
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText)
+                .unwrap(),
+            "Error saving list of accounts."
+        );
+        assert_eq!(&*state.account("bob").await.unwrap().password, "bob's");
+        let alice = state.account("alice").await.unwrap();
+        assert_eq!(&*alice.password, "bob's");
+        assert_eq!(&*alice.name, "Robert");
+        assert_eq!(alice.access, Access::BROADCAST);
+        assert_eq!(alice.access_extra, AccessExtra::MSG_OVERRIDE);
+        assert_eq!(&*bob.login, "alice");
+        assert_eq!(bob.access, Access::BROADCAST);
+        assert_eq!(
+            log.activities(),
+            [Activity::AccountChange {
+                action: AccountAction::Modify,
+                account: "alice".into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn set_user_list_rename_onto_a_taken_login_leaves_its_sessions() {
+        let admin = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let record = rename_onto_alice(&state).await;
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        let (mut alice, mut alice_rx) = online(2, "alice", &state).await;
+
+        admin.on_set_user_list(&request, &state).await;
+        let update = next_access_update(&mut alice_rx);
+        alice.apply_access_update(update, &state).await;
+
+        assert_eq!(&*alice.login, "alice");
+        assert_eq!(alice.access, Access::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn set_user_list_rename_onto_a_taken_login_applies_the_rest_of_the_list() {
+        let admin = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let rename = rename_onto_alice(&state).await;
+        let create = user_list_record(
+            None,
+            "Carol",
+            "carol",
+            Field::obfuscated_string(FieldId::UserPassword, "carol's"),
+            Access::SEND_CHAT,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![rename, create]);
+
+        let replies = admin.on_set_user_list(&request, &state).await;
 
         assert!(replies[0].is_error());
+        assert_eq!(&*state.account("alice").await.unwrap().name, "Robert");
+        assert_eq!(&*state.account("carol").await.unwrap().password, "carol's");
+    }
+
+    #[tokio::test]
+    async fn set_user_list_rename_onto_a_taken_login_changes_nothing_with_refuse() {
+        let admin = test_session("Admin", Access::all());
+        let (state, log) = state_refusing_a_taken_login();
+        let record = rename_onto_alice(&state).await;
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        let mut admin_rx = state.register_recipient(admin.user_id).await;
+        let (_bob, mut bob_rx) = online(2, "bob", &state).await;
+
+        let replies = admin.on_set_user_list(&request, &state).await;
+
+        assert!(replies[0].is_error());
+        let notice = admin_rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ServerMsg push")
+            .received(text_encoding::DEFAULT);
+        assert_eq!(notice.r#type(), TransactionType::Push(Opcode::ServerMsg));
+        assert_eq!(
+            notice.string(FieldId::Data).unwrap(),
+            "Cannot rename account \"bob\" to \"alice\" because there is already an account with that login."
+        );
         assert_eq!(&*state.account("bob").await.unwrap().password, "bob's");
         let alice = state.account("alice").await.unwrap();
         assert_eq!(&*alice.password, "alice's");
+        assert_eq!(&*alice.name, "Alice Jones");
         assert_eq!(alice.access, Access::SEND_CHAT);
+        assert_eq!(alice.access_extra, AccessExtra::CHAT_PRIVATE);
+        assert!(bob_rx.try_recv().is_err());
+        assert!(log.activities().is_empty());
     }
 
     #[tokio::test]
