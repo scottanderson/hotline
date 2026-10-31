@@ -238,7 +238,7 @@ fn import_folder(
                 continue;
             }
         };
-        if let Err(e) = NewsCategory::from_hlnz(&bytes, encoding)
+        if let Err(e) = NewsCategory::from_hlnz(&bytes, encoding, &chrono::Local)
             .and_then(|category| tree.insert_category(components, &name, category))
         {
             tracing::warn!(path = %path.display(), error = e, "skipped a news category");

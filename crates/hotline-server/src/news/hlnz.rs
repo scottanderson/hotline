@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::news::category::MAX_REPLY_CHAIN_LEN;
 use crate::news::{body_from_wire, NewsArticle, NewsCategory};
+use crate::policy::to_utc;
 
 /// The file's type code and first four bytes.
 pub const HLNZ_MAGIC: &[u8; 4] = b"HLNZ";
@@ -227,8 +228,13 @@ impl Reader<'_> {
 impl NewsCategory {
     /// The category stored in an openline `HLNZ` file, with its text in
     /// `encoding`. A text flavor is stored as UTF-8. An article with no
-    /// flavor gets an empty `text/plain` body.
-    pub fn from_hlnz(file: &[u8], encoding: &'static Encoding) -> Result<Self, &'static str> {
+    /// flavor gets an empty `text/plain` body. Each date in the file is a
+    /// local time in `zone`, and is stored as UTC.
+    pub fn from_hlnz(
+        file: &[u8],
+        encoding: &'static Encoding,
+        zone: &impl chrono::TimeZone,
+    ) -> Result<Self, &'static str> {
         let header = Header::decode(
             file.first_chunk()
                 .copied()
@@ -250,10 +256,14 @@ impl NewsCategory {
             .max()
             .map_or(1, |&id| id.saturating_add(1))
             .max(header.next_article_id);
+        let mut articles = reader.articles;
+        for article in articles.values_mut() {
+            article.date = to_utc(article.date, zone);
+        }
         Ok(Self::from_articles(
             header.guid,
             next_article_id,
-            reader.articles,
+            articles,
             roots,
         ))
     }
@@ -261,6 +271,7 @@ impl NewsCategory {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{FixedOffset, Utc};
     use hotline_proto::wire::{PacketWriter, VecWriter};
 
     use super::*;
@@ -411,7 +422,7 @@ mod tests {
     #[test]
     fn from_hlnz_reads_a_thread() {
         let category =
-            NewsCategory::from_hlnz(&file(&thread(), 3, 9), text_encoding::DEFAULT).unwrap();
+            NewsCategory::from_hlnz(&file(&thread(), 3, 9), text_encoding::DEFAULT, &Utc).unwrap();
 
         assert_eq!(category.guid, Uuid::from_bytes([7; 16]));
         assert_eq!(category.roots, [1, 2]);
@@ -428,6 +439,20 @@ mod tests {
     }
 
     #[test]
+    fn from_hlnz_stores_a_local_date_as_utc() {
+        let east = FixedOffset::east_opt(2 * 3600).unwrap();
+        let category =
+            NewsCategory::from_hlnz(&file(&thread(), 3, 9), text_encoding::DEFAULT, &east).unwrap();
+
+        let utc = HlDate {
+            year: 2000,
+            milliseconds: 0,
+            seconds: 365 * 86400 + 23 * 3600,
+        };
+        assert_eq!(category.articles[&1].date, utc);
+    }
+
+    #[test]
     fn from_hlnz_keeps_every_flavor() {
         let roots = [Art {
             id: 1,
@@ -437,7 +462,7 @@ mod tests {
         }];
 
         let category =
-            NewsCategory::from_hlnz(&file(&roots, 1, 2), text_encoding::DEFAULT).unwrap();
+            NewsCategory::from_hlnz(&file(&roots, 1, 2), text_encoding::DEFAULT, &Utc).unwrap();
 
         let data = &category.articles[&1].data;
         assert_eq!(data["text/plain"], b"see");
@@ -454,7 +479,7 @@ mod tests {
         }];
 
         let category =
-            NewsCategory::from_hlnz(&file(&roots, 1, 2), text_encoding::DEFAULT).unwrap();
+            NewsCategory::from_hlnz(&file(&roots, 1, 2), text_encoding::DEFAULT, &Utc).unwrap();
 
         assert_eq!(category.articles[&1].data["text/plain"], b"");
     }
@@ -469,9 +494,12 @@ mod tests {
         }];
         let bytes = file(&roots, 1, 2);
 
-        let category =
-            NewsCategory::from_hlnz(&bytes[..bytes.len() - BLOCK + 8], text_encoding::DEFAULT)
-                .unwrap();
+        let category = NewsCategory::from_hlnz(
+            &bytes[..bytes.len() - BLOCK + 8],
+            text_encoding::DEFAULT,
+            &Utc,
+        )
+        .unwrap();
 
         assert_eq!(&*category.articles[&1].title, "cut");
         assert_eq!(category.articles[&1].data["text/plain"], b"");
@@ -483,7 +511,7 @@ mod tests {
         bytes[HEADER_AREA as usize + TITLE_AT] = 200;
         bytes[HEADER_AREA as usize + TITLE_AT + 64] = 200;
 
-        let category = NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT).unwrap();
+        let category = NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT, &Utc).unwrap();
 
         assert_eq!(category.articles[&1].title.len(), 63);
         assert_eq!(category.articles[&1].poster.len(), 31);
@@ -494,7 +522,8 @@ mod tests {
         assert_eq!(
             NewsCategory::from_hlnz(
                 &file(&[art(0, b"a", b"a", vec![])], 1, 2),
-                text_encoding::DEFAULT
+                text_encoding::DEFAULT,
+                &Utc
             )
             .unwrap_err(),
             "HLNZ article id is 0"
@@ -504,7 +533,7 @@ mod tests {
     #[test]
     fn from_hlnz_reads_only_the_header_article_count() {
         let category =
-            NewsCategory::from_hlnz(&file(&thread(), 2, 4), text_encoding::DEFAULT).unwrap();
+            NewsCategory::from_hlnz(&file(&thread(), 2, 4), text_encoding::DEFAULT, &Utc).unwrap();
 
         assert_eq!(category.roots, [1]);
         assert_eq!(category.articles[&1].children, [3]);
@@ -514,7 +543,7 @@ mod tests {
     #[test]
     fn from_hlnz_sets_the_next_id_past_every_article() {
         let category =
-            NewsCategory::from_hlnz(&file(&thread(), 3, 1), text_encoding::DEFAULT).unwrap();
+            NewsCategory::from_hlnz(&file(&thread(), 3, 1), text_encoding::DEFAULT, &Utc).unwrap();
 
         assert_eq!(category.add_sn, 4);
     }
@@ -523,11 +552,11 @@ mod tests {
     fn from_hlnz_rejects_another_file_type_or_version() {
         let mut bytes = file(&thread(), 3, 4);
         bytes[3] = b'X';
-        assert!(NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT).is_err());
+        assert!(NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT, &Utc).is_err());
 
         let mut bytes = file(&thread(), 3, 4);
         bytes[7] = 3;
-        assert!(NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT).is_err());
+        assert!(NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT, &Utc).is_err());
     }
 
     #[test]
@@ -536,7 +565,7 @@ mod tests {
         bytes[HEADER_AREA as usize + NEXT_ARTICLE_AT + 3] = 1;
 
         assert_eq!(
-            NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT).unwrap_err(),
+            NewsCategory::from_hlnz(&bytes, text_encoding::DEFAULT, &Utc).unwrap_err(),
             "HLNZ article list has a loop"
         );
     }
@@ -546,7 +575,7 @@ mod tests {
         let roots = [art(1, b"a", b"a", vec![art(1, b"b", b"b", vec![])])];
 
         assert_eq!(
-            NewsCategory::from_hlnz(&file(&roots, 2, 2), text_encoding::DEFAULT).unwrap_err(),
+            NewsCategory::from_hlnz(&file(&roots, 2, 2), text_encoding::DEFAULT, &Utc).unwrap_err(),
             "duplicate article id in HLNZ file"
         );
     }
@@ -555,7 +584,7 @@ mod tests {
     fn from_hlnz_rejects_a_cut_short_file() {
         let bytes = file(&thread(), 3, 4);
 
-        assert!(NewsCategory::from_hlnz(&bytes[..600], text_encoding::DEFAULT).is_err());
-        assert!(NewsCategory::from_hlnz(&bytes[..100], text_encoding::DEFAULT).is_err());
+        assert!(NewsCategory::from_hlnz(&bytes[..600], text_encoding::DEFAULT, &Utc).is_err());
+        assert!(NewsCategory::from_hlnz(&bytes[..100], text_encoding::DEFAULT, &Utc).is_err());
     }
 }

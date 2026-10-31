@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Local, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDateTime, Timelike};
 use hotline_proto::types::{days_from_civil, HlDate};
 
 /// The time zone of each date that a server sends.
@@ -23,20 +23,35 @@ impl TimeZone {
 
 /// The UTC `date` in `zone`. Out of range keeps `date`.
 fn in_zone(date: HlDate, zone: &impl chrono::TimeZone) -> HlDate {
+    to_naive(date)
+        .map(|utc| utc.and_utc().with_timezone(zone).naive_local())
+        .and_then(|local| from_naive(local, date.milliseconds))
+        .unwrap_or(date)
+}
+
+/// The `date` in `zone` as UTC. The earlier of two times counts. Out of
+/// range, or a time that `zone` skips, keeps `date`.
+pub(crate) fn to_utc(date: HlDate, zone: &impl chrono::TimeZone) -> HlDate {
+    to_naive(date)
+        .and_then(|local| zone.from_local_datetime(&local).earliest())
+        .and_then(|utc| from_naive(utc.naive_utc(), date.milliseconds))
+        .unwrap_or(date)
+}
+
+/// `date` with no time zone.
+fn to_naive(date: HlDate) -> Option<NaiveDateTime> {
     let seconds = days_from_civil(date.year.into(), 1, 1) * 86400 + i64::from(date.seconds);
     let nanos = u32::from(date.milliseconds) * 1_000_000;
-    let Some(utc) = DateTime::from_timestamp(seconds, nanos) else {
-        return date;
-    };
-    let local = utc.with_timezone(zone).naive_local();
-    let Ok(year) = u16::try_from(local.year()) else {
-        return date;
-    };
-    HlDate {
-        year,
-        milliseconds: date.milliseconds,
-        seconds: local.ordinal0() * 86400 + local.num_seconds_from_midnight(),
-    }
+    DateTime::from_timestamp(seconds, nanos).map(|utc| utc.naive_utc())
+}
+
+/// The [`HlDate`] of `naive`, with `milliseconds`.
+fn from_naive(naive: NaiveDateTime, milliseconds: u16) -> Option<HlDate> {
+    Some(HlDate {
+        year: u16::try_from(naive.year()).ok()?,
+        milliseconds,
+        seconds: naive.ordinal0() * 86400 + naive.num_seconds_from_midnight(),
+    })
 }
 
 #[cfg(test)]
@@ -87,5 +102,19 @@ mod tests {
             seconds: 4 * 3600 + 1800,
         };
         assert_eq!(in_zone(new_year_eve, &east), new_year);
+    }
+
+    #[test]
+    fn to_utc_undoes_in_zone() {
+        let date = HlDate {
+            year: 2024,
+            milliseconds: 5,
+            seconds: 365 * 86400 + 23 * 3600,
+        };
+        let east = FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
+        let west = FixedOffset::west_opt(3 * 3600 + 1800).unwrap();
+
+        assert_eq!(to_utc(in_zone(date, &east), &east), date);
+        assert_eq!(to_utc(in_zone(date, &west), &west), date);
     }
 }
