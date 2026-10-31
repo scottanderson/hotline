@@ -8,7 +8,9 @@ use hotline_proto::{Access, Field, FieldId, Opcode, Received, Transaction};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span, Text};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{
+    Block, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap,
+};
 use ratatui::Frame;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -724,7 +726,11 @@ fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
     let items: Vec<ListItem> = view
         .tasks
         .iter()
-        .map(|row| ListItem::new(&*row.label))
+        .map(|row| {
+            let mut lines = vec![UiLine::from(&*row.label)];
+            lines.extend(row.ratio.map(|_| UiLine::default()));
+            ListItem::new(lines)
+        })
         .collect();
     let focused = view.focus == Focus::Tasks;
     let title = format!("tasks ({})", view.tasks.len());
@@ -737,6 +743,32 @@ fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
         .with_selected(selected.filter(|_| focused));
     frame.render_stateful_widget(list, area, &mut state);
     view.tasks_offset = state.offset();
+    let inner = inner(area);
+    let mut y = inner.y;
+    for row in view.tasks.iter().skip(view.tasks_offset) {
+        if y >= inner.bottom() {
+            break;
+        }
+        let gauge_y = y.saturating_add(1);
+        if let Some(ratio) = row.ratio.filter(|_| gauge_y < inner.bottom()) {
+            let gauge = Rect {
+                y: gauge_y,
+                height: 1,
+                ..inner
+            };
+            frame.render_widget(task_gauge(ratio), gauge);
+        }
+        y = y.saturating_add(row.height());
+    }
+}
+
+/// The progress bar of a task that is `ratio` done, in eighths of a cell.
+fn task_gauge(ratio: f64) -> Gauge<'static> {
+    Gauge::default()
+        .ratio(ratio)
+        .use_unicode(true)
+        .label("")
+        .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
 }
 
 fn draw_hints(frame: &mut Frame, area: Rect, view: &View, hints: &[Hint]) {
@@ -1006,6 +1038,7 @@ mod tests {
     use super::*;
     use crate::line::Scrollback;
     use crate::session::{ChatRoom, Disconnect, NewsTarget};
+    use crate::tasks::{TaskId, TaskRow};
 
     #[test]
     fn account_circle_follows_openlines_icon_order() {
@@ -1024,6 +1057,38 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         buffer.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn draw_tasks_puts_a_gauge_under_a_task_of_known_size() {
+        let mut view = View::default();
+        view.set_tasks(vec![
+            TaskRow {
+                id: TaskId::Transfer(1),
+                label: "up".into(),
+                cancellable: true,
+                ratio: Some(0.3),
+            },
+            TaskRow {
+                id: TaskId::Request(2),
+                label: "list".into(),
+                cancellable: true,
+                ratio: None,
+            },
+        ]);
+        let backend = ratatui::backend::TestBackend::new(14, 5);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_tasks(frame, frame.area(), &mut view))
+            .unwrap();
+        let row = |y: u16| -> String {
+            (1..13)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect()
+        };
+        assert_eq!(row(1).trim_end(), "up");
+        assert_eq!(row(2).trim_end(), "███▋");
+        assert_eq!(row(3).trim_end(), "list");
     }
 
     #[test]

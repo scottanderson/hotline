@@ -76,13 +76,21 @@ pub struct TaskRow {
     pub id: TaskId,
     pub label: String,
     pub cancellable: bool,
+    /// The part that is done, from 0 to 1, when the size is known.
+    pub ratio: Option<f64>,
 }
 
 impl TaskRow {
-    /// The row of this task after it ends well.
+    /// The lines of the row: the label, and a gauge when the ratio is known.
+    pub fn height(&self) -> u16 {
+        u16::from(self.ratio.is_some()).saturating_add(1)
+    }
+
+    /// The row of this task after it ends well, with a full gauge.
     fn finished(self) -> Self {
         Self {
             cancellable: false,
+            ratio: Some(1.0),
             ..self
         }
     }
@@ -225,6 +233,7 @@ impl Tasks {
                 id: TaskId::Request(r.id),
                 label: r.task.label.as_deref()?.to_string(),
                 cancellable: r.task.cancellable,
+                ratio: None,
             };
             Some((r.started, row))
         });
@@ -328,6 +337,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "Listing root folder...");
         assert!(!rows[0].cancellable);
+        assert_eq!(rows[0].ratio, Some(1.0));
         tasks.finished_at -= KEEP_FINISHED;
         assert!(tasks.rows(&mut session).is_empty());
     }
@@ -407,13 +417,16 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_row_cannot_cancel() {
+    fn a_finished_row_cannot_cancel_and_has_a_full_gauge() {
         let row = TaskRow {
             id: TaskId::Transfer(1),
             label: "Downloading".into(),
             cancellable: true,
+            ratio: None,
         };
-        assert!(!row.finished().cancellable);
+        let finished = row.finished();
+        assert!(!finished.cancellable);
+        assert_eq!(finished.ratio, Some(1.0));
     }
 
     #[tokio::test]
@@ -429,6 +442,7 @@ mod tests {
                 id: TaskId::Request(1),
                 label: "Logging in...".into(),
                 cancellable: false,
+                ratio: None,
             }]
         );
     }

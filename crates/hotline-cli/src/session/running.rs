@@ -91,6 +91,17 @@ impl Progress {
             total => Some(format!("{}/{}", size_text(bytes), size_text(total))),
         }
     }
+
+    /// The part that is done, from 0 to 1. `None` while the download waits
+    /// in the server's queue, or when the size is unknown.
+    fn ratio(&self) -> Option<f64> {
+        if self.waiting.load(Ordering::Relaxed) > 0 {
+            return None;
+        }
+        let total = self.total.load(Ordering::Relaxed);
+        let bytes = self.bytes.load(Ordering::Relaxed).min(total);
+        (total > 0).then(|| bytes as f64 / total as f64)
+    }
 }
 
 /// What a transfer moves, and which way.
@@ -212,6 +223,7 @@ impl ClientSession {
                 id: TaskId::Transfer(t.id),
                 label,
                 cancellable: true,
+                ratio: progress.ratio(),
             };
             (t.started, row)
         })
@@ -384,6 +396,7 @@ mod tests {
             running[0].label,
             "All downloads slots are full. “a.txt” is number 1 in the server queue. Please wait..."
         );
+        assert_eq!(running[0].ratio, None);
 
         session.cancel_transfer(&client, 1).run(&mut session).await;
         assert_eq!(
@@ -436,15 +449,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn running_transfers_shows_the_bytes_of_a_known_size() {
+    async fn running_transfers_gives_the_ratio_of_a_known_size() {
         let mut session = ClientSession::new("me", 0, Default::default());
         let progress = Arc::new(Progress::default());
         progress.set_size(25, 100);
         let _ = track(&mut session, Kind::Upload, progress);
-        assert_eq!(
-            session.running_transfers()[0].label,
-            "Uploading “f” (25/100)"
-        );
+        assert_eq!(session.running_transfers()[0].ratio, Some(0.25));
     }
 
     #[tokio::test]
@@ -460,8 +470,19 @@ mod tests {
                 id: TaskId::Transfer(1),
                 label: "Uploading folder “f” [1 of 2]".into(),
                 cancellable: true,
+                ratio: None,
             }]
         );
+    }
+
+    #[test]
+    fn ratio_waits_for_the_end_of_the_server_queue() {
+        let progress = Progress::default();
+        progress.set_size(0, 100);
+        progress.set_waiting(4);
+        assert_eq!(progress.ratio(), None);
+        progress.count(10);
+        assert_eq!(progress.ratio(), Some(0.1));
     }
 
     #[test]

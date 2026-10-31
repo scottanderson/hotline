@@ -3,7 +3,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
-use super::{contains, row_at, Action, Focus, Hint, View};
+use super::{contains, Action, Focus, Hint, View};
 use crate::tasks::TaskRow;
 use crate::ui;
 
@@ -27,9 +27,9 @@ impl View {
         !self.tasks.is_empty()
     }
 
-    /// The lines of all the rows of the tasks box, one for each row.
-    pub const fn task_lines(&self) -> usize {
-        self.tasks.len()
+    /// The lines of all the rows of the tasks box.
+    pub fn task_lines(&self) -> usize {
+        self.tasks.iter().map(|row| usize::from(row.height())).sum()
     }
 
     /// The selected row of the tasks box.
@@ -48,11 +48,15 @@ impl View {
         if !self.shows_tasks() || !contains(inner, x, y) {
             return None;
         }
-        row_at(
-            self.tasks_offset,
-            y.saturating_sub(inner.y),
-            self.tasks.len(),
-        )
+        let mut bottom = inner.y;
+        self.tasks
+            .iter()
+            .enumerate()
+            .skip(self.tasks_offset)
+            .find_map(|(index, row)| {
+                bottom = bottom.saturating_add(row.height());
+                (y < bottom).then_some(index)
+            })
     }
 
     pub(super) fn tasks_key(&mut self, key: KeyEvent) -> Action {
@@ -104,6 +108,7 @@ mod tests {
             id,
             label: "a task".into(),
             cancellable,
+            ratio: None,
         }
     }
 
@@ -203,6 +208,25 @@ mod tests {
         let _ = view.handle_mouse(mouse, &areas, &[], &[], Instant::now());
         assert_eq!(view.focus, Focus::Tasks);
         assert_eq!(view.selected_task().unwrap().id, TaskId::Request(4));
+    }
+
+    #[test]
+    fn a_click_on_a_gauge_selects_its_task() {
+        let mut view = view_with_tasks();
+        let mut rows = view.tasks.clone();
+        rows[0].ratio = Some(0.5);
+        view.set_tasks(rows);
+        let areas = ui::areas(
+            Rect::new(0, 0, 80, 24),
+            Some(""),
+            &[],
+            true,
+            false,
+            view.task_lines(),
+        );
+        let inner = ui::inner(areas.tasks);
+        assert_eq!(view.task_at(areas.tasks, inner.x, inner.y + 1), Some(0));
+        assert_eq!(view.task_at(areas.tasks, inner.x, inner.y + 2), Some(1));
     }
 
     #[test]
