@@ -15,7 +15,7 @@ use hotline_proto::wire::{PacketReader, PacketWriter, VecWriter};
 use hotline_server::{BoxedReader, FinderInfo};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 /// The start of a sidecar's name.
 pub const PREFIX: &str = "._";
@@ -170,11 +170,20 @@ impl Sidecar {
     }
 }
 
-/// The sidecars that have an open [`ResourceForkWriter`].
+/// The lock on the sidecars, and the sidecars that have an open
+/// [`ResourceForkWriter`].
 #[derive(Debug, Default)]
-pub struct OpenForks(std::sync::Mutex<HashSet<PathBuf>>);
+pub struct Sidecars {
+    changing: Mutex<()>,
+    open: std::sync::Mutex<HashSet<PathBuf>>,
+}
 
-impl OpenForks {
+impl Sidecars {
+    /// Hold the lock while a sidecar changes or moves.
+    pub async fn lock(&self) -> MutexGuard<'_, ()> {
+        self.changing.lock().await
+    }
+
     /// `true` if the sidecar at `path` has an open fork writer.
     pub fn contains(&self, path: &Path) -> bool {
         self.paths().contains(path)
@@ -184,26 +193,26 @@ impl OpenForks {
     /// it is open already.
     pub fn claim(self: &Arc<Self>, path: &Path) -> Option<ForkClaim> {
         self.paths().insert(path.to_path_buf()).then(|| ForkClaim {
-            forks: Arc::clone(self),
+            sidecars: Arc::clone(self),
             path: path.to_path_buf(),
         })
     }
 
     fn paths(&self) -> std::sync::MutexGuard<'_, HashSet<PathBuf>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// A sidecar's mark in [`OpenForks`]. Drop removes it.
+/// A sidecar's mark in [`Sidecars`]. Drop removes it.
 #[derive(Debug)]
 pub struct ForkClaim {
-    forks: Arc<OpenForks>,
+    sidecars: Arc<Sidecars>,
     path: PathBuf,
 }
 
 impl Drop for ForkClaim {
     fn drop(&mut self) {
-        self.forks.paths().remove(&self.path);
+        self.sidecars.paths().remove(&self.path);
     }
 }
 
@@ -288,11 +297,11 @@ pub async fn open_resource_read(path: &Path, at: u64) -> io::Result<BoxedReader>
 
 /// Open the resource fork of the sidecar at `path` for writing from `at`
 /// onward. Creates the sidecar if missing, and cuts the fork to `at`.
-/// Call with `sidecars` held. The writer keeps `claim` until it drops.
+/// Call with the [`Sidecars`] lock held. The writer keeps `claim` until it
+/// drops.
 pub async fn open_resource_write(
     path: &Path,
     at: u64,
-    sidecars: Arc<Mutex<()>>,
     claim: ForkClaim,
 ) -> io::Result<ResourceForkWriter> {
     let mut sidecar = read(path).await?;
@@ -304,20 +313,19 @@ pub async fn open_resource_write(
     Ok(ResourceForkWriter {
         file: Some(file),
         len: at,
-        sidecars,
         closing: None,
-        _claim: claim,
+        claim,
     })
 }
 
 /// Writes a resource fork from [`open_resource_write`]. Shutdown writes
-/// the fork's length into the sidecar's entry table, with `sidecars` held.
+/// the fork's length into the sidecar's entry table, with the [`Sidecars`]
+/// lock held.
 pub struct ResourceForkWriter {
     file: Option<File>,
     len: u64,
-    sidecars: Arc<Mutex<()>>,
     closing: Option<Pin<Box<dyn Future<Output = io::Result<()>> + Send>>>,
-    _claim: ForkClaim,
+    claim: ForkClaim,
 }
 
 impl ResourceForkWriter {
@@ -354,7 +362,7 @@ impl AsyncWrite for ResourceForkWriter {
                 offset: RESOURCE_FORK_OFFSET as u32,
                 len: self.len as u32,
             };
-            let sidecars = Arc::clone(&self.sidecars);
+            let sidecars = Arc::clone(&self.claim.sidecars);
             self.closing = Some(Box::pin(async move {
                 let _sidecars = sidecars.lock().await;
                 file.seek(SeekFrom::Start(RESOURCE_FORK_ENTRY_OFFSET))
@@ -553,16 +561,12 @@ mod tests {
         };
         write(&path, &sidecar).await.unwrap();
 
-        let mut file = open_resource_write(&path, 0, Arc::default(), claim(&path))
-            .await
-            .unwrap();
+        let mut file = open_resource_write(&path, 0, claim(&path)).await.unwrap();
         file.write_all(b"rsrc").await.unwrap();
         file.shutdown().await.unwrap();
         assert_eq!(read(&path).await.unwrap().resource_fork_len(), 4);
 
-        let mut file = open_resource_write(&path, 2, Arc::default(), claim(&path))
-            .await
-            .unwrap();
+        let mut file = open_resource_write(&path, 2, claim(&path)).await.unwrap();
         file.write_all(b"RC!").await.unwrap();
         file.shutdown().await.unwrap();
         let read_back = read(&path).await.unwrap();
@@ -576,7 +580,7 @@ mod tests {
     }
 
     fn claim(path: &Path) -> ForkClaim {
-        Arc::<OpenForks>::default().claim(path).unwrap()
+        Arc::<Sidecars>::default().claim(path).unwrap()
     }
 
     #[tokio::test]
@@ -584,9 +588,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("._a");
 
-        let mut file = open_resource_write(&path, 0, Arc::default(), claim(&path))
-            .await
-            .unwrap();
+        let mut file = open_resource_write(&path, 0, claim(&path)).await.unwrap();
         file.write_all(b"rsrc").await.unwrap();
         file.flush().await.unwrap();
         assert_eq!(read(&path).await.unwrap().resource_fork_len(), 0);

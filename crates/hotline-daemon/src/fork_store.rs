@@ -8,9 +8,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use clap::ValueEnum;
 use hotline_server::{BoxedReader, BoxedWriter, FinderInfo};
-use tokio::sync::Mutex;
 
-use crate::apple_double::{self, OpenForks};
+use crate::apple_double::{self, Sidecars};
 
 /// Stores the Mac metadata of the items on disk. Each `item` is the path
 /// of a file or folder. A store that cannot keep the Finder info or the
@@ -95,10 +94,7 @@ async fn remove_item(item: &Path, is_dir: bool) -> io::Result<()> {
 /// Keeps each item's data in its AppleDouble sidecar (see [`apple_double`]).
 #[derive(Default)]
 pub struct AppleDoubleStore {
-    /// Held while a sidecar changes or moves.
-    sidecars: Arc<Mutex<()>>,
-    /// The sidecars that an upload writes a resource fork into.
-    open_forks: Arc<OpenForks>,
+    sidecars: Arc<Sidecars>,
 }
 
 impl AppleDoubleStore {
@@ -113,7 +109,7 @@ impl AppleDoubleStore {
         tokio::fs::symlink_metadata(item).await?;
         let path = apple_double::path_of(item);
         let _sidecars = self.sidecars.lock().await;
-        if self.open_forks.contains(&path) {
+        if self.sidecars.contains(&path) {
             return Err(io::ErrorKind::ResourceBusy.into());
         }
         let mut sidecar = apple_double::read(&path).await?;
@@ -171,11 +167,10 @@ impl ForkStore for AppleDoubleStore {
         let _sidecars = self.sidecars.lock().await;
         let path = apple_double::path_of(item);
         let claim = self
-            .open_forks
+            .sidecars
             .claim(&path)
             .ok_or_else(|| io::Error::from(io::ErrorKind::ResourceBusy))?;
-        let sidecars = Arc::clone(&self.sidecars);
-        let writer = apple_double::open_resource_write(&path, at, sidecars, claim).await?;
+        let writer = apple_double::open_resource_write(&path, at, claim).await?;
         Ok(Box::new(writer))
     }
 
