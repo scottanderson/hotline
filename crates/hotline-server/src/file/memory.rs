@@ -16,6 +16,13 @@ use crate::file::{
 /// Per-item metadata, keyed by the item's directory and name.
 pub(crate) type ItemMap<V> = HashMap<(Vec<String>, String), V>;
 
+/// The tree and the resource forks, which the open writers share.
+#[derive(Default)]
+pub(crate) struct Store {
+    pub(crate) root: Mutex<Dir>,
+    pub(crate) resource_forks: Mutex<ItemMap<Vec<u8>>>,
+}
+
 /// Move every value keyed under `old_dir`/`old_name` to `new_dir`/
 /// `new_name`: the entry itself, plus (if it's a folder) every descendant
 /// value, whose key's directory has `old_dir`/`old_name` as a prefix.
@@ -75,10 +82,9 @@ fn file_type_and_creator(
 /// the same split on account storage).
 #[derive(Default)]
 pub struct InMemoryFileProvider {
-    root: Arc<Mutex<Dir>>,
+    store: Arc<Store>,
     comments: Mutex<ItemMap<String>>,
     finder_infos: Mutex<ItemMap<FinderInfo>>,
-    resource_forks: Arc<Mutex<ItemMap<Vec<u8>>>>,
     free_space: Mutex<Option<u64>>,
     comment_writes_fail: AtomicBool,
 }
@@ -87,7 +93,7 @@ impl InMemoryFileProvider {
     /// Seed a file at `dir`/`name` with `data`, creating any missing
     /// intermediate directories. For tests/fixtures.
     pub fn seed(&self, dir: &HlPath, name: &str, data: impl Into<Vec<u8>>) {
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let d = root
             .make_dirs(&dir.components)
             .expect("the seed path runs through a file");
@@ -97,7 +103,11 @@ impl InMemoryFileProvider {
     /// Set the resource fork of `dir`/`name` to `data`. For tests/fixtures.
     pub fn seed_resource_fork(&self, dir: &HlPath, name: &str, data: impl Into<Vec<u8>>) {
         let key = (dir.components.clone(), name.to_string());
-        self.resource_forks.lock().unwrap().insert(key, data.into());
+        self.store
+            .resource_forks
+            .lock()
+            .unwrap()
+            .insert(key, data.into());
     }
 
     /// Set the bytes that [`FileProvider::free_space`] reports.
@@ -118,7 +128,7 @@ impl FileProvider for InMemoryFileProvider {
         _requester: FileRequester<'_>,
         dir: &HlPath,
     ) -> Option<Vec<FileNameWithInfo>> {
-        let root = self.root.lock().unwrap();
+        let root = self.store.root.lock().unwrap();
         let d = root.get_dir(&dir.components)?;
         let finder_infos = self.finder_infos.lock().unwrap();
         let mut entries: Vec<FileNameWithInfo> = d
@@ -146,7 +156,7 @@ impl FileProvider for InMemoryFileProvider {
     }
 
     async fn size(&self, _requester: FileRequester<'_>, dir: &HlPath, name: &str) -> Option<u64> {
-        let root = self.root.lock().unwrap();
+        let root = self.store.root.lock().unwrap();
         let d = root.get_dir(&dir.components)?;
         match d.entries.get(name)? {
             Node::File(data) => Some(data.len() as u64),
@@ -159,7 +169,7 @@ impl FileProvider for InMemoryFileProvider {
     }
 
     async fn exists(&self, _requester: FileRequester<'_>, dir: &HlPath, name: &str) -> bool {
-        let root = self.root.lock().unwrap();
+        let root = self.store.root.lock().unwrap();
         root.get_dir(&dir.components)
             .is_some_and(|d| d.entries.contains_key(name))
     }
@@ -170,7 +180,7 @@ impl FileProvider for InMemoryFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> io::Result<BoxedReader> {
-        let root = self.root.lock().unwrap();
+        let root = self.store.root.lock().unwrap();
         let d = root.get_dir(&dir.components).ok_or_else(not_found)?;
         match d.entries.get(name) {
             Some(Node::File(data)) => Ok(Box::new(io::Cursor::new(data.clone()))),
@@ -186,7 +196,7 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
     ) -> io::Result<BoxedWriter> {
         let partial_name = partial_upload_name(name);
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if let Some(Node::Dir(_)) = d.entries.get(&partial_name) {
             return Err(io::Error::from(io::ErrorKind::IsADirectory));
@@ -194,12 +204,13 @@ impl FileProvider for InMemoryFileProvider {
         d.entries
             .insert(partial_name.clone(), Node::File(Vec::new()));
         drop(root);
-        self.resource_forks
+        self.store
+            .resource_forks
             .lock()
             .unwrap()
             .remove(&(dir.components.clone(), partial_name.clone()));
         Ok(Box::new(MemWriter::appending(
-            self.root.clone(),
+            self.store.clone(),
             dir.components.clone(),
             partial_name,
         )))
@@ -213,7 +224,7 @@ impl FileProvider for InMemoryFileProvider {
         at: u64,
     ) -> io::Result<BoxedWriter> {
         let partial_name = partial_upload_name(name);
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         match d.entries.get_mut(&partial_name) {
             Some(Node::File(data)) => {
@@ -229,7 +240,7 @@ impl FileProvider for InMemoryFileProvider {
                 data.resize(at as usize, 0);
                 drop(root);
                 Ok(Box::new(MemWriter::appending(
-                    self.root.clone(),
+                    self.store.clone(),
                     dir.components.clone(),
                     partial_name,
                 )))
@@ -245,7 +256,7 @@ impl FileProvider for InMemoryFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> Option<FileNameWithInfo> {
-        let root = self.root.lock().unwrap();
+        let root = self.store.root.lock().unwrap();
         let d = root.get_dir(&dir.components)?;
         Some(match d.entries.get(name)? {
             Node::Dir(_) => FileNameWithInfo {
@@ -311,7 +322,8 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
     ) -> u64 {
         let key = (dir.components.clone(), name.to_string());
-        self.resource_forks
+        self.store
+            .resource_forks
             .lock()
             .unwrap()
             .get(&key)
@@ -327,6 +339,7 @@ impl FileProvider for InMemoryFileProvider {
     ) -> io::Result<BoxedReader> {
         let key = (dir.components.clone(), name.to_string());
         let fork = self
+            .store
             .resource_forks
             .lock()
             .unwrap()
@@ -348,16 +361,14 @@ impl FileProvider for InMemoryFileProvider {
             return Err(not_found());
         }
         let key = (dir.components.clone(), partial_name);
-        self.resource_forks
+        self.store
+            .resource_forks
             .lock()
             .unwrap()
             .entry(key.clone())
             .or_default()
             .resize(at as usize, 0);
-        Ok(Box::new(ForkWriter::appending(
-            self.resource_forks.clone(),
-            key,
-        )))
+        Ok(Box::new(ForkWriter::appending(self.store.clone(), key)))
     }
 
     async fn delete(
@@ -367,7 +378,7 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
         _is_dir: bool,
     ) -> io::Result<()> {
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         d.entries.remove(name).ok_or_else(not_found)?;
         drop_under(&mut self.comments.lock().unwrap(), &dir.components, name);
@@ -377,7 +388,7 @@ impl FileProvider for InMemoryFileProvider {
             name,
         );
         drop_under(
-            &mut self.resource_forks.lock().unwrap(),
+            &mut self.store.resource_forks.lock().unwrap(),
             &dir.components,
             name,
         );
@@ -390,7 +401,7 @@ impl FileProvider for InMemoryFileProvider {
         dir: &HlPath,
         name: &str,
     ) -> io::Result<()> {
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if d.entries.contains_key(name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
@@ -407,7 +418,7 @@ impl FileProvider for InMemoryFileProvider {
         old_name: &str,
         new_name: &str,
     ) -> io::Result<()> {
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if d.entries.contains_key(new_name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
@@ -429,7 +440,7 @@ impl FileProvider for InMemoryFileProvider {
             new_name,
         );
         rekey(
-            &mut self.resource_forks.lock().unwrap(),
+            &mut self.store.resource_forks.lock().unwrap(),
             &dir.components,
             old_name,
             &dir.components,
@@ -445,7 +456,7 @@ impl FileProvider for InMemoryFileProvider {
         name: &str,
         to_dir: &HlPath,
     ) -> io::Result<()> {
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let source = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
         if !source.entries.contains_key(name) {
             return Err(not_found());
@@ -486,7 +497,7 @@ impl FileProvider for InMemoryFileProvider {
             name,
         );
         rekey(
-            &mut self.resource_forks.lock().unwrap(),
+            &mut self.store.resource_forks.lock().unwrap(),
             &dir.components,
             name,
             &to_dir.components,
@@ -505,7 +516,7 @@ impl FileProvider for InMemoryFileProvider {
         link_dir: &HlPath,
         link_name: &str,
     ) -> io::Result<()> {
-        let mut root = self.root.lock().unwrap();
+        let mut root = self.store.root.lock().unwrap();
         let entry = match root
             .get_dir(&target_dir.components)
             .and_then(|d| d.entries.get(target_name))
