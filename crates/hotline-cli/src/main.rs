@@ -1,6 +1,7 @@
 //! `hlc`, a terminal Hotline client built on `hotline-client`.
 
 mod args;
+mod bell;
 mod file_edit;
 mod line;
 mod locale;
@@ -15,8 +16,9 @@ use std::time::Instant;
 
 use futures::StreamExt;
 use ratatui::crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+    EventStream, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::crossterm::ExecutableCommand;
@@ -24,8 +26,10 @@ use ratatui::widgets::{ListState, TableState};
 use ratatui::DefaultTerminal;
 
 use args::Args;
+use bell::Bell;
 use file_edit::FileEdit;
 use hotline_client::HotlineClient;
+use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
 use line::Line;
 use session::{ClientSession, EventOutcome, Mode, NewsFolder, NewsTarget, KEEP_ALIVE};
@@ -51,20 +55,27 @@ async fn main() -> anyhow::Result<()> {
     let mut session = ClientSession::new(args.nick, args.icon, client.encoding());
     session.server_version = login.version;
     session.download_dir = args.download_dir;
+    let bell = if args.no_bell {
+        Bell::empty()
+    } else {
+        Bell::DEFAULT
+    };
 
     let (mut terminal, enhanced) = setup_terminal()?;
-    let result = run(&mut terminal, &mut session, &client, &mut events).await;
+    let result = run(&mut terminal, &mut session, &client, &mut events, bell).await;
     restore_terminal(enhanced)?;
     result
 }
 
-/// Set up the terminal with [`ratatui::try_init`], mouse capture, and the
-/// keyboard enhancement flags when the terminal has them. The `bool` is
-/// `true` if the terminal now reports Shift+Enter apart from Enter.
+/// Set up the terminal with [`ratatui::try_init`], mouse capture, focus
+/// reports, and the keyboard enhancement flags when the terminal has them.
+/// The `bool` is `true` if the terminal now reports Shift+Enter apart from
+/// Enter.
 /// A panic on any thread restores the terminal, prints, and ends `hlc`.
 fn setup_terminal() -> anyhow::Result<(DefaultTerminal, bool)> {
     let terminal = ratatui::try_init()?;
     std::io::stdout().execute(EnableMouseCapture)?;
+    std::io::stdout().execute(EnableFocusChange)?;
     let enhanced = supports_keyboard_enhancement().unwrap_or(false);
     if enhanced {
         std::io::stdout().execute(PushKeyboardEnhancementFlags(
@@ -87,11 +98,12 @@ fn restore_terminal(enhanced: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Turn off mouse capture and the keyboard enhancement flags.
+/// Turn off mouse capture, focus reports, and the keyboard enhancement flags.
 fn restore_input(enhanced: bool) -> std::io::Result<()> {
     if enhanced {
         std::io::stdout().execute(PopKeyboardEnhancementFlags)?;
     }
+    std::io::stdout().execute(DisableFocusChange)?;
     std::io::stdout().execute(DisableMouseCapture)?;
     Ok(())
 }
@@ -101,9 +113,12 @@ async fn run(
     session: &mut ClientSession,
     client: &HotlineClient,
     events: &mut mpsc::UnboundedReceiver<hotline_proto::Transaction<hotline_proto::Received>>,
+    bell: Bell,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
     let mut view = View::default();
+    // A terminal that does not report focus has it.
+    let mut focused = true;
     let mut should_quit = false;
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
     let mut last_keep_alive = Instant::now();
@@ -111,9 +126,13 @@ async fn run(
 
     terminal.draw(|f| ui::draw(f, session, &mut view))?;
     while !should_quit {
+        let mut happened = Bell::empty();
         tokio::select! {
             // A finished file transfer.
-            Some(line) = done_rx.recv() => session.lines.push(line),
+            Some(line) = done_rx.recv() => {
+                session.lines.push(line);
+                happened = Bell::TRANSFER;
+            }
             // No traffic or keep-alive attempt for a while.
             () = tokio::time::sleep_until((idle_since(last_keep_alive) + KEEP_ALIVE).into()) => {
                 if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {
@@ -124,6 +143,12 @@ async fn run(
             // Server-initiated traffic: chat, user list changes, ...
             tx = events.recv() => {
                 let Some(tx) = tx else { break }; // connection closed
+                if let TransactionType::Push(opcode) = tx.r#type() {
+                    happened = Bell::for_push(opcode);
+                }
+                if let Some(tab) = ui::push_tab(session, &tx) {
+                    happened |= Bell::for_tab(tab, view.tab, focused);
+                }
                 match session.apply_server_event(&tx) {
                     EventOutcome::NeedsAgreementAccept => session.accept_agreement(client).await,
                     EventOutcome::Quit => should_quit = true,
@@ -153,6 +178,10 @@ async fn run(
                         let areas = ui::areas(terminal.size()?.into(), view.input(), &view.hints(files), view.shows_users());
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())
                     }
+                    Event::FocusGained | Event::FocusLost => {
+                        focused = matches!(ev, Event::FocusGained);
+                        Action::None
+                    }
                     _ => Action::None,
                 };
                 should_quit = perform(action, session, &mut view, client, &done_tx).await;
@@ -164,6 +193,7 @@ async fn run(
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
         view.access = session.granted();
         view.note_revisions(ui::tab_revisions(session));
+        bell.ring(happened)?;
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(Modal::Invite);
         }

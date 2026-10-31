@@ -40,6 +40,10 @@ pub struct Args {
     #[arg(long, default_value = "macintosh", value_parser = text_encoding::from_label)]
     pub encoding: &'static Encoding,
 
+    /// Do not ring the terminal bell.
+    #[arg(long)]
+    pub no_bell: bool,
+
     /// List the servers a tracker knows about, then exit without
     /// connecting. Takes `host[:port]`; the port defaults to 5498.
     #[arg(long, value_name = "HOST[:PORT]")]

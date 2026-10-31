@@ -32,6 +32,7 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --nick Alice
 | `--download-dir` | `.`         | the folder that downloads go to                |
 | `--encoding`     | `macintosh` | the text encoding, the same as the server's    |
 | `--tracker`      |             | list a tracker's servers and exit, no login    |
+| `--no-bell`      | off         | do not ring the terminal bell                  |
 
 Use `HLC_PASSWORD` in place of `--password` when other users share the
 host, because they can read a command line.
@@ -50,6 +51,12 @@ A tab label turns yellow when the tab changes while another tab shows.
 The Chat tab and each room tab change with each new line, and the News
 tab changes with each new post. The label turns back when you open the
 tab.
+
+The terminal bell rings on each chat line in a room tab that you cannot
+see: another tab shows, or the terminal does not have the focus. It
+also rings on a private message, an administrator
+message, a broadcast, an invitation to a private chat, and the end of a
+file transfer. `--no-bell` turns it off.
 
 A key, a command, a menu item, or a tab that needs a privilege you do
 not have shows in gray, and it does nothing. hlc gets the privileges

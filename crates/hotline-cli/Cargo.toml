@@ -26,6 +26,7 @@ tokio = { workspace = true }
 futures = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+bitflags = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 sys-locale = { workspace = true }

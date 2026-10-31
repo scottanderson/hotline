@@ -202,6 +202,14 @@ works this way.
   the privilege only to read an article. `hlc` grays out the News and
   Threaded News tabs without the privilege, and sends none of these
   requests.
+- **`hlc` rings for chat and news only when the user cannot see
+  them.** openline's client plays its chat sound on each chat line,
+  and its news sound on each news post (`ProcessTran_ChatMsg` and
+  `ProcessTran_NewMsg` in `Hotline.cp`). `hlc` rings the terminal bell
+  on each of them only while another tab shows, or while the terminal
+  does not have the focus. A terminal that does not report focus
+  counts as focused. `hlc` has no sound for a user who joins or
+  leaves.
 
 ## Openline vs. mhxd divergences (resolved)
 
@@ -269,6 +277,18 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
+6. **`hlc` has no config file.** Keep the settings in
+   `$XDG_CONFIG_HOME/hlc/config.toml`, or `~/.config/hlc/config.toml`
+   when the variable is not set, on macOS too. The file holds the
+   defaults of the command-line options: the name, the icon, the
+   server, the options bits, and the bell. A flag overrides the file,
+   and the file overrides the built-in default. `--bell` and
+   `--no-bell` turn the bell on and off. The file chooses the events
+   that ring it. On the first run with no name in the file and no
+   `--name`, `hlc` asks for a name and saves it. A change in the
+   options form (Alt-O) saves too. Derive `serde` on the settings
+   type. The format is open: TOML with the `toml` crate, or JSON with
+   the workspace's `serde_json`, which adds no new crate.
 
 ## Resolved
 

@@ -1,9 +1,10 @@
 //! Rendering, and the screen areas that mouse clicks hit.
 
 use hotline_client::FileInfo;
+use hotline_proto::opcode::TransactionType;
 use hotline_proto::text_encoding;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
-use hotline_proto::Access;
+use hotline_proto::{Access, Field, FieldId, Opcode, Received, Transaction};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span, Text};
@@ -146,6 +147,20 @@ pub fn tab_at(tabs: Rect, x: u16, y: u16, labels: &[(Tab, String)]) -> Option<Ta
         return None;
     }
     tab_columns(tabs, labels).find_map(|(tab, _, columns)| columns.contains(&x).then_some(tab))
+}
+
+/// The tab that gets a chat line or a news post from the push `tx`.
+pub fn push_tab(session: &ClientSession, tx: &Transaction<Received>) -> Option<Tab> {
+    match tx.r#type() {
+        TransactionType::Push(Opcode::ChatMsg) => Some(
+            tx.field(FieldId::ChatID)
+                .and_then(Field::as_u32)
+                .filter(|&id| session.room(id).is_some())
+                .map_or(Tab::Chat, Tab::Room),
+        ),
+        TransactionType::Push(Opcode::NewMsg) => Some(Tab::News),
+        _ => None,
+    }
 }
 
 /// The revision of each tab that changes without the user: the chat, the
@@ -814,6 +829,9 @@ fn draw_list_modal<'a>(
 
 #[cfg(test)]
 mod tests {
+    use hotline_client::JoinedChat;
+    use hotline_proto::text_encoding::EncodingHandle;
+
     use super::*;
     use crate::session::NewsTarget;
 
@@ -916,5 +934,35 @@ mod tests {
             name: "Games".into(),
         };
         assert_eq!(file_label(&folder), "Games/");
+    }
+
+    #[test]
+    fn push_tab_names_the_tab_of_a_chat_line_or_a_news_post() {
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        session.rooms.push(
+            JoinedChat {
+                id: 7,
+                subject: "".into(),
+                users: Vec::new(),
+            }
+            .into(),
+        );
+        let push =
+            |opcode, fields| Transaction::push(opcode, fields).received(text_encoding::DEFAULT);
+        let chat = |chat_id| push(Opcode::ChatMsg, vec![Field::u32(FieldId::ChatID, chat_id)]);
+        assert_eq!(push_tab(&session, &chat(7)), Some(Tab::Room(7)));
+        assert_eq!(push_tab(&session, &chat(8)), Some(Tab::Chat));
+        assert_eq!(
+            push_tab(&session, &push(Opcode::ChatMsg, Vec::new())),
+            Some(Tab::Chat)
+        );
+        assert_eq!(
+            push_tab(&session, &push(Opcode::NewMsg, Vec::new())),
+            Some(Tab::News)
+        );
+        assert_eq!(
+            push_tab(&session, &push(Opcode::NotifyChatChangeUser, Vec::new())),
+            None
+        );
     }
 }
