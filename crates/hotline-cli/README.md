@@ -45,6 +45,11 @@ moves between them, and Esc goes back to Chat. On Chat, Esc asks
 whether to quit. Ctrl-C asks too, from anywhere, and a second Ctrl-C
 quits.
 
+A tab label turns yellow when the tab changes while another tab shows.
+The Chat tab and each room tab change with each new line, and the News
+tab changes with each new post. The label turns back when you open the
+tab.
+
 | Key    | Where                | Effect                                          |
 |--------|----------------------|-------------------------------------------------|
 | Ctrl-P | outside a dialog     | the commands that work now; type to filter      |

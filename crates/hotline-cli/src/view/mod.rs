@@ -8,7 +8,7 @@ mod modal;
 mod options_form;
 mod tab;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use hotline_client::Ban;
@@ -171,6 +171,10 @@ pub struct View {
     pub can_broadcast: bool,
     /// `true` if the user may disconnect users.
     pub can_disconnect: bool,
+    /// The tabs that changed since the user last showed them.
+    pub updated: HashSet<Tab>,
+    /// The revision of each tab when the user last showed it.
+    seen: HashMap<Tab, u64>,
     selected_user: Option<u16>,
     last_click: Option<(Clicked, Instant)>,
 }
@@ -200,6 +204,8 @@ impl Default for View {
             account_count: 0,
             can_broadcast: false,
             can_disconnect: false,
+            updated: HashSet::new(),
+            seen: HashMap::new(),
             selected_user: None,
             last_click: None,
         }
@@ -236,9 +242,27 @@ impl View {
     pub fn set_tabs(&mut self, tabs: Vec<(Tab, String)>) {
         self.room_inputs
             .retain(|&id, _| tabs.iter().any(|&(tab, _)| tab == Tab::Room(id)));
+        self.updated
+            .retain(|&old| tabs.iter().any(|&(tab, _)| tab == old));
+        self.seen
+            .retain(|&old, _| tabs.iter().any(|&(tab, _)| tab == old));
         self.tabs = tabs;
         if !self.tabs.iter().any(|&(tab, _)| tab == self.tab) {
             let _ = self.set_tab(Tab::Chat);
+        }
+    }
+
+    /// Mark each tab whose revision changed while it was hidden. Clear the
+    /// mark of the shown tab.
+    pub fn note_revisions(&mut self, revisions: impl IntoIterator<Item = (Tab, u64)>) {
+        for (tab, revision) in revisions {
+            let seen = self.seen.entry(tab).or_insert(revision);
+            if tab == self.tab {
+                *seen = revision;
+                self.updated.remove(&tab);
+            } else if *seen != revision {
+                self.updated.insert(tab);
+            }
         }
     }
 
@@ -1679,6 +1703,39 @@ mod tests {
         view.can_broadcast = true;
         assert_eq!(view.handle_key(alt('a'), &users(), &files()), Action::None);
         assert!(matches!(view.modal, Some(Modal::Broadcast { .. })));
+    }
+
+    #[test]
+    fn note_revisions_marks_a_hidden_tab_that_changed() {
+        let mut view = View::default();
+        view.note_revisions([(Tab::Chat, 1), (Tab::News, 1)]);
+        view.note_revisions([(Tab::Chat, 2), (Tab::News, 2)]);
+        assert_eq!(view.updated, HashSet::from([Tab::News]));
+    }
+
+    #[test]
+    fn note_revisions_clears_the_mark_of_the_shown_tab() {
+        let mut view = View::default();
+        view.note_revisions([(Tab::News, 1)]);
+        view.note_revisions([(Tab::News, 2)]);
+        view.tab = Tab::News;
+        view.note_revisions([(Tab::News, 2)]);
+        view.tab = Tab::Chat;
+        view.note_revisions([(Tab::News, 2)]);
+        assert!(view.updated.is_empty());
+    }
+
+    #[test]
+    fn set_tabs_forgets_the_mark_of_a_room_that_closed() {
+        let mut view = View::default();
+        view.set_tabs(vec![
+            (Tab::Chat, "1 Chat".to_string()),
+            (Tab::Room(7), "2 Chat 7".to_string()),
+        ]);
+        view.note_revisions([(Tab::Room(7), 1)]);
+        view.note_revisions([(Tab::Room(7), 2)]);
+        view.set_tabs(vec![(Tab::Chat, "1 Chat".to_string())]);
+        assert!(view.updated.is_empty());
     }
 
     #[test]

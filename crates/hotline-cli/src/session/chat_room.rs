@@ -1,14 +1,14 @@
 use hotline_client::JoinedChat;
 use hotline_proto::types::UserNameWithInfo;
 
-use crate::line::{Line, LineKind};
+use crate::line::{Line, LineKind, Scrollback};
 
 /// A private chat room this client is in.
 pub struct ChatRoom {
     pub id: u32,
     pub subject: Box<str>,
     pub users: Vec<UserNameWithInfo>,
-    pub lines: Vec<Line>,
+    pub lines: Scrollback,
 }
 
 impl ChatRoom {
@@ -21,7 +21,7 @@ impl ChatRoom {
     }
 
     pub(super) fn push(&mut self, text: impl Into<Box<str>>, kind: LineKind) {
-        crate::line::push_line(&mut self.lines, Line::new(text, kind));
+        self.lines.push(Line::new(text, kind));
     }
 }
 
@@ -31,7 +31,7 @@ impl From<JoinedChat> for ChatRoom {
             id: joined.id,
             subject: joined.subject,
             users: joined.users,
-            lines: Vec::new(),
+            lines: Scrollback::default(),
         }
     }
 }

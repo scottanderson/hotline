@@ -113,7 +113,7 @@ async fn run(
     while !should_quit {
         tokio::select! {
             // A finished file transfer.
-            Some(line) = done_rx.recv() => line::push_line(&mut session.lines, line),
+            Some(line) = done_rx.recv() => session.lines.push(line),
             // No traffic or keep-alive attempt for a while.
             () = tokio::time::sleep_until((idle_since(last_keep_alive) + KEEP_ALIVE).into()) => {
                 if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {
@@ -164,6 +164,7 @@ async fn run(
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
         view.can_broadcast = session.can_broadcast();
         view.can_disconnect = session.can_disconnect();
+        view.note_revisions(ui::tab_revisions(session));
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(Modal::Invite);
         }

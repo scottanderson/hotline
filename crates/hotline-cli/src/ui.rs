@@ -150,6 +150,21 @@ pub fn tab_at(tabs: Rect, x: u16, y: u16, labels: &[(Tab, String)]) -> Option<Ta
     tab_columns(tabs, labels).find_map(|(tab, _, columns)| columns.contains(&x).then_some(tab))
 }
 
+/// The revision of each tab that changes without the user: the chat, the
+/// classic news, and each room.
+pub fn tab_revisions(session: &ClientSession) -> impl Iterator<Item = (Tab, u64)> + '_ {
+    let rooms = session
+        .rooms
+        .iter()
+        .map(|room| (Tab::Room(room.id), room.lines.revision()));
+    [
+        (Tab::Chat, session.lines.revision()),
+        (Tab::News, session.news_revision),
+    ]
+    .into_iter()
+    .chain(rooms)
+}
+
 /// The users shown beside `tab`: a room's members, or everyone.
 pub fn tab_users(session: &ClientSession, tab: Tab) -> &[UserNameWithInfo] {
     match tab {
@@ -245,10 +260,10 @@ fn draw_tabs(frame: &mut Frame, area: Rect, view: &View) {
         if !spans.is_empty() {
             spans.push(Span::raw("│"));
         }
-        let style = if tab == view.tab {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
+        let style = match (tab == view.tab, view.updated.contains(&tab)) {
+            (true, _) => Style::default().add_modifier(Modifier::REVERSED),
+            (false, true) => Style::default().fg(Color::Yellow),
+            (false, false) => Style::default(),
         };
         spans.push(Span::styled(format!(" {label} "), style));
     }

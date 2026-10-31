@@ -24,7 +24,7 @@ use hotline_proto::types::{FileNameWithInfo, HlPath, UserChangeOptions, UserName
 use hotline_proto::FieldId;
 use hotline_proto::{Access, Field, Received, Transaction};
 
-use crate::line::{Line, LineKind};
+use crate::line::{Line, LineKind, Scrollback};
 
 pub use chat_room::{ChatInvite, ChatRoom};
 use downloads::RunningDownload;
@@ -41,9 +41,11 @@ pub struct ClientSession {
     pub automatic_response: Box<str>,
     pub mode: Mode,
     pub users: Vec<UserNameWithInfo>,
-    pub lines: Vec<Line>,
+    pub lines: Scrollback,
     /// The classic news, `None` until it is fetched.
     pub news: Option<String>,
+    /// The number of changes to [`Self::news`] and of news posts pushed.
+    pub news_revision: u64,
     /// The listing of the folder at `file_path`, `None` until it is fetched.
     pub files: Option<Vec<FileNameWithInfo>>,
     pub file_path: HlPath,
@@ -84,10 +86,11 @@ impl ClientSession {
             automatic_response: Box::default(),
             mode: Mode::Joining,
             users: Vec::new(),
-            lines: vec![Line::system(
+            lines: Scrollback::from(Line::system(
                 "connected - type a message and press Enter, Esc to quit",
-            )],
+            )),
             news: None,
+            news_revision: 0,
             files: None,
             file_path: HlPath::default(),
             download_dir: PathBuf::from("."),
@@ -126,7 +129,7 @@ impl ClientSession {
     }
 
     fn push(&mut self, text: impl Into<Box<str>>, kind: LineKind) {
-        crate::line::push_line(&mut self.lines, Line::new(text, kind));
+        self.lines.push(Line::new(text, kind));
     }
 
     /// `true` if the server's version is `version` or later.
@@ -221,6 +224,7 @@ impl ClientSession {
             if let Some(news) = &mut self.news {
                 news.insert_str(0, &entry);
             }
+            self.news_revision += 1;
             self.push("new news post", LineKind::System);
         }
     }
@@ -395,7 +399,10 @@ impl ClientSession {
 
     pub async fn get_msgs(&mut self, client: &HotlineClient) {
         match client.get_msgs().await {
-            Ok(news) => self.news = Some(news),
+            Ok(news) => {
+                self.news = Some(news);
+                self.news_revision += 1;
+            }
             Err(e) => self.push(format!("failed to get news: {e}"), LineKind::Error),
         }
     }
@@ -524,6 +531,17 @@ mod tests {
             Some("From alice\rhelloFrom bob\rold")
         );
         assert_eq!(&*session.lines.last().unwrap().text, "new news post");
+        assert_eq!(session.news_revision, 1);
+    }
+
+    #[test]
+    fn new_msg_counts_a_post_before_the_news_is_fetched() {
+        use hotline_proto::opcode::Opcode;
+
+        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let post = test_support::push(Opcode::NewMsg, vec![Field::string(FieldId::Data, "hi")]);
+        let _ = session.apply_server_event(&post);
+        assert_eq!((session.news.as_deref(), session.news_revision), (None, 1));
     }
 
     #[test]

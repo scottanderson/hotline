@@ -220,6 +220,7 @@ mod tests {
     use hotline_proto::Opcode;
 
     use super::*;
+    use crate::line::Scrollback;
     use crate::session::test_support;
 
     fn session_in_room(chat_id: u32) -> ClientSession {
@@ -233,7 +234,7 @@ mod tests {
                 flags: UserFlags::empty(),
                 name: "me".into(),
             }],
-            lines: Vec::new(),
+            lines: Scrollback::default(),
         });
         session
     }
