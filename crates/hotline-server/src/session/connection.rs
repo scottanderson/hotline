@@ -470,7 +470,9 @@ impl Session {
             return false;
         }
         let ip = self.remote_addr.ip();
-        tracing::info!(user_id = self.user_id, %ip, "banned for flooding");
+        if state.is_banned(ip).await.is_none() {
+            tracing::warn!(user_id = self.user_id, %ip, "banned for flooding");
+        }
         state.temp_ban(ip).await;
         state.disconnect(self.user_id).await;
         true

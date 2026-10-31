@@ -71,13 +71,15 @@ impl Server {
                 continue;
             };
             if self.state.check_connection_flood(peer.ip()).await == FloodDecision::Ban {
-                tracing::info!(%peer, "banned for connection flooding");
+                if self.state.is_banned(peer.ip()).await.is_none() {
+                    tracing::warn!(%peer, "banned for connection flooding");
+                }
                 self.state.temp_ban(peer.ip()).await;
                 continue;
             }
             // Avoids Nagle delaying small replies behind the peer's ACKs.
             if let Err(e) = stream.set_nodelay(true) {
-                tracing::warn!(%peer, error = %e, "failed to set TCP_NODELAY");
+                tracing::debug!(%peer, error = %e, "failed to set TCP_NODELAY");
             }
             let state = self.state.clone();
             let config = self.config.clone();
@@ -85,7 +87,7 @@ impl Server {
                 let _permit = permit;
                 tracing::debug!(%peer, "connection accepted");
                 if let Err(e) = Session::run(stream, state, config).await {
-                    tracing::warn!(%peer, error = %e, "session ended with error");
+                    tracing::debug!(%peer, error = %e, "session ended with error");
                 }
             });
         }

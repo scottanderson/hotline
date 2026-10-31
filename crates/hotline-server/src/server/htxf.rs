@@ -47,7 +47,7 @@ pub(crate) async fn run_htxf_listener(listener: TcpListener, state: Arc<SharedSt
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_htxf_connection(stream, peer, &state).await {
-                tracing::warn!(%peer, error = %e, "htxf: connection ended with error");
+                tracing::debug!(%peer, error = %e, "htxf: connection ended with error");
             }
         });
     }
@@ -74,11 +74,11 @@ async fn handle_htxf_connection(
         .take_htxf_transfer(reference, header.transfer_type)
         .await
     else {
-        tracing::warn!(%peer, reference = header.reference, transfer_type = ?header.transfer_type, "htxf: no pending transfer of this type for reference");
+        tracing::debug!(%peer, reference = header.reference, transfer_type = ?header.transfer_type, "htxf: no pending transfer of this type for reference");
         return Ok(());
     };
     if transfer.client_ip != peer.ip() {
-        tracing::warn!(%peer, expected = %transfer.client_ip, "htxf: connection from wrong address for reference");
+        tracing::debug!(%peer, expected = %transfer.client_ip, "htxf: connection from wrong address for reference");
         state.release_download_slot(reference).await;
         return Ok(());
     }
