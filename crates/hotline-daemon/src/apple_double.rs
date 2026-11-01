@@ -11,10 +11,9 @@
 //! 50. A read finds nothing in a sidecar that fails a check, and a change
 //! to it returns an error.
 //!
-//! Two changes differ from xnu. A growth of the attributes that would
-//! write over another entry fails, where xnu writes over it. A Finder info
-//! change is written wherever the entry is, where xnu writes only the
-//! first 120 bytes.
+//! Two changes differ from xnu. A change that would write over another
+//! entry fails, where xnu writes over it. A Finder info change is written
+//! wherever the entry is, where xnu writes only the first 120 bytes.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -262,6 +261,23 @@ impl Info {
             + u32::from(self.finder_info.is_some() && !self.empty_finder_info)
     }
 
+    /// `true` if no other entry starts at or after a resource fork entry,
+    /// so a longer fork overwrites nothing.
+    fn fork_is_last(&self) -> bool {
+        let starts_after = |(i, fork): (usize, &Entry)| {
+            self.entries
+                .iter()
+                .enumerate()
+                .any(|(j, entry)| j != i && entry.offset >= fork.offset)
+        };
+        !self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.id == RESOURCE_FORK_ID)
+            .any(starts_after)
+    }
+
     /// The entry at `index`.
     fn entry_mut(&mut self, index: usize) -> io::Result<&mut Entry> {
         self.entries.get_mut(index).ok_or_else(out_of_range)
@@ -454,15 +470,22 @@ pub async fn open_resource_read(item: &Path, at: u64) -> io::Result<BoxedReader>
     Ok(Box::new(file.take(len - at)))
 }
 
-/// Open the resource fork of `item` for writing from `at` onward. Creates
-/// the sidecar if missing. A fork longer than `at` is cut to `at`. Call
-/// with the [`Sidecars`] lock held. The writer keeps `claim` until it
-/// drops.
+/// Open the resource fork of `item` for writing from `at` onward. At 0 the
+/// old fork goes first, and the sidecar is created if missing. A fork
+/// longer than `at` is cut to `at`. `PermissionDenied` if another entry
+/// starts after the fork. Call with the [`Sidecars`] lock held. The writer
+/// keeps `claim` until it drops.
 pub async fn open_resource_write(
     item: &Path,
     at: u64,
     claim: ForkClaim,
 ) -> io::Result<ResourceForkWriter> {
+    if !tokio::fs::metadata(item).await?.is_file() || !fork_is_last(item).await? {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    if at == 0 {
+        ignore_no_attr(remove_attr(item, AttrName::ResourceFork).await)?;
+    }
     let file = open_sidecar(item, Access::Create)
         .await?
         .ok_or_else(no_attr)?;
@@ -491,6 +514,17 @@ pub async fn open_resource_write(
         closing: None,
         claim,
     })
+}
+
+/// `true` if the sidecar of `item` is missing, fails a check, or has no
+/// entry after its resource fork.
+async fn fork_is_last(item: &Path) -> io::Result<bool> {
+    let Some(file) = open_sidecar(item, Access::Read).await? else {
+        return Ok(true);
+    };
+    Ok(get_info(file, false)
+        .await?
+        .is_none_or(|info| info.fork_is_last()))
 }
 
 /// Writes a resource fork from [`open_resource_write`]. Shutdown writes a
@@ -1029,6 +1063,7 @@ fn check_attrs(buf: &[u8], raw_len: usize, entry: &Entry) -> Option<AttrHeader> 
 #[derive(Debug, Clone, Copy)]
 enum AttrName<'a> {
     FinderInfo,
+    ResourceFork,
     Other(&'a str),
 }
 
@@ -1051,6 +1086,9 @@ async fn remove_attr_from_sidecar(item: &Path, name: AttrName<'_>) -> io::Result
     let mut info = get_info(file, false).await?.ok_or_else(no_attr)?;
     if info.attr_count() == 0 {
         remove(&path_of(item)).await?;
+        if matches!(name, AttrName::ResourceFork) && !tokio::fs::metadata(item).await?.is_file() {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
         return Err(no_attr());
     }
     let last = info.attr_count() == 1;
@@ -1065,6 +1103,25 @@ async fn remove_attr_from_sidecar(item: &Path, name: AttrName<'_>) -> io::Result
             put(&mut info.buf, offset, &[0; FINDER_INFO_LEN as usize])?;
             let len = info.buf.len();
             info.write(len).await
+        }
+        AttrName::ResourceFork => {
+            if !tokio::fs::metadata(item).await?.is_file() {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
+            let index = info.fork.ok_or_else(no_attr)?;
+            let entry = *info.entries.get(index).ok_or_else(out_of_range)?;
+            if entry.len == 0 {
+                return Err(no_attr());
+            }
+            if last {
+                return remove(&path_of(item)).await;
+            }
+            if entry.end().map(u64::from) == Some(info.file_len) {
+                info.file_len = u64::from(entry.offset);
+                info.file.set_len(info.file_len).await?;
+            }
+            info.entry_mut(index)?.len = 0;
+            info.write(ATTR_HEADER_END as usize).await
         }
         AttrName::Other(name) => {
             let header = info.attrs.ok_or_else(no_attr)?;
@@ -1864,6 +1921,27 @@ mod tests {
         assert_eq!(read(&item).await.unwrap().finder_info(), info);
         let file = std::fs::read(path_of(&item)).unwrap();
         assert_eq!(file[62..122], [b'c'; 60]);
+    }
+
+    #[tokio::test]
+    async fn a_fork_before_another_entry_is_not_written() {
+        let (_dir, item) = item();
+        let mut file = b"\x00\x05\x16\x07\x00\x02\x00\x00".to_vec();
+        file.extend_from_slice(&[0; 16]);
+        file.extend_from_slice(&[0, 2]);
+        file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 50, 0, 0, 0, 4]);
+        file.extend_from_slice(&[0, 0, 0, 9, 0, 0, 0, 54, 0, 0, 0, 32]);
+        file.extend_from_slice(b"rsrcTEXTttxt");
+        file.resize(86, 0);
+        std::fs::write(path_of(&item), &file).unwrap();
+        for at in [0, 4] {
+            let error = open_resource_write(&item, at, claim(&item))
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        }
+        assert_eq!(std::fs::read(path_of(&item)).unwrap(), file);
     }
 
     #[tokio::test]

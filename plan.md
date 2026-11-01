@@ -182,12 +182,14 @@ works this way.
   `com.apple.metadata:kMDItemFinderComment`. Each read and change does
   what xnu's `bsd/vfs/vfs_xattr.c` does (xnu-11417.101.15). macOS 15
   and later use doubleagentd for these files, and its source is not
-  public, so xnu is the reference. Finder can show a comment from
-  `.DS_Store` that hls does not see. Two changes differ from xnu, which
-  loses data in a sidecar in another RFC 1740 order. hls refuses an
-  attribute growth that would write over another entry. hls writes a
-  Finder info change past byte 120, which xnu drops and reports as
-  done.
+  public, so xnu is the reference. A fork write starts at the end of
+  the fork, as openline's `ResumeUnflatten` does, and a write from 0
+  replaces the fork, as xnu's `vnode_flushnamedstream` does. Finder can
+  show a comment from `.DS_Store` that hls does not see. Two changes
+  differ from xnu, which loses data in a sidecar in another RFC 1740
+  order. hls refuses a fork write or an attribute growth that would
+  write over another entry. hls writes a Finder info change past byte
+  120, which xnu drops and reports as done.
 - **Resume data without a `DATA` entry is an error.** openline's Mac
   `ResumeFlatten` resumes the data fork from 0 when the `RFLT` data has
   no `DATA` entry, and reads entries past the end of a short field.
