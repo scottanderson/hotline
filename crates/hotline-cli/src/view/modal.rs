@@ -1,7 +1,7 @@
 use hotline_client::{ClientInfoText, FileInfo};
 use hotline_proto::Access;
 
-use super::{AccountForm, OptionsForm, Palette};
+use super::{AccountForm, OptionsForm, Palette, TextBox};
 use crate::file_edit::FileEdit;
 use crate::session::{ArticleText, ChatInvite, NewsFolder, NewsTarget};
 use crate::transfer::Conflict;
@@ -13,7 +13,7 @@ pub enum Modal {
     InstantMsg {
         user_id: u16,
         name: Box<str>,
-        input: String,
+        input: TextBox,
     },
     /// The right-click menu for one user, drawn at `at`.
     UserMenu {
@@ -25,20 +25,20 @@ pub enum Modal {
     /// A choice to disconnect a user, with or without a ban.
     Disconnect { user_id: u16, name: Box<str> },
     /// A message to every connected user.
-    Broadcast { input: String },
+    Broadcast { input: TextBox },
     /// This user's name, icon, and options.
     Options(OptionsForm),
     /// A user's info text.
     Info(ClientInfoText),
     /// The local path of a file or folder to upload to the current folder.
-    Upload { input: String },
+    Upload { input: TextBox },
     /// A transfer that waits for resume, replace, or cancel.
     Confirm(Conflict),
     /// The text of `edit` on the file `name`.
     FileEdit {
         edit: FileEdit,
         name: Box<str>,
-        input: String,
+        input: TextBox,
     },
     /// A check before `hlc` closes the connection and quits.
     Quit,
@@ -47,30 +47,30 @@ pub enum Modal {
     /// The info of a file or folder.
     FileInfo(FileInfo),
     /// A new local name for the download of `name`.
-    SaveAs { name: Box<str>, input: String },
+    SaveAs { name: Box<str>, input: TextBox },
     /// An invitation to a private chat room.
     Invite(ChatInvite),
     /// A new subject for the room `chat_id`.
-    Subject { chat_id: u32, input: String },
+    Subject { chat_id: u32, input: TextBox },
     /// A threaded news article to read.
     Article(ArticleText),
     /// A new article: a reply to `parent_id`, or a new thread if `0`.
     Post {
         parent_id: u32,
-        title: String,
-        body: String,
+        title: TextBox,
+        body: TextBox,
         /// `true` while keys go to `body`.
         on_body: bool,
     },
     /// The name of a new bundle or category.
-    NewsName { kind: NewsFolder, input: String },
+    NewsName { kind: NewsFolder, input: TextBox },
     /// A check before the threaded news folder or article `target` is
     /// deleted.
     DeleteNews { target: NewsTarget, name: Box<str> },
     /// An account to create or change.
     Account(AccountForm),
     /// The login of an account to read.
-    OpenAccount { input: String },
+    OpenAccount { input: TextBox },
     /// A check before the account `login` is deleted.
     DeleteAccount { login: Box<str> },
     /// The downloads to cancel, as `(ID, label)`.
@@ -90,7 +90,7 @@ pub enum Modal {
 
 impl Modal {
     /// The text box with the focus, in a modal that has one.
-    pub const fn input_mut(&mut self) -> Option<&mut String> {
+    pub const fn input_mut(&mut self) -> Option<&mut TextBox> {
         match self {
             Self::Post {
                 title,

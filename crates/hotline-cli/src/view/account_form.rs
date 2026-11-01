@@ -1,5 +1,8 @@
 use hotline_client::{Password, UserAccount};
 use hotline_proto::Access;
+use unicode_segmentation::UnicodeSegmentation;
+
+use super::TextBox;
 
 /// The rows above the privilege rows: name, login, and password.
 pub const TEXT_ROWS: usize = 3;
@@ -17,10 +20,10 @@ pub fn privileges() -> impl Iterator<Item = (String, Access)> {
 pub struct AccountForm {
     /// The login before the edit, `None` for a new account.
     pub old_login: Option<Box<str>>,
-    pub name: String,
-    pub login: String,
+    pub name: TextBox,
+    pub login: TextBox,
     /// The typed password, `None` while it is unchanged.
-    pub password: Option<String>,
+    pub password: Option<TextBox>,
     /// `true` if the account had a password before the edit.
     pub had_password: bool,
     pub access: Access,
@@ -33,8 +36,8 @@ impl AccountForm {
     pub const fn blank() -> Self {
         Self {
             old_login: None,
-            name: String::new(),
-            login: String::new(),
+            name: TextBox::new(),
+            login: TextBox::new(),
             password: None,
             had_password: false,
             access: Access::empty(),
@@ -56,8 +59,8 @@ impl AccountForm {
     pub fn edit(account: &UserAccount) -> Self {
         Self {
             old_login: Some(account.login.clone()),
-            name: account.name.to_string(),
-            login: account.login.to_string(),
+            name: account.name.as_ref().into(),
+            login: account.login.as_ref().into(),
             had_password: account.password != Password::Empty,
             access: account.access,
             ..Self::blank()
@@ -70,11 +73,11 @@ impl AccountForm {
     }
 
     /// The text of the selected row, `None` on a privilege row.
-    pub fn text_mut(&mut self) -> Option<&mut String> {
+    pub fn text_mut(&mut self) -> Option<&mut TextBox> {
         match self.row {
             0 => Some(&mut self.name),
             1 => Some(&mut self.login),
-            2 => Some(self.password.get_or_insert_with(String::new)),
+            2 => Some(self.password.get_or_insert_with(TextBox::new)),
             _ => None,
         }
     }
@@ -89,7 +92,7 @@ impl AccountForm {
     /// The password as the form shows it.
     pub fn password_text(&self) -> String {
         match (&self.password, self.had_password) {
-            (Some(password), _) => "*".repeat(password.chars().count()),
+            (Some(password), _) => "*".repeat(password.as_str().graphemes(true).count()),
             (None, true) => "(unchanged)".to_string(),
             (None, false) => "(none)".to_string(),
         }
@@ -113,6 +116,8 @@ impl AccountForm {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::crossterm::event::KeyCode;
+
     use super::*;
 
     #[test]
@@ -134,10 +139,17 @@ mod tests {
         assert_eq!(form.account(), account);
 
         form.row = 2;
-        form.text_mut().unwrap().push('x');
+        form.text_mut().unwrap().insert('x');
         assert_eq!(form.account().password, Password::New("x".into()));
-        form.text_mut().unwrap().pop();
+        form.text_mut().unwrap().edit(KeyCode::Backspace.into());
         assert_eq!(form.account().password, Password::Empty);
+    }
+
+    #[test]
+    fn password_text_shows_one_star_for_each_grapheme() {
+        let mut form = AccountForm::blank();
+        form.password = Some("e\u{301}x".into());
+        assert_eq!(form.password_text(), "**");
     }
 
     #[test]

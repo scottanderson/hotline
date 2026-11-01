@@ -1,6 +1,6 @@
 use hotline_proto::Access;
 
-use super::{MenuItem, Tab};
+use super::{MenuItem, Tab, TextBox};
 
 /// One entry in the command palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +71,7 @@ impl Command {
 pub struct Palette {
     /// The title shown while `input` is empty.
     pub title: &'static str,
-    pub input: String,
+    pub input: TextBox,
     /// Each command and its label, in palette order.
     commands: Vec<(Command, String)>,
     pub selected: usize,
@@ -85,7 +85,7 @@ impl Palette {
     ) -> Self {
         Self {
             title,
-            input: String::new(),
+            input: TextBox::new(),
             commands: commands
                 .into_iter()
                 .map(|command| (command, command.label(tabs)))
@@ -96,7 +96,7 @@ impl Palette {
 
     /// The commands whose label holds `input`, ignoring case.
     pub fn matches(&self) -> impl Iterator<Item = &(Command, String)> {
-        let input = self.input.to_lowercase();
+        let input = self.input.as_str().to_lowercase();
         self.commands
             .iter()
             .filter(move |(_, label)| label.to_lowercase().contains(&input))
@@ -120,7 +120,7 @@ impl Palette {
 
     /// Change the filter text with `edit`. When `edit` returns `true`,
     /// select the first match.
-    pub fn edit(&mut self, edit: impl FnOnce(&mut String) -> bool) {
+    pub fn edit(&mut self, edit: impl FnOnce(&mut TextBox) -> bool) {
         if edit(&mut self.input) {
             self.selected = 0;
         }

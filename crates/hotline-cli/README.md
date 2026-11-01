@@ -85,11 +85,27 @@ or the folder privilege, for the kind of the selected item.
 | Alt-S  | a room               | set the subject                                 |
 | Alt-W  | a room               | leave the room                                  |
 | ⇧Enter | a text box           | a new line (also Alt-Enter or Ctrl-J)           |
-| Ctrl-W | a text box           | delete the last word (also Alt-⌫)               |
-| Ctrl-U | a text box           | delete the whole text                           |
+| ← →    | a text box           | move one character (also Ctrl-B and Ctrl-F)     |
+| Alt-B  | a text box           | move to the start of a word (also Ctrl-←)       |
+| Alt-F  | a text box           | move to the end of a word (also Ctrl-→)         |
+| Ctrl-A | a text box           | move to the start of the line (also Home)       |
+| Ctrl-E | a text box           | move to the end of the line (also End)          |
+| Ctrl-W | a text box           | cut back to a space                             |
+| Alt-⌫  | a text box           | cut back to the start of a word                 |
+| Alt-D  | a text box           | cut to the end of a word                        |
+| Ctrl-D | a text box           | delete the next character (also Delete)         |
+| Ctrl-U | a text box           | cut to the start of the line                    |
+| Ctrl-K | a text box           | cut to the end of the line                      |
+| Ctrl-Y | a text box           | paste the last cut                              |
+| Ctrl-_ | a text box           | undo                                            |
 | Enter  | user list            | send a private message                          |
 | `i`    | user list            | the user's info                                 |
 | `k`    | user list            | disconnect the user                             |
+
+A text box moves and deletes by grapheme cluster. An accented letter
+or an emoji sequence is one character. Cuts in a row join into one
+cut. Each text box keeps its own cut. Undo removes a run of typed
+text in one step.
 
 Alt-X also opens the palette, for a terminal that takes Ctrl-P.
 Shift-F10 and the Menu key also open the actions. The palette and

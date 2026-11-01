@@ -8,6 +8,7 @@ mod hint;
 mod modal;
 mod options_form;
 mod tab;
+mod text_box;
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -33,6 +34,7 @@ pub use hint::Hint;
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OptionsForm, OPTIONS};
 pub use tab::Tab;
+pub use text_box::TextBox;
 
 /// The longest gap between the two clicks of a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
@@ -64,41 +66,6 @@ fn plain_code(key: KeyEvent) -> KeyCode {
     } else {
         key.code
     }
-}
-
-/// Type into `text`, or edit it with Backspace, Alt+Backspace,
-/// Ctrl+Backspace, Ctrl+H, Ctrl+U, or Ctrl+W. Returns `false` for any
-/// other key.
-fn edit_text(text: &mut String, key: KeyEvent) -> bool {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    match key.code {
-        KeyCode::Backspace if ctrl || alt => delete_word(text),
-        KeyCode::Backspace => {
-            text.pop();
-        }
-        KeyCode::Char('h') if ctrl => {
-            text.pop();
-        }
-        KeyCode::Char('u') if ctrl => text.clear(),
-        KeyCode::Char('w') if ctrl => delete_word(text),
-        // AltGr on Windows sends Ctrl and Alt, and gives no ASCII letter or digit.
-        KeyCode::Char(c) if !ctrl && !alt || ctrl && alt && !c.is_ascii_alphanumeric() => {
-            text.push(c);
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// Delete the last word of `text` and the spaces after it.
-fn delete_word(text: &mut String) {
-    let start = text
-        .trim_end()
-        .char_indices()
-        .rfind(|&(_, c)| c.is_whitespace())
-        .map_or(0, |(i, c)| i + c.len_utf8());
-    text.truncate(start);
 }
 
 /// `true` if `enabled_by` is empty, or `access` has one of its privileges.
@@ -151,10 +118,10 @@ pub struct View {
     pub modal: Option<Modal>,
     /// Each tab and its label: the tab bar in order, then the rooms.
     pub tabs: Vec<(Tab, String)>,
-    pub chat_input: String,
-    pub post_input: String,
+    pub chat_input: TextBox,
+    pub post_input: TextBox,
     /// The input line of each room tab.
-    pub room_inputs: HashMap<u32, String>,
+    pub room_inputs: HashMap<u32, TextBox>,
     /// Lines of news scrolled past the top.
     pub news_scroll: u16,
     /// The first user list row on screen, as the last draw left it.
@@ -195,8 +162,8 @@ impl Default for View {
                 .iter()
                 .map(|&(tab, label)| (tab, label.to_string()))
                 .collect(),
-            chat_input: String::new(),
-            post_input: String::new(),
+            chat_input: TextBox::new(),
+            post_input: TextBox::new(),
             room_inputs: HashMap::new(),
             news_scroll: 0,
             users_offset: 0,
@@ -225,16 +192,17 @@ impl View {
     }
 
     /// The input line for the current tab, `None` on a tab with no input line.
-    pub fn input(&self) -> Option<&str> {
+    pub fn input(&self) -> Option<&TextBox> {
+        static EMPTY: TextBox = TextBox::new();
         match self.tab {
             Tab::Chat => Some(&self.chat_input),
             Tab::News => Some(&self.post_input),
             Tab::Files | Tab::Threaded | Tab::Admin => None,
-            Tab::Room(id) => Some(self.room_inputs.get(&id).map_or("", String::as_str)),
+            Tab::Room(id) => Some(self.room_inputs.get(&id).unwrap_or(&EMPTY)),
         }
     }
 
-    fn input_mut(&mut self) -> Option<&mut String> {
+    fn input_mut(&mut self) -> Option<&mut TextBox> {
         match self.tab {
             Tab::Chat => Some(&mut self.chat_input),
             Tab::News => Some(&mut self.post_input),
@@ -711,7 +679,7 @@ impl View {
             Command::OpenTab(tab) => self.set_tab(tab),
             Command::Broadcast => {
                 self.modal = Some(Modal::Broadcast {
-                    input: String::new(),
+                    input: TextBox::new(),
                 });
                 Action::None
             }
@@ -742,7 +710,7 @@ impl View {
             },
             KeyCode::Up => palette.select_previous(),
             KeyCode::Down => palette.select_next(),
-            _ => palette.edit(|input| edit_text(input, key)),
+            _ => palette.edit(|input| input.edit(key)),
         }
         self.modal = Some(Modal::Palette(palette));
         Action::None
@@ -769,8 +737,8 @@ impl View {
                 };
                 self.modal = Some(Modal::Post {
                     parent_id: article.id,
-                    title,
-                    body: String::new(),
+                    title: title.into(),
+                    body: TextBox::new(),
                     on_body: true,
                 });
                 return Action::None;
@@ -793,7 +761,7 @@ impl View {
                 return Action::EditFile {
                     edit: *edit,
                     name: std::mem::take(name),
-                    text: std::mem::take(input),
+                    text: input.take(),
                 };
             }
             (Modal::Quit, KeyCode::Char('y')) => return Action::Quit,
@@ -804,11 +772,11 @@ impl View {
                 return Action::DeleteAccount(std::mem::take(login));
             }
             (Modal::OpenAccount { input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::OpenAccount(std::mem::take(input));
+                return Action::OpenAccount(input.take());
             }
             (Modal::Post { body, on_body, .. }, _) if is_new_line(key) => {
                 if *on_body {
-                    body.push('\n');
+                    body.insert('\n');
                 }
             }
             (Modal::Post { on_body, .. }, KeyCode::Tab) => *on_body = !*on_body,
@@ -823,13 +791,13 @@ impl View {
             ) if !title.is_empty() => {
                 return Action::PostArticle {
                     parent_id: *parent_id,
-                    title: std::mem::take(title),
-                    text: std::mem::take(body),
+                    title: title.take(),
+                    text: body.take(),
                 };
             }
             (Modal::NewsName { kind, input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::NewNewsItem {
-                    name: std::mem::take(input),
+                    name: input.take(),
                     kind: *kind,
                 };
             }
@@ -840,7 +808,7 @@ impl View {
             (Modal::InstantMsg { input, .. } | Modal::Broadcast { input }, _)
                 if is_new_line(key) =>
             {
-                input.push('\n');
+                input.insert('\n');
             }
             (_, KeyCode::Esc)
             | (Modal::Info(_) | Modal::FileInfo(_) | Modal::Article(_), KeyCode::Enter) => {
@@ -849,22 +817,22 @@ impl View {
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::SendInstantMsg {
                     user_id: *user_id,
-                    text: std::mem::take(input),
+                    text: input.take(),
                 };
             }
             (Modal::Broadcast { input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::UserBroadcast(std::mem::take(input));
+                return Action::UserBroadcast(input.take());
             }
             (Modal::Upload { input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::Upload {
-                    path: std::mem::take(input),
+                    path: input.take(),
                     start: Start::Ask,
                 };
             }
             (Modal::Subject { chat_id, input }, KeyCode::Enter) => {
                 return Action::SetChatSubject {
                     chat_id: *chat_id,
-                    subject: std::mem::take(input),
+                    subject: input.take(),
                 };
             }
             (
@@ -919,7 +887,7 @@ impl View {
             (Modal::SaveAs { name, input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::DownloadFile {
                     name: std::mem::take(name),
-                    save_as: std::mem::take(input).into(),
+                    save_as: input.take().into(),
                     start: Start::Ask,
                 };
             }
@@ -949,7 +917,7 @@ impl View {
             }
             (modal, _) => {
                 if let Some(input) = modal.input_mut() {
-                    edit_text(input, key);
+                    input.edit(key);
                 }
             }
         }
@@ -1002,23 +970,23 @@ impl View {
             return Action::None;
         };
         if is_new_line(key) {
-            input.push('\n');
+            input.insert('\n');
             return Action::None;
         }
         match (key.code, tab) {
             (KeyCode::Enter, Tab::Chat) if may_chat && !input.is_empty() => {
-                return Action::SendChat(std::mem::take(input));
+                return Action::SendChat(input.take());
             }
             (KeyCode::Enter, Tab::News) if may_post && !input.is_empty() => {
-                return Action::OldPostNews(std::mem::take(input));
+                return Action::OldPostNews(input.take());
             }
             (KeyCode::Enter, Tab::Room(chat_id)) if may_chat && !input.is_empty() => {
                 return Action::SendRoomChat {
                     chat_id,
-                    text: std::mem::take(input),
+                    text: input.take(),
                 };
             }
-            _ if edit_text(input, key) => {}
+            _ if input.edit(key) => {}
             (KeyCode::Tab, _) => self.focus = Focus::Users,
             (KeyCode::Esc, Tab::Chat) => self.modal = Some(Modal::Quit),
             (KeyCode::Esc, _) => return self.set_tab(Tab::Chat),
@@ -1046,7 +1014,7 @@ impl View {
             }
             KeyCode::Char('u') if self.may(Access::UPLOAD_FILE | Access::UPLOAD_FOLDER) => {
                 self.modal = Some(Modal::Upload {
-                    input: String::new(),
+                    input: TextBox::new(),
                 });
             }
             KeyCode::Char('n') if self.may(FileEdit::NewFolder.enabled_by(false)) => {
@@ -1104,7 +1072,7 @@ impl View {
             KeyCode::PageUp => form.row = form.row.saturating_sub(10),
             KeyCode::PageDown => form.row = (form.row + 10).min(last),
             KeyCode::Char(' ') if form.row >= account_form::TEXT_ROWS => form.toggle(),
-            _ if form.text_mut().is_some_and(|text| edit_text(text, key)) => {}
+            _ if form.text_mut().is_some_and(|text| text.edit(key)) => {}
             _ => {}
         }
         self.modal = Some(Modal::Account(form));
@@ -1123,7 +1091,7 @@ impl View {
             KeyCode::Up => form.row = form.row.saturating_sub(1),
             KeyCode::Down => form.row = (form.row + 1).min(last),
             KeyCode::Char(' ') if form.row >= options_form::TEXT_ROWS => form.toggle(),
-            _ if form.text_mut().is_some_and(|text| edit_text(text, key)) => {}
+            _ if form.text_mut().is_some_and(|text| text.edit(key)) => {}
             _ => {}
         }
         self.modal = Some(Modal::Options(form));
@@ -1146,7 +1114,7 @@ impl View {
             }
             KeyCode::Char('o') if self.may(Access::OPEN_USER) => {
                 self.modal = Some(Modal::OpenAccount {
-                    input: String::new(),
+                    input: TextBox::new(),
                 });
             }
             KeyCode::Char('x') if self.account_count > 0 && self.may(Access::DELETE_USER) => {
@@ -1193,7 +1161,7 @@ impl View {
                     } else {
                         NewsFolder::Bundle
                     },
-                    input: String::new(),
+                    input: TextBox::new(),
                 });
             }
             _ => {}
@@ -1442,7 +1410,7 @@ impl View {
                     self.modal = Some(Modal::InstantMsg {
                         user_id,
                         name: user.name.clone(),
-                        input: String::new(),
+                        input: TextBox::new(),
                     });
                 }
                 Action::None
@@ -1762,7 +1730,7 @@ mod tests {
             Some(Modal::InstantMsg {
                 user_id: 2,
                 name: "Bob".into(),
-                input: String::new()
+                input: TextBox::new()
             })
         );
 
@@ -1841,21 +1809,21 @@ mod tests {
         let mut view = View::default();
         type_text(&mut view, "héllo wörld  ");
         let _ = view.handle_key(ctrl('w'), &users(), &files());
-        assert_eq!(view.chat_input, "héllo ");
+        assert_eq!(view.chat_input.as_str(), "héllo ");
         let _ = view.handle_key(ctrl('w'), &users(), &files());
-        assert_eq!(view.chat_input, "");
+        assert_eq!(view.chat_input.as_str(), "");
 
         type_text(&mut view, "ab cd");
         let _ = view.handle_key(ctrl('h'), &users(), &files());
-        assert_eq!(view.chat_input, "ab c");
+        assert_eq!(view.chat_input.as_str(), "ab c");
         let ctrl_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL);
         let _ = view.handle_key(ctrl_backspace, &users(), &files());
-        assert_eq!(view.chat_input, "ab ");
+        assert_eq!(view.chat_input.as_str(), "ab ");
         type_text(&mut view, "cd");
         let alt_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT);
         let _ = view.handle_key(alt_backspace, &users(), &files());
-        assert_eq!(view.chat_input, "ab ");
-        view.chat_input.clear();
+        assert_eq!(view.chat_input.as_str(), "ab ");
+        view.chat_input = TextBox::new();
 
         let _ = view.handle_key(ctrl('p'), &users(), &files());
         type_text(&mut view, "go to");
@@ -1863,7 +1831,37 @@ mod tests {
         let Some(Modal::Palette(palette)) = &view.modal else {
             panic!("no palette");
         };
-        assert_eq!(palette.input, "");
+        assert_eq!(palette.input.as_str(), "");
+    }
+
+    #[test]
+    fn readline_keys_move_the_cursor_in_the_input_line_and_a_modal() {
+        let mut view = View {
+            access: Access::all(),
+            ..View::default()
+        };
+        type_text(&mut view, "ac d");
+        let alt_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT);
+        let _ = view.handle_key(alt_b, &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Left), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::Left), &users(), &files());
+        type_text(&mut view, "b");
+        let _ = view.handle_key(ctrl('a'), &users(), &files());
+        type_text(&mut view, ">");
+        let _ = view.handle_key(ctrl('e'), &users(), &files());
+        type_text(&mut view, "!");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::SendChat(">abc d!".into())
+        );
+
+        view.modal = Some(Modal::Broadcast { input: "hi".into() });
+        let _ = view.handle_key(key(KeyCode::Home), &users(), &files());
+        type_text(&mut view, "oh ");
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::UserBroadcast("oh hi".into())
+        );
     }
 
     #[test]
@@ -1874,7 +1872,7 @@ mod tests {
         assert_eq!(view.handle_key(alt('a'), &users(), &files()), Action::None);
         assert_eq!(view.modal, None);
         assert_eq!(view.handle_key(alt('w'), &users(), &files()), Action::None);
-        assert_eq!(view.chat_input, "");
+        assert_eq!(view.chat_input.as_str(), "");
 
         view.show_room(9);
         assert_eq!(
@@ -1966,13 +1964,13 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         let _ = view.handle_key(altgr, &users(), &files());
-        assert_eq!(view.chat_input, "@");
+        assert_eq!(view.chat_input.as_str(), "@");
         let ctrl_alt_x = KeyEvent::new(
             KeyCode::Char('x'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         let _ = view.handle_key(ctrl_alt_x, &users(), &files());
-        assert_eq!(view.chat_input, "@");
+        assert_eq!(view.chat_input.as_str(), "@");
     }
 
     #[test]
@@ -2339,7 +2337,7 @@ mod tests {
     #[test]
     fn chat_enter_needs_send_chat() {
         let mut view = View::default();
-        view.input_mut().unwrap().push_str("hi");
+        *view.input_mut().unwrap() = "hi".into();
         assert_eq!(hint_enabled(&view, "Enter", "send"), Some(false));
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
@@ -2457,7 +2455,7 @@ mod tests {
         assert_eq!(
             view.modal,
             Some(Modal::Upload {
-                input: String::new()
+                input: TextBox::new()
             })
         );
 
@@ -2530,7 +2528,7 @@ mod tests {
                 text: "hi".into()
             }
         );
-        assert_eq!(view.chat_input, "");
+        assert_eq!(view.chat_input.as_str(), "");
     }
 
     #[test]

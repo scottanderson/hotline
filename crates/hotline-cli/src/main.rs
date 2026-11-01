@@ -38,7 +38,7 @@ use session::{
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use transfer::Conflict;
-use view::{AccountForm, Action, Focus, Modal, OptionsForm, View};
+use view::{AccountForm, Action, Focus, Modal, OptionsForm, TextBox, View};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -190,7 +190,7 @@ async fn run(
                         let files = session.files.as_deref().unwrap_or_default();
                         let areas = ui::areas(
                             terminal.size()?.into(),
-                            view.input(),
+                            view.input().map(TextBox::as_str),
                             &view.hints(files),
                             view.shows_users(),
                             view.has_room_row(),
@@ -341,7 +341,10 @@ async fn perform(
                 .room(chat_id)
                 .map(|room| room.subject.to_string())
                 .unwrap_or_default();
-            view.modal = Some(Modal::Subject { chat_id, input });
+            view.modal = Some(Modal::Subject {
+                chat_id,
+                input: input.into(),
+            });
         }
         Action::SetChatSubject { chat_id, subject } => {
             session.set_chat_subject(client, chat_id, &subject).await;
@@ -418,7 +421,11 @@ async fn perform(
                     FileEdit::Move | FileEdit::Alias => session.folder_text(),
                     _ => String::new(),
                 };
-                view.modal = Some(Modal::FileEdit { edit, name, input });
+                view.modal = Some(Modal::FileEdit {
+                    edit,
+                    name,
+                    input: input.into(),
+                });
             }
         },
         Action::EditFile { edit, name, text } => {
@@ -479,8 +486,8 @@ async fn perform(
             if session.can_post() {
                 view.modal = Some(Modal::Post {
                     parent_id: 0,
-                    title: String::new(),
-                    body: String::new(),
+                    title: TextBox::new(),
+                    body: TextBox::new(),
                     on_body: false,
                 });
             }

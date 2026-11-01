@@ -1,6 +1,8 @@
 use hotline_client::ClientUserInfo;
 use hotline_proto::types::UserChangeOptions;
 
+use super::TextBox;
+
 /// The rows above the option rows: name, icon, and automatic response.
 pub const TEXT_ROWS: usize = 3;
 
@@ -15,9 +17,9 @@ pub const OPTIONS: [(&str, UserChangeOptions); 3] = [
 /// one row for each option.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OptionsForm {
-    pub name: String,
-    pub icon: String,
-    pub automatic_response: String,
+    pub name: TextBox,
+    pub icon: TextBox,
+    pub automatic_response: TextBox,
     pub options: UserChangeOptions,
     /// The selected row.
     pub row: usize,
@@ -27,9 +29,9 @@ impl OptionsForm {
     /// A form that edits `info`.
     pub fn edit(info: &ClientUserInfo) -> Self {
         Self {
-            name: info.name.to_string(),
-            icon: info.icon.to_string(),
-            automatic_response: info.automatic_response.to_string(),
+            name: info.name.as_ref().into(),
+            icon: info.icon.to_string().into(),
+            automatic_response: info.automatic_response.as_ref().into(),
             options: info.options,
             row: 0,
         }
@@ -41,7 +43,7 @@ impl OptionsForm {
     }
 
     /// The text of the selected row, `None` on an option row.
-    pub const fn text_mut(&mut self) -> Option<&mut String> {
+    pub const fn text_mut(&mut self) -> Option<&mut TextBox> {
         match self.row {
             0 => Some(&mut self.name),
             1 => Some(&mut self.icon),
@@ -61,7 +63,7 @@ impl OptionsForm {
     pub fn info(&self) -> Option<ClientUserInfo> {
         Some(ClientUserInfo {
             name: self.name.as_str().into(),
-            icon: self.icon.trim().parse().ok()?,
+            icon: self.icon.as_str().trim().parse().ok()?,
             options: self.options,
             automatic_response: self.automatic_response.as_str().into(),
         })
@@ -81,7 +83,7 @@ mod tests {
             form.info().map(|info| info.options),
             Some(UserChangeOptions::AUTO_RESPONSE)
         );
-        form.icon.push('x');
+        form.icon.insert('x');
         assert_eq!(form.info(), None);
     }
 }

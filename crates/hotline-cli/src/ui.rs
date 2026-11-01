@@ -10,12 +10,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span, Text};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::view::{
     allows, contains, privileges, AccountForm, Focus, Hint, MenuItem, Modal, OptionsForm, Tab,
-    View, OPTIONS,
+    TextBox, View, OPTIONS,
 };
 
 /// Where each part of the main screen is drawn.
@@ -35,6 +36,14 @@ pub struct Areas {
 fn text_width(text: &str) -> usize {
     Span::raw(text).width()
 }
+
+/// `n` as a screen coordinate, at most [`u16::MAX`].
+fn to_u16(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
+}
+
+/// The columns of the label before the text of a form row.
+const FORM_LABEL: usize = 10;
 
 /// The most lines a text box shows before it scrolls.
 const MAX_INPUT_ROWS: usize = 5;
@@ -233,7 +242,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     let room_row = view.room_row();
     let areas = areas(
         frame.area(),
-        view.input(),
+        view.input().map(TextBox::as_str),
         &hints,
         view.shows_users(),
         !room_row.is_empty(),
@@ -495,9 +504,9 @@ const fn account_circle(access: Access) -> &'static str {
 /// The rows of `form`: name, login, password, then a check box for each privilege.
 fn account_form_rows(form: &AccountForm) -> Vec<String> {
     let text = [
-        format!("name:     {}", form.name),
-        format!("login:    {}", form.login),
-        format!("password: {}", form.password_text()),
+        text_row("name:", form.name.as_str()),
+        text_row("login:", form.login.as_str()),
+        text_row("password:", &form.password_text()),
     ];
     let checks = privileges().map(|(label, flag)| check_row(form.access.contains(flag), &label));
     text.into_iter().chain(checks).collect()
@@ -506,14 +515,53 @@ fn account_form_rows(form: &AccountForm) -> Vec<String> {
 /// The rows of `form`: name, icon, automatic response, then a check box for each option.
 fn options_form_rows(form: &OptionsForm) -> Vec<String> {
     let text = [
-        format!("name:     {}", form.name),
-        format!("icon:     {}", form.icon),
-        format!("response: {}", form.automatic_response),
+        text_row("name:", form.name.as_str()),
+        text_row("icon:", form.icon.as_str()),
+        text_row("response:", form.automatic_response.as_str()),
     ];
     let checks = OPTIONS
         .iter()
         .map(|(label, flag)| check_row(form.options.contains(*flag), label));
     text.into_iter().chain(checks).collect()
+}
+
+/// A form row with `label`, then `text`.
+fn text_row(label: &str, text: &str) -> String {
+    format!("{label:FORM_LABEL$}{text}")
+}
+
+/// The column of the cursor in the text of the selected row of `form`,
+/// `None` on a privilege row.
+fn account_form_cursor(form: &AccountForm) -> Option<usize> {
+    match form.row {
+        0 => Some(text_width(form.name.before_cursor())),
+        1 => Some(text_width(form.login.before_cursor())),
+        2 => Some(form.password.as_ref().map_or(0, |password| {
+            password.before_cursor().graphemes(true).count()
+        })),
+        _ => None,
+    }
+}
+
+/// The column of the cursor in the text of the selected row of `form`,
+/// `None` on an option row.
+fn options_form_cursor(form: &OptionsForm) -> Option<usize> {
+    let text = match form.row {
+        0 => &form.name,
+        1 => &form.icon,
+        2 => &form.automatic_response,
+        _ => return None,
+    };
+    Some(text_width(text.before_cursor()))
+}
+
+/// Put the cursor `column` columns into the text of row `row` of the form
+/// drawn in `area`.
+fn set_form_cursor(frame: &mut Frame, area: Rect, row: usize, column: usize) {
+    let inner = inner(area);
+    let x = inner.x.saturating_add(to_u16(FORM_LABEL + column));
+    let y = inner.y.saturating_add(to_u16(row));
+    frame.set_cursor_position((x.min(inner.right().saturating_sub(1)), y));
 }
 
 /// A form row with a check box, marked if `on`.
@@ -573,24 +621,29 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
         frame,
         area,
         block,
-        view.input().unwrap_or_default(),
+        view.input().unwrap_or(&TextBox::new()),
         focused && view.modal.is_none(),
     );
 }
 
-/// Draw `text` scrolled to its last line, with the cursor at its end if `cursor`.
-fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor: bool) {
-    let lines = u16::try_from(text.split('\n').count()).unwrap_or(u16::MAX);
-    let rows = input_rows(text);
-    let paragraph = Paragraph::new(text)
+/// Draw `text` scrolled to show its cursor, and put the terminal cursor
+/// there if `cursor`.
+fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &TextBox, cursor: bool) {
+    let inner = block.inner(area);
+    let before = text.before_cursor();
+    let row = before.matches('\n').count();
+    let column = text_width(before.rsplit('\n').next().unwrap_or_default());
+    let scroll_y = (row + 1).saturating_sub(usize::from(inner.height));
+    let scroll_x = (column + 1).saturating_sub(usize::from(inner.width));
+    let paragraph = Paragraph::new(text.as_str())
         .block(block)
-        .scroll((lines.saturating_sub(rows), 0));
+        .scroll((to_u16(scroll_y), to_u16(scroll_x)));
     frame.render_widget(paragraph, area);
 
     if cursor {
-        let last = text.rsplit('\n').next().unwrap_or_default();
-        let x = area.x + 1 + text_width(last) as u16;
-        frame.set_cursor_position((x.min(area.right().saturating_sub(2)), area.y + rows));
+        let x = to_u16(column.saturating_sub(scroll_x));
+        let y = to_u16(row.saturating_sub(scroll_y));
+        frame.set_cursor_position((inner.x.saturating_add(x), inner.y.saturating_add(y)));
     }
 }
 
@@ -743,6 +796,11 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
                 input => modal_block(format!("> {input}")),
             };
             draw_list_modal(frame, area, block, rows, palette.selected);
+            if !palette.input.is_empty() {
+                let column = text_width(palette.input.before_cursor());
+                let x = area.x.saturating_add(to_u16(3 + column));
+                frame.set_cursor_position((x.min(area.right().saturating_sub(2)), area.y));
+            }
         }
         Modal::UserMenu {
             at,
@@ -770,7 +828,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
         } => {
             let area = screen.centered(
                 Constraint::Length(70),
-                Constraint::Length(input_rows(body) + 5),
+                Constraint::Length(input_rows(body.as_str()) + 5),
             );
             let title_area = Rect::new(area.x, area.y, area.width, 3);
             let body_area = Rect::new(
@@ -801,6 +859,9 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
                 None => "new account".to_string(),
             };
             draw_list_modal(frame, area, modal_block(title), rows, form.row);
+            if let Some(column) = account_form_cursor(form) {
+                set_form_cursor(frame, area, form.row, column);
+            }
         }
         Modal::Options(form) => {
             let rows = options_form_rows(form);
@@ -809,6 +870,9 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
                 Constraint::Length(list_height(rows.len())),
             );
             draw_list_modal(frame, area, modal_block("options"), rows, form.row);
+            if let Some(column) = options_form_cursor(form) {
+                set_form_cursor(frame, area, form.row, column);
+            }
         }
         Modal::OpenAccount { input } => {
             draw_input_modal(frame, screen, "open the account with login".into(), input);
@@ -844,10 +908,10 @@ fn list_height(len: usize) -> u16 {
 }
 
 /// Draw a modal that edits `input` under `title`.
-fn draw_input_modal(frame: &mut Frame, screen: Rect, title: String, input: &str) {
+fn draw_input_modal(frame: &mut Frame, screen: Rect, title: String, input: &TextBox) {
     let area = screen.centered(
         Constraint::Length(60),
-        Constraint::Length(input_rows(input) + 2),
+        Constraint::Length(input_rows(input.as_str()) + 2),
     );
     frame.render_widget(Clear, area);
     draw_text_box(frame, area, modal_block(title), input, true);
@@ -926,10 +990,80 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
-                draw_text_box(frame, frame.area(), Block::bordered(), "\u{4f60}a", true);
+                let text = TextBox::from("\u{4f60}a");
+                draw_text_box(frame, frame.area(), Block::bordered(), &text, true);
             })
             .unwrap();
         terminal.backend_mut().assert_cursor_position((4, 1));
+    }
+
+    #[test]
+    fn draw_text_box_puts_the_cursor_inside_the_text() {
+        let backend = ratatui::backend::TestBackend::new(20, 4);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let mut text = TextBox::from("ab\ncd");
+        for _ in 0..4 {
+            text.edit(ratatui::crossterm::event::KeyCode::Left.into());
+        }
+        terminal
+            .draw(|frame| draw_text_box(frame, frame.area(), Block::bordered(), &text, true))
+            .unwrap();
+        terminal.backend_mut().assert_cursor_position((2, 1));
+    }
+
+    #[test]
+    fn draw_text_box_scrolls_a_long_line_to_the_cursor() {
+        let backend = ratatui::backend::TestBackend::new(6, 3);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let text = TextBox::from("abcdefgh");
+        terminal
+            .draw(|frame| draw_text_box(frame, frame.area(), Block::bordered(), &text, true))
+            .unwrap();
+        terminal.backend_mut().assert_cursor_position((4, 1));
+        let row: String = (1..5)
+            .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+            .collect();
+        assert_eq!(row, "fgh ");
+    }
+
+    #[test]
+    fn draw_text_box_scrolls_back_to_a_cursor_at_the_start() {
+        let backend = ratatui::backend::TestBackend::new(6, 3);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let mut text = TextBox::from("abcdefgh");
+        assert!(text.edit(ratatui::crossterm::event::KeyCode::Home.into()));
+        terminal
+            .draw(|frame| draw_text_box(frame, frame.area(), Block::bordered(), &text, true))
+            .unwrap();
+        terminal.backend_mut().assert_cursor_position((1, 1));
+        let row: String = (1..5)
+            .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+            .collect();
+        assert_eq!(row, "abcd");
+    }
+
+    #[test]
+    fn draw_modal_puts_the_cursor_in_the_selected_form_row() {
+        let mut form = AccountForm::blank();
+        form.row = 1;
+        form.login = "bob".into();
+        let backend = ratatui::backend::TestBackend::new(70, 60);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let modal = Modal::Account(form);
+        let mut area = Rect::default();
+        terminal
+            .draw(|frame| {
+                draw_modal(frame, frame.area(), &modal, Access::all());
+                let rows = list_height(AccountForm::rows());
+                area = frame
+                    .area()
+                    .centered(Constraint::Length(50), Constraint::Length(rows));
+            })
+            .unwrap();
+        let x = area.x + 1 + to_u16(FORM_LABEL) + 3;
+        terminal
+            .backend_mut()
+            .assert_cursor_position((x, area.y + 2));
     }
 
     #[test]
