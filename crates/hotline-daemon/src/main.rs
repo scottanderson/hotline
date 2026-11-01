@@ -23,8 +23,9 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use hotline_server::{
-    Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Providers,
-    Server, ServerConfig, SharedState, UrlBannerProvider,
+    Account, AccountProvider, DefaultChatCommands, InMemoryChatRoomProvider, InMemoryFloodPolicy,
+    InMemoryUserListProvider, NoBanner, Providers, Server, ServerConfig, SharedState,
+    UrlBannerProvider,
 };
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::{fmt, prelude::*};
@@ -186,6 +187,8 @@ async fn main() -> anyhow::Result<()> {
             commands,
             activity: activity.clone(),
             policy: Arc::new(HlsPolicy),
+            user_list: Arc::new(InMemoryUserListProvider::default()),
+            chat_rooms: Arc::new(InMemoryChatRoomProvider::default()),
         },
     );
 

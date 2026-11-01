@@ -4,11 +4,13 @@ use crate::account::{AccountProvider, AccountStores, InMemoryAccountProvider, No
 use crate::activity::{ActivityLog, NoActivityLog};
 use crate::ban::{BanProvider, InMemoryBanProvider};
 use crate::banner::{BannerProvider, NoBanner};
+use crate::chat_room::{ChatRoomProvider, InMemoryChatRoomProvider};
 use crate::console::{ChatCommandDispatcher, DefaultChatCommands};
 use crate::file::{FileProvider, InMemoryFileProvider};
 use crate::flood::{FloodPolicy, NoFloodPolicy};
 use crate::news::{FlatNewsProvider, InMemoryNewsProvider, ThreadedNewsProvider};
 use crate::policy::{OpenlinePolicy, ServerPolicy};
+use crate::user_list::{InMemoryUserListProvider, UserListProvider};
 
 /// The pluggable backends [`crate::Server`]/[`crate::SharedState`] run on,
 /// each supplied by the embedding application.
@@ -35,6 +37,10 @@ pub struct Providers {
     pub activity: Arc<dyn ActivityLog>,
     /// See [`ServerPolicy`].
     pub policy: Arc<dyn ServerPolicy>,
+    /// See [`UserListProvider`].
+    pub user_list: Arc<dyn UserListProvider>,
+    /// See [`ChatRoomProvider`].
+    pub chat_rooms: Arc<dyn ChatRoomProvider>,
 }
 
 /// In-memory storage, no account stores, no flood policy, no banner, no
@@ -55,6 +61,8 @@ impl Default for Providers {
             commands: Arc::new(DefaultChatCommands),
             activity: Arc::new(NoActivityLog),
             policy: Arc::new(OpenlinePolicy),
+            user_list: Arc::new(InMemoryUserListProvider::default()),
+            chat_rooms: Arc::new(InMemoryChatRoomProvider::default()),
         }
     }
 }

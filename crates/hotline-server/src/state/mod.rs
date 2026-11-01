@@ -1,6 +1,6 @@
-//! Shared, cross-session server state: the connected-user table, chat
-//! rooms, classic news, and the one per-recipient channel sessions use to
-//! reach each other.
+//! Shared, cross-session server state: the one per-recipient channel
+//! sessions use to reach each other, the transfers, and the calls to the
+//! providers.
 
 mod access;
 mod console;
@@ -11,7 +11,6 @@ mod folder_transfer;
 mod progress;
 mod recipient;
 mod replaced_account;
-mod room;
 mod shared;
 mod transfer;
 mod transfer_ref;
@@ -32,7 +31,6 @@ pub use progress::{TransferProgress, TransferReport, TransferSection};
 pub(crate) use recipient::{Connection, QUEUE_LEN};
 pub use recipient::{Inbox, RecipientMessage};
 pub(crate) use replaced_account::{NotReplaced, ReplacedAccount};
-pub use room::ChatRoom;
 pub use shared::SharedState;
 pub use transfer::{PendingTransfer, TransferDirection, TransferKind};
 pub use transfer_ref::TransferRef;

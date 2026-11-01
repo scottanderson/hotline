@@ -23,6 +23,7 @@ use crate::account::{AccessExtra, Account, AccountProvider, AccountStores};
 use crate::activity::{ActivityEntry, ActivityLog};
 use crate::ban::{BanProvider, BanRecord, TEMP_BAN_DURATION};
 use crate::banner::{BannerKind, BannerProvider};
+use crate::chat_room::{ChatRoom, ChatRoomProvider};
 use crate::console::fields::{
     format_access, format_access_extra, parse_0wn_fields, parse_access_fields,
 };
@@ -43,10 +44,11 @@ use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::progress::RunningTransfers;
 use crate::state::recipient::{self, Recipient};
 use crate::state::{
-    dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom, Connection,
+    dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, Connection,
     ConsoleUpdate, NotReplaced, PendingTransfer, ProgressGuard, RecipientMessage, ReplacedAccount,
     TransferDirection, TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
 };
+use crate::user_list::UserListProvider;
 
 /// How long an active download or an upload may wait for its `HTXF`
 /// connection, openline's 500 s.
@@ -57,16 +59,11 @@ const UPLOAD_SPACE_MARGIN: u64 = 512_000;
 
 /// State shared by every [`crate::Session`], behind one `Arc`.
 pub struct SharedState {
-    users: RwLock<HashMap<u16, UserEntry>>,
     next_user_id: AtomicU16,
     /// One inbound channel per currently connected recipient.
     recipients: RwLock<HashMap<u16, Recipient>>,
     /// The storage and the behavior choices.
     providers: Providers,
-    /// Chat ID `0` is always present: the main room every connected
-    /// user is implicitly in. Other entries are private rooms.
-    chat_rooms: RwLock<HashMap<u32, ChatRoom>>,
-    next_chat_id: AtomicU32,
     /// Held across each check and write of the accounts.
     account_writes: Mutex<()>,
     /// Transfers awaiting their `HTXF` data connection, keyed by the
@@ -83,12 +80,9 @@ pub struct SharedState {
 impl Default for SharedState {
     fn default() -> Self {
         Self {
-            users: RwLock::new(HashMap::new()),
             next_user_id: AtomicU16::new(1),
             recipients: RwLock::new(HashMap::new()),
             providers: Providers::default(),
-            chat_rooms: RwLock::new(HashMap::from([(0, ChatRoom::default())])),
-            next_chat_id: AtomicU32::new(1),
             account_writes: Mutex::default(),
             transfers: RwLock::new(HashMap::new()),
             running: Arc::default(),
@@ -124,6 +118,16 @@ impl SharedState {
     /// The server's behavior choices.
     pub(crate) fn policy(&self) -> &dyn ServerPolicy {
         &*self.providers.policy
+    }
+
+    /// The users that are online.
+    fn user_list(&self) -> &dyn UserListProvider {
+        &*self.providers.user_list
+    }
+
+    /// The chat rooms.
+    fn chat_rooms(&self) -> &dyn ChatRoomProvider {
+        &*self.providers.chat_rooms
     }
 
     /// The account storage.
@@ -194,43 +198,38 @@ impl SharedState {
     /// Register a newly logged-in (or info-changed) user.
     pub async fn insert_user(&self, entry: UserEntry) {
         let user_id = entry.user_id;
-        self.users.write().await.insert(user_id, entry);
+        self.user_list().insert(entry).await;
         self.add_chat_member(0, user_id).await;
     }
 
     /// Remove a user on disconnect.
     pub async fn remove_user(self: &Arc<Self>, user_id: u16) {
-        self.users.write().await.remove(&user_id);
+        self.user_list().remove(user_id).await;
         self.leave_chat_room(0, user_id).await;
         self.release_downloads_for_user(user_id).await;
     }
 
-    /// Snapshot of all currently connected users, in connection order
-    /// (`user_id` is assigned monotonically, so sorting by it avoids the
-    /// underlying map's arbitrary iteration order).
+    /// Snapshot of all currently connected users, in user ID order.
     pub async fn users(&self) -> Vec<UserEntry> {
-        let mut users: Vec<UserEntry> = self.users.read().await.values().cloned().collect();
-        users.sort_by_key(|u| u.user_id);
-        users
+        self.user_list().users().await
     }
 
     /// Look up one connected user by ID.
     pub async fn user(&self, user_id: u16) -> Option<UserEntry> {
-        self.users.read().await.get(&user_id).cloned()
+        self.user_list().user(user_id).await
     }
 
-    /// Whether `user_id` is currently connected, without cloning its entry.
+    /// Whether `user_id` is currently connected.
     pub async fn has_user(&self, user_id: u16) -> bool {
-        self.users.read().await.contains_key(&user_id)
+        self.user(user_id).await.is_some()
     }
 
     /// Every currently connected user ID logged in under `login`, e.g. to
     /// disconnect them after their account is deleted or renamed away.
     pub async fn user_ids_for_login(&self, login: &str) -> Vec<u16> {
-        self.users
-            .read()
+        self.users()
             .await
-            .values()
+            .into_iter()
             .filter(|entry| &*entry.login == login)
             .map(|entry| entry.user_id)
             .collect()
@@ -259,9 +258,7 @@ impl SharedState {
     /// Record that `user_id` just sent a request, resetting their idle
     /// timer. Called once per received frame in the session loop.
     pub async fn touch_user(&self, user_id: u16) {
-        if let Some(entry) = self.users.write().await.get_mut(&user_id) {
-            entry.last_active = std::time::Instant::now();
-        }
+        self.user_list().touch(user_id).await;
     }
 
     /// Register a new connection as a recipient. `None` when each user ID is
@@ -1464,29 +1461,21 @@ impl SharedState {
     /// Create a new private chat room with `creator` as its only member,
     /// returning the new room's ID.
     pub async fn create_chat_room(&self, creator: u16) -> u32 {
-        let id = self.next_chat_id.fetch_add(1, Ordering::Relaxed);
-        self.chat_rooms.write().await.insert(
-            id,
-            ChatRoom {
-                members: vec![creator],
-                ..Default::default()
-            },
-        );
-        id
+        let room = ChatRoom {
+            members: vec![creator],
+            ..ChatRoom::default()
+        };
+        self.chat_rooms().create(room).await
     }
 
     /// Current members of a chat room, in join order, if it exists.
     pub async fn chat_room_members(&self, chat_id: u32) -> Option<Vec<u16>> {
-        self.chat_rooms
-            .read()
-            .await
-            .get(&chat_id)
-            .map(|r| r.members.clone())
+        self.chat_room(chat_id).await.map(|room| room.members)
     }
 
     /// Snapshot of a chat room (members and subject), if it exists.
     pub async fn chat_room(&self, chat_id: u32) -> Option<ChatRoom> {
-        self.chat_rooms.read().await.get(&chat_id).cloned()
+        self.chat_rooms().room(chat_id).await
     }
 
     /// Add `user_id` to a chat room. Requires a pending invite, or the
@@ -1497,21 +1486,13 @@ impl SharedState {
         user_id: u16,
         password: &str,
     ) -> Result<(), &'static str> {
-        let mut rooms = self.chat_rooms.write().await;
-        let room = rooms.get_mut(&chat_id).ok_or("no such chat room")?;
-        let invited = room.invited.remove(&user_id);
-        if !invited {
-            if room.password.is_empty() {
-                return Err("not invited");
-            }
-            if password != &*room.password {
-                return Err("wrong password");
-            }
-        }
-        if !room.members.contains(&user_id) {
-            room.members.push(user_id);
-        }
-        Ok(())
+        let mut joined = Err("no such chat room");
+        let mut change = |room: &mut ChatRoom| {
+            joined = room.join(user_id, password);
+            true
+        };
+        self.chat_rooms().update(chat_id, &mut change).await;
+        joined
     }
 
     /// Add `user_id` to a chat room directly, no invite or password
@@ -1520,23 +1501,24 @@ impl SharedState {
     ///
     /// [`myTran_JoinChat`]: hotline_proto::Opcode::JoinChat
     pub(crate) async fn add_chat_member(&self, chat_id: u32, user_id: u16) {
-        if let Some(room) = self.chat_rooms.write().await.get_mut(&chat_id) {
-            if !room.members.contains(&user_id) {
-                room.members.push(user_id);
-            }
-            room.invited.remove(&user_id);
-        }
+        let mut change = |room: &mut ChatRoom| {
+            room.add_member(user_id);
+            true
+        };
+        self.chat_rooms().update(chat_id, &mut change).await;
     }
 
     /// Mark `user_id` as invited to a chat room. Returns whether this was
     /// a new invite (`false` if already invited, or if the room doesn't
     /// exist).
     pub async fn invite(&self, chat_id: u32, user_id: u16) -> bool {
-        self.chat_rooms
-            .write()
-            .await
-            .get_mut(&chat_id)
-            .is_some_and(|room| room.invited.insert(user_id))
+        let mut invited = false;
+        let mut change = |room: &mut ChatRoom| {
+            invited = room.invited.insert(user_id);
+            true
+        };
+        self.chat_rooms().update(chat_id, &mut change).await;
+        invited
     }
 
     /// Invite `target_id` to a chat room on `inviter`'s behalf: `target_id`
@@ -1552,37 +1534,32 @@ impl SharedState {
         if !self.has_user(target_id).await {
             return Err("no such user");
         }
-        let mut rooms = self.chat_rooms.write().await;
-        let room = rooms.get_mut(&chat_id).ok_or("no such chat room")?;
-        if !room.members.contains(&inviter) {
-            return Err("you are not in that chat room");
-        }
-        if room.members.contains(&target_id) {
-            return Err("that user is already in the chat");
-        }
-        if !room.invited.insert(target_id) {
-            return Err("that user is already invited to the chat");
-        }
-        Ok(())
+        let mut invited = Err("no such chat room");
+        let mut change = |room: &mut ChatRoom| {
+            invited = room.invite_by(inviter, target_id);
+            true
+        };
+        self.chat_rooms().update(chat_id, &mut change).await;
+        invited
     }
 
     /// Clear a pending invite without joining, e.g. on decline. Returns
     /// whether there was one to clear.
     pub async fn invite_declined(&self, chat_id: u32, user_id: u16) -> bool {
-        self.chat_rooms
-            .write()
-            .await
-            .get_mut(&chat_id)
-            .is_some_and(|room| room.invited.remove(&user_id))
+        let mut declined = false;
+        let mut change = |room: &mut ChatRoom| {
+            declined = room.invited.remove(&user_id);
+            true
+        };
+        self.chat_rooms().update(chat_id, &mut change).await;
+        declined
     }
 
     /// Whether `user_id` has a pending invite to a chat room.
     pub async fn is_invited(&self, chat_id: u32, user_id: u16) -> bool {
-        self.chat_rooms
-            .read()
+        self.chat_room(chat_id)
             .await
-            .get(&chat_id)
-            .is_some_and(|r| r.invited.contains(&user_id))
+            .is_some_and(|room| room.invited.contains(&user_id))
     }
 
     /// Remove `user_id` from a chat room, deleting the room once its
@@ -1590,55 +1567,46 @@ impl SharedState {
     /// Returns the remaining members, or `None` if `user_id` was not a
     /// member.
     pub async fn leave_chat_room(&self, chat_id: u32, user_id: u16) -> Option<Vec<u16>> {
-        let mut rooms = self.chat_rooms.write().await;
-        let room = rooms.get_mut(&chat_id)?;
-        let position = room.members.iter().position(|&id| id == user_id)?;
-        room.members.remove(position);
-        let remaining = room.members.clone();
-        if chat_id != 0 && remaining.is_empty() {
-            rooms.remove(&chat_id);
-        }
-        Some(remaining)
+        let mut remaining = None;
+        let mut change = |room: &mut ChatRoom| {
+            remaining = room.leave(user_id);
+            remaining.is_none() || chat_id == 0 || !room.members.is_empty()
+        };
+        self.chat_rooms().update(chat_id, &mut change).await;
+        remaining
     }
 
-    /// Remove `user_id` from every chat room, deleting any that
-    /// becomes empty. Returns each room's ID and remaining members.
+    /// Remove `user_id` from every chat room, deleting any private room
+    /// that becomes empty. Returns each room's ID and remaining members.
     pub async fn leave_all_chat_rooms(&self, user_id: u16) -> Vec<(u32, Vec<u16>)> {
-        let mut rooms = self.chat_rooms.write().await;
         let mut left = Vec::new();
-        rooms.retain(|&chat_id, room| {
-            if !room.members.contains(&user_id) {
+        let mut change = |chat_id, room: &mut ChatRoom| {
+            let Some(remaining) = room.leave(user_id) else {
                 return true;
-            }
-            room.members.retain(|&id| id != user_id);
-            left.push((chat_id, room.members.clone()));
-            !room.members.is_empty()
-        });
+            };
+            left.push((chat_id, remaining));
+            chat_id == 0 || !room.members.is_empty()
+        };
+        self.chat_rooms().update_each(&mut change).await;
         left
     }
 
     /// Set a chat room's subject. `false` if the room doesn't exist.
     pub async fn set_chat_subject(&self, chat_id: u32, subject: &str) -> bool {
-        self.chat_rooms
-            .write()
-            .await
-            .get_mut(&chat_id)
-            .map(|room| {
-                room.subject = subject.into();
-            })
-            .is_some()
+        let mut change = |room: &mut ChatRoom| {
+            room.subject = subject.into();
+            true
+        };
+        self.chat_rooms().update(chat_id, &mut change).await
     }
 
     /// Set a chat room's join password. `false` if the room doesn't exist.
     pub async fn set_chat_password(&self, chat_id: u32, password: &str) -> bool {
-        self.chat_rooms
-            .write()
-            .await
-            .get_mut(&chat_id)
-            .map(|room| {
-                room.password = password.into();
-            })
-            .is_some()
+        let mut change = |room: &mut ChatRoom| {
+            room.password = password.into();
+            true
+        };
+        self.chat_rooms().update(chat_id, &mut change).await
     }
 
     /// Whether `user_id` may change a chat room's subject/password: the
@@ -2183,8 +2151,7 @@ mod tests {
         assert!(!entry.contains('<'), "{entry:?}");
     }
 
-    /// `HashMap`'s iteration order has no relation to insertion order, so
-    /// `users()` must sort explicitly rather than rely on it.
+    /// `users()` comes in user ID order, not in insertion order.
     #[tokio::test]
     async fn users_are_ordered_by_user_id_not_insertion_order() {
         let state = Arc::<SharedState>::default();
@@ -2226,6 +2193,27 @@ mod tests {
         assert!(left.contains(&(shared, vec![2])));
         assert!(state.chat_room(solo).await.is_none());
         assert_eq!(state.chat_room_members(shared).await, Some(vec![2]));
+    }
+
+    #[tokio::test]
+    async fn leave_all_chat_rooms_keeps_the_main_room() {
+        let state = Arc::<SharedState>::default();
+        state.add_chat_member(0, 1).await;
+
+        let left = state.leave_all_chat_rooms(1).await;
+
+        assert_eq!(left, [(0, vec![])]);
+        state.add_chat_member(0, 2).await;
+        assert_eq!(state.chat_room_members(0).await, Some(vec![2]));
+    }
+
+    #[tokio::test]
+    async fn leave_chat_room_by_a_non_member_keeps_an_empty_room() {
+        let state = Arc::<SharedState>::default();
+        let chat_id = state.chat_rooms().create(ChatRoom::default()).await;
+
+        assert_eq!(state.leave_chat_room(chat_id, 1).await, None);
+        assert!(state.chat_room(chat_id).await.is_some());
     }
 
     #[tokio::test]

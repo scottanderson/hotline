@@ -4,7 +4,7 @@
 //! connections. Each accepted connection becomes a [`Session`]. The
 //! session does the `TRTP` handshake and then handles each transaction
 //! by its opcode. [`Providers`] holds the storage for accounts, files,
-//! news, and bans.
+//! news, bans, the online users, and the chat rooms.
 //!
 //! ```no_run
 //! use hotline_server::{Providers, Server, ServerConfig};
@@ -25,6 +25,7 @@ mod activity;
 mod ban;
 mod banner;
 mod bitflags_serde;
+mod chat_room;
 mod console;
 mod error;
 mod file;
@@ -37,6 +38,7 @@ mod session;
 mod state;
 mod sync;
 mod time;
+mod user_list;
 
 pub use account::{
     AccessExtra, Account, AccountProvider, AccountStores, InMemoryAccountProvider, NoAccountStores,
@@ -44,6 +46,7 @@ pub use account::{
 pub use activity::{AccountAction, Activity, ActivityEntry, ActivityLog, NoActivityLog};
 pub use ban::{BanProvider, BanRecord, InMemoryBanProvider};
 pub use banner::{BannerKind, BannerProvider, NoBanner, UrlBannerProvider};
+pub use chat_room::{ChatRoom, ChatRoomProvider, InMemoryChatRoomProvider};
 pub use console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, DefaultChatCommands};
 pub use error::{Result, ServerError};
 pub use file::{
@@ -67,6 +70,7 @@ pub use state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
     TransferProgress, TransferReport, TransferSection, UserEntry,
 };
+pub use user_list::{InMemoryUserListProvider, UserListProvider};
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]

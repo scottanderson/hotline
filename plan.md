@@ -254,9 +254,7 @@ one-shared-room model.
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-2. **Chat rooms and online users have no trait.** `SharedState` keeps
-   them in memory. Put them behind traits, like the storage providers.
-3. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+2. **hlc has no task list.** Ctrl-K lists only the downloads that run,
    and Enter cancels one. hlc does not keep its uploads, and it shows
    no progress. It shows no request that waits for its reply.
    openline's client keeps each transfer as a task
@@ -275,7 +273,7 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-4. **`hlc` has no config file.** Keep the settings in
+3. **`hlc` has no config file.** Keep the settings in
    `$XDG_CONFIG_HOME/hlc/config.toml`, or `~/.config/hlc/config.toml`
    when the variable is not set, on macOS too. The file holds the
    defaults of the command-line options: the name, the icon, the

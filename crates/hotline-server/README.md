@@ -40,19 +40,21 @@ disk, put your own implementations in `Providers`.
 
 `Providers` holds one implementation of each trait:
 
-| Field            | Trait                   | Default                   |
-|------------------|-------------------------|---------------------------|
-| `accounts`       | `AccountProvider`       | `InMemoryAccountProvider` |
-| `files`          | `FileProvider`          | `InMemoryFileProvider`    |
-| `flat_news`      | `FlatNewsProvider`      | `InMemoryNewsProvider`    |
-| `threaded_news`  | `ThreadedNewsProvider`  | `InMemoryNewsProvider`    |
-| `account_stores` | `AccountStores`         | `NoAccountStores`         |
-| `bans`           | `BanProvider`           | `InMemoryBanProvider`     |
-| `flood`          | `FloodPolicy`           | `NoFloodPolicy`           |
-| `banner`         | `BannerProvider`        | `NoBanner`                |
-| `commands`       | `ChatCommandDispatcher` | `DefaultChatCommands`     |
-| `activity`       | `ActivityLog`           | `NoActivityLog`           |
-| `policy`         | `ServerPolicy`          | `OpenlinePolicy`          |
+| Field            | Trait                   | Default                    |
+|------------------|-------------------------|----------------------------|
+| `accounts`       | `AccountProvider`       | `InMemoryAccountProvider`  |
+| `files`          | `FileProvider`          | `InMemoryFileProvider`     |
+| `flat_news`      | `FlatNewsProvider`      | `InMemoryNewsProvider`     |
+| `threaded_news`  | `ThreadedNewsProvider`  | `InMemoryNewsProvider`     |
+| `account_stores` | `AccountStores`         | `NoAccountStores`          |
+| `bans`           | `BanProvider`           | `InMemoryBanProvider`      |
+| `flood`          | `FloodPolicy`           | `NoFloodPolicy`            |
+| `banner`         | `BannerProvider`        | `NoBanner`                 |
+| `commands`       | `ChatCommandDispatcher` | `DefaultChatCommands`      |
+| `activity`       | `ActivityLog`           | `NoActivityLog`            |
+| `policy`         | `ServerPolicy`          | `OpenlinePolicy`           |
+| `user_list`      | `UserListProvider`      | `InMemoryUserListProvider` |
+| `chat_rooms`     | `ChatRoomProvider`      | `InMemoryChatRoomProvider` |
 
 `AccountStores` can give an account its own files and threaded news,
 like openline's `Users/<login>/Files` and `Users/<login>/News`
@@ -65,7 +67,8 @@ account.
 
 - `Session` holds the state of one connection: the user ID, the name,
   and the privileges. `SharedState` holds the state that all sessions
-  see: the user list, the chat rooms, and a channel for each session.
+  see: a channel for each session and the transfers. It reaches the
+  user list and the chat rooms through their providers.
 - A session reaches another session only through that channel. The
   receiving session checks its own privileges before it sends a push.
 - `ServerPolicy` holds the choices where Hotline servers differ.
