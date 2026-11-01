@@ -75,6 +75,11 @@ impl Recipient {
         self.ended.cancel();
     }
 
+    /// Resolves once the session drops its [`Inbox`].
+    pub(crate) async fn closed(&self) {
+        self.messages.closed().await;
+    }
+
     /// Resolves once the server ends the session, or the session drops its
     /// [`Inbox`].
     pub(crate) async fn ended(&self) {

@@ -13,6 +13,7 @@ mod news;
 mod policy;
 mod tracker;
 
+use std::io::{BufRead, IsTerminal};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ use anyhow::Context;
 use clap::Parser;
 use hotline_server::{
     Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoAccountStores, NoBanner,
-    Providers, Server, ServerConfig, UrlBannerProvider,
+    Providers, Server, ServerConfig, SharedState, UrlBannerProvider,
 };
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::{fmt, prelude::*};
@@ -205,12 +206,67 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let state = server.state().clone();
     let result = tokio::select! {
         result = server.run() => result.map_err(anyhow::Error::from),
         result = shutdown_signal() => result.map(|()| tracing::info!("shutting down")),
     };
+    if result.is_ok() {
+        quit_politely(&state).await?;
+    }
     activity.flush().await;
     result
+}
+
+/// Ask the operator for a quit message, send it to each user, and wait for
+/// each connection to close.
+///
+/// `hls` asks only when a connection is open and stdin is a terminal. An
+/// empty message, a second signal, or the close of each connection quits
+/// at once.
+async fn quit_politely(state: &SharedState) -> anyhow::Result<()> {
+    if state.connection_count().await == 0 || !std::io::stdin().is_terminal() {
+        return Ok(());
+    }
+    // A signal or the last close ends the prompt line, so that later output starts a new one.
+    let message = tokio::select! {
+        message = read_quit_message() => message,
+        result = shutdown_signal() => {
+            eprintln!();
+            return result;
+        }
+        () = state.connections_closed() => {
+            eprintln!();
+            return Ok(());
+        }
+    };
+    let Some(message) = message.filter(|message| !message.is_empty()) else {
+        return Ok(());
+    };
+    state.announce_quit(&message).await;
+    tracing::info!(
+        connections = state.connection_count().await,
+        "waiting for the users to leave"
+    );
+    tokio::select! {
+        () = state.connections_closed() => Ok(()),
+        result = shutdown_signal() => result,
+    }
+}
+
+/// Read one line from stdin, without its line end. `None` at the end of
+/// the input.
+async fn read_quit_message() -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // A thread of its own, so that an unfinished read does not hold up the exit.
+    std::thread::spawn(move || {
+        eprint!("Quit message (empty to quit now): ");
+        let mut line = String::new();
+        let read = std::io::stdin().lock().read_line(&mut line);
+        let _ = tx.send(read.ok().filter(|&len| len > 0).map(|_| line));
+    });
+    let line = rx.await.ok().flatten()?;
+    Some(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 /// Wait for Ctrl-C, or for SIGTERM on Unix.

@@ -304,6 +304,23 @@ impl SharedState {
         self.recipients.read().await.len()
     }
 
+    /// Tell each logged-in user that the server quits, with
+    /// [`myTran_DisconnectMsg`] (111). openline's client then shows
+    /// `message` and disconnects.
+    ///
+    /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
+    pub async fn announce_quit(&self, message: &str) {
+        let data = vec![Field::string(FieldId::Data, message)];
+        self.publish(Transaction::push(Opcode::DisconnectMsg, data))
+            .await;
+    }
+
+    /// Resolves once each connection that is open now has closed.
+    pub async fn connections_closed(&self) {
+        let recipients: Vec<Recipient> = self.recipients.read().await.values().cloned().collect();
+        futures::future::join_all(recipients.iter().map(Recipient::closed)).await;
+    }
+
     /// Send a transaction to every session, such as a chat line or a user
     /// list change. A slow or closed session misses it. Each recipient
     /// filters it with `Session::may_receive_broadcast`.
@@ -2053,6 +2070,45 @@ mod tests {
         let first = state.connect().await.unwrap();
         let second = state.connect().await.unwrap();
         assert_eq!((first.user_id, second.user_id), (1, 3));
+    }
+
+    #[tokio::test]
+    async fn announce_quit_sends_a_disconnect_msg_to_each_session() {
+        let state = SharedState::default();
+        let mut rx = state.register_recipient(1).await;
+
+        state.announce_quit("Back soon.").await;
+
+        let push = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .unwrap()
+            .received(hotline_proto::text_encoding::DEFAULT);
+        assert_eq!(
+            push.r#type(),
+            hotline_proto::opcode::TransactionType::Push(Opcode::DisconnectMsg)
+        );
+        assert_eq!(push.string(FieldId::Data).as_deref(), Some("Back soon."));
+    }
+
+    #[tokio::test]
+    async fn connections_closed_resolves_once_each_inbox_drops() {
+        let state = Arc::new(SharedState::default());
+        let rx = state.register_recipient(1).await;
+        let waiting = tokio::spawn({
+            let state = state.clone();
+            async move { state.connections_closed().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+
+        drop(rx);
+
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
