@@ -107,14 +107,13 @@ impl AppleDoubleStore {
         change: impl FnOnce(&mut apple_double::Sidecar),
     ) -> io::Result<()> {
         tokio::fs::symlink_metadata(item).await?;
-        let path = apple_double::path_of(item);
         let _sidecars = self.sidecars.lock().await;
-        if self.sidecars.contains(&path) {
+        if self.sidecars.contains(&apple_double::path_of(item)) {
             return Err(io::ErrorKind::ResourceBusy.into());
         }
-        let mut sidecar = apple_double::read(&path).await?;
+        let mut sidecar = apple_double::read(item).await?;
         change(&mut sidecar);
-        apple_double::write(&path, &sidecar).await
+        apple_double::write(item, &sidecar).await
     }
 }
 
@@ -132,7 +131,7 @@ impl ForkStore for AppleDoubleStore {
     }
 
     async fn finder_info(&self, item: &Path) -> FinderInfo {
-        let sidecar = apple_double::read(&apple_double::path_of(item)).await;
+        let sidecar = apple_double::read(item).await;
         sidecar.unwrap_or_default().finder_info()
     }
 
@@ -142,7 +141,7 @@ impl ForkStore for AppleDoubleStore {
     }
 
     async fn comment(&self, item: &Path) -> Option<String> {
-        let sidecar = apple_double::read(&apple_double::path_of(item)).await;
+        let sidecar = apple_double::read(item).await;
         let comment = sidecar.ok()?.comment;
         (!comment.is_empty()).then_some(comment)
     }
@@ -153,13 +152,13 @@ impl ForkStore for AppleDoubleStore {
     }
 
     async fn resource_fork_size(&self, item: &Path) -> u64 {
-        apple_double::read(&apple_double::path_of(item))
+        apple_double::read(item)
             .await
             .map_or(0, |sidecar| sidecar.resource_fork_len())
     }
 
     async fn open_resource_read(&self, item: &Path, at: u64) -> io::Result<BoxedReader> {
-        apple_double::open_resource_read(&apple_double::path_of(item), at).await
+        apple_double::open_resource_read(item, at).await
     }
 
     async fn open_resource_write(&self, item: &Path, at: u64) -> io::Result<BoxedWriter> {
@@ -170,7 +169,7 @@ impl ForkStore for AppleDoubleStore {
             .sidecars
             .claim(&path)
             .ok_or_else(|| io::Error::from(io::ErrorKind::ResourceBusy))?;
-        let writer = apple_double::open_resource_write(&path, at, claim).await?;
+        let writer = apple_double::open_resource_write(item, at, claim).await?;
         Ok(Box::new(writer))
     }
 

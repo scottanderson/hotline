@@ -1,9 +1,14 @@
 //! AppleDouble sidecar files (RFC 1740). The sidecar of `dir/name` is
 //! `dir/._name`. It holds the item's Finder info, comment, and resource
 //! fork.
+//!
+//! A sidecar is opened and checked as xnu's `bsd/vfs/vfs_xattr.c` does
+//! (xnu-11417.101.15). A read finds nothing in a sidecar that fails a
+//! check, and a change to it returns an error.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::fs::Metadata;
 use std::future::Future;
 use std::io::{self, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -25,6 +30,11 @@ const VERSION: u32 = 0x0002_0000;
 const RESOURCE_FORK_ID: u32 = 2;
 const COMMENT_ID: u32 = 4;
 const FINDER_INFO_ID: u32 = 9;
+
+/// The most entries that a sidecar can hold.
+const MAX_ENTRIES: u16 = 15;
+/// The most bytes that a read of the header takes.
+const ATTR_MAX_HDR_SIZE: u32 = 65536;
 
 /// Where a written sidecar's resource fork starts.
 pub const RESOURCE_FORK_OFFSET: u64 = 4096;
@@ -52,20 +62,10 @@ impl Header {
             .u16(self.entry_count)
             .finish()
     }
-
-    /// `None` if `buf` does not start an AppleDouble version 2 file.
-    fn decode(buf: [u8; Self::LEN]) -> Option<Self> {
-        let mut r = PacketReader::new(buf);
-        let magic = r.u32();
-        let version = r.u32();
-        let _filler = r.take::<16>();
-        let entry_count = r.u16();
-        r.finish();
-        (magic == MAGIC && version == VERSION).then_some(Self { entry_count })
-    }
 }
 
 /// One entry descriptor: what the entry is, and where it is in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Entry {
     id: u32,
     offset: u32,
@@ -75,23 +75,17 @@ struct Entry {
 impl Entry {
     const LEN: usize = 12;
 
+    /// The file offset of the end of the entry. `None` if it is past 4 GiB.
+    const fn end(&self) -> Option<u32> {
+        self.offset.checked_add(self.len)
+    }
+
     fn encode(&self) -> [u8; Self::LEN] {
         PacketWriter::new()
             .u32(self.id)
             .u32(self.offset)
             .u32(self.len)
             .finish()
-    }
-
-    const fn decode(buf: [u8; Self::LEN]) -> Self {
-        let mut r = PacketReader::new(buf);
-        let entry = Self {
-            id: r.u32(),
-            offset: r.u32(),
-            len: r.u32(),
-        };
-        r.finish();
-        entry
     }
 }
 
@@ -223,37 +217,20 @@ pub fn path_of(item: &Path) -> PathBuf {
     item.with_file_name(name)
 }
 
-/// Read the sidecar at `path`. Empty if there is none, or if it is not an
-/// AppleDouble version 2 file.
-pub async fn read(path: &Path) -> io::Result<Sidecar> {
-    let mut file = match File::open(path).await {
-        Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Sidecar::default()),
-        Err(e) => return Err(e),
-    };
-    let file_len = file.metadata().await?.len();
-    if file_len < Header::LEN as u64 {
-        return Ok(Sidecar::default());
-    }
-    let mut header = [0u8; Header::LEN];
-    file.read_exact(&mut header).await?;
-    let Some(header) = Header::decode(header) else {
+/// Read the sidecar of `item`. Empty if there is none, or if it fails a
+/// check.
+pub async fn read(item: &Path) -> io::Result<Sidecar> {
+    let Some(mut file) = open_sidecar(item, Access::Read).await? else {
         return Ok(Sidecar::default());
     };
-    let table_len = usize::from(header.entry_count) * Entry::LEN;
-    if (Header::LEN + table_len) as u64 > file_len {
+    let Some(entries) = check_file(&mut file).await? else {
+        tracing::debug!(item = %item.display(), "a sidecar is not a valid AppleDouble file");
         return Ok(Sidecar::default());
-    }
-    let mut table = vec![0u8; table_len];
-    file.read_exact(&mut table).await?;
-
+    };
     let mut sidecar = Sidecar::default();
-    for entry in table.as_chunks().0.iter().copied().map(Entry::decode) {
+    for entry in entries {
         let offset = u64::from(entry.offset);
         let len = u64::from(entry.len);
-        if offset + len > file_len {
-            continue;
-        }
         match entry.id {
             FINDER_INFO_ID => {
                 let bytes =
@@ -273,40 +250,45 @@ pub async fn read(path: &Path) -> io::Result<Sidecar> {
     Ok(sidecar)
 }
 
-/// Write `sidecar`, as [`read`] returned it, to `path`. The resource fork
-/// moves to [`RESOURCE_FORK_OFFSET`], and other entries are dropped. An
-/// empty sidecar removes the file.
-pub async fn write(path: &Path, sidecar: &Sidecar) -> io::Result<()> {
+/// Write `sidecar`, as [`read`] returned it, to the sidecar of `item`. The
+/// resource fork moves to [`RESOURCE_FORK_OFFSET`], and other entries are
+/// dropped. An empty sidecar removes the file, unless it fails a check.
+pub async fn write(item: &Path, sidecar: &Sidecar) -> io::Result<()> {
     if sidecar.is_empty() {
-        return remove(path).await;
+        let Some(mut file) = open_sidecar(item, Access::Read).await? else {
+            return Ok(());
+        };
+        if check_file(&mut file).await?.is_none() {
+            return Ok(());
+        }
+        return remove(&path_of(item)).await;
     }
-    write_file(path, sidecar).await.map(drop)
+    write_file(item, sidecar).await.map(drop)
 }
 
-/// Open the resource fork of the sidecar at `path` for reading from `at`
-/// onward. Empty if there is no fork.
-pub async fn open_resource_read(path: &Path, at: u64) -> io::Result<BoxedReader> {
-    let Span { offset, len } = read(path).await?.resource_fork;
+/// Open the resource fork of `item` for reading from `at` onward. Empty if
+/// there is no fork.
+pub async fn open_resource_read(item: &Path, at: u64) -> io::Result<BoxedReader> {
+    let Span { offset, len } = read(item).await?.resource_fork;
     if at >= len {
         return Ok(Box::new(tokio::io::empty()));
     }
-    let mut file = File::open(path).await?;
+    let mut file = File::open(path_of(item)).await?;
     file.seek(SeekFrom::Start(offset + at)).await?;
     Ok(Box::new(file.take(len - at)))
 }
 
-/// Open the resource fork of the sidecar at `path` for writing from `at`
-/// onward. Creates the sidecar if missing, and cuts the fork to `at`.
-/// Call with the [`Sidecars`] lock held. The writer keeps `claim` until it
-/// drops.
+/// Open the resource fork of `item` for writing from `at` onward. Creates
+/// the sidecar if missing, and cuts the fork to `at`. Call with the
+/// [`Sidecars`] lock held. The writer keeps `claim` until it drops.
 pub async fn open_resource_write(
-    path: &Path,
+    item: &Path,
     at: u64,
     claim: ForkClaim,
 ) -> io::Result<ResourceForkWriter> {
-    let mut sidecar = read(path).await?;
+    let mut sidecar = read(item).await?;
     sidecar.resource_fork.len = sidecar.resource_fork.len.min(at);
-    let mut file = write_file(path, &sidecar).await?;
+    let mut file = write_file(item, &sidecar).await?;
     file.set_len(RESOURCE_FORK_OFFSET + at).await?;
     file.seek(SeekFrom::Start(RESOURCE_FORK_OFFSET + at))
         .await?;
@@ -377,15 +359,16 @@ impl AsyncWrite for ResourceForkWriter {
     }
 }
 
-/// Write `sidecar` to `path` like [`write()`], also when it is empty.
-async fn write_file(path: &Path, sidecar: &Sidecar) -> io::Result<File> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .await?;
+/// Write `sidecar` to the sidecar of `item` like [`write()`], also when it
+/// is empty. Create the sidecar if missing. An error of kind `InvalidData`
+/// if it fails a check.
+async fn write_file(item: &Path, sidecar: &Sidecar) -> io::Result<File> {
+    let mut file = open_sidecar(item, Access::Create)
+        .await?
+        .ok_or_else(not_valid)?;
+    if file.metadata().await?.len() > 0 && check_file(&mut file).await?.is_none() {
+        return Err(not_valid());
+    }
     let Span {
         offset: fork_offset,
         len: fork_len,
@@ -456,6 +439,187 @@ pub async fn rename(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// How [`open_sidecar`] opens a sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    Read,
+    /// Open it for writing, and create it if missing.
+    Create,
+}
+
+/// Open the sidecar of `item` for `access`. `None` if it is missing, if it
+/// is not a regular file, or if its owner is not the owner of `item`.
+async fn open_sidecar(item: &Path, access: Access) -> io::Result<Option<File>> {
+    let path = path_of(item);
+    let existing = match tokio::fs::symlink_metadata(&path).await {
+        Ok(metadata) => Some(metadata),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    if existing
+        .as_ref()
+        .is_some_and(|metadata| !metadata.is_file())
+    {
+        return Ok(None);
+    }
+    let item_metadata = tokio::fs::metadata(item).await.ok();
+    let file = match (access, &existing) {
+        (Access::Create, _) => {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)
+                .await?
+        }
+        (Access::Read, Some(_)) => File::open(&path).await?,
+        (Access::Read, None) => return Ok(None),
+    };
+    if existing.is_none() {
+        if let Some(item_metadata) = &item_metadata {
+            set_new_owner(&file, item_metadata).await;
+        }
+    }
+    let metadata = file.metadata().await?;
+    let owner = item_metadata.as_ref().and_then(owner_of);
+    if owner.is_some() && owner != owner_of(&metadata) {
+        if existing.is_none() {
+            remove(&path).await?;
+        }
+        return Ok(None);
+    }
+    if access == Access::Create && metadata.len() == 0 && link_count(&metadata) > 1 {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(Some(file))
+}
+
+/// Give a new sidecar the owner, the group, and the read and write bits
+/// of the item with `item_metadata`. A change that the user may not make
+/// does not occur.
+#[cfg(unix)]
+async fn set_new_owner(file: &File, item_metadata: &Metadata) {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let mode = item_metadata.permissions().mode() & 0o666;
+    let mode_set = file
+        .set_permissions(std::fs::Permissions::from_mode(mode))
+        .await;
+    let (uid, gid) = (item_metadata.uid(), item_metadata.gid());
+    let owner_set = std::os::unix::fs::fchown(file, Some(uid), Some(gid))
+        .or_else(|_| std::os::unix::fs::fchown(file, Some(uid), None));
+    if let Err(e) = mode_set.and(owner_set) {
+        tracing::debug!(error = %e, "a new sidecar did not get the owner or mode of its item");
+    }
+}
+
+/// Give a new sidecar the owner, the group, and the read and write bits
+/// of the item with `item_metadata`.
+#[cfg(not(unix))]
+async fn set_new_owner(_file: &File, _item_metadata: &Metadata) {}
+
+/// The user ID of the owner of a file.
+#[cfg(unix)]
+fn owner_of(metadata: &Metadata) -> Option<u32> {
+    Some(std::os::unix::fs::MetadataExt::uid(metadata))
+}
+
+/// The user ID of the owner of a file.
+#[cfg(not(unix))]
+const fn owner_of(_metadata: &Metadata) -> Option<u32> {
+    None
+}
+
+/// The number of hard links to a file.
+#[cfg(unix)]
+fn link_count(metadata: &Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::nlink(metadata)
+}
+
+/// The number of hard links to a file.
+#[cfg(not(unix))]
+const fn link_count(_metadata: &Metadata) -> u64 {
+    1
+}
+
+/// The entries of the sidecar in `file`. `None` if it fails a check.
+async fn check_file(file: &mut File) -> io::Result<Option<Vec<Entry>>> {
+    let file_len = file.metadata().await?.len();
+    let mut buf = Vec::new();
+    file.seek(SeekFrom::Start(0)).await?;
+    (&mut *file)
+        .take(u64::from(ATTR_MAX_HDR_SIZE))
+        .read_to_end(&mut buf)
+        .await?;
+    Ok(check_header(&buf, file_len))
+}
+
+/// The entry table at the start of `buf`, from a file of `file_len` bytes.
+/// `None` if the header is not valid, if there are no entries or more than
+/// [`MAX_ENTRIES`], or if an entry starts in the table, ends past the end
+/// of the file, or overlaps an entry before it.
+fn check_header(buf: &[u8], file_len: u64) -> Option<Vec<Entry>> {
+    let raw_len = buf.len();
+    if raw_len < Header::LEN || u32_at(buf, 0)? != MAGIC || u32_at(buf, 4)? != VERSION {
+        return None;
+    }
+    let count = u16_at(buf, 24)?;
+    if !(1..=MAX_ENTRIES).contains(&count) {
+        return None;
+    }
+    let table_end = Header::LEN + usize::from(count) * Entry::LEN;
+    if raw_len < table_end {
+        return None;
+    }
+    let entries: Vec<Entry> = (0..usize::from(count))
+        .map(|i| {
+            let at = Header::LEN + i * Entry::LEN;
+            Some(Entry {
+                id: u32_at(buf, at)?,
+                offset: u32_at(buf, at + 4)?,
+                len: u32_at(buf, at + 8)?,
+            })
+        })
+        .collect::<Option<_>>()?;
+    let valid = entries.iter().enumerate().all(|(i, entry)| {
+        entry.end().is_some_and(|end| {
+            entry.offset as usize >= table_end
+                && u64::from(end) <= file_len
+                && entries.iter().take(i).all(|before| {
+                    end <= before.offset
+                        || before
+                            .end()
+                            .is_some_and(|before_end| before_end <= entry.offset)
+                })
+        })
+    });
+    valid.then_some(entries)
+}
+
+/// The error for a sidecar that fails a check.
+fn not_valid() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "the sidecar is not a valid AppleDouble file",
+    )
+}
+
+/// The big-endian `u32` at `at` in `buf`.
+fn u32_at(buf: &[u8], at: usize) -> Option<u32> {
+    buf.get(at..)?
+        .first_chunk()
+        .copied()
+        .map(u32::from_be_bytes)
+}
+
+/// The big-endian `u16` at `at` in `buf`.
+fn u16_at(buf: &[u8], at: usize) -> Option<u16> {
+    buf.get(at..)?
+        .first_chunk()
+        .copied()
+        .map(u16::from_be_bytes)
+}
+
 /// Read `len` bytes of `file` from `offset`.
 async fn read_at(file: &mut File, offset: u64, len: u64) -> io::Result<Vec<u8>> {
     file.seek(SeekFrom::Start(offset)).await?;
@@ -474,68 +638,80 @@ fn cut(s: &str, max: usize) -> &str {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn read_of_a_missing_or_foreign_file_is_empty() {
+    /// A directory with the item `a.txt`, and the item's path.
+    fn item() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("._a");
-        assert_eq!(read(&path).await.unwrap(), Sidecar::default());
-        tokio::fs::write(&path, b"not an AppleDouble file at all")
-            .await
-            .unwrap();
-        assert_eq!(read(&path).await.unwrap(), Sidecar::default());
+        let item = dir.path().join("a.txt");
+        std::fs::write(&item, b"data").unwrap();
+        (dir, item)
     }
 
-    #[tokio::test]
-    async fn write_and_read_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("._a");
-        let mut sidecar = Sidecar {
+    fn noted() -> Sidecar {
+        Sidecar {
             comment: "a note".into(),
             ..Sidecar::default()
-        };
-        sidecar.set_finder_info(FinderInfo {
-            file_type: *b"TEXT",
-            creator: *b"ttxt",
-            flags: 0x0400,
-        });
-        write(&path, &sidecar).await.unwrap();
-
-        let read_back = read(&path).await.unwrap();
-        assert_eq!(read_back.finder_info(), sidecar.finder_info());
-        assert_eq!(read_back.comment, "a note");
-        let len = tokio::fs::metadata(&path).await.unwrap().len();
-        assert_eq!(len, RESOURCE_FORK_OFFSET);
+        }
     }
 
-    #[tokio::test]
-    async fn write_moves_a_foreign_resource_fork_and_keeps_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("._a");
+    /// A sidecar with the Finder info at 50 and `fork` after it.
+    fn two_entries(fork: &[u8]) -> Vec<u8> {
         let table_end = (Header::LEN + 2 * Entry::LEN) as u32;
-        let mut foreign = Header { entry_count: 2 }.encode().to_vec();
+        let mut file = Header { entry_count: 2 }.encode().to_vec();
         let finder_info = Entry {
             id: FINDER_INFO_ID,
             offset: table_end,
             len: 32,
         };
-        let fork = Entry {
+        let fork_entry = Entry {
             id: RESOURCE_FORK_ID,
             offset: table_end + 32,
-            len: 5,
+            len: fork.len() as u32,
         };
-        foreign.extend_from_slice(&finder_info.encode());
-        foreign.extend_from_slice(&fork.encode());
-        foreign.extend_from_slice(b"APPLaust");
-        foreign.extend_from_slice(&[0; 24]);
-        foreign.extend_from_slice(b"rsrc!");
-        tokio::fs::write(&path, &foreign).await.unwrap();
+        file.extend_from_slice(&finder_info.encode());
+        file.extend_from_slice(&fork_entry.encode());
+        file.extend_from_slice(b"APPLaust");
+        file.extend_from_slice(&[0; 24]);
+        file.extend_from_slice(fork);
+        file
+    }
 
-        let mut sidecar = read(&path).await.unwrap();
+    #[tokio::test]
+    async fn read_of_a_missing_or_empty_file_is_empty() {
+        let (_dir, item) = item();
+        assert_eq!(read(&item).await.unwrap(), Sidecar::default());
+        std::fs::write(path_of(&item), b"").unwrap();
+        assert_eq!(read(&item).await.unwrap(), Sidecar::default());
+    }
+
+    #[tokio::test]
+    async fn write_and_read_round_trip() {
+        let (_dir, item) = item();
+        let mut sidecar = noted();
+        sidecar.set_finder_info(FinderInfo {
+            file_type: *b"TEXT",
+            creator: *b"ttxt",
+            flags: 0x0400,
+        });
+        write(&item, &sidecar).await.unwrap();
+
+        let read_back = read(&item).await.unwrap();
+        assert_eq!(read_back.finder_info(), sidecar.finder_info());
+        assert_eq!(read_back.comment, "a note");
+        let len = tokio::fs::metadata(path_of(&item)).await.unwrap().len();
+        assert_eq!(len, RESOURCE_FORK_OFFSET);
+    }
+
+    #[tokio::test]
+    async fn write_moves_a_foreign_resource_fork_and_keeps_it() {
+        let (_dir, item) = item();
+        std::fs::write(path_of(&item), two_entries(b"rsrc!")).unwrap();
+
+        let mut sidecar = read(&item).await.unwrap();
         assert_eq!(&sidecar.finder_info().file_type, b"APPL");
         sidecar.comment = "a note".into();
-        write(&path, &sidecar).await.unwrap();
+        write(&item, &sidecar).await.unwrap();
 
-        let read_back = read(&path).await.unwrap();
+        let read_back = read(&item).await.unwrap();
         assert_eq!(&read_back.finder_info().creator, b"aust");
         assert_eq!(read_back.comment, "a note");
         assert_eq!(
@@ -545,72 +721,130 @@ mod tests {
                 len: 5
             }
         );
-        let bytes = tokio::fs::read(&path).await.unwrap();
+        let bytes = std::fs::read(path_of(&item)).unwrap();
         assert_eq!(&bytes[RESOURCE_FORK_OFFSET as usize..], b"rsrc!");
     }
 
     #[tokio::test]
     async fn a_written_resource_fork_reads_back_and_keeps_the_comment() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("._a");
-        let sidecar = Sidecar {
-            comment: "a note".into(),
-            ..Sidecar::default()
-        };
-        write(&path, &sidecar).await.unwrap();
+        let (_dir, item) = item();
+        write(&item, &noted()).await.unwrap();
 
-        let mut file = open_resource_write(&path, 0, claim(&path)).await.unwrap();
+        let mut file = open_resource_write(&item, 0, claim(&item)).await.unwrap();
         file.write_all(b"rsrc").await.unwrap();
         file.shutdown().await.unwrap();
-        assert_eq!(read(&path).await.unwrap().resource_fork_len(), 4);
+        assert_eq!(read(&item).await.unwrap().resource_fork_len(), 4);
 
-        let mut file = open_resource_write(&path, 2, claim(&path)).await.unwrap();
+        let mut file = open_resource_write(&item, 2, claim(&item)).await.unwrap();
         file.write_all(b"RC!").await.unwrap();
         file.shutdown().await.unwrap();
-        let read_back = read(&path).await.unwrap();
+        let read_back = read(&item).await.unwrap();
         assert_eq!(read_back.comment, "a note");
         assert_eq!(read_back.resource_fork_len(), 5);
 
         let mut fork = Vec::new();
-        let mut reader = open_resource_read(&path, 1).await.unwrap();
+        let mut reader = open_resource_read(&item, 1).await.unwrap();
         reader.read_to_end(&mut fork).await.unwrap();
         assert_eq!(fork, b"sRC!");
     }
 
-    fn claim(path: &Path) -> ForkClaim {
-        Arc::<Sidecars>::default().claim(path).unwrap()
+    fn claim(item: &Path) -> ForkClaim {
+        Arc::<Sidecars>::default().claim(&path_of(item)).unwrap()
     }
 
     #[tokio::test]
     async fn a_resource_fork_keeps_its_length_until_the_writer_closes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("._a");
+        let (_dir, item) = item();
 
-        let mut file = open_resource_write(&path, 0, claim(&path)).await.unwrap();
+        let mut file = open_resource_write(&item, 0, claim(&item)).await.unwrap();
         file.write_all(b"rsrc").await.unwrap();
         file.flush().await.unwrap();
-        assert_eq!(read(&path).await.unwrap().resource_fork_len(), 0);
+        assert_eq!(read(&item).await.unwrap().resource_fork_len(), 0);
         file.shutdown().await.unwrap();
-        assert_eq!(read(&path).await.unwrap().resource_fork_len(), 4);
+        assert_eq!(read(&item).await.unwrap().resource_fork_len(), 4);
     }
 
     #[tokio::test]
     async fn writing_an_empty_sidecar_removes_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("._a");
-        let sidecar = Sidecar {
-            comment: "a note".into(),
-            ..Sidecar::default()
-        };
-        write(&path, &sidecar).await.unwrap();
-        assert!(path.exists());
-        write(&path, &Sidecar::default()).await.unwrap();
-        assert!(!path.exists());
+        let (_dir, item) = item();
+        write(&item, &noted()).await.unwrap();
+        assert!(path_of(&item).exists());
+        write(&item, &Sidecar::default()).await.unwrap();
+        assert!(!path_of(&item).exists());
+    }
+
+    /// Check that `bytes` in a sidecar read as nothing, and that a change
+    /// fails and leaves the file as it was.
+    async fn assert_not_valid(bytes: &[u8]) {
+        let (_dir, item) = item();
+        std::fs::write(path_of(&item), bytes).unwrap();
+        assert_eq!(read(&item).await.unwrap(), Sidecar::default());
+        let error = write(&item, &noted()).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        write(&item, &Sidecar::default()).await.unwrap();
+        assert_eq!(std::fs::read(path_of(&item)).unwrap(), bytes);
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_not_appledouble_is_not_valid() {
+        assert_not_valid(&[b'x'; 200]).await;
+    }
+
+    #[tokio::test]
+    async fn a_file_with_more_than_fifteen_entries_is_not_valid() {
+        let mut file = two_entries(b"");
+        file[24..26].copy_from_slice(&16u16.to_be_bytes());
+        assert_not_valid(&file).await;
+        file[24..26].copy_from_slice(&0u16.to_be_bytes());
+        assert_not_valid(&file).await;
+    }
+
+    #[tokio::test]
+    async fn entries_that_overlap_are_not_valid() {
+        let mut file = two_entries(b"0123456789");
+        file[42..46].copy_from_slice(&80u32.to_be_bytes());
+        assert_not_valid(&file).await;
+    }
+
+    #[tokio::test]
+    async fn an_entry_past_the_end_of_the_file_is_not_valid() {
+        let mut file = two_entries(b"0123456789");
+        file[46..50].copy_from_slice(&11u32.to_be_bytes());
+        assert_not_valid(&file).await;
+    }
+
+    #[tokio::test]
+    async fn an_entry_in_the_table_is_not_valid() {
+        let mut file = two_entries(b"");
+        file[30..34].copy_from_slice(&49u32.to_be_bytes());
+        assert_not_valid(&file).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_new_sidecar_gets_the_mode_and_owner_of_its_item() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let (_dir, item) = item();
+        std::fs::set_permissions(&item, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write(&item, &noted()).await.unwrap();
+        let sidecar = std::fs::metadata(path_of(&item)).unwrap();
+        let item = std::fs::metadata(&item).unwrap();
+        assert_eq!(sidecar.permissions().mode() & 0o777, 0o640);
+        assert_eq!((sidecar.uid(), sidecar.gid()), (item.uid(), item.gid()));
+    }
+
+    #[tokio::test]
+    async fn a_hard_linked_empty_sidecar_is_not_used() {
+        let (dir, item) = item();
+        std::fs::write(path_of(&item), b"").unwrap();
+        std::fs::hard_link(path_of(&item), dir.path().join("other")).unwrap();
+        let error = write(&item, &noted()).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read(path_of(&item)).unwrap(), b"");
     }
 
     #[test]
     fn path_of_prefixes_the_name() {
-        let path = path_of(Path::new("files/Folder/a.txt"));
-        assert_eq!(path, Path::new("files/Folder/._a.txt"));
+        assert_eq!(path_of(Path::new("dir/a.txt")), Path::new("dir/._a.txt"));
     }
 }
