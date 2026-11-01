@@ -113,6 +113,12 @@ impl Inbox {
     }
 }
 
+/// A new connection's user ID and its inbound channel.
+pub(crate) struct Connection {
+    pub(crate) user_id: u16,
+    pub(crate) inbox: Inbox,
+}
+
 /// A new [`Recipient`] and its [`Inbox`].
 pub(crate) fn channel() -> (Recipient, Inbox) {
     let (messages_tx, messages) = mpsc::channel(QUEUE_LEN);

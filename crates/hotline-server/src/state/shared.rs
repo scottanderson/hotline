@@ -43,10 +43,9 @@ use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::progress::RunningTransfers;
 use crate::state::recipient::{self, Recipient};
 use crate::state::{
-    dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom,
-    ConsoleUpdate, Inbox, NotReplaced, PendingTransfer, ProgressGuard, RecipientMessage,
-    ReplacedAccount, TransferDirection, TransferKind, TransferProgress, TransferRef,
-    TransferReport, UserEntry,
+    dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, ChatRoom, Connection,
+    ConsoleUpdate, NotReplaced, PendingTransfer, ProgressGuard, RecipientMessage, ReplacedAccount,
+    TransferDirection, TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
 };
 
 /// How long an active download or an upload may wait for its `HTXF`
@@ -183,9 +182,13 @@ impl SharedState {
 }
 
 impl SharedState {
-    /// Allocate the next free user/socket ID.
-    pub fn next_user_id(&self) -> u16 {
-        self.next_user_id.fetch_add(1, Ordering::Relaxed)
+    /// The next user ID, or the one after it when the next one is 0.
+    fn bump_user_id(&self) -> u16 {
+        let next = || self.next_user_id.fetch_add(1, Ordering::Relaxed);
+        match next() {
+            0 => next(),
+            user_id => user_id,
+        }
     }
 
     /// Register a newly logged-in (or info-changed) user.
@@ -261,9 +264,24 @@ impl SharedState {
         }
     }
 
-    /// Register a newly connected socket as a recipient, returning its
-    /// inbound channel. Called once per connection, before login.
-    pub(crate) async fn register_recipient(&self, user_id: u16) -> Inbox {
+    /// Register a new connection as a recipient. `None` when each user ID is
+    /// taken.
+    ///
+    /// The ID counts up from 1 and skips 0. It also skips an ID that a
+    /// connection still holds, which openline's server does not do.
+    pub(crate) async fn connect(&self) -> Option<Connection> {
+        let mut recipients = self.recipients.write().await;
+        let user_id = (0..u16::MAX)
+            .map(|_| self.bump_user_id())
+            .find(|user_id| !recipients.contains_key(user_id))?;
+        let (recipient, inbox) = recipient::channel();
+        recipients.insert(user_id, recipient);
+        Some(Connection { user_id, inbox })
+    }
+
+    /// Register `user_id` as a recipient, returning its inbound channel.
+    #[cfg(test)]
+    pub(crate) async fn register_recipient(&self, user_id: u16) -> recipient::Inbox {
         let (recipient, inbox) = recipient::channel();
         self.recipients.write().await.insert(user_id, recipient);
         inbox
@@ -2015,6 +2033,26 @@ mod tests {
         let report = state.transfer_report(2).await;
         assert_eq!(report.active.len(), 1);
         assert_eq!(report.waiting.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn connect_counts_up_and_skips_0_when_it_wraps() {
+        let state = SharedState::default();
+        let ids = |connection: Option<Connection>| connection.map(|c| c.user_id);
+        assert_eq!(ids(state.connect().await), Some(1));
+        state.remove_recipient(1).await;
+        state.next_user_id.store(u16::MAX, Ordering::Relaxed);
+        assert_eq!(ids(state.connect().await), Some(u16::MAX));
+        assert_eq!(ids(state.connect().await), Some(1));
+    }
+
+    #[tokio::test]
+    async fn connect_skips_a_user_id_that_a_connection_holds() {
+        let state = SharedState::default();
+        let _held = state.register_recipient(2).await;
+        let first = state.connect().await.unwrap();
+        let second = state.connect().await.unwrap();
+        assert_eq!((first.user_id, second.user_id), (1, 3));
     }
 
     #[tokio::test]

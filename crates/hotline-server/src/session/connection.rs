@@ -28,8 +28,8 @@ use crate::error::{Result, ServerError};
 use crate::flood::{FloodDecision, FloodEvent};
 use crate::server::ServerConfig;
 use crate::state::{
-    AccessUpdate, ConsoleUpdate, Inbox, RecipientMessage, SharedState, UserEntry, IDLE_THRESHOLD,
-    QUEUE_LEN,
+    AccessUpdate, Connection, ConsoleUpdate, Inbox, RecipientMessage, SharedState, UserEntry,
+    IDLE_THRESHOLD, QUEUE_LEN,
 };
 
 /// [`myField_Options`] (113) values on
@@ -226,7 +226,10 @@ impl Session {
         let encoding = EncodingHandle::from(config.encoding);
         let codec = TransactionCodec::for_server(encoding.clone());
 
-        let user_id = state.next_user_id();
+        let Some(Connection { user_id, mut inbox }) = state.connect().await else {
+            tracing::debug!(%remote_addr, "no user ID is free");
+            return Ok(());
+        };
         let mut session = Session {
             user_id,
             name: format!("guest{user_id}").into(),
@@ -248,7 +251,6 @@ impl Session {
         };
 
         let (mut writer, mut reader) = Framed::new(stream, codec).split();
-        let mut rx = state.register_recipient(user_id).await;
 
         let outcome = Self::dispatch(
             &mut session,
@@ -256,7 +258,7 @@ impl Session {
             &config,
             &mut writer,
             &mut reader,
-            &mut rx,
+            &mut inbox,
             login_deadline,
         )
         .await;

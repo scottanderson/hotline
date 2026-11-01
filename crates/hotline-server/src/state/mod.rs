@@ -29,7 +29,7 @@ pub use file_transfer::FileTransfer;
 pub use folder_transfer::FolderTransfer;
 pub(crate) use progress::ProgressGuard;
 pub use progress::{TransferProgress, TransferReport, TransferSection};
-pub(crate) use recipient::QUEUE_LEN;
+pub(crate) use recipient::{Connection, QUEUE_LEN};
 pub use recipient::{Inbox, RecipientMessage};
 pub(crate) use replaced_account::{NotReplaced, ReplacedAccount};
 pub use room::ChatRoom;
