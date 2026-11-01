@@ -1,10 +1,20 @@
-//! AppleDouble sidecar files (RFC 1740). The sidecar of `dir/name` is
-//! `dir/._name`. It holds the item's Finder info, comment, and resource
-//! fork.
+//! AppleDouble sidecar files (RFC 1740), as macOS keeps them on a volume
+//! without extended attributes. The sidecar of `dir/name` is
+//! `dir/._name`. It holds the item's Finder info, its resource fork, and
+//! its extended attributes. The comment is the extended attribute
+//! [`COMMENT_NAME`], a property list with one string.
 //!
-//! A sidecar is opened and checked as xnu's `bsd/vfs/vfs_xattr.c` does
-//! (xnu-11417.101.15). A read finds nothing in a sidecar that fails a
-//! check, and a change to it returns an error.
+//! Each change does what xnu's `bsd/vfs/vfs_xattr.c` does for the same
+//! `setxattr` or `removexattr` call (xnu-11417.101.15). The extended
+//! attributes are in the Finder info entry, after an [`AttrHeader`]. They
+//! are read only from a sidecar with the Finder info entry first, at byte
+//! 50. A read finds nothing in a sidecar that fails a check, and a change
+//! to it returns an error.
+//!
+//! Two changes differ from xnu. A growth of the attributes that would
+//! write over another entry fails, where xnu writes over it. A Finder info
+//! change is written wherever the entry is, where xnu writes only the
+//! first 120 bytes.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -16,53 +26,59 @@ use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
 use std::task::{ready, Context, Poll};
 
-use hotline_proto::wire::{PacketReader, PacketWriter, VecWriter};
+use hotline_proto::wire::PacketWriter;
 use hotline_server::{BoxedReader, FinderInfo};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, MutexGuard};
 
+use crate::bplist;
+
 /// The start of a sidecar's name.
 pub const PREFIX: &str = "._";
 
+/// The extended attribute that holds the comment.
+const COMMENT_NAME: &str = "com.apple.metadata:kMDItemFinderComment";
+
 const MAGIC: u32 = 0x0005_1607;
 const VERSION: u32 = 0x0002_0000;
+/// The filler of a new sidecar.
+const FILLER: &[u8; 16] = b"Mac OS X        ";
 const RESOURCE_FORK_ID: u32 = 2;
-const COMMENT_ID: u32 = 4;
 const FINDER_INFO_ID: u32 = 9;
 
 /// The most entries that a sidecar can hold.
 const MAX_ENTRIES: u16 = 15;
-/// The most bytes that a read of the header takes.
-const ATTR_MAX_HDR_SIZE: u32 = 65536;
-
-/// Where a written sidecar's resource fork starts.
-pub const RESOURCE_FORK_OFFSET: u64 = 4096;
-
-/// Where [`write_file`] puts the resource fork's entry, the third.
-const RESOURCE_FORK_ENTRY_OFFSET: u64 = (Header::LEN + 2 * Entry::LEN) as u64;
-
-/// The longest comment a written sidecar holds, in bytes.
-const MAX_COMMENT_LEN: usize =
-    RESOURCE_FORK_OFFSET as usize - Header::LEN - 3 * Entry::LEN - FinderInfoEntry::LEN;
 
 /// The fixed start of a sidecar: magic, version, filler, and entry count.
-struct Header {
-    entry_count: u16,
-}
+const HEADER_LEN: usize = 26;
+/// The length of one entry descriptor.
+const ENTRY_LEN: usize = 12;
+/// The length of the Finder info.
+const FINDER_INFO_LEN: u32 = 32;
+/// Where the Finder info entry starts in a sidecar with two entries.
+const FINDER_INFO_AT: u32 = 50;
+/// The end of the header of a sidecar with two entries, the Finder info,
+/// and 2 bytes of pad.
+const AD_HEADER_END: usize = 84;
+/// The end of the [`AttrHeader`] after [`AD_HEADER_END`].
+const ATTR_HEADER_END: u32 = 120;
+/// The magic number of an [`AttrHeader`], `ATTR`.
+const ATTR_MAGIC: u32 = 0x4154_5452;
+/// The length of a new sidecar, and the step by which the attributes grow.
+const ATTR_BUF_SIZE: u32 = 4096;
+/// The most bytes that a read of the header takes. The attribute entries
+/// end inside them.
+const ATTR_MAX_HDR_SIZE: u32 = 65536;
+/// The most extended attributes that a sidecar can hold.
+const MAX_ATTRS: u16 = 256;
+/// The longest attribute value.
+const ATTR_MAX_SIZE: usize = i32::MAX as usize;
 
-impl Header {
-    const LEN: usize = 26;
-
-    fn encode(&self) -> [u8; Self::LEN] {
-        PacketWriter::new()
-            .u32(MAGIC)
-            .u32(VERSION)
-            .bytes(&[0; 16])
-            .u16(self.entry_count)
-            .finish()
-    }
-}
+/// The length of an empty resource fork.
+const EMPTY_FORK_LEN: u32 = 286;
+/// The system data of an empty resource fork from a new sidecar.
+const EMPTY_FORK_TAG: &[u8; 47] = b"This resource fork intentionally left blank   \0";
 
 /// One entry descriptor: what the entry is, and where it is in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,14 +89,12 @@ struct Entry {
 }
 
 impl Entry {
-    const LEN: usize = 12;
-
     /// The file offset of the end of the entry. `None` if it is past 4 GiB.
     const fn end(&self) -> Option<u32> {
         self.offset.checked_add(self.len)
     }
 
-    fn encode(&self) -> [u8; Self::LEN] {
+    fn encode(&self) -> [u8; ENTRY_LEN] {
         PacketWriter::new()
             .u32(self.id)
             .u32(self.offset)
@@ -89,37 +103,205 @@ impl Entry {
     }
 }
 
-/// The Finder info entry: [`FinderInfo`], then bytes that hls keeps as is.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct FinderInfoEntry {
-    info: FinderInfo,
-    rest: [u8; 22],
+/// The header of the extended attributes, after the Finder info and 2
+/// bytes of pad. Its offsets count from the start of the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AttrHeader {
+    debug_tag: u32,
+    /// The end of the space for the attributes.
+    total_size: u32,
+    data_start: u32,
+    data_length: u32,
+    flags: u16,
+    num_attrs: u16,
 }
 
-impl FinderInfoEntry {
-    const LEN: usize = 32;
+impl AttrHeader {
+    const LEN: usize = 36;
 
     fn encode(&self) -> [u8; Self::LEN] {
         PacketWriter::new()
-            .bytes(&self.info.file_type)
-            .bytes(&self.info.creator)
-            .u16(self.info.flags)
-            .bytes(&self.rest)
+            .u32(ATTR_MAGIC)
+            .u32(self.debug_tag)
+            .u32(self.total_size)
+            .u32(self.data_start)
+            .u32(self.data_length)
+            .bytes(&[0; 12])
+            .u16(self.flags)
+            .u16(self.num_attrs)
             .finish()
     }
 
-    const fn decode(buf: [u8; Self::LEN]) -> Self {
-        let mut r = PacketReader::new(buf);
-        let entry = Self {
-            info: FinderInfo {
-                file_type: r.take(),
-                creator: r.take(),
-                flags: r.u16(),
-            },
-            rest: r.take(),
-        };
-        r.finish();
-        entry
+    /// The header at [`AD_HEADER_END`] in `buf`. `None` without
+    /// [`ATTR_MAGIC`].
+    fn decode(buf: &[u8]) -> Option<Self> {
+        (u32_at(buf, AD_HEADER_END)? == ATTR_MAGIC).then_some(())?;
+        Some(Self {
+            debug_tag: u32_at(buf, AD_HEADER_END + 4)?,
+            total_size: u32_at(buf, AD_HEADER_END + 8)?,
+            data_start: u32_at(buf, AD_HEADER_END + 12)?,
+            data_length: u32_at(buf, AD_HEADER_END + 16)?,
+            flags: u16_at(buf, AD_HEADER_END + 32)?,
+            num_attrs: u16_at(buf, AD_HEADER_END + 34)?,
+        })
+    }
+
+    /// The file offset of the end of the attribute data.
+    const fn data_end(&self) -> u32 {
+        self.data_start.saturating_add(self.data_length)
+    }
+}
+
+/// The length of an attribute entry with a name of `name_len` bytes and
+/// its NUL, padded to 4 bytes.
+const fn attr_entry_len(name_len: u8) -> u32 {
+    (11 + name_len as u32).next_multiple_of(4)
+}
+
+/// One attribute entry: the place of its data and its name.
+struct AttrEntry {
+    /// Where the entry is in the file.
+    at: usize,
+    offset: u32,
+    len: u32,
+    name_len: u8,
+}
+
+/// What [`get_info`] finds in a sidecar.
+struct Info {
+    file: File,
+    file_len: u64,
+    /// The first bytes of the file, at most [`ATTR_MAX_HDR_SIZE`]. When
+    /// the sidecar changes, zero bytes follow up to that size.
+    buf: Vec<u8>,
+    /// How many bytes of `buf` came from the file.
+    raw_len: usize,
+    entries: Vec<Entry>,
+    /// The index of the Finder info entry.
+    finder_info: Option<usize>,
+    /// The Finder info is all zero.
+    empty_finder_info: bool,
+    /// The index of the resource fork entry.
+    fork: Option<usize>,
+    attrs: Option<AttrHeader>,
+}
+
+impl Info {
+    /// `true` if the attribute entry at `at` is inside the bytes read.
+    fn attr_valid(&self, at: usize) -> bool {
+        at + 10 < self.raw_len
+            && self
+                .buf
+                .get(at + 10)
+                .is_some_and(|&name_len| at + attr_entry_len(name_len) as usize <= self.raw_len)
+    }
+
+    /// The attribute entry at `at`.
+    fn attr_entry(&self, at: usize) -> io::Result<AttrEntry> {
+        Ok(AttrEntry {
+            at,
+            offset: u32_at(&self.buf, at).ok_or_else(out_of_range)?,
+            len: u32_at(&self.buf, at + 4).ok_or_else(out_of_range)?,
+            name_len: *self.buf.get(at + 10).ok_or_else(out_of_range)?,
+        })
+    }
+
+    /// `true` if the attribute entry at `at` has the name `name`, which
+    /// ends with its NUL.
+    fn has_name(&self, at: usize, name: &[u8]) -> bool {
+        self.buf.get(at + 11..at + 11 + name.len()) == Some(name)
+    }
+
+    /// Find the attribute `name`, which ends with its NUL. The first value
+    /// is its entry, and the second is `true` if it is the last one. With
+    /// no such attribute, the entry is `None`, and the third value is the
+    /// place after the entries that are inside the bytes read.
+    fn find_attr(&self, name: &[u8]) -> io::Result<(Option<AttrEntry>, bool, usize)> {
+        let count = self.attrs.map_or(0, |attrs| attrs.num_attrs);
+        let mut at = ATTR_HEADER_END as usize;
+        for i in 0..count {
+            if !self.attr_valid(at) {
+                break;
+            }
+            let entry = self.attr_entry(at)?;
+            if self.has_name(at, name) {
+                return Ok((Some(entry), i + 1 == count, at));
+            }
+            at += attr_entry_len(entry.name_len) as usize;
+        }
+        Ok((None, false, at))
+    }
+
+    /// The value of the attribute `entry`.
+    async fn attr_value(&mut self, entry: &AttrEntry) -> io::Result<Vec<u8>> {
+        let start = entry.offset as usize;
+        let end = start + entry.len as usize;
+        if end < ATTR_MAX_HDR_SIZE as usize {
+            return Ok(self.buf.get(start..end).ok_or_else(out_of_range)?.to_vec());
+        }
+        read_at(
+            &mut self.file,
+            u64::from(entry.offset),
+            u64::from(entry.len),
+        )
+        .await
+    }
+
+    /// The Finder info, or `None` if there is none or it is all zero.
+    fn finder_info_bytes(&self) -> Option<[u8; FINDER_INFO_LEN as usize]> {
+        let entry = self.entries.get(self.finder_info?)?;
+        let start = entry.offset as usize;
+        let bytes = self.buf.get(start..start + FINDER_INFO_LEN as usize)?;
+        (!self.empty_finder_info).then(|| bytes.try_into().ok())?
+    }
+
+    /// The number of attributes, counting the Finder info and the fork.
+    fn attr_count(&self) -> u32 {
+        u32::from(self.attrs.map_or(0, |attrs| attrs.num_attrs))
+            + u32::from(self.fork.is_some())
+            + u32::from(self.finder_info.is_some() && !self.empty_finder_info)
+    }
+
+    /// The entry at `index`.
+    fn entry_mut(&mut self, index: usize) -> io::Result<&mut Entry> {
+        self.entries.get_mut(index).ok_or_else(out_of_range)
+    }
+
+    /// Write the entry table, the [`AttrHeader`], and the rest of the
+    /// first `len` bytes of `buf` to the file.
+    async fn write(&mut self, len: usize) -> io::Result<()> {
+        let table: Vec<u8> = self.entries.iter().flat_map(Entry::encode).collect();
+        put(&mut self.buf, HEADER_LEN, &table)?;
+        if let Some(attrs) = self.attrs {
+            put(&mut self.buf, AD_HEADER_END, &attrs.encode())?;
+        }
+        let bytes = self.buf.get(..len).ok_or_else(out_of_range)?;
+        self.file.seek(SeekFrom::Start(0)).await?;
+        self.file.write_all(bytes).await?;
+        self.file.flush().await?;
+        self.file_len = self.file_len.max(len as u64);
+        Ok(())
+    }
+}
+
+/// What a read of a sidecar finds.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Sidecar {
+    finder_info: [u8; FINDER_INFO_LEN as usize],
+    /// The comment.
+    pub comment: Option<String>,
+    resource_fork: Span,
+}
+
+impl Sidecar {
+    /// The type, creator, and flags in the Finder info.
+    pub fn finder_info(&self) -> FinderInfo {
+        finder_info_of(&self.finder_info)
+    }
+
+    /// The byte length of the resource fork.
+    pub const fn resource_fork_len(&self) -> u64 {
+        self.resource_fork.len
     }
 }
 
@@ -130,37 +312,17 @@ struct Span {
     len: u64,
 }
 
-/// The entries of a sidecar that hls keeps.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Sidecar {
-    /// The Finder info entry.
-    finder_info: FinderInfoEntry,
-    /// The comment entry, as UTF-8.
-    pub comment: String,
-    /// The resource fork entry.
-    resource_fork: Span,
-}
-
-impl Sidecar {
-    /// The type, creator, and flags in the Finder info entry.
-    pub const fn finder_info(&self) -> FinderInfo {
-        self.finder_info.info
-    }
-
-    /// Set the type, creator, and flags in the Finder info entry.
-    pub const fn set_finder_info(&mut self, info: FinderInfo) {
-        self.finder_info.info = info;
-    }
-
-    /// The byte length of the resource fork.
-    pub const fn resource_fork_len(&self) -> u64 {
-        self.resource_fork.len
-    }
-
-    fn is_empty(&self) -> bool {
-        self.finder_info == FinderInfoEntry::default()
-            && self.comment.is_empty()
-            && self.resource_fork.len == 0
+/// The type, creator, and flags at the start of the Finder info `bytes`.
+fn finder_info_of(bytes: &[u8; FINDER_INFO_LEN as usize]) -> FinderInfo {
+    let (file_type, rest) = bytes.split_first_chunk().unwrap_or((&[0; 4], &[]));
+    let (creator, rest) = rest.split_first_chunk().unwrap_or((&[0; 4], &[]));
+    let flags = rest
+        .first_chunk()
+        .map_or(0, |&flags| u16::from_be_bytes(flags));
+    FinderInfo {
+        file_type: *file_type,
+        creator: *creator,
+        flags,
     }
 }
 
@@ -220,50 +382,64 @@ pub fn path_of(item: &Path) -> PathBuf {
 /// Read the sidecar of `item`. Empty if there is none, or if it fails a
 /// check.
 pub async fn read(item: &Path) -> io::Result<Sidecar> {
-    let Some(mut file) = open_sidecar(item, Access::Read).await? else {
+    let Some(file) = open_sidecar(item, Access::Read).await? else {
         return Ok(Sidecar::default());
     };
-    let Some(entries) = check_file(&mut file).await? else {
+    let Some(mut info) = get_info(file, false).await? else {
         tracing::debug!(item = %item.display(), "a sidecar is not a valid AppleDouble file");
         return Ok(Sidecar::default());
     };
-    let mut sidecar = Sidecar::default();
-    for entry in entries {
-        let offset = u64::from(entry.offset);
-        let len = u64::from(entry.len);
-        match entry.id {
-            FINDER_INFO_ID => {
-                let bytes =
-                    read_at(&mut file, offset, len.min(FinderInfoEntry::LEN as u64)).await?;
-                let mut buf = [0; FinderInfoEntry::LEN];
-                buf.iter_mut().zip(&bytes).for_each(|(b, &v)| *b = v);
-                sidecar.finder_info = FinderInfoEntry::decode(buf);
-            }
-            COMMENT_ID => {
-                let bytes = read_at(&mut file, offset, len.min(MAX_COMMENT_LEN as u64)).await?;
-                sidecar.comment = String::from_utf8_lossy(&bytes).into_owned();
-            }
-            RESOURCE_FORK_ID => sidecar.resource_fork = Span { offset, len },
-            _ => {}
-        }
-    }
-    Ok(sidecar)
+    let resource_fork = info
+        .fork
+        .and_then(|index| info.entries.get(index))
+        .map_or_else(Span::default, |entry| Span {
+            offset: u64::from(entry.offset),
+            len: u64::from(entry.len),
+        });
+    let comment = match info.find_attr(&nul_terminated(COMMENT_NAME))?.0 {
+        Some(entry) => bplist::decode_string(&info.attr_value(&entry).await?),
+        None => None,
+    };
+    Ok(Sidecar {
+        finder_info: info.finder_info_bytes().unwrap_or_default(),
+        comment,
+        resource_fork,
+    })
 }
 
-/// Write `sidecar`, as [`read`] returned it, to the sidecar of `item`. The
-/// resource fork moves to [`RESOURCE_FORK_OFFSET`], and other entries are
-/// dropped. An empty sidecar removes the file, unless it fails a check.
-pub async fn write(item: &Path, sidecar: &Sidecar) -> io::Result<()> {
-    if sidecar.is_empty() {
-        let Some(mut file) = open_sidecar(item, Access::Read).await? else {
-            return Ok(());
-        };
-        if check_file(&mut file).await?.is_none() {
-            return Ok(());
-        }
-        return remove(&path_of(item)).await;
+/// Set the type, creator, and flags in the Finder info of `item`, and keep
+/// the rest of its Finder info. A Finder info of all zero removes it.
+pub async fn set_finder_info(item: &Path, info: FinderInfo) -> io::Result<()> {
+    let mut bytes = read(item).await?.finder_info;
+    let fields = [
+        info.file_type.as_slice(),
+        &info.creator,
+        &info.flags.to_be_bytes(),
+    ]
+    .concat();
+    put(&mut bytes, 0, &fields)?;
+    if bytes == [0; FINDER_INFO_LEN as usize] {
+        return ignore_no_attr(remove_attr(item, AttrName::FinderInfo).await);
     }
-    write_file(item, sidecar).await.map(drop)
+    let file = open_sidecar(item, Access::Create)
+        .await?
+        .ok_or_else(no_attr)?;
+    let mut info = get_info(file, true).await?.ok_or_else(no_attr)?;
+    let index = info.finder_info.ok_or_else(no_attr)?;
+    let offset = info.entries.get(index).ok_or_else(out_of_range)?.offset as usize;
+    put(&mut info.buf, offset, &bytes)?;
+    let end = offset + FINDER_INFO_LEN as usize;
+    info.write(end.max(ATTR_HEADER_END as usize)).await?;
+    touch(item).await;
+    Ok(())
+}
+
+/// Set the comment of `item`. An empty comment removes it.
+pub async fn set_comment(item: &Path, comment: &str) -> io::Result<()> {
+    if comment.is_empty() {
+        return ignore_no_attr(remove_attr(item, AttrName::Other(COMMENT_NAME)).await);
+    }
+    set_attr(item, COMMENT_NAME, &bplist::encode_string(comment)).await
 }
 
 /// Open the resource fork of `item` for reading from `at` onward. Empty if
@@ -279,33 +455,57 @@ pub async fn open_resource_read(item: &Path, at: u64) -> io::Result<BoxedReader>
 }
 
 /// Open the resource fork of `item` for writing from `at` onward. Creates
-/// the sidecar if missing, and cuts the fork to `at`. Call with the
-/// [`Sidecars`] lock held. The writer keeps `claim` until it drops.
+/// the sidecar if missing. A fork longer than `at` is cut to `at`. Call
+/// with the [`Sidecars`] lock held. The writer keeps `claim` until it
+/// drops.
 pub async fn open_resource_write(
     item: &Path,
     at: u64,
     claim: ForkClaim,
 ) -> io::Result<ResourceForkWriter> {
-    let mut sidecar = read(item).await?;
-    sidecar.resource_fork.len = sidecar.resource_fork.len.min(at);
-    let mut file = write_file(item, &sidecar).await?;
-    file.set_len(RESOURCE_FORK_OFFSET + at).await?;
-    file.seek(SeekFrom::Start(RESOURCE_FORK_OFFSET + at))
+    let file = open_sidecar(item, Access::Create)
+        .await?
+        .ok_or_else(no_attr)?;
+    let mut info = get_info(file, true).await?.ok_or_else(no_attr)?;
+    let index = info.fork.ok_or_else(no_attr)?;
+    let entry = *info.entries.get(index).ok_or_else(out_of_range)?;
+    if at < u64::from(entry.len) {
+        if entry.end().map(u64::from) == Some(info.file_len) {
+            info.file.set_len(u64::from(entry.offset) + at).await?;
+        }
+        info.entry_mut(index)?.len = wire_u32(at)?;
+        info.write(ATTR_HEADER_END as usize).await?;
+    }
+    let mut file = info.file;
+    file.seek(SeekFrom::Start(u64::from(entry.offset) + at))
         .await?;
     Ok(ResourceForkWriter {
         file: Some(file),
-        len: at,
+        end: at,
+        entry: Entry {
+            len: entry.len.min(wire_u32(at)?),
+            ..entry
+        },
+        entry_at: (HEADER_LEN + index * ENTRY_LEN) as u64,
+        item: item.to_path_buf(),
         closing: None,
         claim,
     })
 }
 
-/// Writes a resource fork from [`open_resource_write`]. Shutdown writes
-/// the fork's length into the sidecar's entry table, with the [`Sidecars`]
-/// lock held.
+/// Writes a resource fork from [`open_resource_write`]. Shutdown writes a
+/// longer length into the fork's entry, with the [`Sidecars`] lock held,
+/// and then [`touch`]es the item.
 pub struct ResourceForkWriter {
     file: Option<File>,
-    len: u64,
+    /// The end of the bytes written, from the start of the fork.
+    end: u64,
+    /// The fork's entry, as it was when the writer opened.
+    entry: Entry,
+    /// The file offset of the fork's entry.
+    entry_at: u64,
+    /// The path of the item, to [`touch`] at shutdown.
+    item: PathBuf,
     closing: Option<Pin<Box<dyn Future<Output = io::Result<()>> + Send>>>,
     claim: ForkClaim,
 }
@@ -325,7 +525,7 @@ impl AsyncWrite for ResourceForkWriter {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let written = ready!(Pin::new(self.file()?).poll_write(cx, buf))?;
-        self.len += written as u64;
+        self.end += written as u64;
         Poll::Ready(Ok(written))
     }
 
@@ -341,86 +541,27 @@ impl AsyncWrite for ResourceForkWriter {
                 .file
                 .take()
                 .ok_or_else(|| io::Error::other("resource fork writer is closed"))?;
-            let entry = Entry {
-                id: RESOURCE_FORK_ID,
-                offset: RESOURCE_FORK_OFFSET as u32,
-                len: self.len as u32,
-            };
+            let end = wire_u32(self.end)?;
+            let entry = (end > self.entry.len).then_some(Entry {
+                len: end,
+                ..self.entry
+            });
+            let entry_at = self.entry_at;
+            let item = self.item.clone();
             let sidecars = Arc::clone(&self.claim.sidecars);
             Box::pin(async move {
                 let _sidecars = sidecars.lock().await;
-                file.seek(SeekFrom::Start(RESOURCE_FORK_ENTRY_OFFSET))
-                    .await?;
-                file.write_all(&entry.encode()).await?;
-                file.shutdown().await
+                if let Some(entry) = entry {
+                    file.seek(SeekFrom::Start(entry_at)).await?;
+                    file.write_all(&entry.encode()).await?;
+                }
+                file.shutdown().await?;
+                touch(&item).await;
+                Ok(())
             })
         };
         self.closing.insert(closing).as_mut().poll(cx)
     }
-}
-
-/// Write `sidecar` to the sidecar of `item` like [`write()`], also when it
-/// is empty. Create the sidecar if missing. An error of kind `InvalidData`
-/// if it fails a check.
-async fn write_file(item: &Path, sidecar: &Sidecar) -> io::Result<File> {
-    let mut file = open_sidecar(item, Access::Create)
-        .await?
-        .ok_or_else(not_valid)?;
-    if file.metadata().await?.len() > 0 && check_file(&mut file).await?.is_none() {
-        return Err(not_valid());
-    }
-    let Span {
-        offset: fork_offset,
-        len: fork_len,
-    } = sidecar.resource_fork;
-    let moved_fork = if fork_len > 0 && fork_offset != RESOURCE_FORK_OFFSET {
-        Some(read_at(&mut file, fork_offset, fork_len).await?)
-    } else {
-        None
-    };
-    let comment = cut(&sidecar.comment, MAX_COMMENT_LEN);
-    let finder_info_offset = Header::LEN + 3 * Entry::LEN;
-    let comment_offset = finder_info_offset + FinderInfoEntry::LEN;
-    let entries = [
-        Entry {
-            id: FINDER_INFO_ID,
-            offset: finder_info_offset as u32,
-            len: FinderInfoEntry::LEN as u32,
-        },
-        Entry {
-            id: COMMENT_ID,
-            offset: comment_offset as u32,
-            len: comment.len() as u32,
-        },
-        Entry {
-            id: RESOURCE_FORK_ID,
-            offset: RESOURCE_FORK_OFFSET as u32,
-            len: fork_len as u32,
-        },
-    ];
-    let mut head = VecWriter::with_capacity(RESOURCE_FORK_OFFSET as usize).bytes(
-        &Header {
-            entry_count: entries.len() as u16,
-        }
-        .encode(),
-    );
-    for entry in &entries {
-        head = head.bytes(&entry.encode());
-    }
-    let mut head = head
-        .bytes(&sidecar.finder_info.encode())
-        .bytes(comment.as_bytes())
-        .finish();
-    head.resize(RESOURCE_FORK_OFFSET as usize, 0);
-
-    file.seek(SeekFrom::Start(0)).await?;
-    file.write_all(&head).await?;
-    if let Some(fork) = moved_fork {
-        file.write_all(&fork).await?;
-    }
-    file.flush().await?;
-    file.set_len(RESOURCE_FORK_OFFSET + fork_len).await?;
-    Ok(file)
 }
 
 /// Remove the sidecar at `path`, if there is one.
@@ -443,7 +584,9 @@ pub async fn rename(from: &Path, to: &Path) -> io::Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Access {
     Read,
-    /// Open it for writing, and create it if missing.
+    Write,
+    /// Open it for writing, create it if missing, and give an empty file
+    /// the layout of a new sidecar.
     Create,
 }
 
@@ -463,7 +606,7 @@ async fn open_sidecar(item: &Path, access: Access) -> io::Result<Option<File>> {
         return Ok(None);
     }
     let item_metadata = tokio::fs::metadata(item).await.ok();
-    let file = match (access, &existing) {
+    let mut file = match (access, &existing) {
         (Access::Create, _) => {
             OpenOptions::new()
                 .read(true)
@@ -473,8 +616,14 @@ async fn open_sidecar(item: &Path, access: Access) -> io::Result<Option<File>> {
                 .open(&path)
                 .await?
         }
-        (Access::Read, Some(_)) => File::open(&path).await?,
-        (Access::Read, None) => return Ok(None),
+        (_, Some(_)) => {
+            OpenOptions::new()
+                .read(true)
+                .write(access == Access::Write)
+                .open(&path)
+                .await?
+        }
+        (_, None) => return Ok(None),
     };
     if existing.is_none() {
         if let Some(item_metadata) = &item_metadata {
@@ -489,8 +638,12 @@ async fn open_sidecar(item: &Path, access: Access) -> io::Result<Option<File>> {
         }
         return Ok(None);
     }
-    if access == Access::Create && metadata.len() == 0 && link_count(&metadata) > 1 {
-        return Err(io::ErrorKind::PermissionDenied.into());
+    if access == Access::Create && metadata.len() == 0 {
+        if link_count(&metadata) > 1 {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        file.write_all(&new_sidecar(file_id(&metadata))).await?;
+        file.flush().await?;
     }
     Ok(Some(file))
 }
@@ -530,6 +683,20 @@ const fn owner_of(_metadata: &Metadata) -> Option<u32> {
     None
 }
 
+/// Write the modify time of `item` back to it, which sets its change time.
+async fn touch(item: &Path) {
+    let item = item.to_path_buf();
+    let touched = tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(&item)?;
+        let modified = file.metadata()?.modified()?;
+        file.set_modified(modified)
+    })
+    .await;
+    if let Ok(Err(e)) = touched {
+        tracing::debug!(error = %e, "the change time of an item did not change");
+    }
+}
+
 /// The number of hard links to a file.
 #[cfg(unix)]
 fn link_count(metadata: &Metadata) -> u64 {
@@ -542,38 +709,237 @@ const fn link_count(_metadata: &Metadata) -> u64 {
     1
 }
 
-/// The entries of the sidecar in `file`. `None` if it fails a check.
-async fn check_file(file: &mut File) -> io::Result<Option<Vec<Entry>>> {
-    let file_len = file.metadata().await?.len();
-    let mut buf = Vec::new();
-    file.seek(SeekFrom::Start(0)).await?;
-    (&mut *file)
-        .take(u64::from(ATTR_MAX_HDR_SIZE))
-        .read_to_end(&mut buf)
-        .await?;
-    Ok(check_header(&buf, file_len))
+/// The low 32 bits of a file's inode number.
+#[cfg(unix)]
+fn file_id(metadata: &Metadata) -> u32 {
+    std::os::unix::fs::MetadataExt::ino(metadata) as u32
 }
 
-/// The entry table at the start of `buf`, from a file of `file_len` bytes.
-/// `None` if the header is not valid, if there are no entries or more than
-/// [`MAX_ENTRIES`], or if an entry starts in the table, ends past the end
-/// of the file, or overlaps an entry before it.
-fn check_header(buf: &[u8], file_len: u64) -> Option<Vec<Entry>> {
+/// The low 32 bits of a file's inode number.
+#[cfg(not(unix))]
+const fn file_id(_metadata: &Metadata) -> u32 {
+    0
+}
+
+/// A new sidecar of [`ATTR_BUF_SIZE`] bytes: a Finder info entry at 50 with
+/// an [`AttrHeader`] and no attributes, then an empty resource fork.
+fn new_sidecar(debug_tag: u32) -> Vec<u8> {
+    let fork_at = ATTR_BUF_SIZE - EMPTY_FORK_LEN;
+    let finder_info = Entry {
+        id: FINDER_INFO_ID,
+        offset: FINDER_INFO_AT,
+        len: fork_at - FINDER_INFO_AT,
+    };
+    let fork = Entry {
+        id: RESOURCE_FORK_ID,
+        offset: fork_at,
+        len: EMPTY_FORK_LEN,
+    };
+    let attrs = AttrHeader {
+        debug_tag,
+        total_size: fork_at,
+        data_start: ATTR_HEADER_END,
+        data_length: 0,
+        flags: 0,
+        num_attrs: 0,
+    };
+    let mut file = PacketWriter::<HEADER_LEN>::new()
+        .u32(MAGIC)
+        .u32(VERSION)
+        .bytes(FILLER)
+        .u16(2)
+        .finish()
+        .to_vec();
+    file.extend_from_slice(&finder_info.encode());
+    file.extend_from_slice(&fork.encode());
+    file.resize(AD_HEADER_END, 0);
+    file.extend_from_slice(&attrs.encode());
+    file.resize(fork_at as usize, 0);
+    file.extend_from_slice(&empty_fork());
+    file
+}
+
+/// An empty resource fork: a header and a map with no resources.
+fn empty_fork() -> [u8; EMPTY_FORK_LEN as usize] {
+    const FIRST_RESOURCE: u32 = 256;
+    const NULL_MAP_LEN: u16 = 30;
+    let mut system_data = [0; 112];
+    put(&mut system_data, 0, EMPTY_FORK_TAG).unwrap_or_default();
+    PacketWriter::new()
+        .u32(FIRST_RESOURCE)
+        .u32(FIRST_RESOURCE)
+        .u32(0)
+        .u32(u32::from(NULL_MAP_LEN))
+        .bytes(&system_data)
+        .bytes(&[0; 128])
+        .u32(FIRST_RESOURCE)
+        .u32(FIRST_RESOURCE)
+        .u32(0)
+        .u32(u32::from(NULL_MAP_LEN))
+        .u32(0)
+        .u16(0)
+        .u8(0)
+        .u8(0)
+        .u16(NULL_MAP_LEN - 2)
+        .u16(NULL_MAP_LEN)
+        .u16(0xFFFF)
+        .finish()
+}
+
+/// Read and check the sidecar in `file`. `None` if it fails a check. When
+/// `setting`, the result can be changed, and a sidecar with the Finder
+/// info at 50 and the fork second gets room for the attributes first.
+async fn get_info(mut file: File, setting: bool) -> io::Result<Option<Info>> {
+    let metadata = file.metadata().await?;
+    let mut file_len = metadata.len();
+    let read_len = if setting {
+        ATTR_MAX_HDR_SIZE as usize
+    } else {
+        file_len.min(u64::from(ATTR_MAX_HDR_SIZE)) as usize
+    };
+    if read_len < AD_HEADER_END {
+        return Ok(None);
+    }
+    let mut buf = Vec::with_capacity(read_len);
+    file.seek(SeekFrom::Start(0)).await?;
+    (&mut file)
+        .take(read_len as u64)
+        .read_to_end(&mut buf)
+        .await?;
     let raw_len = buf.len();
-    if raw_len < Header::LEN || u32_at(buf, 0)? != MAGIC || u32_at(buf, 4)? != VERSION {
+    buf.resize(read_len, 0);
+    let Some(mut entries) = check_header(&buf, raw_len, file_len) else {
+        return Ok(None);
+    };
+
+    let mut finder_info = None;
+    let mut empty_finder_info = false;
+    let mut fork = None;
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.id == FINDER_INFO_ID && entry.len >= FINDER_INFO_LEN {
+            finder_info = Some(index);
+            let start = entry.offset as usize;
+            match entry.offset.checked_add(FINDER_INFO_LEN) {
+                Some(end) if end as usize <= raw_len => {
+                    let bytes = buf.get(start..end as usize).unwrap_or_default();
+                    empty_finder_info |= bytes.iter().all(|&byte| byte == 0);
+                }
+                _ => return Ok(None),
+            }
+        }
+        if entry.id == RESOURCE_FORK_ID {
+            if !setting
+                && (entry.len == 0
+                    || entry.len == EMPTY_FORK_LEN && is_empty_fork(&mut file, entry).await)
+            {
+                continue;
+            }
+            fork = Some(index);
+        }
+    }
+
+    if setting
+        && entries.len() == 2
+        && finder_info == Some(0)
+        && fork == Some(1)
+        && entries
+            .first()
+            .is_some_and(|entry| entry.offset == FINDER_INFO_AT && entry.len == FINDER_INFO_LEN)
+    {
+        let [first, second] = entries.as_mut_slice() else {
+            return Ok(None);
+        };
+        let mut delta = ATTR_BUF_SIZE - (FINDER_INFO_AT + FINDER_INFO_LEN);
+        let write_len;
+        if second.len != 0 {
+            shift_down(
+                &mut file,
+                u64::from(second.offset),
+                u64::from(second.len),
+                u64::from(delta),
+            )
+            .await?;
+            file_len =
+                file_len.max(u64::from(second.offset) + u64::from(second.len) + u64::from(delta));
+            write_len = ATTR_HEADER_END as usize;
+        } else {
+            if second.offset as usize + delta as usize + EMPTY_FORK_LEN as usize > read_len {
+                return Ok(None);
+            }
+            file_len = u64::from(second.offset) + u64::from(delta);
+            file.set_len(file_len).await?;
+            delta -= EMPTY_FORK_LEN;
+            let pad = (FINDER_INFO_AT + FINDER_INFO_LEN) as usize;
+            buf.get_mut(pad..pad + delta as usize)
+                .ok_or_else(out_of_range)?
+                .fill(0);
+            put(&mut buf, (second.offset + delta) as usize, &empty_fork())?;
+            second.len = EMPTY_FORK_LEN;
+            write_len = ATTR_BUF_SIZE as usize;
+        }
+        first.len += delta;
+        second.offset += delta;
+        let attrs = AttrHeader {
+            debug_tag: file_id(&metadata),
+            total_size: second.offset,
+            data_start: ATTR_HEADER_END,
+            data_length: 0,
+            flags: 0,
+            num_attrs: 0,
+        };
+        let table: Vec<u8> = entries.iter().flat_map(Entry::encode).collect();
+        put(&mut buf, HEADER_LEN, &table)?;
+        put(&mut buf, AD_HEADER_END, &attrs.encode())?;
+        file.seek(SeekFrom::Start(0)).await?;
+        file.write_all(buf.get(..write_len).ok_or_else(out_of_range)?)
+            .await?;
+        file.flush().await?;
+        file_len = file_len.max(write_len as u64);
+    }
+
+    let mut attrs = None;
+    if let Some(first) = entries
+        .first()
+        .filter(|first| finder_info == Some(0) && first.len as usize >= AttrHeader::LEN)
+    {
+        if first.offset != FINDER_INFO_AT {
+            return Ok(None);
+        }
+        attrs = check_attrs(&buf, raw_len, first);
+    }
+    Ok(Some(Info {
+        file,
+        file_len,
+        buf,
+        raw_len,
+        entries,
+        finder_info,
+        empty_finder_info,
+        fork,
+        attrs,
+    }))
+}
+
+/// The entry table at the start of `buf`, of which `raw_len` bytes came
+/// from a file of `file_len` bytes. `None` if the header is not valid, if
+/// there are no entries or more than [`MAX_ENTRIES`], or if an entry
+/// starts in the table, ends past the end of the file, or overlaps an
+/// entry before it.
+fn check_header(buf: &[u8], raw_len: usize, file_len: u64) -> Option<Vec<Entry>> {
+    if raw_len < HEADER_LEN || u32_at(buf, 0)? != MAGIC || u32_at(buf, 4)? != VERSION {
         return None;
     }
     let count = u16_at(buf, 24)?;
     if !(1..=MAX_ENTRIES).contains(&count) {
         return None;
     }
-    let table_end = Header::LEN + usize::from(count) * Entry::LEN;
+    let table_end = HEADER_LEN + usize::from(count) * ENTRY_LEN;
     if raw_len < table_end {
         return None;
     }
     let entries: Vec<Entry> = (0..usize::from(count))
         .map(|i| {
-            let at = Header::LEN + i * Entry::LEN;
+            let at = HEADER_LEN + i * ENTRY_LEN;
             Some(Entry {
                 id: u32_at(buf, at)?,
                 offset: u32_at(buf, at + 4)?,
@@ -596,12 +962,410 @@ fn check_header(buf: &[u8], file_len: u64) -> Option<Vec<Entry>> {
     valid.then_some(entries)
 }
 
-/// The error for a sidecar that fails a check.
-fn not_valid() -> io::Error {
+/// `true` if the fork of `entry` is the empty fork of a new sidecar, or
+/// cannot be read.
+async fn is_empty_fork(file: &mut File, entry: &Entry) -> bool {
+    let mut system_data = [0; 64];
+    let read = async {
+        file.seek(SeekFrom::Start(u64::from(entry.offset) + 16))
+            .await?;
+        let mut filled = 0;
+        while let Some(rest) = system_data
+            .get_mut(filled..)
+            .filter(|rest| !rest.is_empty())
+        {
+            match file.read(rest).await? {
+                0 => break,
+                n => filled += n,
+            }
+        }
+        io::Result::Ok(())
+    };
+    read.await.is_err() || system_data.starts_with(EMPTY_FORK_TAG)
+}
+
+/// The [`AttrHeader`] in `buf`, of which `raw_len` bytes came from the
+/// file, for the Finder info `entry` at 50. `None` if the header or an
+/// attribute entry is not valid.
+fn check_attrs(buf: &[u8], raw_len: usize, entry: &Entry) -> Option<AttrHeader> {
+    let header = AttrHeader::decode(buf)?;
+    let data_end = header.data_start.checked_add(header.data_length)?;
+    if header.total_size > entry.end()?
+        || header.data_start < ATTR_HEADER_END
+        || data_end > header.total_size
+        || header.data_start as usize > raw_len
+        || header.num_attrs > MAX_ATTRS
+    {
+        return None;
+    }
+    let buf_end = header.data_start as usize;
+    let mut at = ATTR_HEADER_END as usize;
+    let mut header_size = ATTR_HEADER_END;
+    let mut data_size = 0u32;
+    for _ in 0..header.num_attrs {
+        let name_len = *buf.get(at + 10)?;
+        let name_end = at + 11 + usize::from(name_len);
+        if at + 12 > buf_end || name_end > buf_end {
+            return None;
+        }
+        let name = buf.get(at + 11..name_end)?;
+        if name.iter().position(|&byte| byte == 0) != Some(usize::from(name_len).checked_sub(1)?) {
+            return None;
+        }
+        let offset = u32_at(buf, at)?;
+        let len = u32_at(buf, at + 4)?;
+        let end = offset.checked_add(len)?;
+        if end > header.total_size || offset < header.data_start || end > data_end {
+            return None;
+        }
+        header_size = header_size.checked_add(attr_entry_len(name_len))?;
+        data_size = data_size.checked_add(len)?;
+        at += attr_entry_len(name_len) as usize;
+    }
+    (header.data_start >= header_size && data_size == header.data_length).then_some(header)
+}
+
+/// An attribute that [`remove_attr`] removes.
+#[derive(Debug, Clone, Copy)]
+enum AttrName<'a> {
+    FinderInfo,
+    Other(&'a str),
+}
+
+/// Remove the attribute `name` of `item`, and then [`touch`] `item`.
+/// Removing the last attribute removes the sidecar. An error of kind
+/// `InvalidData` if there is no such attribute. A sidecar with no
+/// attributes is removed, and the call fails.
+async fn remove_attr(item: &Path, name: AttrName<'_>) -> io::Result<()> {
+    remove_attr_from_sidecar(item, name).await?;
+    touch(item).await;
+    Ok(())
+}
+
+/// Remove the attribute `name` of `item`, as [`remove_attr`] does, but
+/// leave the times of `item`.
+async fn remove_attr_from_sidecar(item: &Path, name: AttrName<'_>) -> io::Result<()> {
+    let file = open_sidecar(item, Access::Write)
+        .await?
+        .ok_or_else(no_attr)?;
+    let mut info = get_info(file, false).await?.ok_or_else(no_attr)?;
+    if info.attr_count() == 0 {
+        remove(&path_of(item)).await?;
+        return Err(no_attr());
+    }
+    let last = info.attr_count() == 1;
+    match name {
+        AttrName::FinderInfo => {
+            let index = info.finder_info.filter(|_| !info.empty_finder_info);
+            let index = index.ok_or_else(no_attr)?;
+            if last {
+                return remove(&path_of(item)).await;
+            }
+            let offset = info.entries.get(index).ok_or_else(out_of_range)?.offset as usize;
+            put(&mut info.buf, offset, &[0; FINDER_INFO_LEN as usize])?;
+            let len = info.buf.len();
+            info.write(len).await
+        }
+        AttrName::Other(name) => {
+            let header = info.attrs.ok_or_else(no_attr)?;
+            let name = nul_terminated(name);
+            let (Some(entry), is_last, _) = info.find_attr(&name)? else {
+                return Err(no_attr());
+            };
+            if last {
+                return remove(&path_of(item)).await;
+            }
+            remove_attr_entry(&mut info, header, &entry, name.len(), is_last).await
+        }
+    }
+}
+
+/// Remove the attribute `entry`, with a name of `name_len` bytes and its
+/// NUL, from `info`. `is_last` is `true` for the last entry.
+async fn remove_attr_entry(
+    info: &mut Info,
+    mut header: AttrHeader,
+    entry: &AttrEntry,
+    name_len: usize,
+    is_last: bool,
+) -> io::Result<()> {
+    let data_start = header.data_start as usize;
+    let data_end = header.data_end() as usize;
+    let data_at = entry.offset as usize;
+    let data_len = entry.len as usize;
+    let entry_len = attr_entry_len(u8::try_from(name_len).map_err(|_| out_of_range())?) as usize;
+    let split = data_end > ATTR_MAX_HDR_SIZE as usize;
+    if !is_last {
+        copy_within(&mut info.buf, entry.at + entry_len..data_start, entry.at)?;
+    }
+    let write_len = if split {
+        let delta = entry_len as u64;
+        shift_up(
+            &mut info.file,
+            data_start as u64,
+            (data_at - data_start) as u64,
+            delta,
+        )
+        .await?;
+        if !is_last {
+            let after = (data_at + data_len) as u64;
+            shift_up(
+                &mut info.file,
+                after,
+                data_end as u64 - after,
+                (data_len + entry_len) as u64,
+            )
+            .await?;
+        }
+        data_start - entry_len
+    } else {
+        copy_within(&mut info.buf, data_start..data_at, data_start - entry_len)?;
+        if !is_last {
+            copy_within(
+                &mut info.buf,
+                data_at + data_len..data_end,
+                data_at - entry_len,
+            )?;
+        }
+        let freed = data_end - (data_len + entry_len);
+        info.buf
+            .get_mut(freed..data_end)
+            .ok_or_else(out_of_range)?
+            .fill(0);
+        data_end
+    };
+    header.num_attrs -= 1;
+    header.data_start -= entry_len as u32;
+    header.data_length -= entry.len;
+    info.attrs = Some(header);
+    let mut at = ATTR_HEADER_END as usize;
+    for _ in 0..header.num_attrs {
+        if !info.attr_valid(at) {
+            break;
+        }
+        let moved = info.attr_entry(at)?;
+        let mut offset = moved.offset - entry_len as u32;
+        if at >= entry.at {
+            offset -= entry.len;
+        }
+        put(&mut info.buf, at, &offset.to_be_bytes())?;
+        at += attr_entry_len(moved.name_len) as usize;
+    }
+    info.write(write_len).await
+}
+
+/// Set the attribute `name` of `item` to `value`, and then [`touch`]
+/// `item`. Create the sidecar if missing. A value of a new length removes
+/// the attribute and adds it again at the end. `PermissionDenied` if the
+/// attributes must grow over an entry that is not the resource fork.
+async fn set_attr(item: &Path, name: &str, value: &[u8]) -> io::Result<()> {
+    set_attr_in_sidecar(item, name, value).await?;
+    touch(item).await;
+    Ok(())
+}
+
+/// Set the attribute `name` of `item`, as [`set_attr`] does, but leave the
+/// times of `item` to the caller.
+async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Result<()> {
+    if value.len() > ATTR_MAX_SIZE {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let name = nul_terminated(name);
+    let name_len =
+        u8::try_from(name.len()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let entry_len = attr_entry_len(name_len);
+    let value_len = wire_u32(value.len() as u64)?;
+    loop {
+        let file = open_sidecar(item, Access::Create)
+            .await?
+            .ok_or_else(no_attr)?;
+        let mut info = get_info(file, true).await?.ok_or_else(no_attr)?;
+        let mut header = info.attrs.ok_or_else(no_attr)?;
+        let split = u64::from(header.data_end()) + u64::from(entry_len) + u64::from(value_len)
+            > u64::from(ATTR_MAX_HDR_SIZE);
+        let (found, _, slot) = info.find_attr(&name)?;
+        if let Some(entry) = found {
+            if entry.len != value_len {
+                drop(info);
+                remove_attr(item, AttrName::Other(name_str(&name))).await?;
+                continue;
+            }
+            if split {
+                info.file
+                    .seek(SeekFrom::Start(u64::from(entry.offset)))
+                    .await?;
+                info.file.write_all(value).await?;
+                return info.file.flush().await;
+            }
+            put(&mut info.buf, entry.offset as usize, value)?;
+            let len = header.data_end() as usize;
+            return info.write(len).await;
+        }
+        if !info.attr_valid(slot) || header.data_start.saturating_add(entry_len) > ATTR_MAX_HDR_SIZE
+        {
+            return Err(io::ErrorKind::StorageFull.into());
+        }
+        let free = header.total_size - header.data_end();
+        let needed = value_len.checked_add(entry_len).ok_or_else(out_of_range)?;
+        if needed > free {
+            let moves_only_the_fork = info
+                .entries
+                .iter()
+                .all(|entry| matches!(entry.id, FINDER_INFO_ID | RESOURCE_FORK_ID));
+            if !moves_only_the_fork {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
+            let mut grow = (needed - free).next_multiple_of(ATTR_BUF_SIZE);
+            if !split && header.total_size.saturating_add(grow) > ATTR_MAX_HDR_SIZE {
+                grow = ATTR_MAX_HDR_SIZE
+                    .checked_sub(header.total_size)
+                    .ok_or_else(out_of_range)?;
+            }
+            info.file_len += u64::from(grow);
+            info.file.set_len(info.file_len).await?;
+            if let Some(index) = info.fork {
+                let fork = info.entry_mut(index)?;
+                let (offset, len) = (fork.offset, fork.len);
+                fork.offset = offset.checked_add(grow).ok_or_else(out_of_range)?;
+                if len != 0 {
+                    shift_down(
+                        &mut info.file,
+                        u64::from(offset),
+                        u64::from(len),
+                        u64::from(grow),
+                    )
+                    .await?;
+                }
+            }
+            let index = info.finder_info.ok_or_else(no_attr)?;
+            let finder_info = info.entry_mut(index)?;
+            finder_info.len = finder_info.len.checked_add(grow).ok_or_else(out_of_range)?;
+            header.total_size += grow;
+        }
+
+        let data_start = header.data_start as usize;
+        let data_end = header.data_end() as usize;
+        if split {
+            shift_down(
+                &mut info.file,
+                data_start as u64,
+                u64::from(header.data_length),
+                u64::from(entry_len),
+            )
+            .await?;
+        } else {
+            copy_within(
+                &mut info.buf,
+                data_start..data_end,
+                data_start + entry_len as usize,
+            )?;
+        }
+        header.data_start += entry_len;
+        let mut at = ATTR_HEADER_END as usize;
+        while at != slot && info.attr_valid(at) {
+            let moved = info.attr_entry(at)?;
+            put(&mut info.buf, at, &(moved.offset + entry_len).to_be_bytes())?;
+            at += attr_entry_len(moved.name_len) as usize;
+        }
+        let value_at = header.data_end();
+        if split {
+            info.file.seek(SeekFrom::Start(u64::from(value_at))).await?;
+            info.file.write_all(value).await?;
+            info.file.flush().await?;
+        } else {
+            put(&mut info.buf, value_at as usize, value)?;
+        }
+        let fixed = PacketWriter::<11>::new()
+            .u32(value_at)
+            .u32(value_len)
+            .u16(0)
+            .u8(name_len)
+            .finish();
+        put(&mut info.buf, slot, &[fixed.as_slice(), &name].concat())?;
+        header.num_attrs += 1;
+        header.data_length += value_len;
+        info.attrs = Some(header);
+        let len = if split {
+            header.data_start
+        } else {
+            header.data_end()
+        };
+        return info.write(len as usize).await;
+    }
+}
+
+/// Move `len` bytes of `file` at `start` to `start + delta`.
+async fn shift_down(file: &mut File, start: u64, len: u64, delta: u64) -> io::Result<()> {
+    if delta == 0 || len == 0 {
+        return Ok(());
+    }
+    let mut end = start + len;
+    while end > start {
+        let chunk = (end - start).min(u64::from(ATTR_BUF_SIZE));
+        end -= chunk;
+        let bytes = read_at(file, end, chunk).await?;
+        file.seek(SeekFrom::Start(end + delta)).await?;
+        file.write_all(&bytes).await?;
+        file.flush().await?;
+    }
+    Ok(())
+}
+
+/// Move `len` bytes of `file` at `start` to `start - delta`.
+async fn shift_up(file: &mut File, start: u64, len: u64, delta: u64) -> io::Result<()> {
+    if delta == 0 || len == 0 {
+        return Ok(());
+    }
+    let end = start + len;
+    let mut at = start;
+    while at < end {
+        let chunk = (end - at).min(u64::from(ATTR_BUF_SIZE));
+        let bytes = read_at(file, at, chunk).await?;
+        file.seek(SeekFrom::Start(at - delta)).await?;
+        file.write_all(&bytes).await?;
+        file.flush().await?;
+        at += chunk;
+    }
+    Ok(())
+}
+
+/// `name` and its NUL.
+fn nul_terminated(name: &str) -> Vec<u8> {
+    [name.as_bytes(), &[0]].concat()
+}
+
+/// `name` without its NUL.
+fn name_str(name: &[u8]) -> &str {
+    std::str::from_utf8(name.strip_suffix(&[0]).unwrap_or(name)).unwrap_or_default()
+}
+
+/// `Ok` for an error of [`no_attr`].
+fn ignore_no_attr(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(()),
+        result => result,
+    }
+}
+
+/// The error for a sidecar without the attribute, or that fails a check.
+fn no_attr() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        "the sidecar is not a valid AppleDouble file",
+        "the sidecar has no such attribute, or is not valid",
     )
+}
+
+/// The error for an offset outside the bytes read.
+fn out_of_range() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "an offset in the sidecar is out of range",
+    )
+}
+
+/// `n` as a sidecar's 32-bit offset or length.
+fn wire_u32(n: u64) -> io::Result<u32> {
+    u32::try_from(n).map_err(|_| io::Error::other("the sidecar is too large"))
 }
 
 /// The big-endian `u32` at `at` in `buf`.
@@ -620,6 +1384,23 @@ fn u16_at(buf: &[u8], at: usize) -> Option<u16> {
         .map(u16::from_be_bytes)
 }
 
+/// Copy `bytes` into `buf` at `at`.
+fn put(buf: &mut [u8], at: usize, bytes: &[u8]) -> io::Result<()> {
+    buf.get_mut(at..at + bytes.len())
+        .ok_or_else(out_of_range)?
+        .copy_from_slice(bytes);
+    Ok(())
+}
+
+/// Copy the bytes of `buf` in `src` to `dest`. The ranges can overlap.
+fn copy_within(buf: &mut [u8], src: std::ops::Range<usize>, dest: usize) -> io::Result<()> {
+    if src.start > src.end || src.end > buf.len() || dest + src.len() > buf.len() {
+        return Err(out_of_range());
+    }
+    buf.copy_within(src, dest);
+    Ok(())
+}
+
 /// Read `len` bytes of `file` from `offset`.
 async fn read_at(file: &mut File, offset: u64, len: u64) -> io::Result<Vec<u8>> {
     file.seek(SeekFrom::Start(offset)).await?;
@@ -628,15 +1409,13 @@ async fn read_at(file: &mut File, offset: u64, len: u64) -> io::Result<Vec<u8>> 
     Ok(buf)
 }
 
-/// The longest start of `s` of at most `max` bytes, cut at a character
-/// boundary.
-fn cut(s: &str, max: usize) -> &str {
-    s.get(..s.floor_char_boundary(max)).unwrap_or(s)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn be32(bytes: &[u8], at: usize) -> u32 {
+        u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
 
     /// A directory with the item `a.txt`, and the item's path.
     fn item() -> (tempfile::TempDir, PathBuf) {
@@ -646,33 +1425,107 @@ mod tests {
         (dir, item)
     }
 
-    fn noted() -> Sidecar {
-        Sidecar {
-            comment: "a note".into(),
-            ..Sidecar::default()
+    /// A sidecar as macOS writes it: the Finder info at 50 with `attrs`,
+    /// and `fork` at 3810.
+    fn macos_sidecar(attrs: &[(&str, &[u8])], fork: &[u8]) -> Vec<u8> {
+        let mut file = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \x00\x02".to_vec();
+        file.extend_from_slice(&[0, 0, 0, 9, 0, 0, 0, 50, 0, 0, 0x0E, 0xB0]);
+        file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0x0E, 0xE2]);
+        file.extend_from_slice(&(fork.len() as u32).to_be_bytes());
+        file.extend_from_slice(b"TEXTttxt");
+        file.resize(84, 0);
+        let names: Vec<Vec<u8>> = attrs.iter().map(|(name, _)| nul_terminated(name)).collect();
+        let entries_len: usize = names
+            .iter()
+            .map(|name| (11 + name.len()).next_multiple_of(4))
+            .sum();
+        let data_start = 120 + entries_len;
+        let data_len: usize = attrs.iter().map(|(_, value)| value.len()).sum();
+        file.extend_from_slice(b"ATTR");
+        file.extend_from_slice(&7u32.to_be_bytes());
+        file.extend_from_slice(&3810u32.to_be_bytes());
+        file.extend_from_slice(&(data_start as u32).to_be_bytes());
+        file.extend_from_slice(&(data_len as u32).to_be_bytes());
+        file.extend_from_slice(&[0; 12]);
+        file.extend_from_slice(&[0, 0]);
+        file.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
+        let mut offset = data_start;
+        for (name, (_, value)) in names.iter().zip(attrs) {
+            file.extend_from_slice(&(offset as u32).to_be_bytes());
+            file.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            file.extend_from_slice(&[0, 0, name.len() as u8]);
+            file.extend_from_slice(name);
+            file.resize(file.len().next_multiple_of(4), 0);
+            offset += value.len();
         }
-    }
-
-    /// A sidecar with the Finder info at 50 and `fork` after it.
-    fn two_entries(fork: &[u8]) -> Vec<u8> {
-        let table_end = (Header::LEN + 2 * Entry::LEN) as u32;
-        let mut file = Header { entry_count: 2 }.encode().to_vec();
-        let finder_info = Entry {
-            id: FINDER_INFO_ID,
-            offset: table_end,
-            len: 32,
-        };
-        let fork_entry = Entry {
-            id: RESOURCE_FORK_ID,
-            offset: table_end + 32,
-            len: fork.len() as u32,
-        };
-        file.extend_from_slice(&finder_info.encode());
-        file.extend_from_slice(&fork_entry.encode());
-        file.extend_from_slice(b"APPLaust");
-        file.extend_from_slice(&[0; 24]);
+        assert_eq!(file.len(), data_start);
+        for (_, value) in attrs {
+            file.extend_from_slice(value);
+        }
+        file.resize(3810, 0);
         file.extend_from_slice(fork);
         file
+    }
+
+    /// The attributes of `file` as xnu reads them: two entries, the Finder
+    /// info at 50, and the attribute header at 84.
+    fn xnu_attrs(file: &[u8]) -> Vec<(String, Vec<u8>)> {
+        assert_eq!(u16::from_be_bytes([file[24], file[25]]), 2);
+        assert_eq!(be32(file, 26), FINDER_INFO_ID);
+        assert_eq!(be32(file, 30), 50);
+        assert_eq!(be32(file, 38), RESOURCE_FORK_ID);
+        assert_eq!(be32(file, 84), ATTR_MAGIC);
+        let total_size = be32(file, 92) as usize;
+        let data_start = be32(file, 96) as usize;
+        let data_end = data_start + be32(file, 100) as usize;
+        assert!(total_size <= 50 + be32(file, 34) as usize);
+        assert!(data_end <= total_size);
+        assert_eq!(be32(file, 42), total_size as u32);
+        let count = u16::from_be_bytes([file[118], file[119]]);
+        let mut at = 120;
+        let mut attrs = Vec::new();
+        for _ in 0..count {
+            let offset = be32(file, at) as usize;
+            let len = be32(file, at + 4) as usize;
+            let name_len = usize::from(file[at + 10]);
+            assert!(offset >= data_start && offset + len <= data_end);
+            let name = String::from_utf8(file[at + 11..at + 10 + name_len].to_vec()).unwrap();
+            attrs.push((name, file[offset..offset + len].to_vec()));
+            at += (11 + name_len).next_multiple_of(4);
+        }
+        assert!(at <= data_start);
+        attrs
+    }
+
+    /// The resource fork of `file` by its entry table.
+    fn fork_bytes(file: &[u8]) -> &[u8] {
+        let offset = be32(file, 42) as usize;
+        &file[offset..offset + be32(file, 46) as usize]
+    }
+
+    async fn fork_of(item: &Path) -> Vec<u8> {
+        let mut fork = Vec::new();
+        let mut reader = open_resource_read(item, 0).await.unwrap();
+        reader.read_to_end(&mut fork).await.unwrap();
+        fork
+    }
+
+    fn claim(item: &Path) -> ForkClaim {
+        Arc::new(Sidecars::default()).claim(&path_of(item)).unwrap()
+    }
+
+    async fn write_fork(item: &Path, at: u64, bytes: &[u8]) {
+        let mut writer = open_resource_write(item, at, claim(item)).await.unwrap();
+        writer.write_all(bytes).await.unwrap();
+        writer.shutdown().await.unwrap();
+    }
+
+    fn text_info() -> FinderInfo {
+        FinderInfo {
+            file_type: *b"TEXT",
+            creator: *b"ttxt",
+            flags: 0x0100,
+        }
     }
 
     #[tokio::test]
@@ -684,93 +1537,244 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_and_read_round_trip() {
+    async fn a_new_sidecar_has_the_layout_that_xnu_creates() {
         let (_dir, item) = item();
-        let mut sidecar = noted();
-        sidecar.set_finder_info(FinderInfo {
-            file_type: *b"TEXT",
-            creator: *b"ttxt",
-            flags: 0x0400,
-        });
-        write(&item, &sidecar).await.unwrap();
-
-        let read_back = read(&item).await.unwrap();
-        assert_eq!(read_back.finder_info(), sidecar.finder_info());
-        assert_eq!(read_back.comment, "a note");
-        let len = tokio::fs::metadata(path_of(&item)).await.unwrap().len();
-        assert_eq!(len, RESOURCE_FORK_OFFSET);
-    }
-
-    #[tokio::test]
-    async fn write_moves_a_foreign_resource_fork_and_keeps_it() {
-        let (_dir, item) = item();
-        std::fs::write(path_of(&item), two_entries(b"rsrc!")).unwrap();
-
-        let mut sidecar = read(&item).await.unwrap();
-        assert_eq!(&sidecar.finder_info().file_type, b"APPL");
-        sidecar.comment = "a note".into();
-        write(&item, &sidecar).await.unwrap();
-
-        let read_back = read(&item).await.unwrap();
-        assert_eq!(&read_back.finder_info().creator, b"aust");
-        assert_eq!(read_back.comment, "a note");
+        set_finder_info(&item, text_info()).await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(file.len(), 4096);
+        assert_eq!(&file[8..24], b"Mac OS X        ");
         assert_eq!(
-            read_back.resource_fork,
-            Span {
-                offset: RESOURCE_FORK_OFFSET,
-                len: 5
-            }
+            &file[26..50],
+            &[
+                0, 0, 0, 9, 0, 0, 0, 50, 0, 0, 0x0E, 0xB0, 0, 0, 0, 2, 0, 0, 0x0E, 0xE2, 0, 0, 1,
+                0x1E
+            ]
         );
-        let bytes = std::fs::read(path_of(&item)).unwrap();
-        assert_eq!(&bytes[RESOURCE_FORK_OFFSET as usize..], b"rsrc!");
+        assert_eq!(&file[50..60], b"TEXTttxt\x01\x00");
+        assert_eq!(be32(&file, 92), 3810);
+        assert_eq!(be32(&file, 96), 120);
+        assert!(xnu_attrs(&file).is_empty());
+        assert_eq!(&file[3810 + 16..3810 + 16 + 47], EMPTY_FORK_TAG);
+        assert_eq!(&file[4094..], &[0xFF, 0xFF]);
+
+        let sidecar = read(&item).await.unwrap();
+        assert_eq!(sidecar.finder_info(), text_info());
+        assert_eq!(sidecar.resource_fork_len(), 0);
+        assert_eq!(sidecar.comment, None);
     }
 
     #[tokio::test]
-    async fn a_written_resource_fork_reads_back_and_keeps_the_comment() {
+    async fn a_comment_is_an_attribute_with_a_property_list() {
         let (_dir, item) = item();
-        write(&item, &noted()).await.unwrap();
-
-        let mut file = open_resource_write(&item, 0, claim(&item)).await.unwrap();
-        file.write_all(b"rsrc").await.unwrap();
-        file.shutdown().await.unwrap();
-        assert_eq!(read(&item).await.unwrap().resource_fork_len(), 4);
-
-        let mut file = open_resource_write(&item, 2, claim(&item)).await.unwrap();
-        file.write_all(b"RC!").await.unwrap();
-        file.shutdown().await.unwrap();
-        let read_back = read(&item).await.unwrap();
-        assert_eq!(read_back.comment, "a note");
-        assert_eq!(read_back.resource_fork_len(), 5);
-
-        let mut fork = Vec::new();
-        let mut reader = open_resource_read(&item, 1).await.unwrap();
-        reader.read_to_end(&mut fork).await.unwrap();
-        assert_eq!(fork, b"sRC!");
+        set_comment(&item, "a note").await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(
+            xnu_attrs(&file),
+            [(COMMENT_NAME.to_owned(), bplist::encode_string("a note"))]
+        );
+        assert_eq!(
+            read(&item).await.unwrap().comment.as_deref(),
+            Some("a note")
+        );
     }
 
-    fn claim(item: &Path) -> ForkClaim {
-        Arc::<Sidecars>::default().claim(&path_of(item)).unwrap()
+    #[tokio::test]
+    async fn removing_the_last_attribute_removes_the_sidecar() {
+        let (_dir, item) = item();
+        set_comment(&item, "a note").await.unwrap();
+        set_finder_info(&item, text_info()).await.unwrap();
+        set_comment(&item, "").await.unwrap();
+        assert!(path_of(&item).exists());
+        assert_eq!(read(&item).await.unwrap().comment, None);
+        set_finder_info(&item, FinderInfo::default()).await.unwrap();
+        assert!(!path_of(&item).exists());
+        set_comment(&item, "").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_remove_from_a_sidecar_with_no_attributes_removes_it() {
+        let (_dir, item) = item();
+        std::fs::write(path_of(&item), new_sidecar(0)).unwrap();
+        let error = remove_attr(&item, AttrName::Other(COMMENT_NAME))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!path_of(&item).exists());
+    }
+
+    #[tokio::test]
+    async fn a_finder_info_change_keeps_the_attributes_and_the_fork() {
+        let (_dir, item) = item();
+        let attrs: &[(&str, &[u8])] = &[("com.apple.quarantine", b"q-data"), ("user.a", b"hello")];
+        std::fs::write(path_of(&item), macos_sidecar(attrs, b"rsrc-bytes")).unwrap();
+        let info = FinderInfo {
+            file_type: *b"APPL",
+            ..text_info()
+        };
+        set_finder_info(&item, info).await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(&file[50..60], b"APPLttxt\x01\x00");
+        let mut expected = macos_sidecar(attrs, b"rsrc-bytes");
+        expected[50..60].copy_from_slice(b"APPLttxt\x01\x00");
+        assert_eq!(file, expected);
+    }
+
+    #[tokio::test]
+    async fn a_new_comment_follows_the_other_attributes() {
+        let (_dir, item) = item();
+        let attrs: &[(&str, &[u8])] = &[("com.apple.quarantine", b"q-data"), ("user.a", b"hello")];
+        std::fs::write(path_of(&item), macos_sidecar(attrs, b"rsrc-bytes")).unwrap();
+        set_comment(&item, "a note").await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        let list = bplist::encode_string("a note");
+        assert_eq!(
+            xnu_attrs(&file),
+            [
+                ("com.apple.quarantine".to_owned(), b"q-data".to_vec()),
+                ("user.a".to_owned(), b"hello".to_vec()),
+                (COMMENT_NAME.to_owned(), list.clone()),
+            ]
+        );
+        let with_comment: &[(&str, &[u8])] = &[
+            ("com.apple.quarantine", b"q-data"),
+            ("user.a", b"hello"),
+            (COMMENT_NAME, &list),
+        ];
+        // xnu leaves the bytes of an attribute in the pad after a new name.
+        let mut expected = macos_sidecar(with_comment, b"rsrc-bytes");
+        let pad = 152 + 11 + COMMENT_NAME.len() + 1;
+        expected[pad..pad + 2].copy_from_slice(&file[pad..pad + 2]);
+        assert_eq!(file, expected);
+        assert_eq!(fork_of(&item).await, b"rsrc-bytes");
+    }
+
+    #[tokio::test]
+    async fn a_comment_of_the_same_length_changes_in_place() {
+        let (_dir, item) = item();
+        let attrs: &[(&str, &[u8])] = &[
+            (COMMENT_NAME, &bplist::encode_string("one")),
+            ("user.a", b"hello"),
+        ];
+        std::fs::write(path_of(&item), macos_sidecar(attrs, b"")).unwrap();
+        set_comment(&item, "two").await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(
+            xnu_attrs(&file)[0],
+            (COMMENT_NAME.to_owned(), bplist::encode_string("two"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_comment_of_a_new_length_moves_to_the_end() {
+        let (_dir, item) = item();
+        let attrs: &[(&str, &[u8])] = &[
+            ("com.apple.quarantine", b"q-data"),
+            (COMMENT_NAME, &bplist::encode_string("one")),
+            ("user.a", b"hello"),
+        ];
+        std::fs::write(path_of(&item), macos_sidecar(attrs, b"rsrc-bytes")).unwrap();
+        set_comment(&item, "a longer note").await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(
+            xnu_attrs(&file),
+            [
+                ("com.apple.quarantine".to_owned(), b"q-data".to_vec()),
+                ("user.a".to_owned(), b"hello".to_vec()),
+                (
+                    COMMENT_NAME.to_owned(),
+                    bplist::encode_string("a longer note")
+                ),
+            ]
+        );
+        assert_eq!(fork_bytes(&file), b"rsrc-bytes");
+    }
+
+    #[tokio::test]
+    async fn removing_a_comment_keeps_the_attributes_around_it() {
+        let (_dir, item) = item();
+        let attrs: &[(&str, &[u8])] = &[
+            ("com.apple.quarantine", b"q-data"),
+            (COMMENT_NAME, &bplist::encode_string("one")),
+            ("user.a", b"hello"),
+        ];
+        std::fs::write(path_of(&item), macos_sidecar(attrs, b"rsrc-bytes")).unwrap();
+        set_comment(&item, "").await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        let rest: &[(&str, &[u8])] = &[("com.apple.quarantine", b"q-data"), ("user.a", b"hello")];
+        assert_eq!(file, macos_sidecar(rest, b"rsrc-bytes"));
+    }
+
+    #[tokio::test]
+    async fn a_large_comment_grows_the_attributes_and_moves_the_fork() {
+        let (_dir, item) = item();
+        let attrs: &[(&str, &[u8])] = &[("user.a", b"hello")];
+        std::fs::write(path_of(&item), macos_sidecar(attrs, b"rsrc-bytes")).unwrap();
+        let comment = "x".repeat(9000);
+        set_comment(&item, &comment).await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        // The entry and value need 5,432 bytes more than are free: 8,192.
+        assert_eq!(be32(&file, 42), 3810 + 8192);
+        assert_eq!(be32(&file, 34), 3760 + 8192);
+        assert_eq!(xnu_attrs(&file).len(), 2);
+        assert_eq!(fork_bytes(&file), b"rsrc-bytes");
+        assert_eq!(read(&item).await.unwrap().comment, Some(comment));
+    }
+
+    #[tokio::test]
+    async fn a_written_resource_fork_takes_the_place_of_the_empty_one() {
+        let (_dir, item) = item();
+        set_comment(&item, "a note").await.unwrap();
+        let fork = vec![7u8; 300];
+        write_fork(&item, 0, &fork).await;
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(be32(&file, 42), 3810);
+        assert_eq!(fork_bytes(&file), fork.as_slice());
+        assert_eq!(fork_of(&item).await, fork);
+        assert_eq!(
+            read(&item).await.unwrap().comment.as_deref(),
+            Some("a note")
+        );
+
+        write_fork(&item, 300, b"more").await;
+        assert_eq!(read(&item).await.unwrap().resource_fork_len(), 304);
+        write_fork(&item, 0, &[9; 290]).await;
+        assert_eq!(fork_of(&item).await, [9; 290]);
     }
 
     #[tokio::test]
     async fn a_resource_fork_keeps_its_length_until_the_writer_closes() {
         let (_dir, item) = item();
-
-        let mut file = open_resource_write(&item, 0, claim(&item)).await.unwrap();
-        file.write_all(b"rsrc").await.unwrap();
-        file.flush().await.unwrap();
+        let mut writer = open_resource_write(&item, 0, claim(&item)).await.unwrap();
+        writer.write_all(&[1; 400]).await.unwrap();
+        writer.flush().await.unwrap();
         assert_eq!(read(&item).await.unwrap().resource_fork_len(), 0);
-        file.shutdown().await.unwrap();
-        assert_eq!(read(&item).await.unwrap().resource_fork_len(), 4);
+        writer.shutdown().await.unwrap();
+        assert_eq!(read(&item).await.unwrap().resource_fork_len(), 400);
     }
 
     #[tokio::test]
-    async fn writing_an_empty_sidecar_removes_the_file() {
+    async fn an_old_layout_gets_room_for_the_attributes() {
         let (_dir, item) = item();
-        write(&item, &noted()).await.unwrap();
-        assert!(path_of(&item).exists());
-        write(&item, &Sidecar::default()).await.unwrap();
-        assert!(!path_of(&item).exists());
+        let mut file = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \x00\x02".to_vec();
+        file.extend_from_slice(&[0, 0, 0, 9, 0, 0, 0, 50, 0, 0, 0, 32]);
+        file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 82, 0, 0, 0, 40]);
+        file.extend_from_slice(b"TEXTttxt");
+        file.resize(82, 0);
+        file.extend_from_slice(&[5; 40]);
+        std::fs::write(path_of(&item), &file).unwrap();
+        // The first change sees only the bytes read before the layout grew.
+        let error = set_comment(&item, "a note").await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+        set_comment(&item, "a note").await.unwrap();
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(be32(&file, 42), 4096);
+        assert_eq!(fork_bytes(&file), [5; 40]);
+        assert_eq!(&file[50..58], b"TEXTttxt");
+        assert_eq!(xnu_attrs(&file).len(), 1);
+        assert_eq!(
+            read(&item).await.unwrap().comment.as_deref(),
+            Some("a note")
+        );
     }
 
     /// Check that `bytes` in a sidecar read as nothing, and that a change
@@ -779,9 +1783,10 @@ mod tests {
         let (_dir, item) = item();
         std::fs::write(path_of(&item), bytes).unwrap();
         assert_eq!(read(&item).await.unwrap(), Sidecar::default());
-        let error = write(&item, &noted()).await.unwrap_err();
+        let error = set_comment(&item, "a note").await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        write(&item, &Sidecar::default()).await.unwrap();
+        let error = set_finder_info(&item, text_info()).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(std::fs::read(path_of(&item)).unwrap(), bytes);
     }
 
@@ -792,7 +1797,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_file_with_more_than_fifteen_entries_is_not_valid() {
-        let mut file = two_entries(b"");
+        let mut file = macos_sidecar(&[], b"");
         file[24..26].copy_from_slice(&16u16.to_be_bytes());
         assert_not_valid(&file).await;
         file[24..26].copy_from_slice(&0u16.to_be_bytes());
@@ -801,23 +1806,95 @@ mod tests {
 
     #[tokio::test]
     async fn entries_that_overlap_are_not_valid() {
-        let mut file = two_entries(b"0123456789");
-        file[42..46].copy_from_slice(&80u32.to_be_bytes());
+        let mut file = macos_sidecar(&[], b"0123456789");
+        file[42..46].copy_from_slice(&3800u32.to_be_bytes());
         assert_not_valid(&file).await;
     }
 
     #[tokio::test]
     async fn an_entry_past_the_end_of_the_file_is_not_valid() {
-        let mut file = two_entries(b"0123456789");
+        let mut file = macos_sidecar(&[], b"0123456789");
         file[46..50].copy_from_slice(&11u32.to_be_bytes());
         assert_not_valid(&file).await;
     }
 
     #[tokio::test]
     async fn an_entry_in_the_table_is_not_valid() {
-        let mut file = two_entries(b"");
+        let mut file = macos_sidecar(&[], b"");
         file[30..34].copy_from_slice(&49u32.to_be_bytes());
         assert_not_valid(&file).await;
+    }
+
+    #[tokio::test]
+    async fn attributes_with_the_finder_info_away_from_50_are_not_valid() {
+        let mut file = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \x00\x03".to_vec();
+        file.extend_from_slice(&[0, 0, 0, 9, 0, 0, 0, 62, 0, 0, 0, 36]);
+        file.extend_from_slice(&[0, 0, 0, 4, 0, 0, 0, 98, 0, 0, 0, 1]);
+        file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 99, 0, 0, 0, 0]);
+        file.extend_from_slice(b"TEXTttxt");
+        file.resize(99, 0);
+        assert_not_valid(&file).await;
+    }
+
+    /// A sidecar in the order of RFC 1740: a comment entry, the Finder info
+    /// at 122, and an empty resource fork.
+    fn rfc_sidecar() -> Vec<u8> {
+        let mut file = b"\x00\x05\x16\x07\x00\x02\x00\x00".to_vec();
+        file.extend_from_slice(&[0; 16]);
+        file.extend_from_slice(&[0, 3]);
+        file.extend_from_slice(&[0, 0, 0, 4, 0, 0, 0, 62, 0, 0, 0, 60]);
+        file.extend_from_slice(&[0, 0, 0, 9, 0, 0, 0, 122, 0, 0, 0, 32]);
+        file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 154, 0, 0, 0, 0]);
+        file.resize(122, b'c');
+        file.extend_from_slice(b"TEXTttxt");
+        file.resize(154, 0);
+        file
+    }
+
+    #[tokio::test]
+    async fn a_finder_info_change_past_the_attribute_header_is_written() {
+        let (_dir, item) = item();
+        std::fs::write(path_of(&item), rfc_sidecar()).unwrap();
+        let info = FinderInfo {
+            file_type: *b"APPL",
+            creator: *b"abcd",
+            flags: 0,
+        };
+        set_finder_info(&item, info).await.unwrap();
+        assert_eq!(read(&item).await.unwrap().finder_info(), info);
+        let file = std::fs::read(path_of(&item)).unwrap();
+        assert_eq!(file[62..122], [b'c'; 60]);
+    }
+
+    #[tokio::test]
+    async fn attributes_do_not_grow_over_another_entry() {
+        let (_dir, item) = item();
+        let mut file = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \x00\x02".to_vec();
+        file.extend_from_slice(&[0, 0, 0, 9, 0, 0, 0, 50, 0, 0, 0, 70]);
+        file.extend_from_slice(&[0, 0, 0, 4, 0, 0, 0, 120, 0, 0, 0, 64]);
+        file.extend_from_slice(b"TEXTttxt");
+        file.resize(84, 0);
+        file.extend_from_slice(b"ATTR");
+        file.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 120, 0, 0, 0, 120]);
+        // A comment entry long enough to hold the new attribute entry.
+        file.resize(184, 0);
+        std::fs::write(path_of(&item), &file).unwrap();
+        let error = set_comment(&item, "a note").await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read(path_of(&item)).unwrap(), file);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_change_sets_the_change_time_and_keeps_the_modify_time() {
+        use std::os::unix::fs::MetadataExt;
+        let (_dir, item) = item();
+        let before = std::fs::metadata(&item).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        set_comment(&item, "a note").await.unwrap();
+        let after = std::fs::metadata(&item).unwrap();
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+        assert!((after.ctime(), after.ctime_nsec()) > (before.ctime(), before.ctime_nsec()));
     }
 
     #[cfg(unix)]
@@ -826,7 +1903,7 @@ mod tests {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let (_dir, item) = item();
         std::fs::set_permissions(&item, std::fs::Permissions::from_mode(0o640)).unwrap();
-        write(&item, &noted()).await.unwrap();
+        set_comment(&item, "a note").await.unwrap();
         let sidecar = std::fs::metadata(path_of(&item)).unwrap();
         let item = std::fs::metadata(&item).unwrap();
         assert_eq!(sidecar.permissions().mode() & 0o777, 0o640);
@@ -838,9 +1915,74 @@ mod tests {
         let (dir, item) = item();
         std::fs::write(path_of(&item), b"").unwrap();
         std::fs::hard_link(path_of(&item), dir.path().join("other")).unwrap();
-        let error = write(&item, &noted()).await.unwrap_err();
+        let error = set_comment(&item, "a note").await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(std::fs::read(path_of(&item)).unwrap(), b"");
+    }
+
+    /// `check_attrs` for `file`, a sidecar from [`macos_sidecar`].
+    fn attrs_of(file: &[u8]) -> Option<AttrHeader> {
+        let entry = Entry {
+            id: FINDER_INFO_ID,
+            offset: 50,
+            len: be32(file, 34),
+        };
+        check_attrs(file, file.len(), &entry)
+    }
+
+    fn two_attrs() -> Vec<u8> {
+        macos_sidecar(
+            &[("com.apple.quarantine", b"q-data"), ("user.a", b"hello")],
+            b"",
+        )
+    }
+
+    #[test]
+    fn attributes_from_macos_are_valid() {
+        assert_eq!(
+            attrs_of(&two_attrs()).map(|header| header.num_attrs),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_name_without_its_nul_is_not_valid() {
+        let mut file = two_attrs();
+        file[151] = b'x';
+        assert_eq!(attrs_of(&file), None);
+    }
+
+    #[test]
+    fn attribute_data_past_the_data_length_is_not_valid() {
+        let mut file = two_attrs();
+        file[156..160].copy_from_slice(&6u32.to_be_bytes());
+        assert_eq!(attrs_of(&file), None);
+    }
+
+    #[test]
+    fn attributes_whose_lengths_do_not_add_to_the_data_length_are_not_valid() {
+        let mut file = two_attrs();
+        file[156..160].copy_from_slice(&4u32.to_be_bytes());
+        assert_eq!(attrs_of(&file), None);
+    }
+
+    #[test]
+    fn attribute_data_before_the_data_start_is_not_valid() {
+        let mut file = two_attrs();
+        file[120..124].copy_from_slice(&171u32.to_be_bytes());
+        assert_eq!(attrs_of(&file), None);
+    }
+
+    #[test]
+    fn a_data_start_past_the_bytes_read_is_not_valid() {
+        let file = two_attrs();
+        let entry = Entry {
+            id: FINDER_INFO_ID,
+            offset: 50,
+            len: 3760,
+        };
+        assert!(check_attrs(&file, 172, &entry).is_some());
+        assert_eq!(check_attrs(&file, 171, &entry), None);
     }
 
     #[test]

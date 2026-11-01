@@ -178,9 +178,16 @@ works this way.
   files.** openline's Mac build keeps them in the HFS catalog, the
   Desktop database, and the resource fork, and its Windows build keeps
   none of them. `DiskFileProvider` keeps them in the sidecar `._name`
-  next to each item, with the comment as UTF-8. When it changes a
-  sidecar from another tool, it keeps only the Finder info, the comment,
-  and the resource fork.
+  next to each item, with the comment in the extended attribute
+  `com.apple.metadata:kMDItemFinderComment`. Each read and change does
+  what xnu's `bsd/vfs/vfs_xattr.c` does (xnu-11417.101.15). macOS 15
+  and later use doubleagentd for these files, and its source is not
+  public, so xnu is the reference. Finder can show a comment from
+  `.DS_Store` that hls does not see. Two changes differ from xnu, which
+  loses data in a sidecar in another RFC 1740 order. hls refuses an
+  attribute growth that would write over another entry. hls writes a
+  Finder info change past byte 120, which xnu drops and reports as
+  done.
 - **Resume data without a `DATA` entry is an error.** openline's Mac
   `ResumeFlatten` resumes the data fork from 0 when the `RFLT` data has
   no `DATA` entry, and reads entries past the end of a short field.

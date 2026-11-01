@@ -1,6 +1,7 @@
 //! Where a [`DiskFileProvider`](crate::file::DiskFileProvider) keeps each
 //! item's Finder info, comment, and resource fork.
 
+use std::future::Future;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -98,22 +99,20 @@ pub struct AppleDoubleStore {
 }
 
 impl AppleDoubleStore {
-    /// Change the sidecar of `item` with `change`. `NotFound` if the item
-    /// does not exist, and `ResourceBusy` while an upload writes its
-    /// resource fork.
-    async fn update(
+    /// Hold the lock, and run `change` on the sidecar of `item`. `NotFound`
+    /// if the item does not exist, and `ResourceBusy` while an upload
+    /// writes its resource fork.
+    async fn update<F: Future<Output = io::Result<()>>>(
         &self,
         item: &Path,
-        change: impl FnOnce(&mut apple_double::Sidecar),
+        change: impl FnOnce() -> F,
     ) -> io::Result<()> {
         tokio::fs::symlink_metadata(item).await?;
         let _sidecars = self.sidecars.lock().await;
         if self.sidecars.contains(&apple_double::path_of(item)) {
             return Err(io::ErrorKind::ResourceBusy.into());
         }
-        let mut sidecar = apple_double::read(item).await?;
-        change(&mut sidecar);
-        apple_double::write(item, &sidecar).await
+        change().await
     }
 }
 
@@ -136,18 +135,16 @@ impl ForkStore for AppleDoubleStore {
     }
 
     async fn set_finder_info(&self, item: &Path, info: FinderInfo) -> io::Result<()> {
-        self.update(item, |sidecar| sidecar.set_finder_info(info))
+        self.update(item, || apple_double::set_finder_info(item, info))
             .await
     }
 
     async fn comment(&self, item: &Path) -> Option<String> {
-        let sidecar = apple_double::read(item).await;
-        let comment = sidecar.ok()?.comment;
-        (!comment.is_empty()).then_some(comment)
+        apple_double::read(item).await.ok()?.comment
     }
 
     async fn set_comment(&self, item: &Path, comment: &str) -> io::Result<()> {
-        self.update(item, |sidecar| sidecar.comment = comment.into())
+        self.update(item, || apple_double::set_comment(item, comment))
             .await
     }
 

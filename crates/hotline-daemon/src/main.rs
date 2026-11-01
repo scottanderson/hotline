@@ -6,6 +6,7 @@ mod apple_double;
 mod args;
 mod banner;
 mod bans;
+mod bplist;
 mod file;
 mod fork_store;
 mod news;

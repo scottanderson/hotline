@@ -32,10 +32,12 @@ hls --port 5500
 
 The Finder info, the comment, and the resource fork of `files/a.txt` are
 in its AppleDouble file, `files/._a.txt`. Clients do not see these files.
-hls does not read or change a `._` file that is not empty and not a
-valid AppleDouble file, or whose owner is not the owner of its item. A
-new `._` file gets the owner of its item only when hls runs as that user
-or as root.
+hls changes these files as macOS does. The comment is the extended
+attribute `com.apple.metadata:kMDItemFinderComment`, and a change keeps
+the other extended attributes. hls does not read or change a `._` file
+that is not empty and not a valid AppleDouble file, or whose owner is
+not the owner of its item. A new `._` file gets the owner of its item
+only when hls runs as that user or as root.
 `--fork-store none` keeps no Finder info, comment, or resource fork. Then
 a client sees and can name each `._` file.
 
