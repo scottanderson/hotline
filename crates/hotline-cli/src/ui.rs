@@ -451,9 +451,34 @@ fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &
     };
     let rows: Vec<ListItem> = accounts
         .iter()
-        .map(|a| ListItem::new(format!("{}  ({})", a.login, a.name)))
+        .map(|a| {
+            ListItem::new(format!(
+                "{} {}  ({})",
+                account_circle(a.access),
+                a.login,
+                a.name
+            ))
+        })
         .collect();
     draw_list(frame, area, block, rows, &mut view.accounts);
+}
+
+/// The privileges that make an account an admin: all but `NO_AGREEMENT`.
+const ALL_PRIV: Access = Access::all().difference(Access::NO_AGREEMENT);
+
+/// The color of openline's account icon for `access`, as a circle: black
+/// for an admin, red for a moderator, green for no privileges, and yellow
+/// for a guest.
+const fn account_circle(access: Access) -> &'static str {
+    if access.contains(ALL_PRIV) {
+        "⚫"
+    } else if access.contains(Access::DISCON_USER) {
+        "🔴"
+    } else if access.is_empty() {
+        "🟢"
+    } else {
+        "🟡"
+    }
 }
 
 /// The rows of `form`: name, login, password, then a check box for each privilege.
@@ -859,6 +884,15 @@ mod tests {
     use super::*;
     use crate::line::Scrollback;
     use crate::session::{ChatRoom, NewsTarget};
+
+    #[test]
+    fn account_circle_follows_openlines_icon_order() {
+        assert_eq!(account_circle(ALL_PRIV), "⚫");
+        assert_eq!(account_circle(Access::DISCON_USER), "🔴");
+        assert_eq!(account_circle(ALL_PRIV - Access::ANY_NAME), "🔴");
+        assert_eq!(account_circle(Access::empty()), "🟢");
+        assert_eq!(account_circle(Access::READ_CHAT), "🟡");
+    }
 
     fn draw_to_text(modal: &Modal) -> String {
         let backend = ratatui::backend::TestBackend::new(70, 10);
