@@ -308,26 +308,37 @@ fn draw_tabs(frame: &mut Frame, area: Rect, view: &View, labels: &[(Tab, String)
 }
 
 fn draw_messages(frame: &mut Frame, area: Rect, lines: &[Line], title: &str) {
-    let lines: Vec<UiLine> = lines
-        .iter()
-        .map(|line| {
-            let style = match line.kind {
-                LineKind::Chat => Style::default(),
-                LineKind::System => Style::default().fg(Color::DarkGray),
-                LineKind::Error => Style::default().fg(Color::Red),
-            };
-            UiLine::from(Span::styled(&*line.text, style))
-        })
-        .collect();
-
-    // Scroll to the bottom: only the tail that fits needs to be shown.
-    let visible = area.height.saturating_sub(2) as usize;
-    let start = lines.len().saturating_sub(visible);
-
-    let paragraph = Paragraph::new(lines.get(start..).unwrap_or_default().to_vec())
-        .block(Block::bordered().title(title))
-        .wrap(Wrap { trim: false });
+    let block = Block::bordered().title(title);
+    let inner = block.inner(area);
+    // Scroll to the bottom: only the newest lines that fill the pane need a style.
+    let mut tail = Vec::new();
+    let mut rows = 0;
+    for line in lines.iter().rev() {
+        if rows >= usize::from(inner.height) {
+            break;
+        }
+        let line = styled_line(line);
+        let paragraph = Paragraph::new(line.clone()).wrap(Wrap { trim: false });
+        rows += paragraph.line_count(inner.width).max(1);
+        tail.push(line);
+    }
+    tail.reverse();
+    let scroll = rows.saturating_sub(usize::from(inner.height));
+    let paragraph = Paragraph::new(tail)
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0));
     frame.render_widget(paragraph, area);
+}
+
+/// `line` in the style of its kind.
+fn styled_line(line: &Line) -> UiLine<'_> {
+    let style = match line.kind {
+        LineKind::Chat => Style::default(),
+        LineKind::System => Style::default().fg(Color::DarkGray),
+        LineKind::Error => Style::default().fg(Color::Red),
+    };
+    UiLine::from(Span::styled(&*line.text, style))
 }
 
 fn draw_news(frame: &mut Frame, area: Rect, session: &ClientSession, scroll: u16) {
@@ -933,6 +944,26 @@ mod tests {
         let labels = tab_labels(&session);
         assert_eq!(labels.first(), Some(&(Tab::Chat, "1 Chat".to_string())));
         assert_eq!(labels.last(), Some(&(Tab::Room(7), "Chat 7".to_string())));
+    }
+
+    #[test]
+    fn draw_messages_shows_the_newest_line_under_a_wrapped_one() {
+        let lines = [
+            Line::new("old", LineKind::Chat),
+            Line::new("x".repeat(25), LineKind::Chat),
+            Line::new("new", LineKind::Chat),
+        ];
+        let backend = ratatui::backend::TestBackend::new(12, 5);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_messages(frame, frame.area(), &lines, ""))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| (1..11).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        assert_eq!(
+            [row(1), row(2), row(3)],
+            ["xxxxxxxxxx", "xxxxx     ", "new       "]
+        );
     }
 
     #[test]

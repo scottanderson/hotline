@@ -12,13 +12,13 @@ mod ui;
 mod view;
 
 use clap::Parser;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use ratatui::crossterm::event::{
-    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
-    EventStream, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+    EventStream, KeyCode, KeyEventKind, KeyboardEnhancementFlags, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::crossterm::ExecutableCommand;
@@ -120,6 +120,8 @@ async fn run(
     // A terminal that does not report focus has it.
     let mut focused = true;
     let mut should_quit = false;
+    // `true` while the screen lags behind the state.
+    let mut stale = false;
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
     let mut last_keep_alive = Instant::now();
     let idle_since = |last_keep_alive| client.last_traffic().max(last_keep_alive);
@@ -159,6 +161,8 @@ async fn run(
             ev = term_events.next() => {
                 let Some(Ok(ev)) = ev else { break };
                 let action = match ev {
+                    // A mouse move changes nothing.
+                    Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved && !stale => continue,
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if matches!(session.mode, Mode::Agreement(_)) {
                             match key.code {
@@ -203,7 +207,11 @@ async fn run(
         if view.modal.is_none() {
             view.modal = session.invites.pop_front().map(Modal::Invite);
         }
-        terminal.draw(|f| ui::draw(f, session, &mut view))?;
+        // One frame follows a burst of input, such as a drag.
+        stale = event::poll(Duration::ZERO).unwrap_or(false);
+        if !stale {
+            terminal.draw(|f| ui::draw(f, session, &mut view))?;
+        }
     }
     Ok(())
 }
