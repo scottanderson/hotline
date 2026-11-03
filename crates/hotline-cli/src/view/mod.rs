@@ -4,6 +4,7 @@
 mod account_form;
 mod action;
 mod command;
+mod divider;
 mod hint;
 mod modal;
 mod options_form;
@@ -32,6 +33,7 @@ use crate::ui::{self, Areas};
 pub use account_form::{privileges, AccountForm};
 pub use action::Action;
 pub use command::{Command, Palette};
+pub use divider::{Divider, Splits};
 pub use hint::Hint;
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OptionsForm, OPTIONS, QUEUE_TRANSFERS};
@@ -160,6 +162,10 @@ pub struct View {
     seen: HashMap<Tab, u64>,
     selected_user: Option<u16>,
     last_click: Option<(Clicked, Instant)>,
+    /// The pane sizes that the user set with a drag.
+    pub splits: Splits,
+    /// The divider that the user drags.
+    dragging: Option<Divider>,
 }
 
 impl Default for View {
@@ -193,6 +199,8 @@ impl Default for View {
             seen: HashMap::new(),
             selected_user: None,
             last_click: None,
+            splits: Splits::default(),
+            dragging: None,
         }
     }
 }
@@ -1271,6 +1279,10 @@ impl View {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(divider) = self.divider_at(areas, x, y) {
+                    self.dragging = Some(divider);
+                    return Action::None;
+                }
                 if let Some(tab) = ui::tab_at(areas.tabs, x, y, self.bar_tabs()) {
                     return self.set_tab(tab);
                 }
@@ -1310,6 +1322,12 @@ impl View {
                     });
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(divider) = self.dragging {
+                    self.drag(divider, areas, x, y);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.dragging = None,
             MouseEventKind::ScrollUp if self.tab == Tab::News => self.scroll_news(-3),
             MouseEventKind::ScrollDown if self.tab == Tab::News => self.scroll_news(3),
             MouseEventKind::ScrollUp if self.in_preview(areas.body, x, y) => {
@@ -1373,7 +1391,7 @@ impl View {
     /// tab, or open it on the second click of a double click. A click on
     /// the preview focuses it.
     fn click_threaded_news(&mut self, body: Rect, x: u16, y: u16, now: Instant) -> Action {
-        let [folders, threads, preview] = ui::news_areas(body);
+        let [folders, threads, preview] = ui::news_areas(body, self.splits);
         if let Some(index) = self.news_folder_at(folders, x, y) {
             self.news_folders.select(Some(index));
             self.focus = Focus::NewsFolders;
@@ -1493,7 +1511,7 @@ impl View {
 
     /// `true` when `x`, `y` is in the article preview of the Threaded News tab.
     fn in_preview(&self, body: Rect, x: u16, y: u16) -> bool {
-        self.tab == Tab::Threaded && contains(ui::news_areas(body)[2], x, y)
+        self.tab == Tab::Threaded && contains(ui::news_areas(body, self.splits)[2], x, y)
     }
 
     const fn scroll_preview(&mut self, lines: i16) {
@@ -1647,6 +1665,7 @@ mod tests {
     use hotline_proto::types::{HlDate, UserChangeOptions, UserFlags};
 
     use crate::session::{ArticleText, ChatInvite, Disconnect};
+    use crate::ui::Side;
 
     fn users() -> Vec<UserNameWithInfo> {
         ["Alice", "Bob"]
@@ -1674,7 +1693,14 @@ mod tests {
     }
 
     fn areas() -> Areas {
-        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, false, 0)
+        ui::areas(
+            Rect::new(0, 0, 80, 24),
+            Some(""),
+            &[],
+            Some(Side::USERS),
+            false,
+            0,
+        )
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -2425,7 +2451,14 @@ mod tests {
         let mut view = View::default();
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], true, false, 0);
+        let areas = ui::areas(
+            Rect::new(0, 0, 80, 24),
+            None,
+            &[],
+            Some(Side::USERS),
+            false,
+            0,
+        );
         let inner = ui::inner(areas.body);
         let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
         let now = Instant::now();
@@ -2615,7 +2648,14 @@ mod tests {
     #[test]
     fn a_click_on_the_room_row_shows_its_room() {
         let mut view = view_with_rooms();
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, true, 0);
+        let areas = ui::areas(
+            Rect::new(0, 0, 80, 24),
+            Some(""),
+            &[],
+            Some(Side::USERS),
+            true,
+            0,
+        );
         let row = areas.rooms;
         let x = (row.x..row.right())
             .find(|&x| ui::tab_at(row, x, row.y, &view.room_row()) == Some(Tab::Room(7)))
@@ -2760,7 +2800,7 @@ mod tests {
             ..View::default()
         };
         let body = Rect::new(0, 0, 80, 20);
-        let [folders, threads, preview] = ui::news_areas(body);
+        let [folders, threads, preview] = ui::news_areas(body, view.splits);
         let now = Instant::now();
         let folder = ui::inner(folders);
         assert_eq!(
@@ -2793,7 +2833,7 @@ mod tests {
             ..View::default()
         };
         let areas = areas();
-        let [folders, _, preview] = ui::news_areas(areas.body);
+        let [folders, _, preview] = ui::news_areas(areas.body, view.splits);
         let wheel = |x, y| click(MouseEventKind::ScrollDown, x, y);
         let _ = view.handle_mouse(
             wheel(folders.x, folders.y),

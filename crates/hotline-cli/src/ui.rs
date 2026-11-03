@@ -7,6 +7,7 @@ use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use hotline_proto::{Access, Field, FieldId, Opcode, Received, Transaction};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::merge::MergeStrategy;
 use ratatui::text::{Line as UiLine, Span, Text};
 use ratatui::widgets::{
     Block, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap,
@@ -18,8 +19,8 @@ use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::transfer::file_size_text;
 use crate::view::{
-    allows, contains, privileges, AccountForm, Focus, Hint, MenuItem, Modal, OptionsForm, Tab,
-    TextBox, View, OPTIONS, QUEUE_TRANSFERS,
+    allows, contains, privileges, AccountForm, Focus, Hint, MenuItem, Modal, OptionsForm, Splits,
+    Tab, TextBox, View, OPTIONS, QUEUE_TRANSFERS,
 };
 
 /// Where each part of the main screen is drawn.
@@ -79,16 +80,35 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
 /// The most lines the tasks box shows before it scrolls.
 const MAX_TASK_LINES: usize = 5;
 
+/// The right column of the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Side {
+    /// The columns of the right column.
+    pub width: u16,
+    /// `true` if the user list is above the tasks box.
+    pub users: bool,
+}
+
+#[cfg(test)]
+impl Side {
+    /// The default right column with the user list.
+    pub const USERS: Self = Self {
+        width: 24,
+        users: true,
+    };
+}
+
 /// `input` is the text in the input line, which grows to fit it. With `None`,
-/// the input line has no rows. The hint line grows to fit `hints`. Without
-/// `rooms`, the room row has no rows. The right column shows with `users`
-/// or a task. Under the user list, the tasks box grows to fit `task_lines`,
-/// and has none for `0`. Without the user list, it fills the column.
+/// the input line has no rows. The hint line grows to fit `hints`. `side`
+/// is the right column, and `None` hides it. Without `rooms`, the room row
+/// has no rows. Under the user list, the tasks box grows to fit
+/// `task_lines`, and has none for `0`. Without the user list, it fills
+/// the column.
 pub fn areas(
     screen: Rect,
     input: Option<&str>,
     hints: &[Hint],
-    users: bool,
+    side: Option<Side>,
     rooms: bool,
     task_lines: usize,
 ) -> Areas {
@@ -99,29 +119,35 @@ pub fn areas(
         Constraint::Min(6),
         Constraint::Length(hint_rows),
     ]));
-    let [left, right] = middle.layout(&Layout::horizontal([
-        Constraint::Min(20),
-        Constraint::Length(if users || task_lines > 0 { 24 } else { 0 }),
-    ]));
+    let [left, right] = middle.layout(
+        &Layout::horizontal([
+            Constraint::Min(20),
+            Constraint::Length(side.map_or(0, |side| side.width)),
+        ])
+        .spacing(shared(side.is_some())),
+    );
     let task_rows = match task_lines {
         0 => 0,
         n => (n.min(MAX_TASK_LINES) as u16).saturating_add(2),
     };
-    let [users, tasks] = if users {
-        right.layout(&Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(task_rows),
-        ]))
+    let [users, tasks] = if side.is_some_and(|side| side.users) {
+        right.layout(
+            &Layout::vertical([Constraint::Min(3), Constraint::Length(task_rows)])
+                .spacing(shared(task_rows > 0)),
+        )
     } else {
         right.layout(&Layout::vertical([
             Constraint::Length(0),
             Constraint::Fill(1),
         ]))
     };
-    let [body, input] = left.layout(&Layout::vertical([
-        Constraint::Min(3),
-        Constraint::Length(input.map_or(0, |text| input_rows(text).saturating_add(2))),
-    ]));
+    let [body, input] = left.layout(
+        &Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length(input.map_or(0, |text| input_rows(text).saturating_add(2))),
+        ])
+        .spacing(shared(input.is_some())),
+    );
     Areas {
         screen,
         tabs,
@@ -135,17 +161,51 @@ pub fn areas(
 }
 
 /// The folder tree, the thread list, and the article preview of the
-/// Threaded News tab in `body`.
-pub fn news_areas(body: Rect) -> [Rect; 3] {
-    let [folders, right] = body.layout(&Layout::horizontal([
-        Constraint::Percentage(30),
-        Constraint::Fill(1),
-    ]));
-    let [threads, preview] = right.layout(&Layout::vertical([
-        Constraint::Percentage(50),
-        Constraint::Fill(1),
-    ]));
+/// Threaded News tab in `body`, sized by `splits`.
+pub fn news_areas(body: Rect, splits: Splits) -> [Rect; 3] {
+    let folders = splits
+        .news_folders
+        .map_or(Constraint::Percentage(30), Constraint::Length);
+    let threads = splits
+        .news_threads
+        .map_or(Constraint::Percentage(50), Constraint::Length);
+    let [folders, right] =
+        body.layout(&Layout::horizontal([folders, Constraint::Fill(1)]).spacing(shared(true)));
+    let [threads, preview] =
+        right.layout(&Layout::vertical([threads, Constraint::Fill(1)]).spacing(shared(true)));
     [folders, threads, preview]
+}
+
+/// The spacing between two panes: one shared border while the second
+/// `shows`, and none when it does not.
+const fn shared(shows: bool) -> i16 {
+    if shows {
+        -1
+    } else {
+        0
+    }
+}
+
+/// A bordered pane of the main screen, which joins the borders it shares
+/// with the panes beside it.
+const fn pane<'a>() -> Block<'a> {
+    Block::bordered().merge_borders(MergeStrategy::Exact)
+}
+
+/// The area of the pane that has the focus, if it shows.
+fn focus_area(view: &View, areas: &Areas) -> Option<Rect> {
+    let news = view
+        .shows_news_panes()
+        .then(|| news_areas(areas.body, view.splits));
+    match view.focus {
+        Focus::Input => Some(areas.input),
+        Focus::Users => Some(areas.users),
+        Focus::Tasks => Some(areas.tasks),
+        Focus::Files | Focus::Accounts => Some(areas.body),
+        Focus::NewsFolders => news.map(|[folders, _, _]| folders),
+        Focus::NewsThreads => news.map(|[_, threads, _]| threads),
+        Focus::NewsPreview => news.map(|[_, _, preview]| preview),
+    }
 }
 
 /// `rect` inside its border.
@@ -280,7 +340,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         frame.area(),
         view.input().map(TextBox::as_str),
         &hints,
-        view.shows_users(),
+        view.side(),
         !room_row.is_empty(),
         view.task_lines(),
     );
@@ -289,7 +349,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
         Tab::News | Tab::Threaded if !view.may(view.tab.enabled_by()) => {
-            let block = Block::bordered().title("news");
+            let block = pane().title("news");
             let text = Paragraph::new("You are not allowed to read news.").block(block);
             frame.render_widget(text, areas.body);
         }
@@ -309,6 +369,10 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     }
     if view.shows_tasks() {
         draw_tasks(frame, areas.tasks, view);
+    }
+    // The focused pane's border goes on top of the borders it shares.
+    if let Some(area) = focus_area(view, &areas) {
+        frame.render_widget(pane().border_style(border(true)), area);
     }
     draw_hints(frame, areas.hints, view, &hints);
     if let Some(modal) = &view.modal {
@@ -357,7 +421,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, view: &View, labels: &[(Tab, String)
 }
 
 fn draw_messages(frame: &mut Frame, area: Rect, lines: &[Line], title: &str) {
-    let block = Block::bordered().title(title);
+    let block = pane().title(title);
     let inner = block.inner(area);
     // Scroll to the bottom: only the newest lines that fill the pane need a style.
     let mut tail = Vec::new();
@@ -396,14 +460,14 @@ fn draw_news(frame: &mut Frame, area: Rect, session: &ClientSession, scroll: u16
         None => "loading news".to_string(),
     };
     let paragraph = Paragraph::new(text)
-        .block(Block::bordered().title("news"))
+        .block(pane().title("news"))
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 }
 
 fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let block = Block::bordered()
+    let block = pane()
         .border_style(border(view.focus == Focus::Files))
         .title(format!("files {}", session.folder_text()));
     let Some(files) = &session.files else {
@@ -433,14 +497,14 @@ fn draw_list(
 }
 
 fn draw_threaded_news(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let [folders_area, threads_area, preview_area] = news_areas(area);
+    let [folders_area, threads_area, preview_area] = news_areas(area, view.splits);
     draw_news_folders(frame, folders_area, session, view);
     draw_news_threads(frame, threads_area, session, view);
     draw_news_preview(frame, preview_area, session, view);
 }
 
 fn draw_news_folders(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let block = Block::bordered()
+    let block = pane()
         .border_style(border(view.focus == Focus::NewsFolders))
         .title("folders");
     let Some(folders) = &session.news_folders else {
@@ -463,7 +527,7 @@ fn draw_news_threads(frame: &mut Frame, area: Rect, session: &ClientSession, vie
         Some(path) => format!("threads /{}", path.components.join("/")),
         None => "threads".to_string(),
     };
-    let block = Block::bordered()
+    let block = pane()
         .border_style(border(view.focus == Focus::NewsThreads))
         .title(title);
     let cells: Vec<[String; 3]> = session.news_threads.iter().map(NewsThread::cells).collect();
@@ -488,7 +552,7 @@ fn draw_news_threads(frame: &mut Frame, area: Rect, session: &ClientSession, vie
 }
 
 fn draw_news_preview(frame: &mut Frame, area: Rect, session: &ClientSession, view: &View) {
-    let block = Block::bordered().border_style(border(view.focus == Focus::NewsPreview));
+    let block = pane().border_style(border(view.focus == Focus::NewsPreview));
     let Some(article) = &session.news_preview else {
         frame.render_widget(block.title("preview"), area);
         return;
@@ -502,7 +566,7 @@ fn draw_news_preview(frame: &mut Frame, area: Rect, session: &ClientSession, vie
 }
 
 fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut View) {
-    let block = Block::bordered()
+    let block = pane()
         .border_style(border(view.focus == Focus::Accounts))
         .title("accounts");
     let Some(accounts) = &session.accounts else {
@@ -649,7 +713,7 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
         Tab::Files | Tab::Threaded | Tab::Admin => return,
     };
     let focused = view.focus == Focus::Input;
-    let block = Block::bordered().border_style(border(focused)).title(title);
+    let block = pane().border_style(border(focused)).title(title);
     draw_text_box(
         frame,
         area,
@@ -710,7 +774,7 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
 
     let list = List::new(items)
         .block(
-            Block::bordered()
+            pane()
                 .border_style(border(view.focus == Focus::Users))
                 .title(format!("users ({})", users.len())),
         )
@@ -744,7 +808,7 @@ fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
         queued => format!("tasks ({}, {queued} queued)", view.tasks.len()),
     };
     let list = List::new(items)
-        .block(Block::bordered().border_style(border(focused)).title(title))
+        .block(pane().border_style(border(focused)).title(title))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let selected = view.selected_task().map(|_| view.task_selected());
     let mut state = ListState::default()
@@ -1048,6 +1112,25 @@ mod tests {
     use crate::line::Scrollback;
     use crate::session::{ChatRoom, Disconnect, NewsTarget};
     use crate::tasks::{Stop, TaskId, TaskRow};
+
+    #[test]
+    fn areas_share_each_border_between_panes() {
+        let areas = areas(
+            Rect::new(0, 0, 80, 24),
+            Some(""),
+            &[],
+            Some(Side::USERS),
+            false,
+            1,
+        );
+        assert_eq!(areas.users.x, areas.body.right() - 1);
+        assert_eq!(areas.input.y, areas.body.bottom() - 1);
+        assert_eq!(areas.tasks.y, areas.users.bottom() - 1);
+
+        let [folders, threads, preview] = news_areas(areas.body, Splits::default());
+        assert_eq!(threads.x, folders.right() - 1);
+        assert_eq!(preview.y, threads.bottom() - 1);
+    }
 
     #[test]
     fn account_circle_follows_openlines_icon_order() {

@@ -247,7 +247,14 @@ mod tests {
     #[test]
     fn a_click_on_a_task_selects_it_and_focuses_the_box() {
         let mut view = view_with_tasks();
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, false, 2);
+        let areas = ui::areas(
+            Rect::new(0, 0, 80, 24),
+            Some(""),
+            &[],
+            Some(ui::Side::USERS),
+            false,
+            2,
+        );
         let mouse = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: areas.tasks.x + 1,
@@ -269,7 +276,7 @@ mod tests {
             Rect::new(0, 0, 80, 24),
             Some(""),
             &[],
-            true,
+            Some(ui::Side::USERS),
             false,
             view.task_lines(),
         );
@@ -283,7 +290,7 @@ mod tests {
         let mut view = view_with_tasks();
         view.tab = Tab::Threaded;
         assert!(!view.shows_users());
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], false, false, 2);
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], view.side(), false, 2);
         assert_eq!(areas.users.height, 0);
         assert_eq!(areas.tasks.height, areas.body.height);
     }

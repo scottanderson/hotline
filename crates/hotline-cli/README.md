@@ -115,6 +115,10 @@ Shift-F10 and the Menu key also open the actions. The palette and
 the action menu show the key of each entry. A right click on a user
 opens a menu that also starts a private chat.
 
+Two panes side by side share one border. Drag the left border of the
+right column to make it wider or narrower. On the Threaded News tab, drag
+the borders between the three panes. The sizes last until `hlc` quits.
+
 On macOS, Option with a letter types a symbol by default. Set the
 Option key to send Meta for the Alt keys. In Terminal, turn on "Use
 Option as Meta key". In iTerm2, set the left Option key to "Esc+".

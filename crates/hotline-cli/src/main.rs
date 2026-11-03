@@ -218,7 +218,7 @@ async fn run(
                             terminal.size()?.into(),
                             view.input().map(TextBox::as_str),
                             &view.hints(files),
-                            view.shows_users(),
+                            view.side(),
                             view.has_room_row(),
                             view.task_lines(),
                         );
