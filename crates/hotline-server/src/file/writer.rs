@@ -34,7 +34,7 @@ impl AsyncWrite for MemWriter {
         let mut guard = lock(&self.store.root);
         if let Some(Node::File(data)) = guard
             .get_dir_mut(&self.dir)
-            .and_then(|d| d.entries.get_mut(&self.name))
+            .and_then(|d| d.entries.get_mut(self.name.as_str()))
         {
             data.extend_from_slice(buf);
         }

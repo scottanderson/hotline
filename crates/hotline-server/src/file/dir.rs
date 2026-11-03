@@ -4,14 +4,14 @@ use crate::file::Node;
 
 #[derive(Clone, Default)]
 pub(crate) struct Dir {
-    pub(crate) entries: HashMap<String, Node>,
+    pub(crate) entries: HashMap<Box<str>, Node>,
 }
 
 impl Dir {
     pub(crate) fn get_dir<'a>(&'a self, components: &[String]) -> Option<&'a Dir> {
         let mut current = self;
         for component in components {
-            match current.entries.get(component)? {
+            match current.entries.get(component.as_str())? {
                 Node::Dir(d) => current = d,
                 Node::File(_) => return None,
             }
@@ -23,7 +23,7 @@ impl Dir {
     pub(crate) fn get_dir_mut<'a>(&'a mut self, components: &[String]) -> Option<&'a mut Dir> {
         let mut current = self;
         for component in components {
-            current = match current.entries.get_mut(component)? {
+            current = match current.entries.get_mut(component.as_str())? {
                 Node::Dir(d) => d,
                 Node::File(_) => return None,
             };
@@ -38,7 +38,7 @@ impl Dir {
         for component in components {
             current = match current
                 .entries
-                .entry(component.clone())
+                .entry(component.as_str().into())
                 .or_insert_with(|| Node::Dir(Dir::default()))
             {
                 Node::Dir(d) => d,

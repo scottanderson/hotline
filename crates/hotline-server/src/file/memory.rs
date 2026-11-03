@@ -99,7 +99,7 @@ impl InMemoryFileProvider {
         let d = root
             .make_dirs(&dir.components)
             .expect("the seed path runs through a file");
-        d.entries.insert(name.to_string(), Node::File(data.into()));
+        d.entries.insert(name.into(), Node::File(data.into()));
     }
 
     /// Set the resource fork of `dir`/`name` to `data`. For tests/fixtures.
@@ -145,7 +145,7 @@ impl FileProvider for InMemoryFileProvider {
                     file_type,
                     creator,
                     size,
-                    name: name.as_str().into(),
+                    name: name.clone(),
                 }
             })
             .collect();
@@ -196,11 +196,11 @@ impl FileProvider for InMemoryFileProvider {
         let partial_name = partial_upload_name(name);
         let mut root = lock(&self.store.root);
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
-        if let Some(Node::Dir(_)) = d.entries.get(&partial_name) {
+        if let Some(Node::Dir(_)) = d.entries.get(partial_name.as_str()) {
             return Err(io::Error::from(io::ErrorKind::IsADirectory));
         }
         d.entries
-            .insert(partial_name.clone(), Node::File(Vec::new()));
+            .insert(partial_name.as_str().into(), Node::File(Vec::new()));
         drop(root);
         lock(&self.store.resource_forks).remove(&(dir.components.clone(), partial_name.clone()));
         Ok(Box::new(MemWriter::appending(
@@ -220,7 +220,7 @@ impl FileProvider for InMemoryFileProvider {
         let partial_name = partial_upload_name(name);
         let mut root = lock(&self.store.root);
         let d = root.get_dir_mut(&dir.components).ok_or_else(not_found)?;
-        match d.entries.get_mut(&partial_name) {
+        match d.entries.get_mut(partial_name.as_str()) {
             Some(Node::File(data)) => {
                 if data.len() as u64 != at {
                     tracing::debug!(
@@ -379,8 +379,7 @@ impl FileProvider for InMemoryFileProvider {
         if d.entries.contains_key(name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        d.entries
-            .insert(name.to_string(), Node::Dir(Dir::default()));
+        d.entries.insert(name.into(), Node::Dir(Dir::default()));
         Ok(())
     }
 
@@ -397,7 +396,7 @@ impl FileProvider for InMemoryFileProvider {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
         let entry = d.entries.remove(old_name).ok_or_else(not_found)?;
-        d.entries.insert(new_name.to_string(), entry);
+        d.entries.insert(new_name.into(), entry);
         rekey(
             &mut lock(&self.comments),
             &dir.components,
@@ -456,7 +455,7 @@ impl FileProvider for InMemoryFileProvider {
         root.get_dir_mut(&to_dir.components)
             .ok_or_else(not_found)?
             .entries
-            .insert(name.to_string(), entry);
+            .insert(name.into(), entry);
         rekey(
             &mut lock(&self.comments),
             &dir.components,
@@ -505,7 +504,7 @@ impl FileProvider for InMemoryFileProvider {
         if dest.entries.contains_key(link_name) {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
-        dest.entries.insert(link_name.to_string(), entry);
+        dest.entries.insert(link_name.into(), entry);
         Ok(())
     }
 
