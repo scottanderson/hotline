@@ -1253,7 +1253,7 @@ mod tests {
         let config = ServerConfig::default();
         state
             .put_account(
-                "alice".to_string(),
+                "alice".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".into(),
@@ -1285,7 +1285,7 @@ mod tests {
         let config = ServerConfig::default();
         state
             .put_account(
-                "a-b".to_string(),
+                "a-b".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".into(),
@@ -1317,7 +1317,7 @@ mod tests {
         let config = ServerConfig::default();
         state
             .put_account(
-                "alice".to_string(),
+                "alice".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".into(),
@@ -1349,7 +1349,7 @@ mod tests {
         let config = ServerConfig::default();
         state
             .put_account(
-                "alice".to_string(),
+                "alice".into(),
                 Account {
                     access_extra: AccessExtra::empty(),
                     password: Box::default(),
@@ -1377,7 +1377,7 @@ mod tests {
         let config = ServerConfig::default();
         state
             .put_account(
-                "alice".to_string(),
+                "alice".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "hunter2".into(),
@@ -1450,7 +1450,7 @@ mod tests {
         let config = ServerConfig::default();
         state
             .put_account(
-                "alice".to_string(),
+                "alice".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -1901,7 +1901,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "skipper".to_string(),
+                "skipper".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -1943,7 +1943,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "skipper".to_string(),
+                "skipper".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -2021,7 +2021,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "alice".to_string(),
+                "alice".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -2110,7 +2110,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "alice".to_string(),
+                "alice".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -2152,7 +2152,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "guest".to_string(),
+                "guest".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -2429,7 +2429,7 @@ mod tests {
             name: "Guest".into(),
             access: Access::empty(),
         };
-        state.put_account("guest".to_string(), guest).await.unwrap();
+        state.put_account("guest".into(), guest).await.unwrap();
         client
             .write_all(&ClientHandshake::default().encode())
             .await

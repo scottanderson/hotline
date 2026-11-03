@@ -12,10 +12,10 @@ use crate::sync::{read, write};
 /// (full access) and a passwordless `guest` (default access).
 #[derive(Debug)]
 pub struct InMemoryAccountProvider {
-    accounts: RwLock<HashMap<String, Account>>,
+    accounts: RwLock<HashMap<Box<str>, Account>>,
 }
 
-impl<T: Into<HashMap<String, Account>>> From<T> for InMemoryAccountProvider {
+impl<T: Into<HashMap<Box<str>, Account>>> From<T> for InMemoryAccountProvider {
     fn from(value: T) -> Self {
         Self {
             accounts: RwLock::new(value.into()),
@@ -26,8 +26,8 @@ impl<T: Into<HashMap<String, Account>>> From<T> for InMemoryAccountProvider {
 impl Default for InMemoryAccountProvider {
     fn default() -> Self {
         Self::from([
-            ("admin".to_string(), Account::admin("admin")),
-            ("guest".to_string(), Account::guest()),
+            ("admin".into(), Account::admin("admin")),
+            ("guest".into(), Account::guest()),
         ])
     }
 }
@@ -38,7 +38,7 @@ impl AccountProvider for InMemoryAccountProvider {
         read(&self.accounts).get(login).cloned()
     }
 
-    async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
+    async fn put(&self, login: Box<str>, account: Account) -> Result<(), Cow<'static, str>> {
         write(&self.accounts).insert(login, account);
         Ok(())
     }
@@ -47,7 +47,7 @@ impl AccountProvider for InMemoryAccountProvider {
         Ok(write(&self.accounts).remove(login).is_some())
     }
 
-    async fn list(&self) -> Vec<(String, Account)> {
+    async fn list(&self) -> Vec<(Box<str>, Account)> {
         read(&self.accounts)
             .iter()
             .map(|(login, account)| (login.clone(), account.clone()))
@@ -77,7 +77,7 @@ mod tests {
     #[tokio::test]
     async fn put_then_get_round_trips() {
         let provider = InMemoryAccountProvider::default();
-        provider.put(USER_ALICE.to_string(), alice()).await.unwrap();
+        provider.put(USER_ALICE.into(), alice()).await.unwrap();
         assert_eq!(provider.get(USER_ALICE).await, Some(alice()));
     }
 
@@ -90,7 +90,7 @@ mod tests {
     #[tokio::test]
     async fn remove_reports_whether_it_existed() {
         let provider = InMemoryAccountProvider::default();
-        provider.put(USER_ALICE.to_string(), alice()).await.unwrap();
+        provider.put(USER_ALICE.into(), alice()).await.unwrap();
 
         assert_eq!(provider.delete(USER_ALICE).await, Ok(true));
         assert_eq!(provider.delete(USER_ALICE).await, Ok(false));

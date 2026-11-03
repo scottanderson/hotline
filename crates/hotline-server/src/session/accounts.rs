@@ -29,7 +29,7 @@ impl Session {
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
-        let login = login.to_lowercase();
+        let login: Box<str> = login.to_lowercase().into();
         let access = tx.access().unwrap_or_else(Access::empty);
         if !self.access.contains(access - Access::NO_AGREEMENT) {
             return vec![tx.reply_error("Cannot create account with more access than yourself.")];
@@ -62,7 +62,7 @@ impl Session {
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
-        let login = login.to_lowercase();
+        let login: Box<str> = login.to_lowercase().into();
         if let Err(reason) = state.delete_account(&login).await {
             return vec![tx.reply_error(reason)];
         }
@@ -76,17 +76,11 @@ impl Session {
     async fn record_account_change(
         &self,
         action: AccountAction,
-        account: String,
+        account: Box<str>,
         state: &SharedState,
     ) {
-        self.record_activity(
-            Activity::AccountChange {
-                action,
-                account: account.into(),
-            },
-            state,
-        )
-        .await;
+        self.record_activity(Activity::AccountChange { action, account }, state)
+            .await;
     }
 
     /// Disconnect every session currently logged in under `login`, with
@@ -143,7 +137,7 @@ impl Session {
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
-        let login = login.to_lowercase();
+        let login: Box<str> = login.to_lowercase().into();
         let password = Self::new_password(tx.field(FieldId::UserPassword));
         let name = tx.name();
         let access = tx.access();
@@ -159,7 +153,7 @@ impl Session {
         };
         state
             .push_access_update(AccessUpdate {
-                login: login.as_str().into(),
+                login: login.clone(),
                 renamed_to: None,
                 access: account.access,
                 name: (!account.name.is_empty()).then_some(account.name),
@@ -305,13 +299,14 @@ impl Session {
             .field(FieldId::Data)
             .map(as_deobfuscated_string)
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_lowercase());
+            .map(|s| Box::<str>::from(s.to_lowercase()));
         let name = record.string(FieldId::UserName).unwrap_or_default();
         let login = record
             .field(FieldId::UserLogin)
             .map(as_deobfuscated_string)
             .unwrap_or_default()
-            .to_lowercase();
+            .to_lowercase()
+            .into_boxed_str();
 
         if name.is_empty() && login.is_empty() {
             let Some(old_login) = old_login else {
@@ -365,16 +360,14 @@ impl Session {
                 }) => {
                     state
                         .push_access_update(AccessUpdate {
-                            login: old_login.as_str().into(),
-                            renamed_to: renamed.then(|| login.as_str().into()),
+                            login: old_login.clone(),
+                            renamed_to: renamed.then(|| login.clone()),
                             access,
                             name: (!name.is_empty()).then(|| name.into()),
                         })
                         .await;
                     if renamed && !over_taken_login {
-                        let action = AccountAction::Rename {
-                            from: old_login.into(),
-                        };
+                        let action = AccountAction::Rename { from: old_login };
                         self.record_account_change(action, login.clone(), state)
                             .await;
                     }
@@ -384,9 +377,7 @@ impl Session {
                 }
                 Err(NotReplaced { moved, .. }) => {
                     if moved {
-                        let action = AccountAction::Rename {
-                            from: old_login.into(),
-                        };
+                        let action = AccountAction::Rename { from: old_login };
                         self.record_account_change(action, login, state).await;
                     }
                     Ok(false)
@@ -526,7 +517,7 @@ mod tests {
         let session = test_session("Admin", Access::all());
         let state = Arc::<SharedState>::default();
         state
-            .put_account("bob".to_string(), Account::guest())
+            .put_account("bob".into(), Account::guest())
             .await
             .unwrap();
 
@@ -634,7 +625,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -685,7 +676,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -720,7 +711,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -754,7 +745,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -766,7 +757,7 @@ mod tests {
             .unwrap();
         state
             .put_account(
-                "carol".to_string(),
+                "carol".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -820,7 +811,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -906,7 +897,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -976,7 +967,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -1058,7 +1049,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -1196,7 +1187,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "original".into(),
@@ -1229,7 +1220,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -1292,7 +1283,7 @@ mod tests {
         let (state, log) = state_recording_activity(Default::default());
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -1335,7 +1326,7 @@ mod tests {
             self.0.get(login).await
         }
 
-        async fn put(&self, _login: String, _account: Account) -> Result<(), Cow<'static, str>> {
+        async fn put(&self, _login: Box<str>, _account: Account) -> Result<(), Cow<'static, str>> {
             Err("disk full")?
         }
 
@@ -1343,7 +1334,7 @@ mod tests {
             self.0.delete(login).await
         }
 
-        async fn list(&self) -> Vec<(String, Account)> {
+        async fn list(&self) -> Vec<(Box<str>, Account)> {
             self.0.list().await
         }
     }
@@ -1358,7 +1349,7 @@ mod tests {
             name: "Bob".into(),
             access: Access::SEND_CHAT,
         };
-        accounts.put("bob".to_string(), bob).await.unwrap();
+        accounts.put("bob".into(), bob).await.unwrap();
         let state = state_with_accounts(std::sync::Arc::new(FailingPutAccounts(accounts)));
 
         let record = user_list_record(
@@ -1384,7 +1375,7 @@ mod tests {
             self.0.get(login).await
         }
 
-        async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
+        async fn put(&self, login: Box<str>, account: Account) -> Result<(), Cow<'static, str>> {
             self.0.put(login, account).await
         }
 
@@ -1392,7 +1383,7 @@ mod tests {
             Err("disk full")?
         }
 
-        async fn list(&self) -> Vec<(String, Account)> {
+        async fn list(&self) -> Vec<(Box<str>, Account)> {
             self.0.list().await
         }
     }
@@ -1407,7 +1398,7 @@ mod tests {
             name: "Bob".into(),
             access: Access::SEND_CHAT,
         };
-        accounts.put("bob".to_string(), bob).await.unwrap();
+        accounts.put("bob".into(), bob).await.unwrap();
         let state = state_with_accounts(std::sync::Arc::new(FailingDeleteAccounts(accounts)));
         let mut bob_rx = state.register_recipient(2).await;
 
@@ -1437,7 +1428,7 @@ mod tests {
             self.0.get(login).await
         }
 
-        async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
+        async fn put(&self, login: Box<str>, account: Account) -> Result<(), Cow<'static, str>> {
             self.0.put(login, account).await
         }
 
@@ -1448,7 +1439,7 @@ mod tests {
         async fn rename(
             &self,
             old_login: &str,
-            login: String,
+            login: Box<str>,
             _account: Account,
         ) -> Result<(), Cow<'static, str>> {
             let old = self.0.get(old_login).await.ok_or("no account")?;
@@ -1457,7 +1448,7 @@ mod tests {
             Err("disk full")?
         }
 
-        async fn list(&self) -> Vec<(String, Account)> {
+        async fn list(&self) -> Vec<(Box<str>, Account)> {
             self.0.list().await
         }
     }
@@ -1472,7 +1463,7 @@ mod tests {
             name: "Bob".into(),
             access: Access::SEND_CHAT,
         };
-        accounts.put("bob".to_string(), bob).await.unwrap();
+        accounts.put("bob".into(), bob).await.unwrap();
         let log = Arc::new(RecordingActivityLog::default());
         let state = SharedState::new(crate::Providers {
             accounts: Arc::new(FailingWriteAccounts(accounts)),
@@ -1508,7 +1499,7 @@ mod tests {
         let admin = test_session("Admin", Access::all());
         let accounts = crate::account::InMemoryAccountProvider::default();
         accounts
-            .put("bobby".to_string(), Account::guest())
+            .put("bobby".into(), Account::guest())
             .await
             .unwrap();
         let log = Arc::new(RecordingActivityLog::default());
@@ -1543,7 +1534,7 @@ mod tests {
             name: "Bob".into(),
             access: Access::empty(),
         };
-        state.put_account("bob".to_string(), account).await.unwrap();
+        state.put_account("bob".into(), account).await.unwrap();
         let mut bob = test_session("Bob", Access::empty());
         bob.login = "bob".into();
         let mut bob_rx = state.register_recipient(bob.user_id).await;
@@ -1578,7 +1569,7 @@ mod tests {
                 name: name.into(),
                 access: Access::SEND_CHAT,
             };
-            state.put_account(login.to_string(), account).await.unwrap();
+            state.put_account(login.into(), account).await.unwrap();
         }
         user_list_record(
             Some("bob"),
@@ -1807,7 +1798,7 @@ mod tests {
         let session = test_session("Admin", Access::all());
         let state = Arc::<SharedState>::default();
         state
-            .put_account("bob".to_string(), Account::guest())
+            .put_account("bob".into(), Account::guest())
             .await
             .unwrap();
         let mut rx = state.register_recipient(session.user_id).await;
@@ -1842,7 +1833,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".to_string(),
+                "bob".into(),
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),

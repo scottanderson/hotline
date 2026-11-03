@@ -17,7 +17,7 @@ pub trait AccountProvider: Send + Sync {
     /// Look up an account by login.
     async fn get(&self, login: &str) -> Option<Account>;
     /// Create or overwrite an account.
-    async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>>;
+    async fn put(&self, login: Box<str>, account: Account) -> Result<(), Cow<'static, str>>;
     /// Delete an account. `false` if it didn't exist.
     async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>>;
     /// Store `account` under `login`, a login that is free, and remove
@@ -28,7 +28,7 @@ pub trait AccountProvider: Send + Sync {
     async fn rename(
         &self,
         old_login: &str,
-        login: String,
+        login: Box<str>,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
         self.put(login, account).await?;
@@ -39,5 +39,5 @@ pub trait AccountProvider: Send + Sync {
     /// [`myTran_GetUserList`] (348).
     ///
     /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
-    async fn list(&self) -> Vec<(String, Account)>;
+    async fn list(&self) -> Vec<(Box<str>, Account)>;
 }

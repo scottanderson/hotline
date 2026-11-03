@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     if accounts.is_empty().await {
         let password = random_password()?;
         accounts
-            .put(ADMIN_LOGIN.to_string(), Account::admin(password.as_str()))
+            .put(ADMIN_LOGIN.into(), Account::admin(password.as_str()))
             .await
             .map_err(anyhow::Error::msg)?;
         println!(
@@ -95,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
             args.accounts_dir
         );
         accounts
-            .put(GUEST_LOGIN.to_string(), Account::guest())
+            .put(GUEST_LOGIN.into(), Account::guest())
             .await
             .map_err(anyhow::Error::msg)?;
     }

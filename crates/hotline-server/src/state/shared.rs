@@ -1782,7 +1782,7 @@ impl SharedState {
     /// Create or overwrite an account.
     pub async fn put_account(
         &self,
-        login: String,
+        login: Box<str>,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
@@ -1793,7 +1793,7 @@ impl SharedState {
     /// An empty login gets the error for a taken login.
     pub async fn create_account(
         &self,
-        login: String,
+        login: Box<str>,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
@@ -1815,7 +1815,7 @@ impl SharedState {
     pub(crate) async fn replace_account(
         &self,
         old_login: &str,
-        login: String,
+        login: Box<str>,
         edit: impl FnOnce(Account) -> Account,
     ) -> Result<ReplacedAccount, NotReplaced> {
         let _writes = self.account_writes.lock().await;
@@ -1825,7 +1825,7 @@ impl SharedState {
         if login.is_empty() {
             Err("Error saving list of accounts.")?;
         }
-        let renamed = old_login != login;
+        let renamed = old_login != &*login;
         let over_taken_login = renamed && self.accounts().get(&login).await.is_some();
         if over_taken_login && self.policy().taken_login() == TakenLogin::Refuse {
             Err("that login is taken")?;
@@ -1925,7 +1925,7 @@ impl SharedState {
     /// deterministic listing order, [`myTran_GetUserList`] (348).
     ///
     /// [`myTran_GetUserList`]: hotline_proto::Opcode::GetUserList
-    pub async fn list_accounts(&self) -> Vec<(String, Account)> {
+    pub async fn list_accounts(&self) -> Vec<(Box<str>, Account)> {
         let mut accounts = self.accounts().list().await;
         accounts.sort_by(|(a, _), (b, _)| a.cmp(b));
         accounts
@@ -2341,11 +2341,11 @@ mod tests {
     async fn create_account_refuses_a_taken_login() {
         let state = Arc::<SharedState>::default();
         state
-            .create_account("bob".to_string(), Account::guest())
+            .create_account("bob".into(), Account::guest())
             .await
             .unwrap();
         assert!(state
-            .create_account("bob".to_string(), Account::guest())
+            .create_account("bob".into(), Account::guest())
             .await
             .is_err());
     }
@@ -2354,21 +2354,21 @@ mod tests {
     async fn replace_account_refuses_a_deleted_login_and_writes_a_taken_rename_over_it() {
         let state = Arc::<SharedState>::default();
         assert!(state
-            .replace_account("bob", "bob".to_string(), |_| Account::guest())
+            .replace_account("bob", "bob".into(), |_| Account::guest())
             .await
             .is_err());
         assert!(state.account("bob").await.is_none());
 
         state
-            .put_account("bob".to_string(), Account::admin("bob's"))
+            .put_account("bob".into(), Account::admin("bob's"))
             .await
             .unwrap();
         state
-            .put_account("amy".to_string(), Account::guest())
+            .put_account("amy".into(), Account::guest())
             .await
             .unwrap();
         let replaced = state
-            .replace_account("bob", "amy".to_string(), |bob| Account {
+            .replace_account("bob", "amy".into(), |bob| Account {
                 name: "Edited".into(),
                 ..bob
             })
@@ -2385,7 +2385,7 @@ mod tests {
         );
 
         let replaced = state
-            .replace_account("bob", "bobby".to_string(), |_| Account::guest())
+            .replace_account("bob", "bobby".into(), |_| Account::guest())
             .await
             .unwrap();
         assert!(!replaced.over_taken_login);

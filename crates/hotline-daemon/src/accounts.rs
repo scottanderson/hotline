@@ -31,7 +31,7 @@ const ACCOUNT_FILE: &str = "account.json";
 /// with an in-memory cache so `get` never touches disk.
 pub struct FileAccountProvider {
     dir: PathBuf,
-    cache: RwLock<HashMap<String, Account>>,
+    cache: RwLock<HashMap<Box<str>, Account>>,
 }
 
 impl FileAccountProvider {
@@ -55,7 +55,7 @@ impl FileAccountProvider {
             {
                 continue;
             }
-            let Some(login) = entry.file_name().to_str().map(str::to_string) else {
+            let Some(login) = entry.file_name().to_str().map(Box::from) else {
                 let path = path.display();
                 tracing::warn!(%path, "skipped an account whose folder name is not UTF-8");
                 continue;
@@ -111,7 +111,7 @@ impl AccountProvider for FileAccountProvider {
 
     /// Makes the folder of a new login first, and fails if that folder
     /// exists. A failed write removes the new folder again.
-    async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
+    async fn put(&self, login: Box<str>, account: Account) -> Result<(), Cow<'static, str>> {
         let folder = self.folder_for(&login).ok_or("invalid login")?;
         let new = !self.cache.read().await.contains_key(&login);
         if new {
@@ -160,7 +160,7 @@ impl AccountProvider for FileAccountProvider {
     async fn rename(
         &self,
         old_login: &str,
-        login: String,
+        login: Box<str>,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
         let (Some(old_folder), Some(folder)) =
@@ -186,7 +186,7 @@ impl AccountProvider for FileAccountProvider {
         }
     }
 
-    async fn list(&self) -> Vec<(String, Account)> {
+    async fn list(&self) -> Vec<(Box<str>, Account)> {
         self.cache
             .read()
             .await
@@ -230,7 +230,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
 
-        provider.put("alice".to_string(), alice()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
 
         assert_eq!(provider.get("alice").await, Some(alice()));
     }
@@ -243,7 +243,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let accounts = dir.path().join("accounts");
         let provider = FileAccountProvider::open(&accounts).await.unwrap();
-        provider.put("alice".to_string(), alice()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
 
         let mode = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(accounts.clone()), 0o700);
@@ -255,7 +255,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let provider = FileAccountProvider::open(dir.path()).await.unwrap();
-            provider.put("alice".to_string(), alice()).await.unwrap();
+            provider.put("alice".into(), alice()).await.unwrap();
         }
 
         let reopened = FileAccountProvider::open(dir.path()).await.unwrap();
@@ -267,7 +267,7 @@ mod tests {
     async fn delete_removes_the_file_and_reports_whether_it_existed() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
-        provider.put("alice".to_string(), alice()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
 
         assert_eq!(provider.delete("alice").await, Ok(true));
         assert_eq!(provider.delete("alice").await, Ok(false));
@@ -280,7 +280,7 @@ mod tests {
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
         assert!(provider.is_empty().await);
 
-        provider.put("alice".to_string(), alice()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
 
         assert!(!provider.is_empty().await);
     }
@@ -297,11 +297,11 @@ mod tests {
     async fn rename_moves_the_account_folder() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
-        provider.put("alice".to_string(), alice()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
         std::fs::write(dir.path().join("alice").join("own.txt"), "x").unwrap();
 
         provider
-            .rename("alice", "bob".to_string(), alice())
+            .rename("alice", "bob".into(), alice())
             .await
             .unwrap();
 
@@ -316,12 +316,9 @@ mod tests {
     async fn rename_that_changes_only_the_case_keeps_the_account() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
-        provider.put("bob".to_string(), alice()).await.unwrap();
+        provider.put("bob".into(), alice()).await.unwrap();
 
-        provider
-            .rename("bob", "Bob".to_string(), alice())
-            .await
-            .unwrap();
+        provider.rename("bob", "Bob".into(), alice()).await.unwrap();
 
         assert_eq!(provider.get("bob").await, None);
         assert_eq!(provider.get("Bob").await, Some(alice()));
@@ -333,12 +330,12 @@ mod tests {
     async fn rename_onto_a_folder_with_files_fails_and_keeps_the_account() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
-        provider.put("alice".to_string(), alice()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
         std::fs::create_dir(dir.path().join("bob")).unwrap();
         std::fs::write(dir.path().join("bob").join("own.txt"), "x").unwrap();
 
         assert!(provider
-            .rename("alice", "bob".to_string(), alice())
+            .rename("alice", "bob".into(), alice())
             .await
             .is_err());
 
@@ -352,7 +349,7 @@ mod tests {
     async fn delete_removes_the_account_folder() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
-        provider.put("alice".to_string(), alice()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
         std::fs::create_dir(dir.path().join("alice").join("own")).unwrap();
 
         assert_eq!(provider.delete("alice").await, Ok(true));
@@ -379,7 +376,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("alice")).unwrap();
 
         assert_eq!(
-            provider.put("alice".to_string(), alice()).await,
+            provider.put("alice".into(), alice()).await,
             Err(
                 "Cannot create account \"alice\" because there is already an account with that login."
                     .into()
@@ -395,10 +392,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
 
-        assert!(provider
-            .put("../escape".to_string(), alice())
-            .await
-            .is_err());
+        assert!(provider.put("../escape".into(), alice()).await.is_err());
     }
 
     #[tokio::test]
