@@ -851,11 +851,16 @@ fn draw_question<'a>(frame: &mut Frame, screen: Rect, title: &'a str, text: impl
 
 /// Draw a modal that shows `text`, wrapped, under `title`.
 fn draw_text_modal(frame: &mut Frame, screen: Rect, width: u16, title: String, text: String) {
-    let height = list_height(text.lines().count()).min(screen.height.saturating_sub(2));
-    let area = screen.centered(Constraint::Length(width), Constraint::Length(height));
     let paragraph = Paragraph::new(text)
         .block(modal_block(title))
         .wrap(Wrap { trim: false });
+    let width = width.min(screen.width);
+    // line_count adds the border rows, but wraps at the full width it gets.
+    let rows = paragraph.line_count(width.saturating_sub(2)).max(3);
+    let height = u16::try_from(rows)
+        .unwrap_or(u16::MAX)
+        .min(screen.height.saturating_sub(2));
+    let area = screen.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }
@@ -928,6 +933,19 @@ mod tests {
         let labels = tab_labels(&session);
         assert_eq!(labels.first(), Some(&(Tab::Chat, "1 Chat".to_string())));
         assert_eq!(labels.last(), Some(&(Tab::Room(7), "Chat 7".to_string())));
+    }
+
+    #[test]
+    fn draw_text_modal_grows_to_fit_each_wrapped_row() {
+        let backend = ratatui::backend::TestBackend::new(12, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let text = "aaaa bbbb cccc".to_string();
+        terminal
+            .draw(|frame| draw_text_modal(frame, frame.area(), 6, String::new(), text))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let column = (0..8).map(|y| buffer[(4, y)].symbol()).collect::<String>();
+        assert_eq!(column, "  ─abc─ ");
     }
 
     #[test]
