@@ -23,9 +23,9 @@ pub struct Args {
     #[arg(long, env = "HLC_PASSWORD", hide_env_values = true, default_value = "")]
     pub password: String,
 
-    /// Display nickname.
+    /// The name in the user list.
     #[arg(long, default_value = "RustHL")]
-    pub nick: String,
+    pub name: String,
 
     /// Icon ID.
     #[arg(long, default_value_t = 0)]

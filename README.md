@@ -62,7 +62,7 @@ cargo fmt --all
 cargo run -p hotline-daemon -- --port 5500
 
 # terminal 2
-cargo run -p hotline-cli -- --host 127.0.0.1 --port 5500 --login guest --nick RustHL
+cargo run -p hotline-cli -- --host 127.0.0.1 --port 5500 --login guest --name RustHL
 ```
 
 ## License

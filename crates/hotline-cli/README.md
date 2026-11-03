@@ -18,7 +18,7 @@ cargo install hotline-cli
 ## Usage
 
 ```sh
-HLC_PASSWORD=secret hlc --host example.com --login alice --nick Alice
+HLC_PASSWORD=secret hlc --host example.com --login alice --name Alice
 ```
 
 | Flag             | Default     | Effect                                         |
@@ -27,7 +27,7 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --nick Alice
 | `--port`         | 5500        | the server's port                              |
 | `--login`        | (guest)     | the account login                              |
 | `--password`     | (none)      | the password, also read from `HLC_PASSWORD`    |
-| `--nick`         | `RustHL`    | the name in the user list                      |
+| `--name`         | `RustHL`    | the name in the user list                      |
 | `--icon`         | 0           | the icon ID                                    |
 | `--download-dir` | `.`         | the folder that downloads go to                |
 | `--encoding`     | `macintosh` | the text encoding, the same as the server's    |

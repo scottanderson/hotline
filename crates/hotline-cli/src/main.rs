@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     client.encoding().set(args.encoding);
     let login = client.login(&args.login, &args.password).await?;
 
-    let mut session = ClientSession::new(args.nick, args.icon, client.encoding());
+    let mut session = ClientSession::new(args.name, args.icon, client.encoding());
     session.server_version = login.version;
     session.download_dir = args.download_dir;
     let bell = if args.no_bell {

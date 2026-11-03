@@ -34,7 +34,7 @@ pub use mode::Mode;
 pub use threaded_news::{ArticleText, NewsFolder, NewsFolderNode, NewsTarget, NewsThread};
 
 pub struct ClientSession {
-    pub nick: Box<str>,
+    pub name: Box<str>,
     pub icon: u16,
     pub options: UserChangeOptions,
     /// The reply to a private message while [`UserChangeOptions::AUTO_RESPONSE`] is on.
@@ -78,9 +78,9 @@ pub struct ClientSession {
 }
 
 impl ClientSession {
-    pub fn new(nick: String, icon: u16, encoding: EncodingHandle) -> Self {
+    pub fn new(name: String, icon: u16, encoding: EncodingHandle) -> Self {
         Self {
-            nick: nick.into(),
+            name: name.into(),
             icon,
             options: UserChangeOptions::empty(),
             automatic_response: Box::default(),
@@ -463,7 +463,7 @@ impl ClientSession {
     /// This user's name, icon, and options.
     pub fn user_info(&self) -> ClientUserInfo {
         ClientUserInfo {
-            name: self.nick.clone(),
+            name: self.name.clone(),
             icon: self.icon,
             options: self.options,
             automatic_response: self.automatic_response.clone(),
@@ -478,7 +478,7 @@ impl ClientSession {
         if let Err(e) = client.set_client_user_info(&info).await {
             return self.push(format!("failed to change options: {e}"), LineKind::Error);
         }
-        self.nick = info.name;
+        self.name = info.name;
         self.icon = info.icon;
         self.options = info.options;
         self.automatic_response = info.automatic_response;

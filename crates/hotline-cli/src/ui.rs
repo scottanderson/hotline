@@ -600,7 +600,7 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
             } else if flags.contains(UserFlags::AWAY) {
                 style = style.fg(Color::DarkGray);
             }
-            if u.name == session.nick {
+            if u.name == session.name {
                 style = style.add_modifier(Modifier::BOLD);
             }
             ListItem::new(Span::styled(label, style))

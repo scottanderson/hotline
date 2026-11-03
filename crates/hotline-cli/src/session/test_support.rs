@@ -62,17 +62,17 @@ pub async fn next_push(
     .expect("push arrives")
 }
 
-/// Log in as `admin` under `nick` and accept the agreement.
+/// Log in as `admin` under `name` and accept the agreement.
 pub async fn join_admin(
     addr: SocketAddr,
-    nick: &str,
+    name: &str,
 ) -> (HotlineClient, UnboundedReceiver<Transaction<Received>>) {
     let (client, mut events) = HotlineClient::connect(addr).await.unwrap();
     client.login("admin", "admin").await.unwrap();
     next_push(&mut events, Opcode::ShowAgreement).await;
     client
         .agree(&ClientUserInfo {
-            name: nick.into(),
+            name: name.into(),
             ..ClientUserInfo::default()
         })
         .await
