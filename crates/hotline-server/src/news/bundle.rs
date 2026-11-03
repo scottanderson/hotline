@@ -176,11 +176,11 @@ impl NewsBundle {
         &mut self,
         components: &[String],
         parent_id: u32,
-        title: String,
-        poster: String,
+        title: Box<str>,
+        poster: Box<str>,
         flags: u32,
-        mime_type: String,
-        data: Vec<u8>,
+        mime_type: Box<str>,
+        data: Box<[u8]>,
     ) -> Result<u32, &'static str> {
         // Each is wire-encoded with a 1-byte length prefix in the
         // article listing (`myField_NewsArtListData` (321)). Openline
@@ -270,11 +270,11 @@ mod tests {
         root.post_article(
             &["General".to_string()],
             0,
-            "Hi".to_string(),
-            "alice".to_string(),
+            "Hi".into(),
+            "alice".into(),
             0,
-            "text/plain".to_string(),
-            b"hello".to_vec(),
+            "text/plain".into(),
+            b"hello".as_slice().into(),
         )
         .unwrap();
 
@@ -303,22 +303,22 @@ mod tests {
             .post_article(
                 &path,
                 0,
-                "Top".to_string(),
-                "alice".to_string(),
+                "Top".into(),
+                "alice".into(),
                 0,
-                "text/plain".to_string(),
-                b"1".to_vec(),
+                "text/plain".into(),
+                b"1".as_slice().into(),
             )
             .unwrap();
         let reply = root
             .post_article(
                 &path,
                 top,
-                "Re: Top".to_string(),
-                "bob".to_string(),
+                "Re: Top".into(),
+                "bob".into(),
                 0,
-                "text/plain".to_string(),
-                b"2".to_vec(),
+                "text/plain".into(),
+                b"2".as_slice().into(),
             )
             .unwrap();
 
@@ -339,11 +339,11 @@ mod tests {
             .post_article(
                 &["General".to_string()],
                 999,
-                "x".to_string(),
-                "alice".to_string(),
+                "x".into(),
+                "alice".into(),
                 0,
-                "text/plain".to_string(),
-                b"x".to_vec(),
+                "text/plain".into(),
+                b"x".as_slice().into(),
             )
             .unwrap_err();
         assert_eq!(err, "no such parent article");
@@ -362,11 +362,11 @@ mod tests {
                 .post_article(
                     path,
                     parent_id,
-                    "Re".to_string(),
-                    "alice".to_string(),
+                    "Re".into(),
+                    "alice".into(),
                     0,
-                    "text/plain".to_string(),
-                    b"x".to_vec(),
+                    "text/plain".into(),
+                    b"x".as_slice().into(),
                 )
                 .unwrap();
         }
@@ -401,11 +401,11 @@ mod tests {
             .post_article(
                 &path,
                 last,
-                "One reply too many".to_string(),
-                "alice".to_string(),
+                "One reply too many".into(),
+                "alice".into(),
                 0,
-                "text/plain".to_string(),
-                b"x".to_vec(),
+                "text/plain".into(),
+                b"x".as_slice().into(),
             )
             .unwrap_err();
         assert_eq!(err, "reply chain is too deep");
@@ -458,22 +458,22 @@ mod tests {
             .post_article(
                 &path,
                 0,
-                "Top".to_string(),
-                "a".to_string(),
+                "Top".into(),
+                "a".into(),
                 0,
-                "text/plain".to_string(),
-                b"1".to_vec(),
+                "text/plain".into(),
+                b"1".as_slice().into(),
             )
             .unwrap();
         let reply = root
             .post_article(
                 &path,
                 top,
-                "Re".to_string(),
-                "b".to_string(),
+                "Re".into(),
+                "b".into(),
                 0,
-                "text/plain".to_string(),
-                b"2".to_vec(),
+                "text/plain".into(),
+                b"2".as_slice().into(),
             )
             .unwrap();
 
@@ -493,33 +493,33 @@ mod tests {
             .post_article(
                 &path,
                 0,
-                "Top".to_string(),
-                "a".to_string(),
+                "Top".into(),
+                "a".into(),
                 0,
-                "text/plain".to_string(),
-                b"1".to_vec(),
+                "text/plain".into(),
+                b"1".as_slice().into(),
             )
             .unwrap();
         let first = root
             .post_article(
                 &path,
                 top,
-                "First".to_string(),
-                "b".to_string(),
+                "First".into(),
+                "b".into(),
                 0,
-                "text/plain".to_string(),
-                b"2".to_vec(),
+                "text/plain".into(),
+                b"2".as_slice().into(),
             )
             .unwrap();
         let second = root
             .post_article(
                 &path,
                 top,
-                "Second".to_string(),
-                "c".to_string(),
+                "Second".into(),
+                "c".into(),
                 0,
-                "text/plain".to_string(),
-                b"3".to_vec(),
+                "text/plain".into(),
+                b"3".as_slice().into(),
             )
             .unwrap();
 

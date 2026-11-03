@@ -19,7 +19,7 @@ pub struct NewsArticle {
     /// The name of the user who posted it.
     pub poster: Box<str>,
     /// Stored bodies, keyed by MIME type. Always has at least one entry.
-    pub data: BTreeMap<String, Vec<u8>>,
+    pub data: BTreeMap<Box<str>, Box<[u8]>>,
     /// Reply article IDs, oldest posted first.
     pub children: Vec<u32>,
 }

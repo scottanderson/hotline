@@ -25,7 +25,7 @@ pub struct NewsArticleDetail {
     /// Its first reply's article ID, or `0` if it has none.
     pub first_child_id: u32,
     /// This article's stored bodies, keyed by MIME type.
-    pub data: BTreeMap<String, Vec<u8>>,
+    pub data: BTreeMap<Box<str>, Box<[u8]>>,
 }
 
 impl From<NewsArticleView<'_>> for NewsArticleDetail {

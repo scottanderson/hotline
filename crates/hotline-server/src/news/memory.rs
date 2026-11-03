@@ -87,11 +87,11 @@ impl ThreadedNewsProvider for InMemoryNewsProvider {
         &self,
         components: &[String],
         parent_id: u32,
-        title: String,
-        poster: String,
+        title: Box<str>,
+        poster: Box<str>,
         flags: u32,
-        mime_type: String,
-        data: Vec<u8>,
+        mime_type: Box<str>,
+        data: Box<[u8]>,
     ) -> Result<u32, &'static str> {
         let _guard = self.tree_lock.lock().await;
         let mut tree = Arc::unwrap_or_clone(self.tree.load_full());

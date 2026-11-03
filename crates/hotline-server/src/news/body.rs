@@ -9,11 +9,11 @@ fn is_text(mime_type: &str) -> bool {
 }
 
 /// A body from the wire, as stored.
-pub fn body_from_wire(mime_type: &str, data: Vec<u8>, encoding: &'static Encoding) -> Vec<u8> {
+pub fn body_from_wire(mime_type: &str, data: Vec<u8>, encoding: &'static Encoding) -> Box<[u8]> {
     if is_text(mime_type) {
-        text_encoding::decode(encoding, &data).into_bytes()
+        text_encoding::decode(encoding, &data).into_bytes().into()
     } else {
-        data
+        data.into()
     }
 }
 
@@ -33,13 +33,13 @@ mod tests {
     #[test]
     fn body_from_wire_stores_text_as_utf8() {
         let stored = body_from_wire("text/plain", b"caf\x8e".to_vec(), text_encoding::DEFAULT);
-        assert_eq!(stored, "caf\u{e9}".as_bytes());
+        assert_eq!(&*stored, "caf\u{e9}".as_bytes());
     }
 
     #[test]
     fn body_from_wire_keeps_other_flavors_as_bytes() {
         let stored = body_from_wire("image/gif", b"\x8e".to_vec(), text_encoding::DEFAULT);
-        assert_eq!(stored, b"\x8e");
+        assert_eq!(&*stored, b"\x8e");
     }
 
     #[test]

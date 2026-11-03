@@ -44,11 +44,11 @@ pub trait ThreadedNewsProvider: Send + Sync {
         &self,
         components: &[String],
         parent_id: u32,
-        title: String,
-        poster: String,
+        title: Box<str>,
+        poster: Box<str>,
         flags: u32,
-        mime_type: String,
-        data: Vec<u8>,
+        mime_type: Box<str>,
+        data: Box<[u8]>,
     ) -> Result<u32, &'static str>;
     /// Deletes an article from the category at `components`. If
     /// `recursive`, every reply under it is deleted too; otherwise its

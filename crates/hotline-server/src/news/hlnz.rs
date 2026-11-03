@@ -198,7 +198,7 @@ impl Reader<'_> {
 
     /// The flavor chain at `offset`, keyed by MIME type. The chain ends at
     /// the first flavor that does not read.
-    fn flavors(&self, mut offset: u32) -> BTreeMap<String, Vec<u8>> {
+    fn flavors(&self, mut offset: u32) -> BTreeMap<Box<str>, Box<[u8]>> {
         let mut data = BTreeMap::new();
         for _ in 0..MAX_FLAVORS {
             let Some((next, mime_type, body)) = self.flavor(offset) else {
@@ -208,23 +208,23 @@ impl Reader<'_> {
             offset = next;
         }
         if data.is_empty() {
-            data.insert("text/plain".to_string(), Vec::new());
+            data.insert("text/plain".into(), Box::default());
         }
         data
     }
 
     /// The flavor at block `offset`: the next flavor's offset, the MIME
     /// type, and the body as stored.
-    fn flavor(&self, offset: u32) -> Option<(u32, String, Vec<u8>)> {
+    fn flavor(&self, offset: u32) -> Option<(u32, Box<str>, Box<[u8]>)> {
         let mut r = SliceReader::new(self.block(offset).ok()?);
         let next = r.u32().ok()?;
         let size = r.u32().ok()?;
         let type_len = usize::from(r.u8().ok()?);
         let padded_type = r.bytes((type_len + 1).next_multiple_of(4) - 1).ok()?;
-        let mime_type = String::from_utf8_lossy(padded_type.get(..type_len)?).into_owned();
+        let mime_type = String::from_utf8_lossy(padded_type.get(..type_len)?);
         let body = r.bytes(size as usize).ok()?.to_vec();
         let body = body_from_wire(&mime_type, body, self.encoding);
-        Some((next, mime_type, body))
+        Some((next, mime_type.into(), body))
     }
 }
 
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(&*first.poster, "bob");
         assert_eq!(first.flags, 10);
         assert_eq!(first.date, date());
-        assert_eq!(first.data["text/plain"], "na\u{ef}ve".as_bytes());
+        assert_eq!(&*first.data["text/plain"], "na\u{ef}ve".as_bytes());
         assert_eq!(first.children, [3]);
         assert_eq!(category.articles[&3].parent_id, 1);
         assert_eq!(category.articles[&2].parent_id, 0);
@@ -468,8 +468,8 @@ mod tests {
             NewsCategory::from_hlnz(&file(&roots, 1, 2), text_encoding::DEFAULT, &Utc).unwrap();
 
         let data = &category.articles[&1].data;
-        assert_eq!(data["text/plain"], b"see");
-        assert_eq!(data["image/gif"], b"\x8e\x00");
+        assert_eq!(&*data["text/plain"], b"see");
+        assert_eq!(&*data["image/gif"], b"\x8e\x00");
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
         let category =
             NewsCategory::from_hlnz(&file(&roots, 1, 2), text_encoding::DEFAULT, &Utc).unwrap();
 
-        assert_eq!(category.articles[&1].data["text/plain"], b"");
+        assert_eq!(&*category.articles[&1].data["text/plain"], b"");
     }
 
     #[test]
@@ -505,7 +505,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(&*category.articles[&1].title, "cut");
-        assert_eq!(category.articles[&1].data["text/plain"], b"");
+        assert_eq!(&*category.articles[&1].data["text/plain"], b"");
     }
 
     #[test]

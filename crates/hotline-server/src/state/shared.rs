@@ -1446,7 +1446,7 @@ impl SharedState {
                         .data
                         .iter()
                         .map(|(mime_type, data)| NewsFlavor {
-                            mime_type: mime_type.as_str().into(),
+                            mime_type: (**mime_type).into(),
                             size: u16::try_from(body_to_wire(mime_type, data, encoding).len())
                                 .unwrap_or(u16::MAX),
                         })
@@ -1531,11 +1531,11 @@ impl SharedState {
         login: &str,
         path: &HlPath,
         parent_id: u32,
-        title: String,
-        poster: String,
+        title: Box<str>,
+        poster: Box<str>,
         flags: u32,
-        mime_type: String,
-        data: Vec<u8>,
+        mime_type: Box<str>,
+        data: Box<[u8]>,
     ) -> Result<u32, &'static str> {
         self.threaded_news_for(login)
             .await?
@@ -2045,11 +2045,11 @@ mod tests {
                 "",
                 &HlPath::new(["General"]),
                 0,
-                "Hi".to_string(),
-                "alice".to_string(),
+                "Hi".into(),
+                "alice".into(),
                 0,
-                "text/plain".to_string(),
-                b"hello".to_vec(),
+                "text/plain".into(),
+                b"hello".as_slice().into(),
             )
             .await
             .unwrap();

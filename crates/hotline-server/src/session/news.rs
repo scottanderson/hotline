@@ -256,7 +256,7 @@ impl Session {
             FieldId::NewsArtDataFlav,
             requested_flavor.clone(),
         ));
-        if let Some(data) = detail.data.get(&requested_flavor) {
+        if let Some(data) = detail.data.get(requested_flavor.as_str()) {
             let data = body_to_wire(&requested_flavor, data, encoding);
             fields.push(Field::bytes(FieldId::NewsArtData, data));
         }
@@ -301,10 +301,10 @@ impl Session {
                 &self.login,
                 &path,
                 parent_id,
-                title,
-                self.name.to_string(),
+                title.into(),
+                (*self.name).into(),
                 flags,
-                mime_type,
+                mime_type.into(),
                 data,
             )
             .await
@@ -724,7 +724,7 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         let stored = state.news_article("", &path, 1).await.unwrap();
-        assert_eq!(stored.data["text/plain"], "caf\u{e9}".as_bytes());
+        assert_eq!(&*stored.data["text/plain"], "caf\u{e9}".as_bytes());
 
         let listing = state.news_list_articles("", &path, utf8).await.unwrap();
         assert_eq!(listing.articles[0].flavors[0].size, 5);

@@ -99,11 +99,11 @@ impl NewsCategory {
     pub(crate) fn add_article(
         &mut self,
         parent_id: u32,
-        title: String,
-        poster: String,
+        title: Box<str>,
+        poster: Box<str>,
         flags: u32,
-        mime_type: String,
-        data: Vec<u8>,
+        mime_type: Box<str>,
+        data: Box<[u8]>,
     ) -> Result<u32, &'static str> {
         let id = self.next_article_id;
         self.siblings_of_mut(parent_id)
@@ -116,8 +116,8 @@ impl NewsCategory {
                 parent_id,
                 flags,
                 date: HlDate::from(SystemTime::now()),
-                title: title.into(),
-                poster: poster.into(),
+                title,
+                poster,
                 data: [(mime_type, data)].into(),
                 children: Vec::new(),
             },
@@ -259,7 +259,7 @@ struct ArticleNode {
     title: Box<str>,
     poster: Box<str>,
     #[serde(with = "flavor_map")]
-    data: BTreeMap<String, Vec<u8>>,
+    data: BTreeMap<Box<str>, Box<[u8]>>,
     #[serde(default)]
     children: Vec<ArticleNode>,
 }
@@ -364,7 +364,7 @@ mod tests {
                 "alice".into(),
                 0,
                 "text/plain".into(),
-                b"hi".to_vec(),
+                b"hi".as_slice().into(),
             )
             .unwrap();
         category
@@ -374,7 +374,7 @@ mod tests {
                 "bob".into(),
                 0,
                 "text/plain".into(),
-                b"hey".to_vec(),
+                b"hey".as_slice().into(),
             )
             .unwrap();
 
@@ -402,7 +402,7 @@ mod tests {
                 "alice".into(),
                 0,
                 "text/plain".into(),
-                b"hi".to_vec(),
+                b"hi".as_slice().into(),
             )
             .unwrap();
         let reply = category
@@ -412,7 +412,7 @@ mod tests {
                 "bob".into(),
                 0,
                 "text/plain".into(),
-                b"hey".to_vec(),
+                b"hey".as_slice().into(),
             )
             .unwrap();
 
@@ -435,7 +435,7 @@ mod tests {
                 "alice".into(),
                 0,
                 "text/plain".into(),
-                b"hi".to_vec(),
+                b"hi".as_slice().into(),
             )
             .unwrap();
 
@@ -458,7 +458,7 @@ mod tests {
                 "alice".into(),
                 0,
                 "text/plain".into(),
-                b"hi".to_vec(),
+                b"hi".as_slice().into(),
             )
             .unwrap();
 
@@ -483,7 +483,7 @@ mod tests {
                 "alice".into(),
                 7,
                 "text/plain".into(),
-                b"hi".to_vec(),
+                b"hi".as_slice().into(),
             )
             .unwrap();
         category
@@ -493,7 +493,7 @@ mod tests {
                 "bob".into(),
                 0,
                 "text/plain".into(),
-                b"hey".to_vec(),
+                b"hey".as_slice().into(),
             )
             .unwrap();
 

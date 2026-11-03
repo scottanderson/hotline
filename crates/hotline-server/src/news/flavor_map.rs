@@ -12,10 +12,10 @@ use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserializer, Serialize, Serializer};
 
-pub(crate) fn serialize<S: Serializer>(
-    data: &BTreeMap<String, Vec<u8>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
+/// Each body, keyed by its MIME type.
+type Flavors = BTreeMap<Box<str>, Box<[u8]>>;
+
+pub(crate) fn serialize<S: Serializer>(data: &Flavors, serializer: S) -> Result<S::Ok, S::Error> {
     let mut map = serializer.serialize_map(Some(data.len()))?;
     for (mime_type, body) in data {
         match std::str::from_utf8(body) {
@@ -26,13 +26,11 @@ pub(crate) fn serialize<S: Serializer>(
     map.end()
 }
 
-pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<BTreeMap<String, Vec<u8>>, D::Error> {
+pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Flavors, D::Error> {
     struct MapVisitor;
 
     impl<'de> Visitor<'de> for MapVisitor {
-        type Value = BTreeMap<String, Vec<u8>>;
+        type Value = Flavors;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("a map of MIME type to a string or an array of byte values")
@@ -51,7 +49,7 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
 }
 
 /// One flavor's body: a string for text, or a byte array otherwise.
-struct Body(Vec<u8>);
+struct Body(Box<[u8]>);
 
 impl<'de> serde::Deserialize<'de> for Body {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -65,7 +63,7 @@ impl<'de> serde::Deserialize<'de> for Body {
             }
 
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Body, E> {
-                Ok(Body(v.as_bytes().to_vec()))
+                Ok(Body(v.as_bytes().into()))
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Body, A::Error> {
@@ -73,7 +71,7 @@ impl<'de> serde::Deserialize<'de> for Body {
                 while let Some(byte) = seq.next_element()? {
                     out.push(byte);
                 }
-                Ok(Body(out))
+                Ok(Body(out.into()))
             }
         }
 
@@ -83,7 +81,7 @@ impl<'de> serde::Deserialize<'de> for Body {
 
 /// Borrows [`NewsArticle::data`](super::NewsArticle::data) for a
 /// hand-written `Serialize` impl.
-pub(crate) struct FlavorMapRef<'a>(pub(crate) &'a BTreeMap<String, Vec<u8>>);
+pub(crate) struct FlavorMapRef<'a>(pub(crate) &'a Flavors);
 
 impl Serialize for FlavorMapRef<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -96,10 +94,10 @@ mod tests {
     use super::*;
 
     #[derive(serde::Serialize, serde::Deserialize)]
-    struct Wrapper(#[serde(with = "super")] BTreeMap<String, Vec<u8>>);
+    struct Wrapper(#[serde(with = "super")] BTreeMap<Box<str>, Box<[u8]>>);
 
-    fn map(mime_type: &str, data: &[u8]) -> BTreeMap<String, Vec<u8>> {
-        [(mime_type.to_string(), data.to_vec())].into()
+    fn map(mime_type: &str, data: &[u8]) -> BTreeMap<Box<str>, Box<[u8]>> {
+        [(mime_type.into(), data.into())].into()
     }
 
     #[test]
