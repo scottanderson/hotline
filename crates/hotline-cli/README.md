@@ -44,10 +44,10 @@ account privileges. Each tab has a number, which the tab bar shows. F1
 to F9, or Alt with 1 to 9, opens a tab. When you have joined a private
 chat room, a row under the tab bar of Chat and of each room shows
 Public, the public chat, then each room. Alt-, and Alt-. move to the
-previous and the next entry of that row. Each tab has a main pane and
-the user list. Tab moves between them, and Esc goes back to Chat. On
-Chat, Esc asks whether to quit. Ctrl-C asks too, from anywhere, and a
-second Ctrl-C quits.
+previous and the next entry of that row. Each tab has a main pane.
+Chat and each room also have the user list, and Tab moves between it
+and the main pane. Esc goes back to Chat. On Chat, Esc asks whether to
+quit. Ctrl-C asks too, from anywhere, and a second Ctrl-C quits.
 When the server ends the connection, a box shows its message, or that
 the connection closed. Enter, Esc, or Ctrl-C closes the box and quits.
 
@@ -144,15 +144,15 @@ its place, and its gauge fills as the queue moves. A task that ends
 well stays in its place with a full gauge, and goes 500 ms after the
 last task ends. A task that fails or that the user cancels goes at
 once. The error line in the chat tells why a task failed. The box
-shows only while it has a task, on each tab. Under the user list, Tab
-moves from the user list to the box. On Threaded News, the box fills
-the right column, and Tab moves from the preview to the box. Alt-J
-moves to it from anywhere. A click selects a task. Enter cancels the
-selected download, upload, or request that only reads. Enter does
-nothing on a request that changes the server. Enter on the
-`Logging in...` step of the login ends the connection. A cancelled
-download that waits in the server's queue leaves the queue. A
-cancelled upload closes its connection.
+shows only while it has a task, on each tab. On Chat and the rooms, it
+is under the user list, and Tab moves from the user list to the box.
+On the other tabs, it fills the right column, and Tab moves from the
+main pane to the box. Alt-J moves to it from anywhere. A click selects
+a task. Enter cancels the selected download, upload, or request that
+only reads. Enter does nothing on a request that changes the server.
+Enter on the `Logging in...` step of the login ends the connection. A
+cancelled download that waits in the server's queue leaves the queue.
+A cancelled upload closes its connection.
 
 Each transfer waits until each older transfer ends. A waiting transfer
 shows `(queued)`, and the box title counts these transfers. `s` starts
@@ -160,16 +160,16 @@ the selected transfer at once. The `queue transfers` row of the options
 form (Alt-O) turns the queue off, and then each transfer starts at
 once. The queue is on when `hlc` starts.
 
-The Threaded News tab has no user list. It has three panes: a tree of
-bundles (📚) and categories (📰) on the left, the threads of the
-selected category on the top right, and the selected article on the
-bottom right. Tab moves from pane to pane. In the tree, → or Enter
-opens a bundle, and ← closes it or goes to the bundle that holds it.
-Enter on a category moves to its threads. Each move in the thread list
-shows that article in the preview, and Enter opens it. ← goes back to
-the tree. `p` posts, `r` replies to the open article, `x` deletes, and
-`b` and `c` create a bundle or a category in the selected bundle, or in
-the bundle that holds the selected category.
+The Threaded News tab has three panes: a tree of bundles (📚) and
+categories (📰) on the left, the threads of the selected category on the
+top right, and the selected article on the bottom right. Tab moves from
+pane to pane. In the tree, → or Enter opens a bundle, and ← closes it or
+goes to the bundle that holds it. Enter on a category moves to its
+threads. Each move in the thread list shows that article in the preview,
+and Enter opens it. ← goes back to the tree. `p` posts, `r` replies to
+the open article, `x` deletes, and `b` and `c` create a bundle or a
+category in the selected bundle, or in the bundle that holds the
+selected category.
 
 On the Admin tab, Enter edits an account, `n` creates one, `o` opens
 one by login, and `x` deletes one. In the account form, Space turns

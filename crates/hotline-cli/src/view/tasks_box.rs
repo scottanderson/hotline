@@ -286,10 +286,16 @@ mod tests {
     }
 
     #[test]
-    fn the_tasks_box_fills_the_right_column_without_the_user_list() {
+    fn the_tasks_box_shows_on_a_tab_without_the_user_list() {
         let mut view = view_with_tasks();
-        view.tab = Tab::Threaded;
-        assert!(!view.shows_users());
+        view.tab = Tab::Files;
+        view.focus = Focus::Files;
+        assert_eq!(view.side().map(|side| side.users), Some(false));
+        let _ = press(&mut view, KeyCode::Tab);
+        assert_eq!(view.focus, Focus::Tasks);
+        let _ = press(&mut view, KeyCode::Tab);
+        assert_eq!(view.focus, Focus::Files);
+
         let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], view.side(), false, 2);
         assert_eq!(areas.users.height, 0);
         assert_eq!(areas.tasks.height, areas.body.height);

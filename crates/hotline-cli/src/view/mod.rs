@@ -357,7 +357,7 @@ impl View {
             edit("c", "comment", FileEdit::Comment),
             edit("m", "move", FileEdit::Move),
             edit("a", "alias", FileEdit::Alias),
-            Hint::new("Tab", "users"),
+            Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
             Hint::new("Esc", "chat"),
         ]
     }
@@ -504,7 +504,7 @@ impl View {
                 Hint::new("n", "new").enabled_by(Access::CREATE_USER),
                 Hint::new("o", "open").enabled_by(Access::OPEN_USER),
                 Hint::new("x", "delete").enabled_by(Access::DELETE_USER),
-                Hint::new("Tab", "users"),
+                Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::NewsFolders, _) | (None, Focus::Input, Tab::Threaded) => vec![
@@ -559,7 +559,7 @@ impl View {
                 Hint::new("Enter", "post").enabled_by(Access::POST_NEWS_ART),
                 Hint::new("⇧Enter", "new line"),
                 Hint::new("↑↓", "scroll"),
-                Hint::new("Tab", "users"),
+                Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::Users | Focus::Files | Focus::Tasks, _)
@@ -1003,7 +1003,7 @@ impl View {
                 };
             }
             _ if input.edit(key) => {}
-            (KeyCode::Tab, _) => self.focus = Focus::Users,
+            (KeyCode::Tab, _) => self.focus = self.side_focus(),
             (KeyCode::Esc, Tab::Chat) => self.modal = Some(Modal::Quit),
             (KeyCode::Esc, _) => return self.set_tab(Tab::Chat),
             (KeyCode::Up, Tab::News) => self.scroll_news(-1),
@@ -1017,7 +1017,7 @@ impl View {
 
     fn files_key(&mut self, key: KeyEvent, files: &[FileNameWithInfo]) -> Action {
         match key.code {
-            KeyCode::Tab => self.focus = Focus::Users,
+            KeyCode::Tab => self.focus = self.side_focus(),
             KeyCode::Esc => return self.set_tab(Tab::Chat),
             KeyCode::Up => self.files.select_previous(),
             KeyCode::Down => self.files.select_next(),
@@ -1120,7 +1120,7 @@ impl View {
 
     fn accounts_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Tab => self.focus = Focus::Users,
+            KeyCode::Tab => self.focus = self.side_focus(),
             KeyCode::Esc => return self.set_tab(Tab::Chat),
             KeyCode::Up => self.accounts.select_previous(),
             KeyCode::Down => self.accounts.select_next(),
@@ -1213,8 +1213,7 @@ impl View {
 
     fn news_preview_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Tab if self.shows_tasks() => self.focus = Focus::Tasks,
-            KeyCode::Tab => self.focus = Focus::NewsFolders,
+            KeyCode::Tab => self.focus = self.side_focus(),
             KeyCode::Esc => return self.set_tab(Tab::Chat),
             KeyCode::Up => self.scroll_preview(-1),
             KeyCode::Down => self.scroll_preview(1),
@@ -1578,9 +1577,21 @@ impl View {
         row_at(self.news.offset(), row, self.news_count)
     }
 
-    /// `false` on a tab that hides the user list.
-    pub fn shows_users(&self) -> bool {
-        self.tab != Tab::Threaded
+    /// `true` on a chat tab: Chat or a room.
+    pub const fn shows_users(&self) -> bool {
+        matches!(self.tab, Tab::Chat | Tab::Room(_))
+    }
+
+    /// The focus that Tab gives from the main pane: the user list, else the
+    /// tasks box, else the main pane.
+    const fn side_focus(&self) -> Focus {
+        if self.shows_users() {
+            Focus::Users
+        } else if self.shows_tasks() {
+            Focus::Tasks
+        } else {
+            Focus::main(self.tab)
+        }
     }
 }
 
@@ -2436,12 +2447,14 @@ mod tests {
     }
 
     #[test]
-    fn tab_from_the_user_list_returns_to_the_file_list() {
+    fn only_the_chat_tabs_show_the_user_list() {
         let mut view = View::default();
+        assert!(view.shows_users());
+        view.show_room(7);
+        assert!(view.shows_users());
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
-        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
-        assert_eq!(view.focus, Focus::Users);
+        assert!(!view.shows_users());
         let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
         assert_eq!(view.focus, Focus::Files);
     }
