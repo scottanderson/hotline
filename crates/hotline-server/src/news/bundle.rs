@@ -16,7 +16,7 @@ const MAX_BUNDLE_DEPTH: usize = 16;
 #[serde(transparent)]
 pub struct NewsBundle {
     /// This bundle's own bundles/categories, keyed by name.
-    pub entries: HashMap<String, NewsNode>,
+    pub entries: HashMap<Box<str>, NewsNode>,
 }
 
 impl NewsBundle {
@@ -25,7 +25,7 @@ impl NewsBundle {
     fn bundle(&self, components: &[String]) -> Option<&NewsBundle> {
         let mut current = self;
         for component in components {
-            current = match current.entries.get(component)? {
+            current = match current.entries.get(component.as_str())? {
                 NewsNode::Bundle(b) => b,
                 NewsNode::Category(_) => return None,
             };
@@ -36,7 +36,7 @@ impl NewsBundle {
     fn bundle_mut(&mut self, components: &[String]) -> Option<&mut NewsBundle> {
         let mut current = self;
         for component in components {
-            current = match current.entries.get_mut(component)? {
+            current = match current.entries.get_mut(component.as_str())? {
                 NewsNode::Bundle(b) => b,
                 NewsNode::Category(_) => return None,
             };
@@ -48,7 +48,7 @@ impl NewsBundle {
     /// an empty path, since the root has no name of its own.
     fn node(&self, components: &[String]) -> Option<&NewsNode> {
         let (last, parent) = components.split_last()?;
-        self.bundle(parent)?.entries.get(last)
+        self.bundle(parent)?.entries.get(last.as_str())
     }
 
     fn category(&self, components: &[String]) -> Option<&NewsCategory> {
@@ -60,7 +60,7 @@ impl NewsBundle {
 
     fn category_mut(&mut self, components: &[String]) -> Option<&mut NewsCategory> {
         let (last, parent) = components.split_last()?;
-        match self.bundle_mut(parent)?.entries.get_mut(last)? {
+        match self.bundle_mut(parent)?.entries.get_mut(last.as_str())? {
             NewsNode::Category(c) => Some(c),
             NewsNode::Bundle(_) => None,
         }
@@ -73,7 +73,7 @@ impl NewsBundle {
         let mut entries: Vec<(String, NewsListKind)> = bundle
             .entries
             .iter()
-            .map(|(name, node)| (name.clone(), NewsListKind::from(node)))
+            .map(|(name, node)| (name.to_string(), NewsListKind::from(node)))
             .collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         Some(entries)
@@ -106,7 +106,7 @@ impl NewsBundle {
         let parent = self.check_new_name(components, name)?;
         parent
             .entries
-            .insert(name.to_string(), NewsNode::Bundle(NewsBundle::default()));
+            .insert(name.into(), NewsNode::Bundle(NewsBundle::default()));
         Ok(())
     }
 
@@ -127,7 +127,7 @@ impl NewsBundle {
         let parent = self.check_new_name(components, name)?;
         parent
             .entries
-            .insert(name.to_string(), NewsNode::Category(category));
+            .insert(name.into(), NewsNode::Category(category));
         Ok(())
     }
 
@@ -152,10 +152,10 @@ impl NewsBundle {
     pub fn delete(&mut self, components: &[String]) -> Result<(), &'static str> {
         let (last, parent) = components.split_last().ok_or("cannot delete the root")?;
         let parent = self.bundle_mut(parent).ok_or("news item not found")?;
-        if !parent.entries.contains_key(last) {
+        if !parent.entries.contains_key(last.as_str()) {
             return Err("news item not found");
         }
-        parent.entries.remove(last);
+        parent.entries.remove(last.as_str());
         Ok(())
     }
 
