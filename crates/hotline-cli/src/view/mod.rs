@@ -123,7 +123,8 @@ pub struct View {
     pub tab: Tab,
     pub focus: Focus,
     pub modal: Option<Modal>,
-    /// Each tab and its label: the tab bar in order, then the rooms.
+    /// Each tab and its label: the tab bar in order, then the tabs in the
+    /// rows under it.
     pub tabs: Vec<(Tab, String)>,
     pub chat_input: TextBox,
     pub post_input: TextBox,
@@ -180,6 +181,7 @@ impl Default for View {
             tabs: Tab::FIXED
                 .iter()
                 .map(|&(tab, label)| (tab, label.to_string()))
+                .chain([(Tab::Threaded, Tab::THREADED_LABEL.to_string())])
                 .collect(),
             chat_input: TextBox::new(),
             post_input: TextBox::new(),
@@ -250,8 +252,8 @@ impl View {
         }
     }
 
-    /// The index in `tabs` of the first room.
-    fn first_room(&self) -> usize {
+    /// The index in `tabs` of the first tab in a row under the tab bar.
+    fn first_sub(&self) -> usize {
         self.tabs
             .iter()
             .position(|&(tab, _)| tab != tab.top())
@@ -260,30 +262,33 @@ impl View {
 
     /// The tabs of the tab bar.
     pub fn bar_tabs(&self) -> &[(Tab, String)] {
-        self.tabs.get(..self.first_room()).unwrap_or_default()
+        self.tabs.get(..self.first_sub()).unwrap_or_default()
     }
 
-    /// The row under the Chat tab: Public, then each room. It is empty
-    /// with no room, or on another tab.
-    pub fn room_row(&self) -> Vec<(Tab, String)> {
-        let rooms = self.tabs.get(self.first_room()..).unwrap_or_default();
-        if rooms.is_empty() || self.tab.top() != Tab::Chat {
+    /// The row under the shown tab of the tab bar: Public and each room
+    /// under Chat, or the message board and the threaded news under News.
+    /// It is empty when the bar tab has nothing under it.
+    pub fn sub_row(&self) -> Vec<(Tab, String)> {
+        let top = self.tab.top();
+        let subs = self.tabs.get(self.first_sub()..).unwrap_or_default();
+        let mut subs = subs.iter().filter(|&&(tab, _)| tab.top() == top).peekable();
+        let Some(label) = top.row_label().filter(|_| subs.peek().is_some()) else {
             return Vec::new();
-        }
-        std::iter::once((Tab::Chat, Tab::PUBLIC_LABEL.to_string()))
-            .chain(rooms.iter().cloned())
+        };
+        std::iter::once((top, label.to_string()))
+            .chain(subs.cloned())
             .collect()
     }
 
-    /// Whether the room row shows.
-    pub fn has_room_row(&self) -> bool {
-        !self.room_row().is_empty()
+    /// Whether the row under the tab bar shows.
+    pub fn has_sub_row(&self) -> bool {
+        !self.sub_row().is_empty()
     }
 
-    /// The entry of the room row after the shown one, or before it, with
-    /// wraparound.
-    fn step_room(&self, forward: bool) -> Option<Tab> {
-        let row = self.room_row();
+    /// The entry of the row under the tab bar after the shown one, or
+    /// before it, with wraparound.
+    fn step_sub(&self, forward: bool) -> Option<Tab> {
+        let row = self.sub_row();
         let at = row.iter().position(|&(tab, _)| tab == self.tab)?;
         let next = if forward {
             row.get(at.saturating_add(1)).or(row.first())
@@ -518,6 +523,7 @@ impl View {
                 Hint::new("b", "new bundle").enabled_by(Access::NEWS_CREATE_FLDR),
                 Hint::new("c", "new category").enabled_by(Access::NEWS_CREATE_CAT),
                 Hint::new("Tab", "threads"),
+                Hint::new("Alt-,.", "news"),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::NewsThreads, _) => vec![
@@ -541,7 +547,7 @@ impl View {
                 Hint::new("Tab", "users"),
             ]
             .into_iter()
-            .chain(self.has_room_row().then_some(Hint::new("Alt-,.", "room")))
+            .chain(self.has_sub_row().then_some(Hint::new("Alt-,.", "room")))
             .chain([
                 Hint::new("F1-F9", "tab"),
                 Hint::new("^P", "commands"),
@@ -560,6 +566,7 @@ impl View {
                 Hint::new("Enter", "post").enabled_by(Access::POST_NEWS_ART),
                 Hint::new("⇧Enter", "new line"),
                 Hint::new("↑↓", "scroll"),
+                Hint::new("Alt-,.", "news").only_if(self.has_sub_row()),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::Users | Focus::Files | Focus::Tasks, _)
@@ -590,9 +597,9 @@ impl View {
                 None => Action::None,
             };
         }
-        if let Some(forward) = room_step(key) {
+        if let Some(forward) = sub_step(key) {
             return self
-                .step_room(forward)
+                .step_sub(forward)
                 .map_or(Action::None, |tab| self.set_tab(tab));
         }
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -1288,7 +1295,7 @@ impl View {
                 if let Some(tab) = ui::tab_at(areas.tabs, x, y, self.bar_tabs()) {
                     return self.set_tab(tab);
                 }
-                if let Some(tab) = ui::tab_at(areas.rooms, x, y, &self.room_row()) {
+                if let Some(tab) = ui::tab_at(areas.sub_row, x, y, &self.sub_row()) {
                     return self.set_tab(tab);
                 }
                 if let Some(user_id) = self.user_at(areas.users, x, y, users) {
@@ -1645,8 +1652,9 @@ const fn is_menu_key(key: KeyEvent) -> bool {
     }
 }
 
-/// `Some(true)` for Alt-`.`, the next room, and `Some(false)` for Alt-`,`.
-const fn room_step(key: KeyEvent) -> Option<bool> {
+/// `Some(true)` for Alt-`.`, the next entry of the row under the tab bar,
+/// and `Some(false)` for Alt-`,`.
+const fn sub_step(key: KeyEvent) -> Option<bool> {
     if !key.modifiers.contains(KeyModifiers::ALT) || key.modifiers.contains(KeyModifiers::CONTROL) {
         return None;
     }
@@ -2287,10 +2295,7 @@ mod tests {
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
             Action::None
         );
-        assert_eq!(
-            view.handle_key(key(KeyCode::F(4)), &users(), &files()),
-            Action::None
-        );
+        assert_eq!(view.handle_key(alt('.'), &users(), &files()), Action::None);
         assert_eq!(view.tab, Tab::Threaded);
     }
 
@@ -2551,6 +2556,16 @@ mod tests {
         assert_eq!(view.modal, None);
     }
 
+    /// Open the threaded news with F2 and Alt-`.`.
+    fn open_threaded(view: &mut View) -> Action {
+        let _ = view.handle_key(key(KeyCode::F(2)), &users(), &files());
+        view.handle_key(alt('.'), &users(), &files())
+    }
+
+    fn alt(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
+    }
+
     /// A view whose tab bar has rooms 7 and 9.
     fn view_with_rooms() -> View {
         let mut view = granted();
@@ -2593,9 +2608,9 @@ mod tests {
         let alt_3 = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT);
         let _ = view.handle_key(alt_3, &users(), &files());
         assert_eq!(view.tab, Tab::Files);
-        let _ = view.handle_key(key(KeyCode::F(5)), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::F(4)), &users(), &files());
         assert_eq!(view.tab, Tab::Tasks);
-        let _ = view.handle_key(key(KeyCode::F(6)), &users(), &files());
+        let _ = view.handle_key(key(KeyCode::F(5)), &users(), &files());
         assert_eq!(view.tab, Tab::Tasks);
         let _ = view.handle_key(key(KeyCode::F(1)), &users(), &files());
         assert_eq!(view.tab, Tab::Chat);
@@ -2604,7 +2619,6 @@ mod tests {
     #[test]
     fn alt_comma_and_dot_step_through_the_room_row_and_wrap() {
         let mut view = view_with_rooms();
-        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
         for tab in [Tab::Room(7), Tab::Room(9), Tab::Chat] {
             let _ = view.handle_key(alt('.'), &users(), &files());
             assert_eq!(view.tab, tab);
@@ -2635,20 +2649,39 @@ mod tests {
     }
 
     #[test]
-    fn room_row_lists_public_and_each_room_on_the_chat_tab() {
+    fn sub_row_lists_public_and_each_room_on_the_chat_tab() {
         let mut view = granted();
-        assert!(view.room_row().is_empty());
-        assert!(!view.has_room_row());
+        assert!(view.sub_row().is_empty());
+        assert!(!view.has_sub_row());
         assert_eq!(hint_enabled(&view, "Alt-,.", "room"), None);
         view = view_with_rooms();
         assert_eq!(hint_enabled(&view, "Alt-,.", "room"), Some(true));
-        let row: Vec<Tab> = view.room_row().into_iter().map(|(tab, _)| tab).collect();
+        let row: Vec<Tab> = view.sub_row().into_iter().map(|(tab, _)| tab).collect();
         assert_eq!(row, [Tab::Chat, Tab::Room(7), Tab::Room(9)]);
-        assert!(view.has_room_row());
+        assert!(view.has_sub_row());
         assert_eq!(view.bar_tabs().len(), Tab::FIXED.len());
+        let _ = view.handle_key(key(KeyCode::F(3)), &users(), &files());
+        assert!(view.sub_row().is_empty());
+        assert!(!view.has_sub_row());
+    }
+
+    #[test]
+    fn sub_row_lists_the_message_board_and_the_threaded_news_on_the_news_tab() {
+        let mut view = granted();
+        assert!(view.sub_row().is_empty());
         let _ = view.handle_key(key(KeyCode::F(2)), &users(), &files());
-        assert!(view.room_row().is_empty());
-        assert!(!view.has_room_row());
+        let row: Vec<Tab> = view.sub_row().into_iter().map(|(tab, _)| tab).collect();
+        assert_eq!(row, [Tab::News, Tab::Threaded]);
+        assert_eq!(view.bar_tabs().len(), Tab::FIXED.len());
+        assert_eq!(
+            view.handle_key(alt(','), &users(), &files()),
+            Action::ListThreadedNews
+        );
+        assert_eq!(
+            view.handle_key(alt(','), &users(), &files()),
+            Action::GetMsgs
+        );
+        assert_eq!(view.tab, Tab::News);
     }
 
     #[test]
@@ -2661,9 +2694,9 @@ mod tests {
             Some(Side::USERS),
             true,
         );
-        let row = areas.rooms;
+        let row = areas.sub_row;
         let x = (row.x..row.right())
-            .find(|&x| ui::tab_at(row, x, row.y, &view.room_row()) == Some(Tab::Room(7)))
+            .find(|&x| ui::tab_at(row, x, row.y, &view.sub_row()) == Some(Tab::Room(7)))
             .unwrap();
         let left = click(MouseEventKind::Down(MouseButton::Left), x, row.y);
         let _ = view.handle_mouse(left, &areas, &users(), &files(), Instant::now());
@@ -2906,12 +2939,9 @@ mod tests {
     }
 
     #[test]
-    fn f4_opens_threaded_news_and_walks_its_panes() {
+    fn alt_dot_opens_threaded_news_and_walks_its_panes() {
         let mut view = granted();
-        assert_eq!(
-            view.handle_key(key(KeyCode::F(4)), &users(), &files()),
-            Action::ListThreadedNews
-        );
+        assert_eq!(open_threaded(&mut view), Action::ListThreadedNews);
         assert_eq!((view.tab, view.focus), (Tab::Threaded, Focus::NewsFolders));
         assert!(!view.shows_users());
         assert_eq!(
@@ -3011,7 +3041,7 @@ mod tests {
     #[test]
     fn a_new_category_takes_its_name_and_a_delete_takes_y() {
         let mut view = granted();
-        let _ = view.handle_key(key(KeyCode::F(4)), &users(), &files());
+        let _ = open_threaded(&mut view);
         let _ = view.handle_key(key(KeyCode::Char('c')), &users(), &files());
         type_text(&mut view, "Gen");
         assert_eq!(
@@ -3067,19 +3097,19 @@ mod tests {
     }
 
     #[test]
-    fn f6_opens_the_admin_tab_only_when_it_is_shown() {
+    fn f5_opens_the_admin_tab_only_when_it_is_shown() {
         let mut view = granted();
         assert_eq!(
-            view.handle_key(key(KeyCode::F(6)), &users(), &files()),
+            view.handle_key(key(KeyCode::F(5)), &users(), &files()),
             Action::None
         );
         assert_eq!(view.tab, Tab::Chat);
 
         let mut tabs = view.tabs.clone();
-        tabs.push((Tab::Admin, Tab::ADMIN_LABEL.to_string()));
+        tabs.insert(Tab::FIXED.len(), (Tab::Admin, Tab::ADMIN_LABEL.to_string()));
         view.set_tabs(tabs);
         assert_eq!(
-            view.handle_key(key(KeyCode::F(6)), &users(), &files()),
+            view.handle_key(key(KeyCode::F(5)), &users(), &files()),
             Action::ListAccounts
         );
         assert_eq!((view.tab, view.focus), (Tab::Admin, Focus::Accounts));

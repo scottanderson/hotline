@@ -39,12 +39,14 @@ host, because they can read a command line.
 
 The line at the bottom of the screen shows the keys of the focused
 pane.
-The tabs are Chat, News, Files, Threaded News, and Tasks, then Admin
-with the account privileges. Each tab has a number, which the tab bar
-shows. F1 to F9, or Alt with 1 to 9, opens a tab. When you have joined
-a private chat room, a row under the tab bar of Chat and of each room
-shows Public, the public chat, then each room. Alt-, and Alt-. move to
-the previous and the next entry of that row. Each tab has a main pane.
+The tabs are Chat, News, Files, and Tasks, then Admin with the account
+privileges. Each tab has a number, which the tab bar shows. F1 to F9,
+or Alt with 1 to 9, opens a tab. When you have joined a private chat
+room, a row under the tab bar of Chat and of each room shows Public,
+the public chat, then each room. A row under the News tab shows
+Message Board, the classic news, and Threaded News. Alt-, and Alt-.
+move to the previous and the next entry of that row. Each tab has a
+main pane.
 Chat and each room also have the user list, and Tab moves between it
 and the main pane. Esc goes back to Chat. On Chat, Esc asks whether to
 quit. Ctrl-C asks too, from anywhere, and a second Ctrl-C quits.
@@ -82,8 +84,8 @@ or the folder privilege, for the kind of the selected item.
 | Alt-A  | outside a dialog     | a broadcast                                     |
 | Alt-O  | outside a dialog     | your name, icon, and options                    |
 | Alt-T  | outside a dialog     | the Tasks tab, or back to the tab before it     |
-| Alt-,  | Chat, a room         | the previous room, or Public                    |
-| Alt-.  | Chat, a room         | the next room, or Public                        |
+| Alt-,  | Chat, a room, News   | the previous entry of the row under the tab bar |
+| Alt-.  | Chat, a room, News   | the next entry of the row under the tab bar     |
 | Alt-I  | a room               | invite a user                                   |
 | Alt-S  | a room               | set the subject                                 |
 | Alt-W  | a room               | leave the room                                  |

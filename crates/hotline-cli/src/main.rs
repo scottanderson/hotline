@@ -219,7 +219,7 @@ async fn run(
                             view.input().map(TextBox::as_str),
                             &view.hints(files),
                             view.side(),
-                            view.has_room_row(),
+                            view.has_sub_row(),
                         );
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())
                     }

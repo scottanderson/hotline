@@ -28,8 +28,8 @@ use crate::view::{
 pub struct Areas {
     pub screen: Rect,
     pub tabs: Rect,
-    /// The room row under the Chat tab.
-    pub rooms: Rect,
+    /// The row under the Chat or the News tab.
+    pub sub_row: Rect,
     /// The chat lines or the news.
     pub body: Rect,
     pub input: Rect,
@@ -91,19 +91,19 @@ impl Side {
 
 /// `input` is the text in the input line, which grows to fit it. With `None`,
 /// the input line has no rows. The hint line grows to fit `hints`. `side`
-/// is the right column, and `None` hides it. Without `rooms`, the room row
-/// has no rows.
+/// is the right column, and `None` hides it. Without `sub_row`, the row
+/// under the tab bar has no rows.
 pub fn areas(
     screen: Rect,
     input: Option<&str>,
     hints: &[Hint],
     side: Option<Side>,
-    rooms: bool,
+    sub_row: bool,
 ) -> Areas {
     let hint_rows = hint_rows(hints, screen.width).len() as u16;
-    let [tabs, rooms, middle, hints] = screen.layout(&Layout::vertical([
+    let [tabs, sub_row, middle, hints] = screen.layout(&Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(u16::from(rooms)),
+        Constraint::Length(u16::from(sub_row)),
         Constraint::Min(6),
         Constraint::Length(hint_rows),
     ]));
@@ -124,7 +124,7 @@ pub fn areas(
     Areas {
         screen,
         tabs,
-        rooms,
+        sub_row,
         body,
         input,
         users,
@@ -184,15 +184,16 @@ pub fn inner(rect: Rect) -> Rect {
     Block::bordered().inner(rect)
 }
 
-/// Each tab and its label: the fixed tabs, then one for each room. Each
-/// of the first nine labels before the rooms starts with its number, the
-/// key of the tab.
+/// Each tab and its label: the tabs of the tab bar, then the threaded
+/// news, then one for each room. Each of the first nine labels of the tab
+/// bar starts with its number, the key of the tab.
 pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
     let fixed = Tab::FIXED
         .iter()
         .map(|&(tab, label)| (tab, label.to_string()));
     let admin = allows(session.granted(), Tab::Admin.enabled_by())
         .then(|| (Tab::Admin, Tab::ADMIN_LABEL.to_string()));
+    let threaded = (Tab::Threaded, Tab::THREADED_LABEL.to_string());
     let rooms = session
         .rooms
         .iter()
@@ -204,6 +205,7 @@ pub fn tab_labels(session: &ClientSession) -> Vec<(Tab, String)> {
             1..=9 => (tab, format!("{n} {label}")),
             _ => (tab, label),
         })
+        .chain(std::iter::once(threaded))
         .chain(rooms)
         .collect()
 }
@@ -306,16 +308,16 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     }
 
     let hints = view.hints(session.files.as_deref().unwrap_or_default());
-    let room_row = view.room_row();
+    let sub_row = view.sub_row();
     let areas = areas(
         frame.area(),
         view.input().map(TextBox::as_str),
         &hints,
         view.side(),
-        !room_row.is_empty(),
+        !sub_row.is_empty(),
     );
     draw_tabs(frame, areas.tabs, view, view.bar_tabs(), true);
-    draw_tabs(frame, areas.rooms, view, &room_row, false);
+    draw_tabs(frame, areas.sub_row, view, &sub_row, false);
     match view.tab {
         Tab::Chat => draw_messages(frame, areas.body, &session.lines, "Hotline"),
         Tab::News | Tab::Threaded if !view.may(view.tab.enabled_by()) => {
@@ -1351,6 +1353,16 @@ mod tests {
         let labels = tab_labels(&session);
         assert_eq!(labels.first(), Some(&(Tab::Chat, "1 Chat".to_string())));
         assert_eq!(labels.last(), Some(&(Tab::Room(7), "Chat 7".to_string())));
+    }
+
+    #[test]
+    fn tab_labels_hold_the_threaded_news_after_the_tab_bar() {
+        let session = ClientSession::new("me", 0, Default::default());
+        let labels = tab_labels(&session);
+        assert_eq!(
+            labels.last(),
+            Some(&(Tab::Threaded, Tab::THREADED_LABEL.to_string()))
+        );
     }
 
     #[test]
