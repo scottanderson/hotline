@@ -10,3 +10,4 @@ Cargo.lock
 .DS_Store
 *.swp
 .claude
+__pycache__/

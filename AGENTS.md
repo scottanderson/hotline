@@ -135,7 +135,8 @@ Session tests build their fixtures with `test_session` in
   `htxf` for a file transfer change that is about more than one
   crate, `plan` for a change only to `plan.md`, `agents` for a change
   only to `AGENTS.md`, `gitlint` for `.gitlint`, and `workflows` for
-  `.github/workflows/`.
+  `.github/workflows/`. A `gitlint` rule checks the area against the
+  changed files.
 - Put the reasons in the body. Add `Fixes #N` when a commit closes an
   issue. Put issue references only in commit messages.
 - Stage files by name. Keep the changes the user already staged.
