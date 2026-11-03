@@ -64,14 +64,14 @@ impl UserEntry {
     }
 
     /// Current `UserFlags`: admin (from `DISCONNECT_USERS`), idle, and
-    /// whether this user holds every/no currently-defined privilege.
+    /// whether this user holds each privilege but `NO_AGREEMENT`, or none.
     pub fn flags(&self) -> UserFlags {
         let mut flags = UserFlags::empty();
         flags.set(UserFlags::ADMIN, self.access.contains(Access::DISCON_USER));
         flags.set(UserFlags::AWAY, self.is_idle());
         flags.set(
             UserFlags::ALL_PRIVS,
-            self.access == Access::all() - Access::NO_AGREEMENT,
+            self.access.contains(Access::all() - Access::NO_AGREEMENT),
         );
         flags.set(UserFlags::NO_PRIVS, self.access.is_empty());
         flags.set(UserFlags::REFUSES_PM, self.refuses_pm);

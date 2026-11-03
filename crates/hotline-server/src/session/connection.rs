@@ -960,7 +960,7 @@ impl Session {
         flags.set(UserFlags::AWAY, self.is_away);
         flags.set(
             UserFlags::ALL_PRIVS,
-            self.access == Access::all() - Access::NO_AGREEMENT,
+            self.access.contains(Access::all() - Access::NO_AGREEMENT),
         );
         flags.set(UserFlags::NO_PRIVS, self.access.is_empty());
         flags.set(UserFlags::REFUSES_PM, self.refuses_pm);
@@ -2244,6 +2244,9 @@ mod tests {
         let all_privs = test_session("Alice", Access::all() - Access::NO_AGREEMENT);
         assert!(all_privs.user_flags().contains(UserFlags::ALL_PRIVS));
         assert!(!all_privs.user_flags().contains(UserFlags::NO_PRIVS));
+
+        let no_agreement = test_session("Dave", Access::all());
+        assert!(no_agreement.user_flags().contains(UserFlags::ALL_PRIVS));
 
         let no_privs = test_session("Bob", Access::empty());
         assert!(no_privs.user_flags().contains(UserFlags::NO_PRIVS));
