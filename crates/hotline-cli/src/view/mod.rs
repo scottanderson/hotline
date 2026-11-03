@@ -133,7 +133,7 @@ pub struct View {
     /// The first user list row on screen, as the last draw left it.
     pub users_offset: usize,
     /// The selection and scroll position of the file list.
-    pub files: ListState,
+    pub files: TableState,
     /// The selection and scroll position of the threaded news folder tree.
     pub news_folders: TableState,
     /// The number of rows in the folder tree.
@@ -183,7 +183,7 @@ impl Default for View {
             room_inputs: HashMap::new(),
             news_scroll: 0,
             users_offset: 0,
-            files: ListState::default().with_selected(Some(0)),
+            files: TableState::default().with_selected(Some(0)),
             news_folders: TableState::default().with_selected(Some(0)),
             news_folder_count: 0,
             news: TableState::default().with_selected(Some(0)),

@@ -28,7 +28,7 @@ impl NewsFolder {
     /// The icon of the folder in the tree.
     pub const fn icon(self) -> &'static str {
         match self {
-            Self::Bundle => "\u{1f5de}\u{fe0f}",
+            Self::Bundle => "\u{1f4da}",
             Self::Category => "\u{1f4f0}",
         }
     }
@@ -550,6 +550,13 @@ mod tests {
 
     use super::*;
     use crate::session::test_support;
+
+    #[test]
+    fn icon_needs_no_variation_selector() {
+        for folder in [NewsFolder::Bundle, NewsFolder::Category] {
+            assert!(!folder.icon().contains('\u{fe0f}'));
+        }
+    }
 
     fn summary(id: u32, parent_id: u32) -> NewsArticleSummary {
         NewsArticleSummary {

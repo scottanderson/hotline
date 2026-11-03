@@ -658,7 +658,7 @@ fn list_files(tasks: &mut Tasks, path: HlPath) {
     let request = ClientSession::get_file_name_list(&tasks.client, path);
     tasks.start(task, request, |listed, _, view, _| {
         if listed {
-            view.files = ListState::default().with_selected(Some(0));
+            view.files = TableState::default().with_selected(Some(0));
         }
     });
 }

@@ -474,8 +474,27 @@ fn draw_files(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
         frame.render_widget(Paragraph::new("loading files").block(block), area);
         return;
     };
-    let items: Vec<ListItem> = files.iter().map(|f| ListItem::new(file_label(f))).collect();
-    draw_list(frame, area, block, items, &mut view.files);
+    let cells: Vec<[String; 2]> = files.iter().map(file_cells).collect();
+    let size_width = cells
+        .iter()
+        .map(|[_, size]| text_width(size))
+        .fold(0, usize::max);
+    let rows = files.iter().zip(cells).map(|(file, cells)| {
+        let row = Row::new(cells);
+        if &file.file_type == b"alis" {
+            row.style(Style::default().fg(Color::DarkGray))
+        } else {
+            row
+        }
+    });
+    let widths = [Constraint::Fill(1), Constraint::Length(size_width as u16)];
+    let table = Table::new(rows, widths)
+        .block(block)
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    if view.files.selected().is_none() {
+        view.files.select_first();
+    }
+    frame.render_stateful_widget(table, area, &mut view.files);
 }
 
 /// Draw `items` in `block` with the selection and scroll position of
@@ -697,12 +716,38 @@ fn file_info_lines(info: &FileInfo) -> Vec<String> {
         .collect()
 }
 
-/// A folder's name with a trailing `/`, or a file's name and size.
-fn file_label(file: &FileNameWithInfo) -> String {
-    if file.is_folder() {
-        format!("{}/", file.name)
-    } else {
-        format!("{}  {}", file.name, file_size_text(file.size.into()))
+/// The cells of a file row: the icon and the name, and the size. A
+/// folder shows its item count, and an alias shows `-`.
+fn file_cells(file: &FileNameWithInfo) -> [String; 2] {
+    let size = match &file.file_type {
+        b"fldr" => format!("({})", file.size),
+        b"alis" => "-".to_string(),
+        _ => file_size_text(file.size.into()),
+    };
+    [
+        format!("{} {}", file_icon(&file.file_type), file.name),
+        size,
+    ]
+}
+
+/// The emoji of a file with the Mac type `file_type`.
+const fn file_icon(file_type: &[u8; 4]) -> &'static str {
+    match file_type {
+        b"fldr" => "📁",
+        b"HTft" => "⏳",
+        b"SITD" | b"SIT!" | b"SIT5" | b"ZIP " => "📦",
+        b"TEXT" => "📝",
+        b"ttro" => "📃",
+        b"PICT" | b"JPEG" | b"GIFf" | b"8BPS" | b"BMP " => "📷",
+        b"DEXE" | b"APPL" => "🚀",
+        b"HTbm" | b"HTtb" | b"HTss" => "🔖",
+        b"Seg1" | b"Seg2" | b"Seg3" | b"SegN" => "🧩",
+        b"alis" => "🔗",
+        b"dImg" | b"rohd" => "💿",
+        b"Mp3 " | b"MP3 " | b"mp3!" | b"SwaT" | b"RAE " | b"AIFF" | b"WAVE" | b"MiDi" => "🎵",
+        b"MooV" | b"MPEG" | b"AVI " | b"VfW " => "🎬",
+        b"SWFL" => "⚡",
+        _ => "📄",
     }
 }
 
@@ -1397,14 +1442,17 @@ mod tests {
     }
 
     #[test]
-    fn file_label_marks_a_folder_with_a_slash() {
-        let folder = FileNameWithInfo {
-            file_type: *b"fldr",
+    fn file_cells_show_the_icon_and_the_size_of_each_kind() {
+        let file = |file_type: &[u8; 4], size| FileNameWithInfo {
+            file_type: *file_type,
             creator: [0; 4],
-            size: 3,
-            name: "Games".into(),
+            size,
+            name: "a".into(),
         };
-        assert_eq!(file_label(&folder), "Games/");
+        assert_eq!(file_cells(&file(b"fldr", 3)), ["📁 a", "(3)"]);
+        assert_eq!(file_cells(&file(b"alis", 3)), ["🔗 a", "-"]);
+        assert_eq!(file_cells(&file(b"JPEG", 1536)), ["📷 a", "1K"]);
+        assert_eq!(file_cells(&file(b"????", 512)), ["📄 a", "<1K"]);
     }
 
     #[test]

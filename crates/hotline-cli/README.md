@@ -129,6 +129,12 @@ Backspace goes up. `d` downloads, `u` uploads a local file or folder,
 sets the comment, `m` moves, and `a` makes an alias. A download goes
 to `name.hpf` first. If one is there, `hlc` asks whether to resume it.
 
+Each row of the file list starts with an emoji for the file's Mac
+type, such as 📁 for a folder, 📝 for text, and 📷 for an image. The
+size has its own column, in openline's form, such as `<1K`, `12K`, or
+`1.5M`. A folder shows its item count, such as `(3)`. An alias shows
+`-`, and its row is gray.
+
 A tasks box shows each transfer with its progress, and each request
 that waits for its reply, in the order the user started them. A
 transfer shows its rate, its bytes, and the time left, such as
@@ -155,7 +161,7 @@ form (Alt-O) turns the queue off, and then each transfer starts at
 once. The queue is on when `hlc` starts.
 
 The Threaded News tab has no user list. It has three panes: a tree of
-bundles (🗞️) and categories (📰) on the left, the threads of the
+bundles (📚) and categories (📰) on the left, the threads of the
 selected category on the top right, and the selected article on the
 bottom right. Tab moves from pane to pane. In the tree, → or Enter
 opens a bundle, and ← closes it or goes to the bundle that holds it.
