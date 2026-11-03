@@ -1871,9 +1871,17 @@ impl SharedState {
         self.bans().ban(record).await
     }
 
-    /// Ban `ip` for [`TEMP_BAN_DURATION`], logging a failure.
+    /// Ban `ip` for [`TEMP_BAN_DURATION`], logging a failure. A ban on `ip`
+    /// that lasts longer stays.
     pub(crate) async fn temp_ban(&self, ip: IpAddr) {
         let until = std::time::SystemTime::now() + TEMP_BAN_DURATION;
+        let longer = self
+            .is_banned(ip)
+            .await
+            .is_some_and(|ban| ban.until.is_none_or(|end| end >= until));
+        if longer {
+            return;
+        }
         if let Err(error) = self.ban(BanRecord::new(ip, Some(until))).await {
             tracing::warn!(%ip, %error, "failed to persist ban");
         }
@@ -2189,6 +2197,17 @@ mod tests {
         assert!(shared.is_empty());
         let own = news.list_dir(&[]).await.unwrap();
         assert_eq!(own.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn temp_ban_keeps_a_permanent_ban() {
+        let state = Arc::<SharedState>::default();
+        let ip = IpAddr::from([10, 0, 0, 1]);
+        state.ban(BanRecord::new(ip, None)).await.unwrap();
+
+        state.temp_ban(ip).await;
+
+        assert_eq!(state.is_banned(ip).await.unwrap().until, None);
     }
 
     /// Matches openline's `AddToMsgBoard` header, body, and footer shape,
