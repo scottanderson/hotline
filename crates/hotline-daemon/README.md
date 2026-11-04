@@ -23,7 +23,7 @@ hls --port 5500
 
 | Path            | Contents                         | Flag                |
 |-----------------|----------------------------------|---------------------|
-| `accounts/`     | one JSON file for each account   | `--accounts-dir`    |
+| `accounts/`     | one folder for each account      | `--accounts-dir`    |
 | `files/`        | the files clients see            | `--files-dir`       |
 | `news.txt`      | classic news                     | `--news-file`       |
 | `news.json`     | threaded news                    | `--news-tree-file`  |
@@ -51,6 +51,11 @@ Text in these files is UTF-8. On the wire, text uses Mac OS Roman by
 default. `--encoding utf-8` changes the wire encoding of every
 connection. It takes a WHATWG label, such as `shift_jis`. Every client
 must use the same encoding, for example `hlc --encoding utf-8`.
+
+Each account is a folder, `accounts/<login>/`, as on openline. The
+folder holds the account in `account.json`. A new account fails if its
+folder exists. A rename of the account renames its folder. A delete
+removes the folder with all that it holds.
 
 `hls --import-news <folder>` reads the threaded news of an openline
 server: its `News` folder. It writes the tree to `--news-tree-file`,

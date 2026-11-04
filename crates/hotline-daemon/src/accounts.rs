@@ -1,10 +1,10 @@
-//! A JSON-file-backed [`AccountProvider`], one file per login under a
+//! A JSON-file-backed [`AccountProvider`], one folder per login under a
 //! directory. `hotline-server` deliberately doesn't own persistence (see
 //! its module docs); this is the concrete backend `hls` plugs in.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use hotline_server::{Account, AccountProvider};
@@ -24,8 +24,11 @@ pub fn random_password() -> std::io::Result<String> {
         .map_err(std::io::Error::other)
 }
 
-/// Persists accounts as one `<login>.json` file per account under a
-/// directory, with an in-memory cache so `get` never touches disk.
+/// The file in an account's folder that holds the account.
+const ACCOUNT_FILE: &str = "account.json";
+
+/// Persists each account as `<login>/account.json` under a directory,
+/// with an in-memory cache so `get` never touches disk.
 pub struct FileAccountProvider {
     dir: PathBuf,
     cache: RwLock<HashMap<String, Account>>,
@@ -45,17 +48,22 @@ impl FileAccountProvider {
         let mut cache = HashMap::new();
         let mut entries = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            let folder = entry.path();
+            let path = folder.join(ACCOUNT_FILE);
+            if !metadata(&folder).await?.is_some_and(|meta| meta.is_dir())
+                || !metadata(&path).await?.is_some_and(|meta| meta.is_file())
+            {
                 continue;
             }
-            let Some(login) = path.file_stem().and_then(|s| s.to_str()) else {
+            let Some(login) = entry.file_name().to_str().map(str::to_string) else {
+                let path = path.display();
+                tracing::warn!(%path, "skipped an account whose folder name is not UTF-8");
                 continue;
             };
             let bytes = tokio::fs::read(&path).await?;
             let account: Account = serde_json::from_slice(&bytes)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            cache.insert(login.to_string(), account);
+            cache.insert(login, account);
         }
 
         let cache = RwLock::new(cache);
@@ -67,12 +75,16 @@ impl FileAccountProvider {
         self.cache.read().await.is_empty()
     }
 
-    /// `None` for a login that can't be a safe filename. mhxd also rejects a `/`.
+    /// The folder of `login`. `None` for a login that can't be a safe
+    /// folder name. mhxd also rejects a `/`.
+    fn folder_for(&self, login: &str) -> Option<PathBuf> {
+        is_safe_login(login).then(|| self.dir.join(login))
+    }
+
+    /// The account file of `login`. `None` as for [`Self::folder_for`].
     fn path_for(&self, login: &str) -> Option<PathBuf> {
-        if login.is_empty() || login.contains(['/', '\\']) || login == "." || login == ".." {
-            return None;
-        }
-        Some(self.dir.join(format!("{login}.json")))
+        self.folder_for(login)
+            .map(|folder| folder.join(ACCOUNT_FILE))
     }
 
     async fn write_account(&self, login: &str, account: &Account) -> std::io::Result<()> {
@@ -97,16 +109,36 @@ impl AccountProvider for FileAccountProvider {
         self.cache.read().await.get(login).cloned()
     }
 
+    /// Makes the folder of a new login first, and fails if that folder
+    /// exists. A failed write removes the new folder again.
     async fn put(&self, login: String, account: Account) -> Result<(), Cow<'static, str>> {
-        self.write_account(&login, &account)
-            .await
-            .map_err(|e| e.to_string())?;
+        let folder = self.folder_for(&login).ok_or("invalid login")?;
+        let new = !self.cache.read().await.contains_key(&login);
+        if new {
+            tokio::fs::create_dir(&folder)
+                .await
+                .map_err(|e| match e.kind() {
+                    std::io::ErrorKind::AlreadyExists => format!(
+                        "Cannot create account \"{login}\" because there is already an account with that login."
+                    ),
+                    _ => e.to_string(),
+                })?;
+        }
+        if let Err(error) = self.write_account(&login, &account).await {
+            if new {
+                let _ = tokio::fs::remove_file(folder.join(ACCOUNT_FILE)).await;
+                let _ = tokio::fs::remove_dir(&folder).await;
+            }
+            Err(error.to_string())?;
+        }
         self.cache.write().await.insert(login, account);
         Ok(())
     }
 
+    /// Removes the account file, then the rest of the account's folder. A
+    /// failure to remove the rest leaves the folder and logs a warning.
     async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>> {
-        let Some(path) = self.path_for(login) else {
+        let (Some(path), Some(folder)) = (self.path_for(login), self.folder_for(login)) else {
             return Ok(false);
         };
         match tokio::fs::remove_file(path).await {
@@ -114,23 +146,29 @@ impl AccountProvider for FileAccountProvider {
             other => other.map_err(|e| e.to_string())?,
         }
         self.cache.write().await.remove(login);
+        if let Err(error) = tokio::fs::remove_dir_all(&folder).await {
+            let folder = folder.display();
+            tracing::warn!(%error, %folder, "could not remove a deleted account's folder");
+        }
         Ok(true)
     }
 
-    /// Moves the account file, then writes `account` into it, so a rename
-    /// works when the file system sees both logins as one name, such as a
-    /// change of only the letter case. A failed write leaves the old account
-    /// under `login`.
+    /// Moves the account's folder, then writes `account` into it, so a
+    /// rename works when the file system sees both logins as one name, such
+    /// as a change of only the letter case. A failed write leaves the old
+    /// account under `login`.
     async fn rename(
         &self,
         old_login: &str,
         login: String,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
-        let (Some(old_path), Some(path)) = (self.path_for(old_login), self.path_for(&login)) else {
+        let (Some(old_folder), Some(folder)) =
+            (self.folder_for(old_login), self.folder_for(&login))
+        else {
             Err("invalid login")?
         };
-        tokio::fs::rename(&old_path, &path)
+        tokio::fs::rename(old_folder, folder)
             .await
             .map_err(|e| e.to_string())?;
         let written = self.write_account(&login, &account).await;
@@ -156,6 +194,20 @@ impl AccountProvider for FileAccountProvider {
             .map(|(login, account)| (login.clone(), account.clone()))
             .collect()
     }
+}
+
+/// The metadata of `path`, or `None` if it does not exist.
+async fn metadata(path: &Path) -> std::io::Result<Option<std::fs::Metadata>> {
+    match tokio::fs::metadata(path).await {
+        Ok(meta) => Ok(Some(meta)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether `login` can name a folder in the accounts directory.
+fn is_safe_login(login: &str) -> bool {
+    !(login.is_empty() || login.contains(['/', '\\']) || login == "." || login == "..")
 }
 
 #[cfg(test)]
@@ -195,7 +247,7 @@ mod tests {
 
         let mode = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(accounts.clone()), 0o700);
-        assert_eq!(mode(accounts.join("alice.json")), 0o600);
+        assert_eq!(mode(accounts.join("alice").join(ACCOUNT_FILE)), 0o600);
     }
 
     #[tokio::test]
@@ -242,14 +294,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_login_with_a_path_separator_is_rejected() {
+    async fn rename_moves_the_account_folder() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        provider.put("alice".to_string(), alice()).await.unwrap();
+        std::fs::write(dir.path().join("alice").join("own.txt"), "x").unwrap();
 
-        assert!(provider
-            .put("../escape".to_string(), alice())
+        provider
+            .rename("alice", "bob".to_string(), alice())
             .await
-            .is_err());
+            .unwrap();
+
+        assert_eq!(provider.get("alice").await, None);
+        assert_eq!(provider.get("bob").await, Some(alice()));
+        assert!(!dir.path().join("alice").exists());
+        assert!(dir.path().join("bob").join(ACCOUNT_FILE).is_file());
+        assert!(dir.path().join("bob").join("own.txt").is_file());
     }
 
     #[tokio::test]
@@ -270,11 +330,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rename_that_fails_keeps_the_file() {
+    async fn rename_onto_a_folder_with_files_fails_and_keeps_the_account() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
         provider.put("alice".to_string(), alice()).await.unwrap();
-        std::fs::create_dir(dir.path().join("bob.json")).unwrap();
+        std::fs::create_dir(dir.path().join("bob")).unwrap();
+        std::fs::write(dir.path().join("bob").join("own.txt"), "x").unwrap();
 
         assert!(provider
             .rename("alice", "bob".to_string(), alice())
@@ -282,6 +343,72 @@ mod tests {
             .is_err());
 
         assert_eq!(provider.get("alice").await, Some(alice()));
-        assert!(dir.path().join("alice.json").is_file());
+        assert_eq!(provider.get("bob").await, None);
+        assert!(dir.path().join("alice").join(ACCOUNT_FILE).is_file());
+        assert!(!dir.path().join("bob").join(ACCOUNT_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn delete_removes_the_account_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        provider.put("alice".to_string(), alice()).await.unwrap();
+        std::fs::create_dir(dir.path().join("alice").join("own")).unwrap();
+
+        assert_eq!(provider.delete("alice").await, Ok(true));
+
+        assert!(!dir.path().join("alice").exists());
+    }
+
+    #[tokio::test]
+    async fn delete_that_cannot_remove_the_account_file_keeps_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        std::fs::create_dir_all(dir.path().join("alice").join(ACCOUNT_FILE)).unwrap();
+        std::fs::write(dir.path().join("alice").join("own.txt"), "x").unwrap();
+
+        assert!(provider.delete("alice").await.is_err());
+
+        assert!(dir.path().join("alice").join("own.txt").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_new_login_whose_folder_exists_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        std::fs::create_dir(dir.path().join("alice")).unwrap();
+
+        assert_eq!(
+            provider.put("alice".to_string(), alice()).await,
+            Err(
+                "Cannot create account \"alice\" because there is already an account with that login."
+                    .into()
+            )
+        );
+
+        assert_eq!(provider.get("alice").await, None);
+        assert!(!dir.path().join("alice").join(ACCOUNT_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn a_login_with_a_path_separator_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+
+        assert!(provider
+            .put("../escape".to_string(), alice())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn open_skips_a_folder_without_an_account_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("alice")).unwrap();
+        std::fs::write(dir.path().join("bob"), "x").unwrap();
+
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+
+        assert!(provider.is_empty().await);
     }
 }
