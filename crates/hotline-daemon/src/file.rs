@@ -28,10 +28,15 @@ impl DiskFileProvider {
     pub async fn open(root: impl Into<PathBuf>) -> io::Result<Self> {
         let root = root.into();
         tokio::fs::create_dir_all(&root).await?;
-        Ok(Self {
-            root,
+        Ok(Self::new(root))
+    }
+
+    /// Serve `root`, a folder that exists.
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
             fork_store: ForkStoreKind::AppleDouble.store(),
-        })
+        }
     }
 
     /// Keep each item's Mac metadata in `fork_store`.
