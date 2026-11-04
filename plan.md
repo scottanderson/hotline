@@ -242,22 +242,14 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **An account cannot have its own files or news.** openline's
-   `GetClientRootFolder` and `GetClientRootNewsFolder` use
-   `Users/<login>/Files` and `Users/<login>/News` when the folder
-   exists, and the shared folder when it does not. hls gives every
-   account the same root. Decided: port openline's per-account roots.
-   The work needs a per-account root in `FileProvider` and the news
-   providers, and a place for these folders in the `hls` data
-   directory.
-2. **No HTTP tunnel listeners.** openline also listens on the base
+1. **No HTTP tunnel listeners.** openline also listens on the base
    port plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`,
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-3. **Chat rooms and online users have no trait.** `SharedState` keeps
+2. **Chat rooms and online users have no trait.** `SharedState` keeps
    them in memory. Put them behind traits, like the storage providers.
-4. **hlc has no task list.** Ctrl-K lists only the downloads that run,
+3. **hlc has no task list.** Ctrl-K lists only the downloads that run,
    and Enter cancels one. hlc does not keep its uploads, and it shows
    no progress. It shows no request that waits for its reply.
    openline's client keeps each transfer as a task
@@ -276,7 +268,7 @@ one-shared-room model.
      `myTran_KillDownload` (214), as now. A cancelled upload closes its
      transfer connection and sends nothing, as openline's
      `~CMyUploadTask` does.
-5. **`hlc` has no config file.** Keep the settings in
+4. **`hlc` has no config file.** Keep the settings in
    `$XDG_CONFIG_HOME/hlc/config.toml`, or `~/.config/hlc/config.toml`
    when the variable is not set, on macOS too. The file holds the
    defaults of the command-line options: the name, the icon, the

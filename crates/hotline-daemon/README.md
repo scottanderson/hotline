@@ -63,6 +63,17 @@ folder holds the account in `account.json`. A new account fails if its
 folder exists. A rename of the account renames its folder. A delete
 removes the folder with all that it holds.
 
+An account can have its own files and threaded news, as on openline.
+Make the folder `accounts/<login>/files/` for its own files, and the
+file `accounts/<login>/news.json` for its own threaded news. An empty
+`{}` starts an empty tree. The account then sees only these, and other
+accounts see the shared ones. Classic news is the same for every
+account. A `files` item that is not a folder, or a `news.json` that is
+not a file, is not a store, so the account gets the shared one. If the
+account's store exists but does not open, such as a `news.json` that
+does not parse, each request to that store gets an error, and `hls` logs
+it at the debug level. The account does not get the shared store.
+
 `hls --import-news <folder>` reads the threaded news of an openline
 server: its `News` folder. It writes the tree to `--news-tree-file`,
 then exits. It does not overwrite a file that exists. The text in the

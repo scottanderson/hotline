@@ -21,8 +21,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use hotline_server::{
-    Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoAccountStores, NoBanner,
-    Providers, Server, ServerConfig, SharedState, UrlBannerProvider,
+    Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Providers,
+    Server, ServerConfig, SharedState, UrlBannerProvider,
 };
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::{fmt, prelude::*};
@@ -85,7 +85,8 @@ async fn main() -> anyhow::Result<()> {
                 "failed to open accounts directory {} (--accounts-dir)",
                 args.accounts_dir
             )
-        })?;
+        })?
+        .with_fork_store(args.fork_store);
     if accounts.is_empty().await {
         let password = random_password()?;
         accounts
@@ -162,11 +163,11 @@ async fn main() -> anyhow::Result<()> {
     let server = Server::new(
         config,
         Providers {
-            accounts,
+            accounts: accounts.clone(),
             files,
             flat_news,
             threaded_news,
-            account_stores: Arc::new(NoAccountStores),
+            account_stores: accounts,
             bans,
             flood,
             banner,

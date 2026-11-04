@@ -7,6 +7,7 @@
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{PoisonError, RwLock};
 
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
@@ -19,7 +20,7 @@ use crate::fork_store::{ForkStore, ForkStoreKind};
 
 /// Serves one directory on disk, the same for every login.
 pub struct DiskFileProvider {
-    root: PathBuf,
+    root: RwLock<PathBuf>,
     fork_store: Box<dyn ForkStore>,
 }
 
@@ -34,9 +35,14 @@ impl DiskFileProvider {
     /// Serve `root`, a folder that exists.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
-            root: root.into(),
+            root: RwLock::new(root.into()),
             fork_store: ForkStoreKind::AppleDouble.store(),
         }
+    }
+
+    /// Serve `root` from now on, after the folder moved there.
+    pub fn move_root(&self, root: PathBuf) {
+        *self.root.write().unwrap_or_else(PoisonError::into_inner) = root;
     }
 
     /// Keep each item's Mac metadata in `fork_store`.
@@ -48,7 +54,11 @@ impl DiskFileProvider {
     /// Resolve a directory path under `root`. `None` when a component is
     /// not a plain name.
     fn resolve_dir(&self, dir: &HlPath) -> Option<PathBuf> {
-        let mut path = self.root.clone();
+        let mut path = self
+            .root
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         for component in &dir.components {
             if !self.is_plain_name(component) {
                 return None;

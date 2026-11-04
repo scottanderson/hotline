@@ -1,15 +1,22 @@
 //! A JSON-file-backed [`AccountProvider`], one folder per login under a
 //! directory. `hotline-server` deliberately doesn't own persistence (see
 //! its module docs); this is the concrete backend `hls` plugs in.
+//!
+//! An account's folder can also hold its own stores, for [`AccountStores`].
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, PoisonError};
 
 use async_trait::async_trait;
-use hotline_server::{Account, AccountProvider};
+use hotline_server::{Account, AccountProvider, AccountStores, FileProvider, ThreadedNewsProvider};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
+
+use crate::file::DiskFileProvider;
+use crate::fork_store::ForkStoreKind;
+use crate::news::FileThreadedNewsProvider;
 
 /// The seeded account with full access.
 pub const ADMIN_LOGIN: &str = "admin";
@@ -27,12 +34,28 @@ pub fn random_password() -> std::io::Result<String> {
 /// The file in an account's folder that holds the account.
 const ACCOUNT_FILE: &str = "account.json";
 
+/// The folder in an account's folder that holds its own files.
+const FILES_DIR: &str = "files";
+
+/// The file in an account's folder that holds its own threaded news.
+const NEWS_FILE: &str = "news.json";
+
 /// Persists each account as `<login>/account.json` under a directory,
 /// with an in-memory cache so `get` never touches disk.
+///
+/// An account's own stores are in its `<login>` folder too: `files/` and
+/// `news.json`. Each store that exists replaces the shared one for that
+/// account.
 pub struct FileAccountProvider {
     dir: PathBuf,
     cache: RwLock<HashMap<Box<str>, Account>>,
+    fork_store: ForkStoreKind,
+    files: Stores<DiskFileProvider>,
+    news: Stores<FileThreadedNewsProvider>,
 }
+
+/// The open stores of each login.
+type Stores<T> = std::sync::RwLock<HashMap<Box<str>, Arc<T>>>;
 
 impl FileAccountProvider {
     /// Loads every account under `dir`. A new `dir` is private to this
@@ -66,8 +89,19 @@ impl FileAccountProvider {
             cache.insert(login, account);
         }
 
-        let cache = RwLock::new(cache);
-        Ok(Self { dir, cache })
+        Ok(Self {
+            dir,
+            cache: RwLock::new(cache),
+            fork_store: ForkStoreKind::AppleDouble,
+            files: Stores::default(),
+            news: Stores::default(),
+        })
+    }
+
+    /// Keep the Mac metadata of each account's own files in `fork_store`.
+    pub const fn with_fork_store(mut self, fork_store: ForkStoreKind) -> Self {
+        self.fork_store = fork_store;
+        self
     }
 
     /// Whether the directory holds no accounts.
@@ -85,6 +119,24 @@ impl FileAccountProvider {
     fn path_for(&self, login: &str) -> Option<PathBuf> {
         self.folder_for(login)
             .map(|folder| folder.join(ACCOUNT_FILE))
+    }
+
+    /// Drop the open stores of `login`.
+    fn forget_stores(&self, login: &str) {
+        forget(&self.files, login);
+        forget(&self.news, login);
+    }
+
+    /// Give the open files store of `old_login` to `login`, and serve it
+    /// from the files folder in `folder`.
+    fn move_files(&self, old_login: &str, login: &str, folder: &Path) {
+        let mut files = self.files.write().unwrap_or_else(PoisonError::into_inner);
+        let store = files.remove(old_login);
+        files.remove(login);
+        if let Some(store) = store {
+            store.move_root(folder.join(FILES_DIR));
+            files.insert(login.into(), store);
+        }
     }
 
     async fn write_account(&self, login: &str, account: &Account) -> std::io::Result<()> {
@@ -146,6 +198,7 @@ impl AccountProvider for FileAccountProvider {
             other => other.map_err(|e| e.to_string())?,
         }
         self.cache.write().await.remove(login);
+        self.forget_stores(login);
         if let Err(error) = tokio::fs::remove_dir_all(&folder).await {
             let folder = folder.display();
             tracing::warn!(%error, %folder, "could not remove a deleted account's folder");
@@ -168,9 +221,11 @@ impl AccountProvider for FileAccountProvider {
         else {
             Err("invalid login")?
         };
-        tokio::fs::rename(old_folder, folder)
-            .await
-            .map_err(|e| e.to_string())?;
+        let moved = tokio::fs::rename(old_folder, &folder).await;
+        forget(&self.news, old_login);
+        forget(&self.news, &login);
+        moved.map_err(|e| e.to_string())?;
+        self.move_files(old_login, &login, &folder);
         let written = self.write_account(&login, &account).await;
         let mut cache = self.cache.write().await;
         let old = cache.remove(old_login);
@@ -196,12 +251,104 @@ impl AccountProvider for FileAccountProvider {
     }
 }
 
+#[async_trait]
+impl AccountStores for FileAccountProvider {
+    async fn files(&self, login: &str) -> Result<Option<Arc<dyn FileProvider>>, &'static str> {
+        let failed = |error: std::io::Error| {
+            tracing::debug!(login, %error, "could not open an account's files");
+            "the account's files cannot be opened"
+        };
+        let Some(root) = self.folder_for(login).map(|folder| folder.join(FILES_DIR)) else {
+            return Ok(None);
+        };
+        let exists = metadata(&root)
+            .await
+            .map_err(failed)?
+            .is_some_and(|meta| meta.is_dir());
+        if !exists {
+            forget(&self.files, login);
+            return Ok(None);
+        }
+        let provider = match open_store(&self.files, login) {
+            Some(provider) => provider,
+            None => {
+                let provider = DiskFileProvider::new(root).with_fork_store(self.fork_store.store());
+                keep(&self.files, login, provider)
+            }
+        };
+        Ok(Some(provider))
+    }
+
+    async fn threaded_news(
+        &self,
+        login: &str,
+    ) -> Result<Option<Arc<dyn ThreadedNewsProvider>>, &'static str> {
+        let failed = |error: std::io::Error| {
+            tracing::debug!(login, %error, "could not open an account's news");
+            "the account's news cannot be opened"
+        };
+        let Some(path) = self.folder_for(login).map(|folder| folder.join(NEWS_FILE)) else {
+            return Ok(None);
+        };
+        let exists = metadata(&path)
+            .await
+            .map_err(failed)?
+            .is_some_and(|meta| meta.is_file());
+        if !exists {
+            forget(&self.news, login);
+            return Ok(None);
+        }
+        let provider = match open_store(&self.news, login) {
+            Some(provider) => provider,
+            None => {
+                let provider = FileThreadedNewsProvider::open(path).await.map_err(failed)?;
+                keep(&self.news, login, provider)
+            }
+        };
+        Ok(Some(provider))
+    }
+}
+
 /// The metadata of `path`, or `None` if it does not exist.
 async fn metadata(path: &Path) -> std::io::Result<Option<std::fs::Metadata>> {
     match tokio::fs::metadata(path).await {
         Ok(meta) => Ok(Some(meta)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
+    }
+}
+
+/// The open store of `login` in `stores`.
+fn open_store<T>(stores: &Stores<T>, login: &str) -> Option<Arc<T>> {
+    stores
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(login)
+        .cloned()
+}
+
+/// Keep `store` as the store of `login`, or give the store that another
+/// lookup kept first, so each login uses one copy of its store.
+fn keep<T>(stores: &Stores<T>, login: &str, store: T) -> Arc<T> {
+    stores
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(login.into())
+        .or_insert_with(|| Arc::new(store))
+        .clone()
+}
+
+/// Forget the open store of `login` in `stores`.
+fn forget<T>(stores: &Stores<T>, login: &str) {
+    let open = stores
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains_key(login);
+    if open {
+        stores
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(login);
     }
 }
 
@@ -214,7 +361,8 @@ fn is_safe_login(login: &str) -> bool {
 mod tests {
     use super::*;
     use hotline_proto::consts::Access;
-    use hotline_server::AccessExtra;
+    use hotline_proto::types::HlPath;
+    use hotline_server::{AccessExtra, FileRequester};
 
     fn alice() -> Account {
         Account {
@@ -294,11 +442,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_account_has_its_own_files_while_its_files_folder_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
+        assert!(provider.files("alice").await.unwrap().is_none());
+
+        let root = dir.path().join("alice").join(FILES_DIR);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("own.txt"), "x").unwrap();
+        let requester = FileRequester { login: "alice" };
+        let files = provider.files("alice").await.unwrap().unwrap();
+        let listed = files.list(requester, &HlPath::default()).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(&*listed[0].name, "own.txt");
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(provider.files("alice").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_account_has_its_own_threaded_news_while_its_news_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        assert!(provider.threaded_news("alice").await.unwrap().is_none());
+
+        std::fs::create_dir(dir.path().join("alice")).unwrap();
+        std::fs::write(dir.path().join("alice").join(NEWS_FILE), "{}").unwrap();
+
+        let news = provider.threaded_news("alice").await.unwrap().unwrap();
+        news.mkcategory(&[], "Own").await.unwrap();
+        let again = provider.threaded_news("alice").await.unwrap().unwrap();
+        assert_eq!(again.list_dir(&[]).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_account_whose_news_file_does_not_parse_gets_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        std::fs::create_dir(dir.path().join("alice")).unwrap();
+        std::fs::write(dir.path().join("alice").join(NEWS_FILE), "not json").unwrap();
+
+        assert!(provider.threaded_news("alice").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_folder_called_news_json_gives_the_shared_news() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        std::fs::create_dir_all(dir.path().join("alice").join(NEWS_FILE)).unwrap();
+
+        assert!(provider.threaded_news("alice").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_file_called_files_gives_the_shared_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        std::fs::create_dir(dir.path().join("alice")).unwrap();
+        std::fs::write(dir.path().join("alice").join(FILES_DIR), "x").unwrap();
+
+        assert!(provider.files("alice").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn rename_moves_the_account_folder() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
         provider.put("alice".into(), alice()).await.unwrap();
-        std::fs::write(dir.path().join("alice").join("own.txt"), "x").unwrap();
+        std::fs::create_dir(dir.path().join("alice").join(FILES_DIR)).unwrap();
+        assert!(provider.files("alice").await.unwrap().is_some());
 
         provider
             .rename("alice", "bob".into(), alice())
@@ -309,7 +522,37 @@ mod tests {
         assert_eq!(provider.get("bob").await, Some(alice()));
         assert!(!dir.path().join("alice").exists());
         assert!(dir.path().join("bob").join(ACCOUNT_FILE).is_file());
-        assert!(dir.path().join("bob").join("own.txt").is_file());
+        assert!(provider.files("alice").await.unwrap().is_none());
+        assert!(provider.files("bob").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn rename_moves_an_open_files_store_with_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        provider.put("alice".into(), alice()).await.unwrap();
+        std::fs::create_dir(dir.path().join("alice").join(FILES_DIR)).unwrap();
+        let files = provider.files("alice").await.unwrap().unwrap();
+        let requester = FileRequester { login: "alice" };
+        let root = HlPath::default();
+        let mut writer = files.create_write(requester, &root, "a.txt").await.unwrap();
+        writer.write_all(b"he").await.unwrap();
+
+        provider
+            .rename("alice", "bob".into(), alice())
+            .await
+            .unwrap();
+
+        writer.write_all(b"llo").await.unwrap();
+        writer.shutdown().await.unwrap();
+        files
+            .finish_upload(requester, &root, "a.txt")
+            .await
+            .unwrap();
+        let moved = dir.path().join("bob").join(FILES_DIR).join("a.txt");
+        assert_eq!(std::fs::read(moved).unwrap(), b"hello");
+        let bob = provider.files("bob").await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&files, &bob));
     }
 
     #[tokio::test]
@@ -331,8 +574,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
         provider.put("alice".into(), alice()).await.unwrap();
-        std::fs::create_dir(dir.path().join("bob")).unwrap();
-        std::fs::write(dir.path().join("bob").join("own.txt"), "x").unwrap();
+        std::fs::create_dir_all(dir.path().join("bob").join(FILES_DIR)).unwrap();
 
         assert!(provider
             .rename("alice", "bob".into(), alice())
@@ -350,11 +592,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
         provider.put("alice".into(), alice()).await.unwrap();
-        std::fs::create_dir(dir.path().join("alice").join("own")).unwrap();
+        let root = dir.path().join("alice").join(FILES_DIR);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("own.txt"), "x").unwrap();
+        assert!(provider.files("alice").await.unwrap().is_some());
 
         assert_eq!(provider.delete("alice").await, Ok(true));
 
         assert!(!dir.path().join("alice").exists());
+        assert!(provider.files("alice").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -362,11 +608,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
         std::fs::create_dir_all(dir.path().join("alice").join(ACCOUNT_FILE)).unwrap();
-        std::fs::write(dir.path().join("alice").join("own.txt"), "x").unwrap();
+        std::fs::create_dir(dir.path().join("alice").join(FILES_DIR)).unwrap();
 
         assert!(provider.delete("alice").await.is_err());
 
-        assert!(dir.path().join("alice").join("own.txt").is_file());
+        assert!(dir.path().join("alice").join(FILES_DIR).is_dir());
+        assert!(provider.files("alice").await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -398,7 +645,7 @@ mod tests {
     #[tokio::test]
     async fn open_skips_a_folder_without_an_account_file() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("alice")).unwrap();
+        std::fs::create_dir_all(dir.path().join("alice").join(FILES_DIR)).unwrap();
         std::fs::write(dir.path().join("bob"), "x").unwrap();
 
         let provider = FileAccountProvider::open(dir.path()).await.unwrap();
