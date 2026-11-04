@@ -114,7 +114,7 @@ at `debug!`.
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 cargo test --workspace
 cargo test -p hotline-server <test_name>
 gitlint --commits main..HEAD
