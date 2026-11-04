@@ -27,6 +27,11 @@ pub struct HlDate {
 
 /// Days since 1970-01-01 for a proleptic Gregorian `(year, month, day)`.
 /// Howard Hinnant's `days_from_civil`, a standard, well known algorithm.
+/// Each step stays inside `i64` for a year within ±10¹².
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "each caller passes a year far inside the safe range"
+)]
 pub const fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -38,7 +43,12 @@ pub const fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 }
 
 /// Inverse of [`days_from_civil`]: proleptic Gregorian `(year, month,
-/// day)` for days since 1970-01-01.
+/// day)` for days since 1970-01-01. Each step stays inside `i64` for a
+/// year within ±10¹².
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "each caller passes days far inside the safe range"
+)]
 pub const fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
@@ -62,11 +72,13 @@ impl From<SystemTime> for HlDate {
         let secs = since_epoch.as_secs();
         let days = (secs / 86400) as i64;
         let (year, _month, _day) = civil_from_days(days);
-        let days_since_jan1 = days - days_from_civil(year, 1, 1);
+        let days_since_jan1 = days.saturating_sub(days_from_civil(year, 1, 1));
         Self {
             year: year as u16,
             milliseconds: since_epoch.subsec_millis() as u16,
-            seconds: days_since_jan1 as u32 * 86400 + (secs % 86400) as u32,
+            seconds: (days_since_jan1 as u32)
+                .saturating_mul(86400)
+                .saturating_add((secs % 86400) as u32),
         }
     }
 }
@@ -136,7 +148,8 @@ impl fmt::Display for HlDate {
 
     #[cfg(not(feature = "chrono"))]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let days = days_from_civil(self.year.into(), 1, 1) + i64::from(self.seconds / 86400);
+        let days =
+            days_from_civil(self.year.into(), 1, 1).saturating_add(i64::from(self.seconds / 86400));
         let (year, month, day) = civil_from_days(days);
         let time = self.seconds % 86400;
         let (hour, minute, second) = (time / 3600, time / 60 % 60, time % 60);

@@ -40,8 +40,10 @@ pub(crate) fn to_utc(date: HlDate, zone: &impl chrono::TimeZone) -> HlDate {
 
 /// `date` with no time zone.
 fn to_naive(date: HlDate) -> Option<NaiveDateTime> {
-    let seconds = days_from_civil(date.year.into(), 1, 1) * 86400 + i64::from(date.seconds);
-    let nanos = u32::from(date.milliseconds) * 1_000_000;
+    let seconds = days_from_civil(date.year.into(), 1, 1)
+        .saturating_mul(86400)
+        .saturating_add(date.seconds.into());
+    let nanos = u32::from(date.milliseconds).checked_mul(1_000_000)?;
     DateTime::from_timestamp(seconds, nanos).map(|utc| utc.naive_utc())
 }
 
@@ -50,7 +52,10 @@ fn from_naive(naive: NaiveDateTime, milliseconds: u16) -> Option<HlDate> {
     Some(HlDate {
         year: u16::try_from(naive.year()).ok()?,
         milliseconds,
-        seconds: naive.ordinal0() * 86400 + naive.num_seconds_from_midnight(),
+        seconds: naive
+            .ordinal0()
+            .saturating_mul(86400)
+            .saturating_add(naive.num_seconds_from_midnight()),
     })
 }
 
@@ -102,6 +107,17 @@ mod tests {
             seconds: 4 * 3600 + 1800,
         };
         assert_eq!(in_zone(new_year_eve, &east), new_year);
+    }
+
+    #[test]
+    fn to_utc_keeps_a_date_with_too_many_milliseconds() {
+        let date = HlDate {
+            year: 2024,
+            milliseconds: u16::MAX,
+            seconds: 3600,
+        };
+        let east = FixedOffset::east_opt(3600).unwrap();
+        assert_eq!(to_utc(date, &east), date);
     }
 
     #[test]

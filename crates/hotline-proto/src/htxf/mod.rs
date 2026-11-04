@@ -51,7 +51,7 @@ impl ResumedFork {
         let offset = resume.min(size);
         Self {
             offset,
-            len: size - offset,
+            len: size.saturating_sub(offset),
         }
     }
 
@@ -64,7 +64,7 @@ impl ResumedFork {
 /// Byte length of [`flat_file_header`]'s output for `info_len` bytes of
 /// `INFO` fork data.
 pub const fn flat_file_header_len(info_len: usize) -> usize {
-    FLAT_FILE_PREFIX_LEN + ForkHeader::LEN + info_len + ForkHeader::LEN
+    info_len.saturating_add(FLAT_FILE_PREFIX_LEN + 2 * ForkHeader::LEN)
 }
 
 /// Byte length of [`flat_file_header`]'s output with [`empty_info`].

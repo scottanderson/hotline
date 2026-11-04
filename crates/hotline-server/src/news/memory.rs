@@ -40,7 +40,7 @@ impl FlatNewsProvider for InMemoryNewsProvider {
     async fn post(&self, entry: &str) {
         let _guard = self.flat_lock.lock().await;
         let flat = self.load().await;
-        let mut new_flat = String::with_capacity(entry.len() + flat.len());
+        let mut new_flat = String::with_capacity(entry.len().saturating_add(flat.len()));
         new_flat.push_str(entry);
         new_flat.push_str(&flat);
         *write(&self.flat) = new_flat.into();

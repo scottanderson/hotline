@@ -43,7 +43,7 @@ impl FolderReceiver {
             self.stream = None;
             return Ok(None);
         };
-        self.remaining -= 1;
+        self.remaining = self.remaining.saturating_sub(1);
         stream
             .write_all(&u16::from(FolderAction::NextFile).to_be_bytes())
             .await?;

@@ -39,7 +39,7 @@ impl OptionsForm {
 
     /// The number of rows.
     pub const fn rows() -> usize {
-        TEXT_ROWS + OPTIONS.len()
+        TEXT_ROWS.saturating_add(OPTIONS.len())
     }
 
     /// The text of the selected row, `None` on an option row.

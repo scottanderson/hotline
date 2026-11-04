@@ -3,6 +3,8 @@
 //! separate from `hotline-proto`'s transaction framing, a different wire
 //! shape entirely, but reuses its `PacketWriter`/`PacketReader`/`VecWriter`.
 
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+
 mod error;
 mod server_beacon;
 mod server_list;

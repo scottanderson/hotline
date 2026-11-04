@@ -69,7 +69,7 @@ impl AccountForm {
 
     /// The number of rows.
     pub fn rows() -> usize {
-        TEXT_ROWS + privileges().count()
+        TEXT_ROWS.saturating_add(privileges().count())
     }
 
     /// The text of the selected row, `None` on a privilege row.

@@ -77,12 +77,12 @@ impl NewsCategory {
     /// Number of ancestors `id` has (0 for a root article). `id` must
     /// already exist in `self.articles`.
     pub(crate) fn depth_of(&self, mut id: u32) -> usize {
-        let mut depth = 0;
+        let mut depth = 0_usize;
         while let Some(article) = self.articles.get(&id) {
             if article.parent_id == 0 {
                 break;
             }
-            depth += 1;
+            depth = depth.saturating_add(1);
             id = article.parent_id;
         }
         depth

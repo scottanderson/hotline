@@ -1,5 +1,7 @@
 //! `hlc`, a terminal Hotline client built on `hotline-client`.
 
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+
 mod args;
 mod bell;
 mod file_edit;
@@ -133,6 +135,10 @@ async fn run(
     let mut tasks = Tasks::new(client);
     let mut last_keep_alive = Instant::now();
     let idle_since = |last_keep_alive| client.last_traffic().max(last_keep_alive);
+    let keep_alive_due = |last_keep_alive| {
+        let idle = idle_since(last_keep_alive);
+        idle.checked_add(KEEP_ALIVE).unwrap_or(idle)
+    };
 
     terminal.draw(|f| ui::draw(f, session, &mut view))?;
     while !should_quit {
@@ -147,7 +153,7 @@ async fn run(
             // A reply to a request.
             Some(step) = tasks.next() => step(session, &mut view, &mut tasks),
             // No traffic or keep-alive attempt for a while.
-            () = tokio::time::sleep_until((idle_since(last_keep_alive) + KEEP_ALIVE).into()),
+            () = tokio::time::sleep_until(keep_alive_due(last_keep_alive).into()),
                 if disconnected.is_none() =>
             {
                 if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {

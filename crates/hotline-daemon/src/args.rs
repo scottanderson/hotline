@@ -162,7 +162,7 @@ impl Args {
 
     /// The log level that `-v` and `-q` set, with INFO as the default.
     pub fn log_level(&self) -> LevelFilter {
-        match i16::from(self.verbose) - i16::from(self.quiet) {
+        match i16::from(self.verbose).saturating_sub(self.quiet.into()) {
             ..=-3 => LevelFilter::OFF,
             -2 => LevelFilter::ERROR,
             -1 => LevelFilter::WARN,

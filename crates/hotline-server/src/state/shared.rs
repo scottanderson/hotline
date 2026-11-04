@@ -643,7 +643,7 @@ impl SharedState {
         size: u64,
     ) -> Result<(), String> {
         match files.free_space(requester, dir).await {
-            Some(free) if size + UPLOAD_SPACE_MARGIN > free => Err(format!(
+            Some(free) if size.saturating_add(UPLOAD_SPACE_MARGIN) > free => Err(format!(
                 "Cannot accept upload of the {kind} \"{name}\" because there is not enough free disk space."
             )),
             _ => Ok(()),
@@ -1771,7 +1771,8 @@ impl SharedState {
     /// Ban `ip` for [`TEMP_BAN_DURATION`], logging a failure. A ban on `ip`
     /// that lasts longer stays.
     pub(crate) async fn temp_ban(&self, ip: IpAddr) {
-        let until = std::time::SystemTime::now() + TEMP_BAN_DURATION;
+        let now = std::time::SystemTime::now();
+        let until = now.checked_add(TEMP_BAN_DURATION).unwrap_or(now);
         let longer = self
             .is_banned(ip)
             .await

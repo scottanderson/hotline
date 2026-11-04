@@ -260,8 +260,12 @@ impl View {
     fn step_room(&self, forward: bool) -> Option<Tab> {
         let row = self.room_row();
         let at = row.iter().position(|&(tab, _)| tab == self.tab)?;
-        let next = if forward { at + 1 } else { at + row.len() - 1 };
-        row.get(next % row.len()).map(|&(tab, _)| tab)
+        let next = if forward {
+            row.get(at.saturating_add(1)).or(row.first())
+        } else {
+            at.checked_sub(1).and_then(|i| row.get(i)).or(row.last())
+        };
+        next.map(|&(tab, _)| tab)
     }
 
     /// Mark each tab whose revision changed while it was hidden. Clear the
@@ -558,7 +562,7 @@ impl View {
             return self.modal_key(modal, key, users);
         }
         if let Some(number) = tab_number(key) {
-            return match self.bar_tabs().get(number - 1) {
+            return match self.bar_tabs().get(number.saturating_sub(1)) {
                 Some(&(tab, _)) => self.set_tab(tab),
                 None => Action::None,
             };
@@ -865,7 +869,9 @@ impl View {
                 },
                 KeyCode::Down,
             ) => {
-                *selected = (*selected + 1).min(downloads.len().saturating_sub(1));
+                *selected = selected
+                    .saturating_add(1)
+                    .min(downloads.len().saturating_sub(1));
             }
             (
                 Modal::PickDownload {
@@ -884,7 +890,9 @@ impl View {
                 },
                 KeyCode::Down,
             ) => {
-                *selected = (*selected + 1).min(users.len().saturating_sub(1));
+                *selected = selected
+                    .saturating_add(1)
+                    .min(users.len().saturating_sub(1));
             }
             (Modal::SaveAs { name, input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::DownloadFile {
@@ -902,7 +910,9 @@ impl View {
                 },
                 KeyCode::Down,
             ) => {
-                *selected = (*selected + 1).min(items.len() - 1);
+                *selected = selected
+                    .saturating_add(1)
+                    .min(items.len().saturating_sub(1));
             }
             (
                 Modal::UserMenu {
@@ -1060,7 +1070,7 @@ impl View {
     }
 
     fn account_form_key(&mut self, mut form: AccountForm, key: KeyEvent) -> Action {
-        let last = AccountForm::rows() - 1;
+        let last = AccountForm::rows().saturating_sub(1);
         match key.code {
             KeyCode::Esc => return Action::None,
             KeyCode::Enter if !form.login.is_empty() && self.may(form.saved_by()) => {
@@ -1070,9 +1080,9 @@ impl View {
                 };
             }
             KeyCode::Up => form.row = form.row.saturating_sub(1),
-            KeyCode::Down => form.row = (form.row + 1).min(last),
+            KeyCode::Down => form.row = form.row.saturating_add(1).min(last),
             KeyCode::PageUp => form.row = form.row.saturating_sub(10),
-            KeyCode::PageDown => form.row = (form.row + 10).min(last),
+            KeyCode::PageDown => form.row = form.row.saturating_add(10).min(last),
             KeyCode::Char(' ') if form.row >= account_form::TEXT_ROWS => form.toggle(),
             _ if form.text_mut().is_some_and(|text| text.edit(key)) => {}
             _ => {}
@@ -1082,7 +1092,7 @@ impl View {
     }
 
     fn options_form_key(&mut self, mut form: OptionsForm, key: KeyEvent) -> Action {
-        let last = OptionsForm::rows() - 1;
+        let last = OptionsForm::rows().saturating_sub(1);
         match key.code {
             KeyCode::Esc => return Action::None,
             KeyCode::Enter => {
@@ -1091,7 +1101,7 @@ impl View {
                 }
             }
             KeyCode::Up => form.row = form.row.saturating_sub(1),
-            KeyCode::Down => form.row = (form.row + 1).min(last),
+            KeyCode::Down => form.row = form.row.saturating_add(1).min(last),
             KeyCode::Char(' ') if form.row >= options_form::TEXT_ROWS => form.toggle(),
             _ if form.text_mut().is_some_and(|text| text.edit(key)) => {}
             _ => {}
@@ -1465,7 +1475,7 @@ impl View {
         let next = match (current, down) {
             (None, true) => 0,
             (None, false) => last,
-            (Some(i), true) => (i + 1).min(last),
+            (Some(i), true) => i.saturating_add(1).min(last),
             (Some(i), false) => i.saturating_sub(1),
         };
         self.selected_user = users.get(next).map(|u| u.user_id);
@@ -1490,8 +1500,9 @@ impl View {
         if !contains(inner, x, y) {
             return None;
         }
-        let index = self.users_offset + usize::from(y - inner.y);
-        users.get(index).map(|u| u.user_id)
+        row_at(self.users_offset, y.saturating_sub(inner.y), users.len())
+            .and_then(|index| users.get(index))
+            .map(|u| u.user_id)
     }
 
     /// The index of the file on the list row at `x`, `y` of the Files tab.
@@ -1500,7 +1511,7 @@ impl View {
         if self.tab != Tab::Files || !contains(inner, x, y) {
             return None;
         }
-        row_at(self.files.offset(), y - inner.y, files.len())
+        row_at(self.files.offset(), y.saturating_sub(inner.y), files.len())
     }
 
     /// The index of the account on the list row at `x`, `y` of the Admin tab.
@@ -1509,7 +1520,11 @@ impl View {
         if self.tab != Tab::Admin || !contains(inner, x, y) {
             return None;
         }
-        row_at(self.accounts.offset(), y - inner.y, self.account_count)
+        row_at(
+            self.accounts.offset(),
+            y.saturating_sub(inner.y),
+            self.account_count,
+        )
     }
 
     /// The row of the folder tree at `x`, `y`.
@@ -1520,7 +1535,7 @@ impl View {
         }
         row_at(
             self.news_folders.offset(),
-            y - inner.y,
+            y.saturating_sub(inner.y),
             self.news_folder_count,
         )
     }
@@ -1531,7 +1546,8 @@ impl View {
         if !contains(inner, x, y) || y == inner.y {
             return None;
         }
-        row_at(self.news.offset(), y - inner.y - 1, self.news_count)
+        let row = y.saturating_sub(inner.y).saturating_sub(1);
+        row_at(self.news.offset(), row, self.news_count)
     }
 
     /// `false` on a tab that hides the user list.
@@ -1549,8 +1565,9 @@ fn selected(selected: Option<usize>, len: usize) -> usize {
 /// not `down`, kept in range.
 const fn step(index: usize, len: usize, down: bool) -> usize {
     if down {
-        if index + 1 < len {
-            index + 1
+        let next = index.saturating_add(1);
+        if next < len {
+            next
         } else {
             index
         }
@@ -1562,7 +1579,9 @@ const fn step(index: usize, len: usize, down: bool) -> usize {
 /// The index of the row on screen line `row` of a list of `len` rows
 /// that starts at `offset`.
 fn row_at(offset: usize, row: u16, len: usize) -> Option<usize> {
-    Some(offset + usize::from(row)).filter(|&index| index < len)
+    offset
+        .checked_add(usize::from(row))
+        .filter(|&index| index < len)
 }
 
 /// Download `file` under its own name.

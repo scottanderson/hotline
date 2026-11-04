@@ -41,7 +41,8 @@ async fn query_until(
         .await
         .context("failed to send the tracker request")?;
 
-    let deadline = tokio::time::Instant::now() + reply_timeout;
+    let now = tokio::time::Instant::now();
+    let deadline = now.checked_add(reply_timeout).unwrap_or(now);
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     let mut partial = None;

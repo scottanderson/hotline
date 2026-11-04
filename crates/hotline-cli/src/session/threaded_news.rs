@@ -143,10 +143,11 @@ fn threaded(articles: Vec<NewsArticleSummary>) -> Vec<NewsThread> {
             0 => None,
             id => rows.iter().position(|row| row.summary.id == id),
         };
-        let parent = parent.and_then(|p| rows.get(p).map(|row| (p, row.depth + 1)));
+        let parent = parent.and_then(|p| rows.get(p).map(|row| (p, row.depth.saturating_add(1))));
         let (at, depth) = parent.map_or((rows.len(), 0), |(p, depth)| {
-            let end = rows.iter().skip(p + 1).position(|row| row.depth < depth);
-            (end.map_or(rows.len(), |n| p + 1 + n), depth)
+            let after = p.saturating_add(1);
+            let end = rows.iter().skip(after).position(|row| row.depth < depth);
+            (end.map_or(rows.len(), |n| after.saturating_add(n)), depth)
         });
         rows.insert(at, NewsThread { summary, depth });
     }
@@ -264,7 +265,8 @@ impl ClientSession {
         };
         node.expanded = true;
         let children = entries.into_iter().map(|e| NewsFolderNode::new(path, e));
-        folders.splice(index + 1..index + 1, children);
+        let after = index.saturating_add(1);
+        folders.splice(after..after, children);
     }
 
     /// Hide the contents of the bundle at `index`.
@@ -277,12 +279,13 @@ impl ClientSession {
         };
         node.expanded = false;
         let depth = node.depth();
+        let after = index.saturating_add(1);
         let end = folders
             .iter()
-            .skip(index + 1)
+            .skip(after)
             .position(|child| child.depth() <= depth)
-            .map_or(folders.len(), |n| index + 1 + n);
-        folders.drain(index + 1..end);
+            .map_or(folders.len(), |n| after.saturating_add(n));
+        folders.drain(after..end);
     }
 
     /// The row of the bundle that holds the folder at `index`.

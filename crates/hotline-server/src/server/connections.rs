@@ -48,8 +48,9 @@ impl ConnectionLimits {
         if at_limit(open.total, self.max_total) || at_limit(from_ip, self.max_per_address) {
             return None;
         }
-        open.total += 1;
-        *open.by_address.entry(ip).or_default() += 1;
+        open.total = open.total.saturating_add(1);
+        let from_ip = open.by_address.entry(ip).or_default();
+        *from_ip = from_ip.saturating_add(1);
         Some(ConnectionPermit {
             limits: Arc::clone(self),
             ip,
@@ -67,9 +68,9 @@ pub(crate) struct ConnectionPermit {
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
         let mut open = lock(&self.limits.open);
-        open.total -= 1;
+        open.total = open.total.saturating_sub(1);
         if let Entry::Occupied(mut entry) = open.by_address.entry(self.ip) {
-            *entry.get_mut() -= 1;
+            *entry.get_mut() = entry.get().saturating_sub(1);
             if *entry.get() == 0 {
                 entry.remove();
             }

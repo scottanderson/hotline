@@ -1,6 +1,10 @@
 //! Requests against a real in-process `hotline-server`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::unwrap_used
+)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

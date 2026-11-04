@@ -86,13 +86,15 @@ pub fn decode_server_list(buf: &[u8], encoding: &'static Encoding) -> Result<Ser
         let header = ChunkHeader::decode(buf.get(offset..).unwrap_or_default())?;
         total = header.total_servers;
 
-        let end = offset + DATA_SIZE_END + usize::from(header.data_size);
-        let mut entries =
-            buf.get(offset + CHUNK_HEADER_LEN..end)
-                .ok_or(TrackerError::UnexpectedEof {
-                    needed: end,
-                    available: buf.len(),
-                })?;
+        let end = offset
+            .saturating_add(DATA_SIZE_END)
+            .saturating_add(usize::from(header.data_size));
+        let mut entries = buf
+            .get(offset.saturating_add(CHUNK_HEADER_LEN)..end)
+            .ok_or(TrackerError::UnexpectedEof {
+                needed: end,
+                available: buf.len(),
+            })?;
 
         for _ in 0..header.chunk_servers {
             let (server, consumed) = TrackedServer::decode(entries, encoding).map_err(|_| {

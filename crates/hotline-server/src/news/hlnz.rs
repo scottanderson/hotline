@@ -130,7 +130,7 @@ impl Reader<'_> {
     fn block(&self, offset: u32) -> Result<&[u8], &'static str> {
         let start = u64::from(offset)
             .checked_sub(1)
-            .map(|index| HEADER_AREA + index * u64::from(self.block_size))
+            .map(|index| HEADER_AREA.saturating_add(index.saturating_mul(self.block_size.into())))
             .ok_or("HLNZ block offset is 0")?;
         usize::try_from(start)
             .ok()
@@ -163,7 +163,7 @@ impl Reader<'_> {
             if !self.visited_blocks.insert(offset) {
                 return Err("HLNZ article list has a loop");
             }
-            self.remaining -= 1;
+            self.remaining = self.remaining.saturating_sub(1);
             let item = ItemBlock::decode(
                 self.block(offset)?
                     .first_chunk()
@@ -177,7 +177,7 @@ impl Reader<'_> {
                 return Err("duplicate article id in HLNZ file");
             }
             let data = self.flavors(item.first_flavor);
-            let children = self.siblings(item.first_child, item.id, depth + 1)?;
+            let children = self.siblings(item.first_child, item.id, depth.saturating_add(1))?;
             self.articles.insert(
                 item.id,
                 NewsArticle {
@@ -220,7 +220,8 @@ impl Reader<'_> {
         let next = r.u32().ok()?;
         let size = r.u32().ok()?;
         let type_len = usize::from(r.u8().ok()?);
-        let padded_type = r.bytes((type_len + 1).next_multiple_of(4) - 1).ok()?;
+        // The length byte and the padded type fill a multiple of 4 bytes.
+        let padded_type = r.bytes(type_len | 3).ok()?;
         let mime_type = String::from_utf8_lossy(padded_type.get(..type_len)?);
         let body = r.bytes(size as usize).ok()?.to_vec();
         let body = body_from_wire(&mime_type, body, self.encoding);

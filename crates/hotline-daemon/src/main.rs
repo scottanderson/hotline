@@ -1,5 +1,7 @@
 //! `hls`, a Hotline server daemon built on `hotline-server`.
 
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+
 mod accounts;
 mod activity;
 mod apple_double;

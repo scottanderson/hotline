@@ -367,7 +367,7 @@ async fn receive_folder(
     queued: &AtomicBool,
 ) -> anyhow::Result<(u32, u64)> {
     let mut receiver = download.open().await?;
-    let (mut files, mut bytes) = (0, 0);
+    let (mut files, mut bytes) = (0_u32, 0_u64);
     while let Some(item) = receiver.next_item().await? {
         queued.store(false, Ordering::Relaxed);
         let local = item
@@ -392,12 +392,13 @@ async fn receive_folder(
         };
         let (file, offset) = open_partial(&partial, item_start).await?;
         let mut out = BufWriter::new(file);
-        bytes += match offset {
+        let received = match offset {
             0 => receiver.receive_file(&mut out).await?,
             offset => receiver.resume_file(&mut out, offset).await?,
         };
+        bytes = bytes.saturating_add(received);
         tokio::fs::rename(&partial, &local).await?;
-        files += 1;
+        files = files.saturating_add(1);
     }
     Ok((files, bytes))
 }
@@ -469,7 +470,7 @@ async fn send_folder(upload: FolderUpload, items: Vec<LocalItem>) -> anyhow::Res
     let Some(mut sender) = upload.open().await? else {
         return Ok((0, 0));
     };
-    let (mut files, mut bytes) = (0, 0);
+    let (mut files, mut bytes) = (0_u32, 0_u64);
     for item in items {
         let header = FolderItemHeader {
             is_folder: item.file.is_none(),
@@ -480,10 +481,11 @@ async fn send_folder(upload: FolderUpload, items: Vec<LocalItem>) -> anyhow::Res
             let mut file = File::open(&local).await?;
             file.seek(SeekFrom::Start(offset)).await?;
             let mut data = BufReader::new(file);
-            bytes += sender
+            let sent = sender
                 .send_file(&mut data, size.saturating_sub(offset))
                 .await?;
-            files += 1;
+            bytes = bytes.saturating_add(sent);
+            files = files.saturating_add(1);
         }
     }
     sender.finish().await?;

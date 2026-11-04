@@ -236,7 +236,7 @@ impl ClientSession {
             if let Some(news) = &mut self.news {
                 news.insert_str(0, &entry);
             }
-            self.news_revision += 1;
+            self.news_revision = self.news_revision.wrapping_add(1);
             self.push("new news post", LineKind::System);
         }
     }
@@ -446,7 +446,7 @@ impl ClientSession {
             "failed to get news",
             |session: &mut Self, news| {
                 if session.news.as_ref() != Some(&news) {
-                    session.news_revision += 1;
+                    session.news_revision = session.news_revision.wrapping_add(1);
                 }
                 session.news = Some(news);
             },

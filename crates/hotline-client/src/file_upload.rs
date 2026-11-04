@@ -38,7 +38,7 @@ impl FileUpload {
     /// `data` must hold the file's bytes from [`Self::offset`] on.
     /// Returns once the server closes the connection.
     pub async fn send<R: AsyncRead + Unpin>(self, data: &mut R) -> Result<u64> {
-        let remaining = self.file_size - self.offset;
+        let remaining = self.file_size.saturating_sub(self.offset);
         let header = HtxfHeader {
             reference: self.reference,
             len: Self::transfer_size(remaining).unwrap_or(u32::MAX),

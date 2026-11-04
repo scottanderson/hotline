@@ -20,8 +20,8 @@ impl<const N: usize> Default for Fixed<N> {
 
 impl<const N: usize> Storage for Fixed<N> {
     fn append(&mut self, bytes: &[u8]) {
-        let len = bytes.len();
-        self.buf[self.pos..self.pos + len].copy_from_slice(bytes);
-        self.pos += len;
+        let end = self.pos.saturating_add(bytes.len());
+        self.buf[self.pos..end].copy_from_slice(bytes);
+        self.pos = end;
     }
 }

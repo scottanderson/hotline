@@ -50,8 +50,8 @@ impl FolderItemHeader {
     /// `size` covering everything after itself.
     pub fn encode(&self, encoding: &'static Encoding) -> Result<Vec<u8>> {
         let path_bytes = self.path.encode(encoding)?;
-        let body_len = Self::LEN + path_bytes.len();
-        let w = VecWriter::with_capacity(2 + body_len)
+        let body_len = path_bytes.len().saturating_add(Self::LEN);
+        let w = VecWriter::with_capacity(body_len.saturating_add(2))
             .u16(body_len as u16)
             .u16(u16::from(self.is_folder))
             .bytes(&path_bytes);

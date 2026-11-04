@@ -352,7 +352,10 @@ impl HotlineClient {
     /// When a transaction last went either way on the connection.
     pub fn last_traffic(&self) -> Instant {
         let nanos = self.shared.last_traffic.load(Ordering::Relaxed);
-        self.shared.connected + Duration::from_nanos(nanos)
+        let connected = self.shared.connected;
+        connected
+            .checked_add(Duration::from_nanos(nanos))
+            .unwrap_or(connected)
     }
 
     /// Tell the server that the connection is in use,

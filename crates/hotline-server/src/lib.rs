@@ -18,6 +18,8 @@
 //! # }
 //! ```
 
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+
 mod account;
 mod activity;
 mod ban;
@@ -34,6 +36,7 @@ mod server;
 mod session;
 mod state;
 mod sync;
+mod time;
 
 pub use account::{
     AccessExtra, Account, AccountProvider, AccountStores, InMemoryAccountProvider, NoAccountStores,

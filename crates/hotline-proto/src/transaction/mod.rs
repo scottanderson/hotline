@@ -110,7 +110,7 @@ impl Transaction {
         })?;
 
         Ok(
-            VecWriter::with_capacity(TransactionHeader::LEN + body.len())
+            VecWriter::with_capacity(body.len().saturating_add(TransactionHeader::LEN))
                 .u32(self.r#type.as_u32())
                 .u32(self.trans)
                 .u32(self.flag)
@@ -396,7 +396,7 @@ impl Transaction<Received> {
                 available: buf.len(),
             })?;
         let header = decode_prefix(prefix);
-        let body_end = TransactionHeader::LEN + header.data_len() as usize;
+        let body_end = (header.data_len() as usize).saturating_add(TransactionHeader::LEN);
         let body = buf
             .get(TransactionHeader::LEN..body_end)
             .ok_or(ProtoError::UnexpectedEof {

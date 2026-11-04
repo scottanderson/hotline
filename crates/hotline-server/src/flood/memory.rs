@@ -53,13 +53,13 @@ impl Window {
         if self.count > max {
             return true;
         }
-        self.count += amount;
+        self.count = self.count.saturating_add(amount);
         false
     }
 
     /// Adds `amount` without a check.
     const fn add(&mut self, amount: usize) {
-        self.count += amount;
+        self.count = self.count.saturating_add(amount);
     }
 }
 
@@ -106,7 +106,7 @@ impl UserFlood {
         text.hash(&mut hasher);
         let hash = hasher.finish();
         if self.last_text == Some(hash) {
-            self.repeats += 1;
+            self.repeats = self.repeats.saturating_add(1);
             return self.repeats == MAX_REPEATS;
         }
         self.last_text = Some(hash);
@@ -144,7 +144,7 @@ impl FloodPolicy for InMemoryFloodPolicy {
         let mut last = lock(&self.last_connection);
         match last.as_mut() {
             Some(run) if run.ip == ip => {
-                run.count += 1;
+                run.count = run.count.saturating_add(1);
                 FloodDecision::ban_if(
                     run.count > MAX_CONNECTIONS_IN_A_ROW
                         && now.duration_since(run.start) < CONNECTION_BURST,

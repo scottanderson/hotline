@@ -31,7 +31,10 @@ impl Session {
         };
         let login: Box<str> = login.to_lowercase().into();
         let access = tx.access().unwrap_or_else(Access::empty);
-        if !self.access.contains(access - Access::NO_AGREEMENT) {
+        if !self
+            .access
+            .contains(access.difference(Access::NO_AGREEMENT))
+        {
             return vec![tx.reply_error("Cannot create account with more access than yourself.")];
         }
         let account = Account {
@@ -398,7 +401,10 @@ impl Session {
         }
 
         self.access.require(Access::CREATE_USER)?;
-        if !self.access.contains(access - Access::NO_AGREEMENT) {
+        if !self
+            .access
+            .contains(access.difference(Access::NO_AGREEMENT))
+        {
             Err("Cannot create account with more access than yourself.")?;
         }
         let Some(password) = password else {

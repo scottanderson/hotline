@@ -30,7 +30,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for CountingStream<S> {
     ) -> Poll<io::Result<()>> {
         let before = buf.filled().len();
         let result = Pin::new(&mut self.inner).poll_read(cx, buf);
-        self.add(buf.filled().len() - before);
+        self.add(buf.filled().len().saturating_sub(before));
         result
     }
 }

@@ -66,11 +66,11 @@ pub fn cut<'a>(encoding: &'static Encoding, s: &'a str, max: usize) -> &'a str {
     if encode(encoding, s).len() <= max {
         return s;
     }
-    let mut len = 0;
+    let mut len = 0_usize;
     let end = s
         .char_indices()
         .find(|&(_, c)| {
-            len += encode(encoding, c.encode_utf8(&mut [0; 4])).len();
+            len = len.saturating_add(encode(encoding, c.encode_utf8(&mut [0; 4])).len());
             len > max
         })
         .map_or(s.len(), |(i, _)| i);
@@ -114,11 +114,11 @@ pub fn encode_truncated(encoding: &'static Encoding, s: &str, max: usize) -> Vec
         let (result, read, wrote) =
             encoder.encode_from_utf8_without_replacement(remaining, rest, true);
         remaining = remaining.get(read..).unwrap_or_default();
-        written += wrote;
+        written = written.saturating_add(wrote);
         match (result, out.get_mut(written)) {
             (encoding_rs::EncoderResult::Unmappable(_), Some(byte)) => {
                 *byte = FALLBACK_BYTE;
-                written += 1;
+                written = written.saturating_add(1);
             }
             _ => break,
         }

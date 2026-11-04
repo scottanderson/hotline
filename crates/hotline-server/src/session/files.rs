@@ -183,8 +183,10 @@ impl Session {
         let total_size = if raw {
             data_size
         } else {
-            let header_len = htxf::flat_file_header_len(info.len()) + ForkHeader::LEN;
-            header_len as u64 + data.len + resource.len
+            let header_len = htxf::flat_file_header_len(info.len()).saturating_add(ForkHeader::LEN);
+            (header_len as u64)
+                .saturating_add(data.len)
+                .saturating_add(resource.len)
         };
         let kind = TransferKind::File(FileTransfer {
             target: TransferTarget {

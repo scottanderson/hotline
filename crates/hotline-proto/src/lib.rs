@@ -5,6 +5,8 @@
 //! fields, and the composite types the field table refers to). The async
 //! socket handling lives in `hotline-client` / `hotline-server`.
 
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+
 pub mod consts;
 pub mod error;
 pub mod field;

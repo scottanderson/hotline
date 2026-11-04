@@ -8,6 +8,8 @@
 //! frame. Callers get a `Stream<Item = Result<Transaction, _>>` +
 //! `Sink<Transaction>`, used as `.next().await` / `.send(tx).await`.
 
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+
 mod transaction_codec;
 
 pub use transaction_codec::{CodecError, TransactionCodec};

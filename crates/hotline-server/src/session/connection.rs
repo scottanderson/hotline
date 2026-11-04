@@ -21,6 +21,8 @@ use hotline_proto::types::{UserChangeOptions, UserFlags, UserNameWithInfo};
 use hotline_proto::FieldId;
 use hotline_proto::{ClientHandshake, Field, Received, ServerHandshake, Transaction};
 
+use crate::time::deadline;
+
 use crate::account::AccessExtra;
 use crate::activity::{Activity, ActivityEntry};
 use crate::banner::BannerKind;
@@ -214,7 +216,7 @@ impl Session {
         config: ServerConfig,
     ) -> Result<()> {
         let remote_addr = stream.peer_addr()?;
-        let login_deadline = tokio::time::Instant::now() + config.login_timeout;
+        let login_deadline = deadline(tokio::time::Instant::now(), config.login_timeout);
         let Ok(handshake) =
             tokio::time::timeout_at(login_deadline, Self::handshake(&mut stream)).await
         else {
@@ -299,8 +301,8 @@ impl Session {
                     }
                     state.touch_user(session.user_id).await;
                     let now = tokio::time::Instant::now();
-                    idle_sleep.as_mut().reset(now + IDLE_THRESHOLD);
-                    login_sleep.as_mut().reset(now + config.login_timeout);
+                    idle_sleep.as_mut().reset(deadline(now, IDLE_THRESHOLD));
+                    login_sleep.as_mut().reset(deadline(now, config.login_timeout));
                     if session.is_away {
                         session.set_away(false, state).await;
                     }
@@ -308,7 +310,7 @@ impl Session {
                         send_unless_ended(writer, reply, rx).await?;
                     }
                     if matches!(session.state, SessionState::LoginFailed) {
-                        login_sleep.as_mut().reset(now + LOGIN_FAILED_WAIT);
+                        login_sleep.as_mut().reset(deadline(now, LOGIN_FAILED_WAIT));
                     }
                 }
                 // Fires after IDLE_THRESHOLD with no request from this client.
@@ -962,7 +964,8 @@ impl Session {
         flags.set(UserFlags::AWAY, self.is_away);
         flags.set(
             UserFlags::ALL_PRIVS,
-            self.access.contains(Access::all() - Access::NO_AGREEMENT),
+            self.access
+                .contains(Access::all().difference(Access::NO_AGREEMENT)),
         );
         flags.set(UserFlags::NO_PRIVS, self.access.is_empty());
         flags.set(UserFlags::REFUSES_PM, self.refuses_pm);

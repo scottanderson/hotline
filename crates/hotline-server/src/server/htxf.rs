@@ -235,11 +235,11 @@ async fn send_file(
     } else {
         let data = ResumedFork {
             offset: transfer.resume_offset,
-            len: transfer.size - transfer.resume_offset,
+            len: transfer.size.saturating_sub(transfer.resume_offset),
         };
         let resource = ResumedFork {
             offset: *resource_offset,
-            len: resource_size - resource_offset,
+            len: resource_size.saturating_sub(*resource_offset),
         };
         skip_bytes(&mut reader, data.offset).await?;
         let resource_reader = store
@@ -372,7 +372,7 @@ async fn receive_flat_file(
             if &fork_header.fork_type == b"INFO" {
                 let mut data = vec![0u8; remaining.min(FlatFileInfo::MAX_LEN as u64) as usize];
                 stream.read_exact(&mut data).await?;
-                remaining -= data.len() as u64;
+                remaining = remaining.saturating_sub(data.len() as u64);
                 info = Some(FlatFileInfo::decode(&data, encoding));
             }
             skip_bytes(stream, remaining).await?;
@@ -453,8 +453,11 @@ async fn send_folder(
                 let resource_reader = store
                     .open_resource_read(requester, &dir, name, resource.offset)
                     .await?;
-                let header_len = (htxf::flat_file_header_len(info.len()) + ForkHeader::LEN) as u64;
-                let flat_size = header_len + data.len + resource.len;
+                let header_len =
+                    htxf::flat_file_header_len(info.len()).saturating_add(ForkHeader::LEN) as u64;
+                let flat_size = header_len
+                    .saturating_add(data.len)
+                    .saturating_add(resource.len);
                 stream.write_all(&(flat_size as u32).to_be_bytes()).await?;
                 send_flat_file(
                     stream,

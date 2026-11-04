@@ -22,11 +22,11 @@ pub struct TrackedServer {
 /// returning it along with the offset just past it.
 fn read_pstring(buf: &[u8], offset: usize, encoding: &'static Encoding) -> Result<(String, usize)> {
     let len = *buf.get(offset).ok_or(TrackerError::UnexpectedEof {
-        needed: offset + 1,
+        needed: offset.saturating_add(1),
         available: buf.len(),
     })? as usize;
-    let start = offset + 1;
-    let end = start + len;
+    let start = offset.saturating_add(1);
+    let end = start.saturating_add(len);
     buf.get(start..end)
         .map(|bytes| (text_encoding::decode(encoding, bytes), end))
         .ok_or(TrackerError::UnexpectedEof {

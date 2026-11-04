@@ -1,3 +1,4 @@
+use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -44,8 +45,7 @@ impl Server {
     pub async fn run(self) -> Result<()> {
         let listener = TcpListener::bind(&*self.config.bind_addr).await?;
         let local_addr = listener.local_addr()?;
-        let htxf_addr = SocketAddr::new(local_addr.ip(), local_addr.port() + 1);
-        let htxf_listener = TcpListener::bind(htxf_addr).await?;
+        let htxf_listener = TcpListener::bind(port_above(local_addr, 1)?).await?;
         self.run_on(listener, htxf_listener).await
     }
 
@@ -91,5 +91,34 @@ impl Server {
                 }
             });
         }
+    }
+}
+
+/// The address `n` ports above `addr`. `Err` past port 65535.
+fn port_above(addr: SocketAddr, n: u16) -> Result<SocketAddr> {
+    let port = addr.port().checked_add(n).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("the port {n} above {addr} is larger than 65535"),
+        )
+    })?;
+    Ok(SocketAddr::new(addr.ip(), port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_above_adds_to_the_port() {
+        let addr: SocketAddr = "127.0.0.1:5500".parse().unwrap();
+        assert_eq!(port_above(addr, 2).unwrap().port(), 5502);
+    }
+
+    #[test]
+    fn port_above_65535_is_an_error() {
+        let addr: SocketAddr = "127.0.0.1:65534".parse().unwrap();
+        assert_eq!(port_above(addr, 1).unwrap().port(), 65535);
+        assert!(port_above(addr, 2).is_err());
     }
 }

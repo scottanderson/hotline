@@ -102,10 +102,10 @@ impl DiskFileProvider {
         let Ok(mut read_dir) = tokio::fs::read_dir(path).await else {
             return 0;
         };
-        let mut count = 0;
+        let mut count = 0_u32;
         while let Ok(Some(entry)) = read_dir.next_entry().await {
             if self.listed_name(&entry).is_some() {
-                count += 1;
+                count = count.saturating_add(1);
             }
         }
         count

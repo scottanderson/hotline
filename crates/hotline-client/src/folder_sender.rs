@@ -47,7 +47,7 @@ impl FolderSender {
                 io::Error::new(io::ErrorKind::InvalidInput, "more items than declared").into(),
             );
         }
-        self.remaining -= 1;
+        self.remaining = self.remaining.saturating_sub(1);
         if self.action_due {
             match self.read_action().await? {
                 FolderAction::NextFile => {}

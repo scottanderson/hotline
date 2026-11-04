@@ -68,7 +68,7 @@ impl FieldList {
             .collect::<Result<Vec<_>>>()?
             .concat();
 
-        Ok(VecWriter::with_capacity(2 + encoded.len())
+        Ok(VecWriter::with_capacity(encoded.len().saturating_add(2))
             .u16(count)
             .bytes(&encoded)
             .finish())
@@ -100,7 +100,7 @@ impl FieldList<Received> {
         for _ in 0..count {
             let (field, consumed) =
                 Field::decode(body.get(offset..).unwrap_or_default(), encoding)?;
-            offset += consumed;
+            offset = offset.saturating_add(consumed);
             fields.push(field);
         }
         Ok(Self::new(fields))

@@ -245,7 +245,7 @@ impl TextBox {
         self.after_cursor()
             .graphemes(true)
             .next()
-            .map_or(self.cursor, |g| self.cursor + g.len())
+            .map_or(self.cursor, |g| self.cursor.saturating_add(g.len()))
     }
 
     /// The start of the word before the cursor. A word is a run of
@@ -274,21 +274,23 @@ impl TextBox {
             } else if seen {
                 break;
             }
-            end += g.len();
+            end = end.saturating_add(g.len());
         }
         end
     }
 
     /// The start of the line that holds the cursor.
     fn line_start(&self) -> usize {
-        self.before_cursor().rfind('\n').map_or(0, |i| i + 1)
+        self.before_cursor()
+            .rfind('\n')
+            .map_or(0, |i| i.saturating_add(1))
     }
 
     /// The end of the line that holds the cursor.
     fn line_end(&self) -> usize {
         self.after_cursor()
             .find('\n')
-            .map_or(self.text.len(), |i| self.cursor + i)
+            .map_or(self.text.len(), |i| self.cursor.saturating_add(i))
     }
 
     /// The end of the line, or the line break after it when the cursor is

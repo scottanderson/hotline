@@ -46,9 +46,9 @@ impl Scrollback {
         let lines = &mut self.lines;
         lines.extend(line.text.split('\r').map(|part| Line::new(part, line.kind)));
         if lines.len() > MAX_LINES + MAX_LINES / 4 {
-            lines.drain(..lines.len() - MAX_LINES);
+            lines.drain(..lines.len().saturating_sub(MAX_LINES));
         }
-        self.revision += 1;
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// The number of pushes.

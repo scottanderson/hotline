@@ -64,7 +64,7 @@ impl Inner {
 /// The downloads ahead of a new one when `count` run and `max` may run:
 /// `0` under `max`, `count - max + 1` at or past it.
 const fn ahead(count: usize, max: usize) -> u32 {
-    (count + 1).saturating_sub(max) as u32
+    count.saturating_add(1).saturating_sub(max) as u32
 }
 
 /// One promotion or position update to push as [`myTran_DownloadInfo`] (211).
@@ -102,7 +102,7 @@ impl DownloadQueue {
             inner.active.insert(reference, user_id);
             return 0;
         }
-        let reported = waiting_count + inner.waiting.len() as u32;
+        let reported = waiting_count.saturating_add(inner.waiting.len() as u32);
         inner.notify.insert(reference, Arc::new(Notify::new()));
         inner.waiting.push_back(Waiting {
             reference,
@@ -211,7 +211,7 @@ fn recompute(inner: &mut Inner) -> Vec<QueueUpdate> {
     while let Some(user_id) = inner.waiting.get(i).map(|w| w.user_id) {
         let mut waiting_count = inner.ahead_of(user_id);
         if waiting_count > 0 {
-            waiting_count += i as u32;
+            waiting_count = waiting_count.saturating_add(i as u32);
         }
         if waiting_count == 0 {
             let Some(w) = inner.waiting.remove(i) else {
@@ -233,7 +233,7 @@ fn recompute(inner: &mut Inner) -> Vec<QueueUpdate> {
                     waiting_count,
                 });
             }
-            i += 1;
+            i = i.saturating_add(1);
         }
     }
     updates

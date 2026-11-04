@@ -71,7 +71,8 @@ impl UserEntry {
         flags.set(UserFlags::AWAY, self.is_idle());
         flags.set(
             UserFlags::ALL_PRIVS,
-            self.access.contains(Access::all() - Access::NO_AGREEMENT),
+            self.access
+                .contains(Access::all().difference(Access::NO_AGREEMENT)),
         );
         flags.set(UserFlags::NO_PRIVS, self.access.is_empty());
         flags.set(UserFlags::REFUSES_PM, self.refuses_pm);

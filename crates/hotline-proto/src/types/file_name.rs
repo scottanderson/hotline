@@ -36,7 +36,7 @@ impl FileNameWithInfo {
     /// Encode to the packed wire representation.
     pub fn encode(&self, encoding: &'static Encoding) -> Vec<u8> {
         let name_bytes = text_encoding::encode(encoding, &self.name);
-        VecWriter::with_capacity(Self::LEN + name_bytes.len())
+        VecWriter::with_capacity(name_bytes.len().saturating_add(Self::LEN))
             .bytes(&self.file_type)
             .bytes(&self.creator)
             .u32(self.size)

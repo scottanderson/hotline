@@ -7,6 +7,8 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::time::{Instant, Sleep};
 
+use crate::time::deadline;
+
 /// A stream whose reads fail with [`io::ErrorKind::TimedOut`] once `timeout`
 /// passes with no byte received.
 pub(crate) struct IdleStream<S> {
@@ -36,7 +38,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for IdleStream<S> {
         match Pin::new(&mut this.inner).poll_read(cx, buf) {
             Poll::Ready(result) => {
                 if buf.filled().len() > before {
-                    let next = Instant::now() + this.timeout;
+                    let next = deadline(Instant::now(), this.timeout);
                     this.deadline.as_mut().reset(next);
                 }
                 Poll::Ready(result)

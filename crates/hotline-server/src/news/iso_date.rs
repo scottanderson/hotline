@@ -11,7 +11,8 @@ use serde::{Deserialize, Deserializer};
 pub(crate) fn to_string(date: &HlDate) -> String {
     let days = date.seconds / 86400;
     let secs_of_day = date.seconds % 86400;
-    let (_, month, day) = civil_from_days(days_from_civil(date.year as i64, 1, 1) + days as i64);
+    let (_, month, day) =
+        civil_from_days(days_from_civil(date.year as i64, 1, 1).saturating_add(days as i64));
     let (hour, minute, second) = (secs_of_day / 3600, secs_of_day / 60 % 60, secs_of_day % 60);
     format!(
         "{:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
@@ -62,11 +63,18 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<
     let milliseconds: u16 = millis_part.parse().map_err(|_| err())?;
 
     let days_since_jan1 =
-        days_from_civil(year as i64, month, day) - days_from_civil(year as i64, 1, 1);
+        days_from_civil(year as i64, month, day).saturating_sub(days_from_civil(year as i64, 1, 1));
+    let seconds = u32::try_from(days_since_jan1)
+        .ok()
+        .and_then(|days| days.checked_mul(86400))
+        .and_then(|seconds| seconds.checked_add(hour.checked_mul(3600)?))
+        .and_then(|seconds| seconds.checked_add(minute.checked_mul(60)?))
+        .and_then(|seconds| seconds.checked_add(second))
+        .ok_or_else(err)?;
     Ok(HlDate {
         year,
         milliseconds,
-        seconds: days_since_jan1 as u32 * 86400 + hour * 3600 + minute * 60 + second,
+        seconds,
     })
 }
 
@@ -92,5 +100,11 @@ mod tests {
         let json = serde_json::Value::String(text);
         let Wrapper(round_tripped) = serde_json::from_value(json).unwrap();
         assert_eq!(round_tripped, date);
+    }
+
+    #[test]
+    fn date_with_too_many_seconds_is_an_error() {
+        let json = serde_json::Value::String("2024-03-05T99999999:00:00.000Z".into());
+        assert!(serde_json::from_value::<Wrapper>(json).is_err());
     }
 }

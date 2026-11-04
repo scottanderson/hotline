@@ -115,7 +115,7 @@ impl Palette {
 
     pub fn select_next(&mut self) {
         let last = self.matches().count().saturating_sub(1);
-        self.selected = (self.selected + 1).min(last);
+        self.selected = self.selected.saturating_add(1).min(last);
     }
 
     /// Change the filter text with `edit`. When `edit` returns `true`,

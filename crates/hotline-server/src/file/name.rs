@@ -70,18 +70,14 @@ fn windows_name(name: &str) -> String {
     }
     truncate(&mut mapped);
     let kept = mapped.trim_end_matches(['.', ' ']).len();
-    let dashes = "-".repeat(mapped.len() - kept);
+    let dashes = "-".repeat(mapped.len().saturating_sub(kept));
     mapped.replace_range(kept.., &dashes);
     mapped
 }
 
 /// Cut `name` to [`MAX_NAME_LEN`] bytes at a character boundary.
 fn truncate(name: &mut String) {
-    let mut cut = MAX_NAME_LEN.min(name.len());
-    while !name.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    name.truncate(cut);
+    name.truncate(name.floor_char_boundary(MAX_NAME_LEN));
 }
 
 #[cfg(test)]

@@ -93,10 +93,9 @@ impl TransferProgress {
 
     /// openline's `done / (size / 100)`, at most 100, or 0 under 100 bytes.
     fn percent(&self) -> u64 {
-        match self.size / 100 {
-            0 => 0,
-            step => (self.done / step).min(100),
-        }
+        self.done
+            .checked_div(self.size / 100)
+            .map_or(0, |percent| percent.min(100))
     }
 }
 

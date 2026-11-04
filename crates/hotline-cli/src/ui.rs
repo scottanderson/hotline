@@ -56,14 +56,16 @@ fn input_rows(text: &str) -> u16 {
 /// `hints` laid out in rows no wider than `width`, keeping each hint whole.
 fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
     let mut rows = Vec::new();
-    let (mut start, mut used) = (0, 0);
+    let (mut start, mut used) = (0, 0_usize);
     for (i, hint) in hints.iter().enumerate() {
-        let len = text_width(hint.key) + text_width(hint.does) + 3;
-        if used > 0 && used + len > usize::from(width) {
+        let len = text_width(hint.key)
+            .saturating_add(text_width(hint.does))
+            .saturating_add(3);
+        if used > 0 && used.saturating_add(len) > usize::from(width) {
             rows.push(hints.get(start..i).unwrap_or_default());
             (start, used) = (i, 0);
         }
-        used += len;
+        used = used.saturating_add(len);
     }
     rows.push(hints.get(start..).unwrap_or_default());
     rows
@@ -87,7 +89,7 @@ pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool, roo
     ]));
     let [body, input] = left.layout(&Layout::vertical([
         Constraint::Min(3),
-        Constraint::Length(input.map_or(0, |text| input_rows(text) + 2)),
+        Constraint::Length(input.map_or(0, |text| input_rows(text).saturating_add(2))),
     ]));
     Areas {
         screen,
@@ -150,8 +152,10 @@ fn tab_columns(
 ) -> impl Iterator<Item = (Tab, &str, std::ops::Range<u16>)> {
     labels.iter().scan(tabs.x, |x, (tab, label)| {
         let start = *x;
-        let end = start + text_width(label) as u16 + 2;
-        *x = end + 1;
+        let end = start
+            .saturating_add(text_width(label) as u16)
+            .saturating_add(2);
+        *x = end.saturating_add(1);
         Some((*tab, label.as_str(), start..end))
     })
 }
@@ -208,8 +212,8 @@ pub fn menu_rect(at: (u16, u16), items: &[MenuItem], screen: Rect) -> Rect {
         .map(|item| item.label().len() as u16)
         .max()
         .unwrap_or(0)
-        + 4;
-    let height = items.len() as u16 + 2;
+        .saturating_add(4);
+    let height = (items.len() as u16).saturating_add(2);
     let x = at.0.min(screen.right().saturating_sub(width));
     let y = at.1.min(screen.bottom().saturating_sub(height));
     Rect::new(x, y, width, height).intersection(screen)
@@ -221,7 +225,7 @@ pub fn menu_item_at(menu: Rect, items: &[MenuItem], x: u16, y: u16) -> Option<Me
     if !contains(inner, x, y) {
         return None;
     }
-    items.get(usize::from(y - inner.y)).copied()
+    items.get(usize::from(y.saturating_sub(inner.y))).copied()
 }
 
 fn border(focused: bool) -> Style {
@@ -328,7 +332,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, lines: &[Line], title: &str) {
         }
         let line = styled_line(line);
         let paragraph = Paragraph::new(line.clone()).wrap(Wrap { trim: false });
-        rows += paragraph.line_count(inner.width).max(1);
+        rows = rows.saturating_add(paragraph.line_count(inner.width).max(1));
         tail.push(line);
     }
     tail.reverse();
@@ -559,7 +563,9 @@ fn options_form_cursor(form: &OptionsForm) -> Option<usize> {
 /// drawn in `area`.
 fn set_form_cursor(frame: &mut Frame, area: Rect, row: usize, column: usize) {
     let inner = inner(area);
-    let x = inner.x.saturating_add(to_u16(FORM_LABEL + column));
+    let x = inner
+        .x
+        .saturating_add(to_u16(FORM_LABEL.saturating_add(column)));
     let y = inner.y.saturating_add(to_u16(row));
     frame.set_cursor_position((x.min(inner.right().saturating_sub(1)), y));
 }
@@ -633,8 +639,12 @@ fn draw_text_box(frame: &mut Frame, area: Rect, block: Block, text: &TextBox, cu
     let before = text.before_cursor();
     let row = before.matches('\n').count();
     let column = text_width(before.rsplit('\n').next().unwrap_or_default());
-    let scroll_y = (row + 1).saturating_sub(usize::from(inner.height));
-    let scroll_x = (column + 1).saturating_sub(usize::from(inner.width));
+    let scroll_y = row
+        .saturating_add(1)
+        .saturating_sub(usize::from(inner.height));
+    let scroll_x = column
+        .saturating_add(1)
+        .saturating_sub(usize::from(inner.width));
     let paragraph = Paragraph::new(text.as_str())
         .block(block)
         .scroll((to_u16(scroll_y), to_u16(scroll_x)));
@@ -798,7 +808,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
             draw_list_modal(frame, area, block, rows, palette.selected);
             if !palette.input.is_empty() {
                 let column = text_width(palette.input.before_cursor());
-                let x = area.x.saturating_add(to_u16(3 + column));
+                let x = area.x.saturating_add(to_u16(column.saturating_add(3)));
                 frame.set_cursor_position((x.min(area.right().saturating_sub(2)), area.y));
             }
         }
@@ -828,12 +838,12 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
         } => {
             let area = screen.centered(
                 Constraint::Length(70),
-                Constraint::Length(input_rows(body.as_str()) + 5),
+                Constraint::Length(input_rows(body.as_str()).saturating_add(5)),
             );
             let title_area = Rect::new(area.x, area.y, area.width, 3);
             let body_area = Rect::new(
                 area.x,
-                area.y + 3,
+                area.y.saturating_add(3),
                 area.width,
                 area.height.saturating_sub(3),
             );
@@ -914,7 +924,7 @@ fn list_height(len: usize) -> u16 {
 fn draw_input_modal(frame: &mut Frame, screen: Rect, title: String, input: &TextBox) {
     let area = screen.centered(
         Constraint::Length(60),
-        Constraint::Length(input_rows(input.as_str()) + 2),
+        Constraint::Length(input_rows(input.as_str()).saturating_add(2)),
     );
     frame.render_widget(Clear, area);
     draw_text_box(frame, area, modal_block(title), input, true);

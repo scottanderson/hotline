@@ -194,7 +194,7 @@ impl NewsBundle {
         let category = self
             .category_mut(components)
             .ok_or("no such news category")?;
-        if parent_id != 0 && category.depth_of(parent_id) + 1 >= MAX_REPLY_CHAIN_LEN {
+        if parent_id != 0 && category.depth_of(parent_id).saturating_add(1) >= MAX_REPLY_CHAIN_LEN {
             Err("reply chain is too deep")?;
         }
         category.add_article(parent_id, title, poster, flags, mime_type, data)
@@ -232,7 +232,11 @@ impl NewsBundle {
                 .and_then(|i| siblings.get(i))
                 .copied()
                 .unwrap_or(0),
-            next_id: siblings.get(index + 1).copied().unwrap_or(0),
+            next_id: index
+                .checked_add(1)
+                .and_then(|i| siblings.get(i))
+                .copied()
+                .unwrap_or(0),
         })
     }
 }

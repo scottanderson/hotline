@@ -48,7 +48,7 @@ impl ClientSession {
         queued: Arc<AtomicBool>,
         task: AbortHandle,
     ) {
-        self.next_download_id += 1;
+        self.next_download_id = self.next_download_id.wrapping_add(1);
         self.downloads.push(RunningDownload {
             id: self.next_download_id,
             name: name.into(),

@@ -58,21 +58,25 @@ impl FlatFileInfo {
         let name = text_encoding::encode_truncated(encoding, &self.name, Self::MAX_NAME_LEN);
         let comment =
             text_encoding::encode_truncated(encoding, &self.comment, Self::MAX_COMMENT_LEN);
-        VecWriter::with_capacity(Self::FIXED_LEN + name.len() + 2 + comment.len())
-            .bytes(&self.platform)
-            .bytes(&self.file_type)
-            .bytes(&self.creator)
-            .u32(0) // flags
-            .u32(self.platform_flags)
-            .bytes(&[0; 32]) // reserved
-            .bytes(&self.created.encode())
-            .bytes(&self.modified.encode())
-            .u16(0) // name script
-            .u16(name.len() as u16)
-            .bytes(&name)
-            .u16(comment.len() as u16)
-            .bytes(&comment)
-            .finish()
+        VecWriter::with_capacity(
+            name.len()
+                .saturating_add(comment.len())
+                .saturating_add(Self::FIXED_LEN + 2),
+        )
+        .bytes(&self.platform)
+        .bytes(&self.file_type)
+        .bytes(&self.creator)
+        .u32(0) // flags
+        .u32(self.platform_flags)
+        .bytes(&[0; 32]) // reserved
+        .bytes(&self.created.encode())
+        .bytes(&self.modified.encode())
+        .u16(0) // name script
+        .u16(name.len() as u16)
+        .bytes(&name)
+        .u16(comment.len() as u16)
+        .bytes(&comment)
+        .finish()
     }
 
     /// Decode `INFO` fork data. Reads at most [`Self::MAX_LEN`] bytes, and
@@ -99,7 +103,7 @@ impl FlatFileInfo {
         let name_size = r.u16() as usize;
         r.finish();
 
-        let name_end = Self::FIXED_LEN + name_size;
+        let name_end = name_size.saturating_add(Self::FIXED_LEN);
         let name = data
             .get(Self::FIXED_LEN..name_end.min(len))
             .unwrap_or_default();
@@ -108,8 +112,10 @@ impl FlatFileInfo {
                 .get(name_end..)
                 .and_then(<[u8]>::first_chunk)
                 .map_or(0, |&size| usize::from(u16::from_be_bytes(size)));
-            let start = name_end + 2;
-            let end = (start + size.min(Self::MAX_COMMENT_LEN)).min(len);
+            let start = name_end.saturating_add(2);
+            let end = start
+                .saturating_add(size.min(Self::MAX_COMMENT_LEN))
+                .min(len);
             data.get(start..end).unwrap_or_default()
         } else {
             &[]

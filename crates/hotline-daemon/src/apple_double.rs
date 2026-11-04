@@ -154,7 +154,7 @@ impl AttrHeader {
 /// The length of an attribute entry with a name of `name_len` bytes and
 /// its NUL, padded to 4 bytes.
 const fn attr_entry_len(name_len: u8) -> u32 {
-    (11 + name_len as u32).next_multiple_of(4)
+    (name_len as u32).saturating_add(11).next_multiple_of(4)
 }
 
 /// One attribute entry: the place of its data and its name.
@@ -188,11 +188,11 @@ struct Info {
 impl Info {
     /// `true` if the attribute entry at `at` is inside the bytes read.
     fn attr_valid(&self, at: usize) -> bool {
-        at + 10 < self.raw_len
-            && self
-                .buf
-                .get(at + 10)
-                .is_some_and(|&name_len| at + attr_entry_len(name_len) as usize <= self.raw_len)
+        let name_len_at = at.saturating_add(10);
+        name_len_at < self.raw_len
+            && self.buf.get(name_len_at).is_some_and(|&name_len| {
+                at.saturating_add(attr_entry_len(name_len) as usize) <= self.raw_len
+            })
     }
 
     /// The attribute entry at `at`.
@@ -200,15 +200,19 @@ impl Info {
         Ok(AttrEntry {
             at,
             offset: u32_at(&self.buf, at).ok_or_else(out_of_range)?,
-            len: u32_at(&self.buf, at + 4).ok_or_else(out_of_range)?,
-            name_len: *self.buf.get(at + 10).ok_or_else(out_of_range)?,
+            len: u32_at(&self.buf, at.saturating_add(4)).ok_or_else(out_of_range)?,
+            name_len: *self
+                .buf
+                .get(at.saturating_add(10))
+                .ok_or_else(out_of_range)?,
         })
     }
 
     /// `true` if the attribute entry at `at` has the name `name`, which
     /// ends with its NUL.
     fn has_name(&self, at: usize, name: &[u8]) -> bool {
-        self.buf.get(at + 11..at + 11 + name.len()) == Some(name)
+        let start = at.saturating_add(11);
+        self.buf.get(start..start.saturating_add(name.len())) == Some(name)
     }
 
     /// Find the attribute `name`, which ends with its NUL. The first value
@@ -224,9 +228,9 @@ impl Info {
             }
             let entry = self.attr_entry(at)?;
             if self.has_name(at, name) {
-                return Ok((Some(entry), i + 1 == count, at));
+                return Ok((Some(entry), i.saturating_add(1) == count, at));
             }
-            at += attr_entry_len(entry.name_len) as usize;
+            at = at.saturating_add(attr_entry_len(entry.name_len) as usize);
         }
         Ok((None, false, at))
     }
@@ -234,7 +238,7 @@ impl Info {
     /// The value of the attribute `entry`.
     async fn attr_value(&mut self, entry: &AttrEntry) -> io::Result<Vec<u8>> {
         let start = entry.offset as usize;
-        let end = start + entry.len as usize;
+        let end = start.saturating_add(entry.len as usize);
         if end < ATTR_MAX_HDR_SIZE as usize {
             return Ok(self.buf.get(start..end).ok_or_else(out_of_range)?.to_vec());
         }
@@ -250,15 +254,19 @@ impl Info {
     fn finder_info_bytes(&self) -> Option<[u8; FINDER_INFO_LEN as usize]> {
         let entry = self.entries.get(self.finder_info?)?;
         let start = entry.offset as usize;
-        let bytes = self.buf.get(start..start + FINDER_INFO_LEN as usize)?;
+        let bytes = self
+            .buf
+            .get(start..start.saturating_add(FINDER_INFO_LEN as usize))?;
         (!self.empty_finder_info).then(|| bytes.try_into().ok())?
     }
 
     /// The number of attributes, counting the Finder info and the fork.
     fn attr_count(&self) -> u32 {
         u32::from(self.attrs.map_or(0, |attrs| attrs.num_attrs))
-            + u32::from(self.fork.is_some())
-            + u32::from(self.finder_info.is_some() && !self.empty_finder_info)
+            .saturating_add(u32::from(self.fork.is_some()))
+            .saturating_add(u32::from(
+                self.finder_info.is_some() && !self.empty_finder_info,
+            ))
     }
 
     /// `true` if no other entry starts at or after a resource fork entry,
@@ -444,7 +452,7 @@ pub async fn set_finder_info(item: &Path, info: FinderInfo) -> io::Result<()> {
     let index = info.finder_info.ok_or_else(no_attr)?;
     let offset = info.entries.get(index).ok_or_else(out_of_range)?.offset as usize;
     put(&mut info.buf, offset, &bytes)?;
-    let end = offset + FINDER_INFO_LEN as usize;
+    let end = offset.saturating_add(FINDER_INFO_LEN as usize);
     info.write(end.max(ATTR_HEADER_END as usize)).await?;
     touch(item).await;
     Ok(())
@@ -466,8 +474,9 @@ pub async fn open_resource_read(item: &Path, at: u64) -> io::Result<BoxedReader>
         return Ok(Box::new(tokio::io::empty()));
     }
     let mut file = File::open(path_of(item)).await?;
-    file.seek(SeekFrom::Start(offset + at)).await?;
-    Ok(Box::new(file.take(len - at)))
+    file.seek(SeekFrom::Start(offset.saturating_add(at)))
+        .await?;
+    Ok(Box::new(file.take(len.saturating_sub(at))))
 }
 
 /// Open the resource fork of `item` for writing from `at` onward. At 0 the
@@ -492,16 +501,18 @@ pub async fn open_resource_write(
     let mut info = get_info(file, true).await?.ok_or_else(no_attr)?;
     let index = info.fork.ok_or_else(no_attr)?;
     let entry = *info.entries.get(index).ok_or_else(out_of_range)?;
+    let fork_at = u64::from(entry.offset)
+        .checked_add(at)
+        .ok_or_else(out_of_range)?;
     if at < u64::from(entry.len) {
         if entry.end().map(u64::from) == Some(info.file_len) {
-            info.file.set_len(u64::from(entry.offset) + at).await?;
+            info.file.set_len(fork_at).await?;
         }
         info.entry_mut(index)?.len = wire_u32(at)?;
         info.write(ATTR_HEADER_END as usize).await?;
     }
     let mut file = info.file;
-    file.seek(SeekFrom::Start(u64::from(entry.offset) + at))
-        .await?;
+    file.seek(SeekFrom::Start(fork_at)).await?;
     Ok(ResourceForkWriter {
         file: Some(file),
         end: at,
@@ -509,7 +520,7 @@ pub async fn open_resource_write(
             len: entry.len.min(wire_u32(at)?),
             ..entry
         },
-        entry_at: (HEADER_LEN + index * ENTRY_LEN) as u64,
+        entry_at: HEADER_LEN.saturating_add(index.saturating_mul(ENTRY_LEN)) as u64,
         item: item.to_path_buf(),
         closing: None,
         claim,
@@ -559,7 +570,7 @@ impl AsyncWrite for ResourceForkWriter {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let written = ready!(Pin::new(self.file()?).poll_write(cx, buf))?;
-        self.end += written as u64;
+        self.end = self.end.saturating_add(written as u64);
         Poll::Ready(Ok(written))
     }
 
@@ -884,6 +895,7 @@ async fn get_info(mut file: File, setting: bool) -> io::Result<Option<Info>> {
             return Ok(None);
         };
         let mut delta = ATTR_BUF_SIZE - (FINDER_INFO_AT + FINDER_INFO_LEN);
+        second.offset.checked_add(delta).ok_or_else(out_of_range)?;
         let write_len;
         if second.len != 0 {
             shift_down(
@@ -893,26 +905,35 @@ async fn get_info(mut file: File, setting: bool) -> io::Result<Option<Info>> {
                 u64::from(delta),
             )
             .await?;
-            file_len =
-                file_len.max(u64::from(second.offset) + u64::from(second.len) + u64::from(delta));
+            let fork_end = u64::from(second.offset)
+                .saturating_add(u64::from(second.len))
+                .saturating_add(u64::from(delta));
+            file_len = file_len.max(fork_end);
             write_len = ATTR_HEADER_END as usize;
         } else {
-            if second.offset as usize + delta as usize + EMPTY_FORK_LEN as usize > read_len {
+            let fork_end = (second.offset as usize)
+                .saturating_add(delta as usize)
+                .saturating_add(EMPTY_FORK_LEN as usize);
+            if fork_end > read_len {
                 return Ok(None);
             }
-            file_len = u64::from(second.offset) + u64::from(delta);
+            file_len = u64::from(second.offset).saturating_add(u64::from(delta));
             file.set_len(file_len).await?;
-            delta -= EMPTY_FORK_LEN;
+            delta = delta.saturating_sub(EMPTY_FORK_LEN);
             let pad = (FINDER_INFO_AT + FINDER_INFO_LEN) as usize;
-            buf.get_mut(pad..pad + delta as usize)
+            buf.get_mut(pad..pad.saturating_add(delta as usize))
                 .ok_or_else(out_of_range)?
                 .fill(0);
-            put(&mut buf, (second.offset + delta) as usize, &empty_fork())?;
+            put(
+                &mut buf,
+                second.offset.saturating_add(delta) as usize,
+                &empty_fork(),
+            )?;
             second.len = EMPTY_FORK_LEN;
             write_len = ATTR_BUF_SIZE as usize;
         }
-        first.len += delta;
-        second.offset += delta;
+        first.len = first.len.saturating_add(delta);
+        second.offset = second.offset.saturating_add(delta);
         let attrs = AttrHeader {
             debug_tag: file_id(&metadata),
             total_size: second.offset,
@@ -967,17 +988,17 @@ fn check_header(buf: &[u8], raw_len: usize, file_len: u64) -> Option<Vec<Entry>>
     if !(1..=MAX_ENTRIES).contains(&count) {
         return None;
     }
-    let table_end = HEADER_LEN + usize::from(count) * ENTRY_LEN;
+    let table_end = HEADER_LEN.saturating_add(usize::from(count).saturating_mul(ENTRY_LEN));
     if raw_len < table_end {
         return None;
     }
     let entries: Vec<Entry> = (0..usize::from(count))
         .map(|i| {
-            let at = HEADER_LEN + i * ENTRY_LEN;
+            let at = HEADER_LEN.saturating_add(i.saturating_mul(ENTRY_LEN));
             Some(Entry {
                 id: u32_at(buf, at)?,
-                offset: u32_at(buf, at + 4)?,
-                len: u32_at(buf, at + 8)?,
+                offset: u32_at(buf, at.saturating_add(4))?,
+                len: u32_at(buf, at.saturating_add(8))?,
             })
         })
         .collect::<Option<_>>()?;
@@ -1010,7 +1031,7 @@ async fn is_empty_fork(file: &mut File, entry: &Entry) -> bool {
         {
             match file.read(rest).await? {
                 0 => break,
-                n => filled += n,
+                n => filled = filled.saturating_add(n),
             }
         }
         io::Result::Ok(())
@@ -1037,24 +1058,25 @@ fn check_attrs(buf: &[u8], raw_len: usize, entry: &Entry) -> Option<AttrHeader> 
     let mut header_size = ATTR_HEADER_END;
     let mut data_size = 0u32;
     for _ in 0..header.num_attrs {
-        let name_len = *buf.get(at + 10)?;
-        let name_end = at + 11 + usize::from(name_len);
-        if at + 12 > buf_end || name_end > buf_end {
+        let name_len = *buf.get(at.saturating_add(10))?;
+        let name_at = at.saturating_add(11);
+        let name_end = name_at.saturating_add(usize::from(name_len));
+        if at.saturating_add(12) > buf_end || name_end > buf_end {
             return None;
         }
-        let name = buf.get(at + 11..name_end)?;
+        let name = buf.get(name_at..name_end)?;
         if name.iter().position(|&byte| byte == 0) != Some(usize::from(name_len).checked_sub(1)?) {
             return None;
         }
         let offset = u32_at(buf, at)?;
-        let len = u32_at(buf, at + 4)?;
+        let len = u32_at(buf, at.saturating_add(4))?;
         let end = offset.checked_add(len)?;
         if end > header.total_size || offset < header.data_start || end > data_end {
             return None;
         }
         header_size = header_size.checked_add(attr_entry_len(name_len))?;
         data_size = data_size.checked_add(len)?;
-        at += attr_entry_len(name_len) as usize;
+        at = at.saturating_add(attr_entry_len(name_len) as usize);
     }
     (header.data_start >= header_size && data_size == header.data_length).then_some(header)
 }
@@ -1153,47 +1175,55 @@ async fn remove_attr_entry(
     let entry_len = attr_entry_len(u8::try_from(name_len).map_err(|_| out_of_range())?) as usize;
     let split = data_end > ATTR_MAX_HDR_SIZE as usize;
     if !is_last {
-        copy_within(&mut info.buf, entry.at + entry_len..data_start, entry.at)?;
+        copy_within(
+            &mut info.buf,
+            entry.at.saturating_add(entry_len)..data_start,
+            entry.at,
+        )?;
     }
     let write_len = if split {
         let delta = entry_len as u64;
         shift_up(
             &mut info.file,
             data_start as u64,
-            (data_at - data_start) as u64,
+            data_at.saturating_sub(data_start) as u64,
             delta,
         )
         .await?;
         if !is_last {
-            let after = (data_at + data_len) as u64;
+            let after = data_at.saturating_add(data_len) as u64;
             shift_up(
                 &mut info.file,
                 after,
-                data_end as u64 - after,
-                (data_len + entry_len) as u64,
+                (data_end as u64).saturating_sub(after),
+                data_len.saturating_add(entry_len) as u64,
             )
             .await?;
         }
-        data_start - entry_len
+        data_start.saturating_sub(entry_len)
     } else {
-        copy_within(&mut info.buf, data_start..data_at, data_start - entry_len)?;
+        copy_within(
+            &mut info.buf,
+            data_start..data_at,
+            data_start.saturating_sub(entry_len),
+        )?;
         if !is_last {
             copy_within(
                 &mut info.buf,
-                data_at + data_len..data_end,
-                data_at - entry_len,
+                data_at.saturating_add(data_len)..data_end,
+                data_at.saturating_sub(entry_len),
             )?;
         }
-        let freed = data_end - (data_len + entry_len);
+        let freed = data_end.saturating_sub(data_len.saturating_add(entry_len));
         info.buf
             .get_mut(freed..data_end)
             .ok_or_else(out_of_range)?
             .fill(0);
         data_end
     };
-    header.num_attrs -= 1;
-    header.data_start -= entry_len as u32;
-    header.data_length -= entry.len;
+    header.num_attrs = header.num_attrs.saturating_sub(1);
+    header.data_start = header.data_start.saturating_sub(entry_len as u32);
+    header.data_length = header.data_length.saturating_sub(entry.len);
     info.attrs = Some(header);
     let mut at = ATTR_HEADER_END as usize;
     for _ in 0..header.num_attrs {
@@ -1201,12 +1231,12 @@ async fn remove_attr_entry(
             break;
         }
         let moved = info.attr_entry(at)?;
-        let mut offset = moved.offset - entry_len as u32;
+        let mut offset = moved.offset.saturating_sub(entry_len as u32);
         if at >= entry.at {
-            offset -= entry.len;
+            offset = offset.saturating_sub(entry.len);
         }
         put(&mut info.buf, at, &offset.to_be_bytes())?;
-        at += attr_entry_len(moved.name_len) as usize;
+        at = at.saturating_add(attr_entry_len(moved.name_len) as usize);
     }
     info.write(write_len).await
 }
@@ -1238,7 +1268,9 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
             .ok_or_else(no_attr)?;
         let mut info = get_info(file, true).await?.ok_or_else(no_attr)?;
         let mut header = info.attrs.ok_or_else(no_attr)?;
-        let split = u64::from(header.data_end()) + u64::from(entry_len) + u64::from(value_len)
+        let split = u64::from(header.data_end())
+            .saturating_add(u64::from(entry_len))
+            .saturating_add(u64::from(value_len))
             > u64::from(ATTR_MAX_HDR_SIZE);
         let (found, _, slot) = info.find_attr(&name)?;
         if let Some(entry) = found {
@@ -1262,7 +1294,7 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
         {
             return Err(io::ErrorKind::StorageFull.into());
         }
-        let free = header.total_size - header.data_end();
+        let free = header.total_size.saturating_sub(header.data_end());
         let needed = value_len.checked_add(entry_len).ok_or_else(out_of_range)?;
         if needed > free {
             let moves_only_the_fork = info
@@ -1272,13 +1304,13 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
             if !moves_only_the_fork {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            let mut grow = (needed - free).next_multiple_of(ATTR_BUF_SIZE);
+            let mut grow = needed.saturating_sub(free).next_multiple_of(ATTR_BUF_SIZE);
             if !split && header.total_size.saturating_add(grow) > ATTR_MAX_HDR_SIZE {
                 grow = ATTR_MAX_HDR_SIZE
                     .checked_sub(header.total_size)
                     .ok_or_else(out_of_range)?;
             }
-            info.file_len += u64::from(grow);
+            info.file_len = info.file_len.saturating_add(u64::from(grow));
             info.file.set_len(info.file_len).await?;
             if let Some(index) = info.fork {
                 let fork = info.entry_mut(index)?;
@@ -1297,7 +1329,7 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
             let index = info.finder_info.ok_or_else(no_attr)?;
             let finder_info = info.entry_mut(index)?;
             finder_info.len = finder_info.len.checked_add(grow).ok_or_else(out_of_range)?;
-            header.total_size += grow;
+            header.total_size = header.total_size.saturating_add(grow);
         }
 
         let data_start = header.data_start as usize;
@@ -1314,15 +1346,16 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
             copy_within(
                 &mut info.buf,
                 data_start..data_end,
-                data_start + entry_len as usize,
+                data_start.saturating_add(entry_len as usize),
             )?;
         }
-        header.data_start += entry_len;
+        header.data_start = header.data_start.saturating_add(entry_len);
         let mut at = ATTR_HEADER_END as usize;
         while at != slot && info.attr_valid(at) {
             let moved = info.attr_entry(at)?;
-            put(&mut info.buf, at, &(moved.offset + entry_len).to_be_bytes())?;
-            at += attr_entry_len(moved.name_len) as usize;
+            let offset = moved.offset.saturating_add(entry_len);
+            put(&mut info.buf, at, &offset.to_be_bytes())?;
+            at = at.saturating_add(attr_entry_len(moved.name_len) as usize);
         }
         let value_at = header.data_end();
         if split {
@@ -1339,8 +1372,8 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
             .u8(name_len)
             .finish();
         put(&mut info.buf, slot, &[fixed.as_slice(), &name].concat())?;
-        header.num_attrs += 1;
-        header.data_length += value_len;
+        header.num_attrs = header.num_attrs.saturating_add(1);
+        header.data_length = header.data_length.saturating_add(value_len);
         info.attrs = Some(header);
         let len = if split {
             header.data_start
@@ -1356,12 +1389,13 @@ async fn shift_down(file: &mut File, start: u64, len: u64, delta: u64) -> io::Re
     if delta == 0 || len == 0 {
         return Ok(());
     }
-    let mut end = start + len;
+    let mut end = start.saturating_add(len);
     while end > start {
-        let chunk = (end - start).min(u64::from(ATTR_BUF_SIZE));
-        end -= chunk;
+        let chunk = end.saturating_sub(start).min(u64::from(ATTR_BUF_SIZE));
+        end = end.saturating_sub(chunk);
         let bytes = read_at(file, end, chunk).await?;
-        file.seek(SeekFrom::Start(end + delta)).await?;
+        file.seek(SeekFrom::Start(end.saturating_add(delta)))
+            .await?;
         file.write_all(&bytes).await?;
         file.flush().await?;
     }
@@ -1373,15 +1407,15 @@ async fn shift_up(file: &mut File, start: u64, len: u64, delta: u64) -> io::Resu
     if delta == 0 || len == 0 {
         return Ok(());
     }
-    let end = start + len;
+    let end = start.saturating_add(len);
     let mut at = start;
     while at < end {
-        let chunk = (end - at).min(u64::from(ATTR_BUF_SIZE));
+        let chunk = end.saturating_sub(at).min(u64::from(ATTR_BUF_SIZE));
         let bytes = read_at(file, at, chunk).await?;
-        file.seek(SeekFrom::Start(at - delta)).await?;
+        file.seek(SeekFrom::Start(at.saturating_sub(delta))).await?;
         file.write_all(&bytes).await?;
         file.flush().await?;
-        at += chunk;
+        at = at.saturating_add(chunk);
     }
     Ok(())
 }
@@ -1443,7 +1477,7 @@ fn u16_at(buf: &[u8], at: usize) -> Option<u16> {
 
 /// Copy `bytes` into `buf` at `at`.
 fn put(buf: &mut [u8], at: usize, bytes: &[u8]) -> io::Result<()> {
-    buf.get_mut(at..at + bytes.len())
+    buf.get_mut(at..at.saturating_add(bytes.len()))
         .ok_or_else(out_of_range)?
         .copy_from_slice(bytes);
     Ok(())
@@ -1451,7 +1485,7 @@ fn put(buf: &mut [u8], at: usize, bytes: &[u8]) -> io::Result<()> {
 
 /// Copy the bytes of `buf` in `src` to `dest`. The ranges can overlap.
 fn copy_within(buf: &mut [u8], src: std::ops::Range<usize>, dest: usize) -> io::Result<()> {
-    if src.start > src.end || src.end > buf.len() || dest + src.len() > buf.len() {
+    if src.start > src.end || src.end > buf.len() || dest.saturating_add(src.len()) > buf.len() {
         return Err(out_of_range());
     }
     buf.copy_within(src, dest);

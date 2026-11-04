@@ -126,7 +126,7 @@ impl Field {
             what: "field data",
             len: data.len(),
         })?;
-        Ok(VecWriter::with_capacity(4 + data.len())
+        Ok(VecWriter::with_capacity(data.len().saturating_add(4))
             .u16(self.id.into())
             .u16(len)
             .bytes(&data)
@@ -221,7 +221,7 @@ impl Field<Received> {
         let size = r.u16() as usize;
         r.finish();
 
-        let total = Self::PREFIX_LEN + size;
+        let total = size.saturating_add(Self::PREFIX_LEN);
         let bytes = buf
             .get(Self::PREFIX_LEN..total)
             .ok_or(ProtoError::UnexpectedEof {

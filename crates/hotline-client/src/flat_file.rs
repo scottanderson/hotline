@@ -43,7 +43,8 @@ where
                 let mut info = Vec::with_capacity(len as usize);
                 let n = (&mut fork_data).take(len).read_to_end(&mut info).await?;
                 received.info = Some(FlatFileInfo::decode(&info, encoding));
-                n as u64 + tokio::io::copy(&mut fork_data, &mut tokio::io::sink()).await?
+                let skipped = tokio::io::copy(&mut fork_data, &mut tokio::io::sink()).await?;
+                (n as u64).saturating_add(skipped)
             }
             b"DATA" => {
                 received.data_len = tokio::io::copy(&mut fork_data, data).await?;

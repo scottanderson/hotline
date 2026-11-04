@@ -29,7 +29,11 @@ const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
 /// Partial ids that fit in [`MAX_PENDING_BYTES`]. Each holds under twice the size cap.
 const fn max_pending_partials(max_transaction_len: u32) -> usize {
-    MAX_PENDING_BYTES / (2 * max_transaction_len as usize)
+    let per_partial = (max_transaction_len as usize).saturating_mul(2);
+    match MAX_PENDING_BYTES.checked_div(per_partial) {
+        Some(partials) => partials,
+        None => 0,
+    }
 }
 
 /// A [`tokio_util::codec::Decoder`]/[`tokio_util::codec::Encoder`] for [`Transaction`].
