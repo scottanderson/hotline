@@ -394,8 +394,8 @@ impl Session {
             };
         }
 
-        // A new record whose login is taken gets a notice and is skipped.
-        if state.account(&login).await.is_some() {
+        // A new record whose login is empty or taken gets a notice and is skipped.
+        if login.is_empty() || state.account(&login).await.is_some() {
             self.notify_login_taken(
                 format!(
                     "Cannot create account \"{login}\" because there is already an account with that login."
@@ -615,6 +615,31 @@ mod tests {
         );
         assert!(!session.on_delete_user(&delete, &state).await[0].is_error());
         assert!(state.account("bob").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_user_with_an_empty_login_finds_no_account() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let set = request(
+            Opcode::SetUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, ""),
+                Field::string(FieldId::UserName, "Nobody"),
+            ],
+        );
+
+        let replies = session.on_set_user(&set, &state).await;
+
+        assert_eq!(
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText)
+                .unwrap(),
+            "No account with login \"\"."
+        );
+        assert!(state.account("").await.is_none());
     }
 
     #[tokio::test]
@@ -1637,6 +1662,87 @@ mod tests {
         assert_eq!(alice.access_extra, AccessExtra::CHAT_PRIVATE);
         assert!(bob_rx.try_recv().is_err());
         assert!(log.activities().is_empty());
+    }
+
+    #[tokio::test]
+    async fn new_user_with_an_empty_login_is_refused() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let create = request(
+            Opcode::NewUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, ""),
+                Field::obfuscated_string(FieldId::UserPassword, "secret"),
+                Field::string(FieldId::UserName, "Nobody"),
+            ],
+        );
+
+        let replies = session.on_new_user(&create, &state).await;
+
+        assert_eq!(
+            replies[0]
+                .received(text_encoding::DEFAULT)
+                .string(FieldId::ErrorText)
+                .unwrap(),
+            "Cannot create account \"\" because there is already an account with that login."
+        );
+        assert!(state.account("").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_rename_to_an_empty_login_changes_nothing() {
+        let admin = test_session("Admin", Access::all());
+        let (state, log) = state_recording_activity(Default::default());
+        state
+            .put_account("bob".into(), Account::admin("bob's"))
+            .await
+            .unwrap();
+        let record = user_list_record(
+            Some("bob"),
+            "Robert",
+            "",
+            Field::bytes(FieldId::UserPassword, vec![0u8]),
+            Access::BROADCAST,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+
+        let replies = admin.on_set_user_list(&request, &state).await;
+
+        assert!(replies[0].is_error());
+        assert_eq!(state.account("bob").await.unwrap(), Account::admin("bob's"));
+        assert!(state.account("").await.is_none());
+        assert!(log.activities().is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_user_list_new_record_with_an_empty_login_sends_a_server_notice() {
+        let admin = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let mut rx = state.register_recipient(admin.user_id).await;
+        let record = user_list_record(
+            None,
+            "Nobody",
+            "",
+            Field::obfuscated_string(FieldId::UserPassword, "secret"),
+            Access::SEND_CHAT,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+
+        let replies = admin.on_set_user_list(&request, &state).await;
+
+        assert!(!replies[0].is_error());
+        let notice = rx
+            .try_recv()
+            .ok()
+            .and_then(RecipientMessage::into_push)
+            .expect("expected a ServerMsg push")
+            .received(text_encoding::DEFAULT);
+        assert_eq!(
+            notice.string(FieldId::Data).unwrap(),
+            "Cannot create account \"\" because there is already an account with that login."
+        );
+        assert!(state.account("").await.is_none());
     }
 
     #[tokio::test]

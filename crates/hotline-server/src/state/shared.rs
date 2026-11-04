@@ -1789,14 +1789,15 @@ impl SharedState {
         self.accounts().put(login, account).await
     }
 
-    /// Create the account `login`. `Err` if the login is taken.
+    /// Create the account `login`. `Err` if the login is empty or taken.
+    /// An empty login gets the error for a taken login.
     pub async fn create_account(
         &self,
         login: String,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
-        if self.accounts().get(&login).await.is_some() {
+        if login.is_empty() || self.accounts().get(&login).await.is_some() {
             Err(format!(
                 "Cannot create account \"{login}\" because there is already an account with that login."
             ))?;
@@ -1805,12 +1806,12 @@ impl SharedState {
     }
 
     /// Save `edit` of the account at `old_login` under `login`. `Err` if
-    /// `old_login` is gone, or if a rename's `login` is taken and the policy
-    /// gives [`TakenLogin::Refuse`]. A rename goes through
-    /// [`AccountProvider::rename`], and its error tells whether the account
-    /// moved. With [`TakenLogin::Overwrite`], a rename onto a taken login
-    /// writes `edit` of the `old_login` account over that account, and keeps
-    /// `old_login`.
+    /// `old_login` is gone, if `login` is empty, or if a rename's `login` is
+    /// taken and the policy gives [`TakenLogin::Refuse`]. A rename goes
+    /// through [`AccountProvider::rename`], and its error tells whether the
+    /// account moved. With [`TakenLogin::Overwrite`], a rename onto a taken
+    /// login writes `edit` of the `old_login` account over that account, and
+    /// keeps `old_login`.
     pub(crate) async fn replace_account(
         &self,
         old_login: &str,
@@ -1821,6 +1822,9 @@ impl SharedState {
         let Some(existing) = self.accounts().get(old_login).await else {
             Err(format!("No account with login \"{old_login}\"."))?
         };
+        if login.is_empty() {
+            Err("Error saving list of accounts.")?;
+        }
         let renamed = old_login != login;
         let over_taken_login = renamed && self.accounts().get(&login).await.is_some();
         if over_taken_login && self.policy().taken_login() == TakenLogin::Refuse {
