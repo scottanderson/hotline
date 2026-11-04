@@ -19,8 +19,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use hotline_server::{
-    Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoBanner, Providers,
-    Server, ServerConfig, UrlBannerProvider,
+    Account, AccountProvider, DefaultChatCommands, InMemoryFloodPolicy, NoAccountStores, NoBanner,
+    Providers, Server, ServerConfig, UrlBannerProvider,
 };
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::{fmt, prelude::*};
@@ -164,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
             files,
             flat_news,
             threaded_news,
+            account_stores: Arc::new(NoAccountStores),
             bans,
             flood,
             banner,

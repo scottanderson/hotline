@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::account::{AccountProvider, InMemoryAccountProvider};
+use crate::account::{AccountProvider, AccountStores, InMemoryAccountProvider, NoAccountStores};
 use crate::activity::{ActivityLog, NoActivityLog};
 use crate::ban::{BanProvider, InMemoryBanProvider};
 use crate::banner::{BannerProvider, NoBanner};
@@ -21,6 +21,8 @@ pub struct Providers {
     pub flat_news: Arc<dyn FlatNewsProvider>,
     /// See [`ThreadedNewsProvider`].
     pub threaded_news: Arc<dyn ThreadedNewsProvider>,
+    /// See [`AccountStores`].
+    pub account_stores: Arc<dyn AccountStores>,
     /// See [`BanProvider`].
     pub bans: Arc<dyn BanProvider>,
     /// See [`FloodPolicy`].
@@ -35,8 +37,8 @@ pub struct Providers {
     pub policy: Arc<dyn ServerPolicy>,
 }
 
-/// In-memory storage, no flood policy, no banner, no activity log, and
-/// openline's behavior.
+/// In-memory storage, no account stores, no flood policy, no banner, no
+/// activity log, and openline's behavior.
 /// Classic and threaded news share one provider.
 impl Default for Providers {
     fn default() -> Self {
@@ -46,6 +48,7 @@ impl Default for Providers {
             files: Arc::new(InMemoryFileProvider::default()),
             flat_news: news.clone(),
             threaded_news: news,
+            account_stores: Arc::new(NoAccountStores),
             bans: Arc::new(InMemoryBanProvider::default()),
             flood: Arc::new(NoFloodPolicy),
             banner: Arc::new(NoBanner),

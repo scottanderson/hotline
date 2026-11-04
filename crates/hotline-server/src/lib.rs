@@ -35,7 +35,9 @@ mod session;
 mod state;
 mod sync;
 
-pub use account::{AccessExtra, Account, AccountProvider, InMemoryAccountProvider};
+pub use account::{
+    AccessExtra, Account, AccountProvider, AccountStores, InMemoryAccountProvider, NoAccountStores,
+};
 pub use activity::{AccountAction, Activity, ActivityEntry, ActivityLog, NoActivityLog};
 pub use ban::{BanProvider, BanRecord, InMemoryBanProvider};
 pub use banner::{BannerKind, BannerProvider, NoBanner, UrlBannerProvider};

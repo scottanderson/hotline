@@ -19,7 +19,7 @@ use hotline_proto::types::{
 };
 use hotline_proto::{Field, FieldId, Transaction};
 
-use crate::account::{AccessExtra, Account, AccountProvider};
+use crate::account::{AccessExtra, Account, AccountProvider, AccountStores};
 use crate::activity::{ActivityEntry, ActivityLog};
 use crate::ban::{BanProvider, BanRecord, TEMP_BAN_DURATION};
 use crate::banner::{BannerKind, BannerProvider};
@@ -132,19 +132,14 @@ impl SharedState {
         &*self.providers.accounts
     }
 
-    /// The file storage.
-    fn files(&self) -> &dyn FileProvider {
-        &*self.providers.files
-    }
-
     /// The flat news storage.
     fn flat_news(&self) -> &dyn FlatNewsProvider {
         &*self.providers.flat_news
     }
 
-    /// The threaded news storage.
-    fn threaded_news(&self) -> &dyn ThreadedNewsProvider {
-        &*self.providers.threaded_news
+    /// The storage of each account's own files and news.
+    fn account_stores(&self) -> &dyn AccountStores {
+        &*self.providers.account_stores
     }
 
     /// The ban list.
@@ -455,20 +450,48 @@ impl SharedState {
         self.commands().run(command, args, actor, self).await
     }
 
+    /// `login`'s own files, or the shared files. `Err` if its own files do
+    /// not open.
+    async fn files_for(&self, login: &str) -> Result<Arc<dyn FileProvider>, &'static str> {
+        Ok(self
+            .account_stores()
+            .files(login)
+            .await?
+            .unwrap_or_else(|| self.providers.files.clone()))
+    }
+
+    /// `login`'s own threaded news, or the shared threaded news. `Err` if
+    /// its own threaded news does not open.
+    async fn threaded_news_for(
+        &self,
+        login: &str,
+    ) -> Result<Arc<dyn ThreadedNewsProvider>, &'static str> {
+        Ok(self
+            .account_stores()
+            .threaded_news(login)
+            .await?
+            .unwrap_or_else(|| self.providers.threaded_news.clone()))
+    }
+
     /// List a directory as seen by `requester`. `dir` is empty for the
     /// root folder. A blocked drop box lists only its partial uploads.
-    /// `None` if the directory doesn't exist or isn't visible.
+    /// `Err` if the directory doesn't exist or isn't visible.
     pub async fn list_files(
         &self,
         requester: FileRequester<'_>,
         dir: &HlPath,
         access: Access,
-    ) -> Option<Vec<FileNameWithInfo>> {
-        let mut files = self.files().list(requester, dir).await?;
+    ) -> Result<Vec<FileNameWithInfo>, &'static str> {
+        let mut files = self
+            .files_for(requester.login)
+            .await?
+            .list(requester, dir)
+            .await
+            .ok_or("file or folder not found.")?;
         if dropbox_blocked(dir, None, access) {
             files.retain(|file| file.file_type == PARTIAL_TYPE);
         }
-        Some(files)
+        Ok(files)
     }
 
     /// A file's size in bytes, for starting a [`myTran_DownloadFile`] (202)
@@ -485,7 +508,8 @@ impl SharedState {
     ) -> Result<u64, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let size = self
-            .files()
+            .files_for(requester.login)
+            .await?
             .size(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -506,7 +530,8 @@ impl SharedState {
     ) -> Result<Vec<FolderItem>, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let items = self
-            .files()
+            .files_for(requester.login)
+            .await?
             .walk(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -516,9 +541,24 @@ impl SharedState {
             .collect())
     }
 
-    /// `name` as a new file or folder stores it.
-    pub fn stored_file_name(&self, name: &str) -> Result<String, &'static str> {
-        self.files().stored_name(name)
+    /// `name` as a new file or folder in `requester`'s files stores it.
+    pub async fn stored_file_name(
+        &self,
+        requester: FileRequester<'_>,
+        name: &str,
+    ) -> Result<String, &'static str> {
+        self.files_for(requester.login).await?.stored_name(name)
+    }
+
+    /// Each of `names` as a new file or folder in `requester`'s files
+    /// stores it.
+    pub async fn stored_file_names(
+        &self,
+        requester: FileRequester<'_>,
+        names: &[String],
+    ) -> Result<Vec<String>, &'static str> {
+        let files = self.files_for(requester.login).await?;
+        names.iter().map(|name| files.stored_name(name)).collect()
     }
 
     /// Whether a file or folder already exists at this path.
@@ -528,7 +568,10 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> bool {
-        self.files().exists(requester, dir, name).await
+        let Ok(files) = self.files_for(requester.login).await else {
+            return false;
+        };
+        files.exists(requester, dir, name).await
     }
 
     /// Whether `requester` may start (or resume) a [`myTran_UploadFile`] (203)
@@ -550,14 +593,15 @@ impl SharedState {
         resume: bool,
         size: u64,
     ) -> Result<u64, Cow<'static, str>> {
+        let files = self.files_for(requester.login).await?;
         if !self.folder_exists(requester, dir).await {
             Err("file or folder not found.")?;
         }
         upload_destination_access(dir, access)?;
-        if self.files().exists(requester, dir, name).await {
+        if files.exists(requester, dir, name).await {
             Err("file already exists.")?;
         }
-        let partial = self.files().partial_upload_size(requester, dir, name).await;
+        let partial = files.partial_upload_size(requester, dir, name).await;
         if resume {
             Ok(partial.ok_or("file or folder not found.")?)
         } else if partial.is_some() {
@@ -580,7 +624,7 @@ impl SharedState {
         name: &str,
         size: u64,
     ) -> Result<(), String> {
-        match self.files().free_space(requester, dir).await {
+        match self.files_for(requester.login).await?.free_space(requester, dir).await {
             Some(free) if size + UPLOAD_SPACE_MARGIN > free => Err(format!(
                 "Cannot accept upload of the {kind} \"{name}\" because there is not enough free disk space."
             )),
@@ -593,7 +637,10 @@ impl SharedState {
         let Some((name, parent)) = dir.components.split_last() else {
             return true;
         };
-        self.files()
+        let Ok(files) = self.files_for(requester.login).await else {
+            return false;
+        };
+        files
             .info(requester, &HlPath::new(parent), name)
             .await
             .is_some_and(|info| info.is_folder())
@@ -616,11 +663,12 @@ impl SharedState {
         resume: bool,
         size: u64,
     ) -> Result<(), Cow<'static, str>> {
+        let files = self.files_for(requester.login).await?;
         if !self.folder_exists(requester, dir).await {
             Err("file or folder not found.")?;
         }
         upload_destination_access(dir, access)?;
-        let existing = self.files().info(requester, dir, name).await;
+        let existing = files.info(requester, dir, name).await;
         if resume {
             let info = existing.ok_or("file or folder not found.")?;
             if !info.is_folder() {
@@ -634,7 +682,7 @@ impl SharedState {
         if resume {
             return Ok(());
         }
-        self.files()
+        files
             .mkdir(requester, dir, name)
             .await
             .map_err(|e| e.to_string())?;
@@ -655,20 +703,21 @@ impl SharedState {
         name: &str,
         is_folder: bool,
     ) -> Option<u64> {
-        self.files().list(requester, dir).await?;
+        let files = self.files_for(requester.login).await.ok()?;
+        files.list(requester, dir).await?;
         if is_folder {
-            if !self.files().exists(requester, dir, name).await {
+            if !files.exists(requester, dir, name).await {
                 // A failed folder still moves on to the next item.
-                if let Err(error) = self.files().mkdir(requester, dir, name).await {
+                if let Err(error) = files.mkdir(requester, dir, name).await {
                     tracing::debug!(%error, name, "folder upload item failed");
                 }
             }
             return None;
         }
-        if let Some(offset) = self.files().partial_upload_size(requester, dir, name).await {
+        if let Some(offset) = files.partial_upload_size(requester, dir, name).await {
             return Some(offset);
         }
-        (!self.files().exists(requester, dir, name).await).then_some(0)
+        (!files.exists(requester, dir, name).await).then_some(0)
     }
 
     /// Open a file for reading, for a [`myTran_DownloadFile`] (202) download.
@@ -680,7 +729,11 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> std::io::Result<BoxedReader> {
-        self.files().open_read(requester, dir, name).await
+        self.files_for(requester.login)
+            .await
+            .map_err(std::io::Error::other)?
+            .open_read(requester, dir, name)
+            .await
     }
 
     /// Create a file for writing, for a [`myTran_UploadFile`] (203) upload.
@@ -692,7 +745,11 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> std::io::Result<BoxedWriter> {
-        self.files().create_write(requester, dir, name).await
+        self.files_for(requester.login)
+            .await
+            .map_err(std::io::Error::other)?
+            .create_write(requester, dir, name)
+            .await
     }
 
     /// Open an existing file for writing from `at` onward, continuing a
@@ -706,7 +763,9 @@ impl SharedState {
         name: &str,
         at: u64,
     ) -> std::io::Result<BoxedWriter> {
-        self.files()
+        self.files_for(requester.login)
+            .await
+            .map_err(std::io::Error::other)?
             .open_write_resume(requester, dir, name, at)
             .await
     }
@@ -718,7 +777,10 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> u64 {
-        self.files().resource_fork_size(requester, dir, name).await
+        let Ok(files) = self.files_for(requester.login).await else {
+            return 0;
+        };
+        files.resource_fork_size(requester, dir, name).await
     }
 
     /// The byte length of the resource fork of `name`'s in-progress upload.
@@ -729,15 +791,17 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> u64 {
-        if self
-            .files()
+        let Ok(files) = self.files_for(requester.login).await else {
+            return 0;
+        };
+        if files
             .partial_upload_size(requester, dir, name)
             .await
             .is_none()
         {
             return 0;
         }
-        self.files()
+        files
             .resource_fork_size(requester, dir, &partial_upload_name(name))
             .await
     }
@@ -750,7 +814,9 @@ impl SharedState {
         name: &str,
         at: u64,
     ) -> std::io::Result<BoxedReader> {
-        self.files()
+        self.files_for(requester.login)
+            .await
+            .map_err(std::io::Error::other)?
             .open_resource_read(requester, dir, name, at)
             .await
     }
@@ -764,7 +830,9 @@ impl SharedState {
         name: &str,
         at: u64,
     ) -> std::io::Result<BoxedWriter> {
-        self.files()
+        self.files_for(requester.login)
+            .await
+            .map_err(std::io::Error::other)?
             .open_resource_write(requester, dir, name, at)
             .await
     }
@@ -780,7 +848,8 @@ impl SharedState {
     ) -> Result<FileNameWithInfo, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
         let info = self
-            .files()
+            .files_for(requester.login)
+            .await?
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -794,7 +863,10 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> ItemTimes {
-        self.files().times(requester, dir, name).await
+        let Ok(files) = self.files_for(requester.login).await else {
+            return ItemTimes::default();
+        };
+        files.times(requester, dir, name).await
     }
 
     /// Delete a file, or a folder and everything under it, after
@@ -806,8 +878,8 @@ impl SharedState {
         name: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
-        let info = self
-            .files()
+        let files = self.files_for(requester.login).await?;
+        let info = files
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -818,7 +890,7 @@ impl SharedState {
             Access::DELETE_FILE
         };
         access.require(required)?;
-        self.files()
+        files
             .delete(requester, dir, name, is_dir)
             .await
             .map_err(|e| e.to_string())?;
@@ -834,7 +906,8 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        self.files()
+        self.files_for(requester.login)
+            .await?
             .mkdir(requester, dir, name)
             .await
             .map_err(|e| e.to_string())?;
@@ -851,9 +924,9 @@ impl SharedState {
         new_name: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
+        let files = self.files_for(requester.login).await?;
         dropbox_access(dir, Some(name), access)?;
-        let info = self
-            .files()
+        let info = files
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -863,7 +936,7 @@ impl SharedState {
         } else {
             Access::RENAME_FILE
         })?;
-        self.files()
+        files
             .rename(requester, dir, name, new_name)
             .await
             .map_err(|e| e.to_string())?;
@@ -881,9 +954,9 @@ impl SharedState {
         to_dir: &HlPath,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
+        let files = self.files_for(requester.login).await?;
         self.drop_box_source(dir, name, access)?;
-        let info = self
-            .files()
+        let info = files
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -893,8 +966,7 @@ impl SharedState {
             Access::MOVE_FILE
         };
         access.require(required)?;
-        self.providers
-            .files
+        files
             .r#move(requester, dir, name, to_dir)
             .await
             .map_err(|e| e.to_string())?;
@@ -913,7 +985,8 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         self.drop_box_source(target_dir, target_name, access)?;
-        self.files()
+        self.files_for(requester.login)
+            .await?
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await
             .map_err(|e| e.to_string())?;
@@ -930,7 +1003,11 @@ impl SharedState {
         access: Access,
     ) -> Result<Option<String>, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        Ok(self.files().comment(requester, dir, name).await)
+        Ok(self
+            .files_for(requester.login)
+            .await?
+            .comment(requester, dir, name)
+            .await)
     }
 
     /// Set a file or folder's comment, after checking the matching
@@ -944,9 +1021,9 @@ impl SharedState {
         comment: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
+        let files = self.files_for(requester.login).await?;
         dropbox_access(dir, Some(name), access)?;
-        let info = self
-            .files()
+        let info = files
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -956,11 +1033,7 @@ impl SharedState {
             Access::SET_FILE_COMMENT
         };
         access.require(required)?;
-        let Err(error) = self
-            .files()
-            .set_comment(requester, dir, name, comment)
-            .await
-        else {
+        let Err(error) = files.set_comment(requester, dir, name, comment).await else {
             return Ok(());
         };
         tracing::debug!(%error, name, "comment write failed");
@@ -1168,7 +1241,11 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
     ) -> std::io::Result<()> {
-        self.files().finish_upload(requester, dir, name).await
+        self.files_for(requester.login)
+            .await
+            .map_err(std::io::Error::other)?
+            .finish_upload(requester, dir, name)
+            .await
     }
 
     /// The `INFO` fork data of the file `dir`/`name`, for a download.
@@ -1179,14 +1256,17 @@ impl SharedState {
         name: &str,
         encoding: &'static Encoding,
     ) -> Vec<u8> {
-        let finder_info = self.files().finder_info(requester, dir, name).await;
+        let Ok(files) = self.files_for(requester.login).await else {
+            return Vec::new();
+        };
+        let finder_info = files.finder_info(requester, dir, name).await;
         let FinderInfo {
             file_type,
             creator,
             flags,
         } = finder_info.unwrap_or_default();
-        let times = self.files().times(requester, dir, name).await;
-        let comment = self.files().comment(requester, dir, name).await;
+        let times = files.times(requester, dir, name).await;
+        let comment = files.comment(requester, dir, name).await;
         FlatFileInfo {
             file_type,
             creator,
@@ -1210,23 +1290,22 @@ impl SharedState {
         name: &str,
         info: &FlatFileInfo,
     ) {
+        let Ok(files) = self.files_for(requester.login).await else {
+            return;
+        };
         let finder_info = FinderInfo {
             file_type: info.file_type,
             creator: info.creator,
             flags: info.platform_flags as u16 & !FinderInfo::INITED & !FinderInfo::ALIAS,
         };
-        let stored = self
-            .files()
+        let stored = files
             .set_finder_info(requester, dir, name, finder_info)
             .await;
         if let Err(error) = stored {
             tracing::debug!(%error, name, "could not store an upload's Finder info");
         }
         if !info.comment.is_empty() {
-            let stored = self
-                .files()
-                .set_comment(requester, dir, name, &info.comment)
-                .await;
+            let stored = files.set_comment(requester, dir, name, &info.comment).await;
             if let Err(error) = stored {
                 tracing::debug!(%error, name, "could not store an upload's comment");
             }
@@ -1312,10 +1391,12 @@ impl SharedState {
     /// doesn't resolve to a bundle.
     pub async fn news_list_dir(
         &self,
+        login: &str,
         path: &HlPath,
     ) -> Result<Vec<NewsCategoryListEntry>, &'static str> {
         let entries = self
-            .threaded_news()
+            .threaded_news_for(login)
+            .await?
             .list_dir(&path.components)
             .await
             .ok_or("news bundle not found")?;
@@ -1341,11 +1422,13 @@ impl SharedState {
     /// doesn't resolve to a category.
     pub async fn news_list_articles(
         &self,
+        login: &str,
         path: &HlPath,
         encoding: &'static Encoding,
     ) -> Result<NewsArticleListData, &'static str> {
         let articles = self
-            .threaded_news()
+            .threaded_news_for(login)
+            .await?
             .list_articles(&path.components)
             .await
             .ok_or("news category not found")?;
@@ -1377,23 +1460,39 @@ impl SharedState {
     /// article itself doesn't exist.
     pub async fn news_article(
         &self,
+        login: &str,
         path: &HlPath,
         id: u32,
     ) -> Result<NewsArticleDetail, &'static str> {
-        self.threaded_news()
+        self.threaded_news_for(login)
+            .await?
             .article(&path.components, id)
             .await
             .ok_or("news article not found")
     }
 
     /// Create a news bundle (folder) named `name` under `path`.
-    pub async fn news_mkdir(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        self.threaded_news().mkdir(&path.components, name).await
+    pub async fn news_mkdir(
+        &self,
+        login: &str,
+        path: &HlPath,
+        name: &str,
+    ) -> Result<(), &'static str> {
+        self.threaded_news_for(login)
+            .await?
+            .mkdir(&path.components, name)
+            .await
     }
 
     /// Create a news category named `name` under `path`.
-    pub async fn news_mkcategory(&self, path: &HlPath, name: &str) -> Result<(), &'static str> {
-        self.threaded_news()
+    pub async fn news_mkcategory(
+        &self,
+        login: &str,
+        path: &HlPath,
+        name: &str,
+    ) -> Result<(), &'static str> {
+        self.threaded_news_for(login)
+            .await?
             .mkcategory(&path.components, name)
             .await
     }
@@ -1404,14 +1503,15 @@ impl SharedState {
     /// doesn't resolve.
     pub async fn news_delete(
         &self,
+        login: &str,
         path: &HlPath,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
+        let news = self.threaded_news_for(login).await?;
         if path.components.is_empty() {
             Err("news item not found")?;
         }
-        let kind = self
-            .threaded_news()
+        let kind = news
             .item_kind(&path.components)
             .await
             .ok_or("news item not found")?;
@@ -1420,7 +1520,7 @@ impl SharedState {
             NewsItemKind::Category => Access::NEWS_DELETE_CAT,
         };
         access.require(required)?;
-        self.threaded_news().delete(&path.components).await?;
+        news.delete(&path.components).await?;
         Ok(())
     }
 
@@ -1428,6 +1528,7 @@ impl SharedState {
     #[allow(clippy::too_many_arguments)]
     pub async fn news_post_article(
         &self,
+        login: &str,
         path: &HlPath,
         parent_id: u32,
         title: String,
@@ -1436,7 +1537,8 @@ impl SharedState {
         mime_type: String,
         data: Vec<u8>,
     ) -> Result<u32, &'static str> {
-        self.threaded_news()
+        self.threaded_news_for(login)
+            .await?
             .post_article(
                 &path.components,
                 parent_id,
@@ -1454,11 +1556,13 @@ impl SharedState {
     /// first reply is promoted into its place.
     pub async fn news_delete_article(
         &self,
+        login: &str,
         path: &HlPath,
         id: u32,
         recursive: bool,
     ) -> Result<(), &'static str> {
-        self.threaded_news()
+        self.threaded_news_for(login)
+            .await?
             .delete_article(&path.components, id, recursive)
             .await
     }
@@ -1921,11 +2025,12 @@ mod tests {
 
         state.post_news("alice", "hello").await;
         state
-            .news_mkcategory(&HlPath::default(), "General")
+            .news_mkcategory("", &HlPath::default(), "General")
             .await
             .unwrap();
         state
             .news_post_article(
+                "",
                 &HlPath::new(["General"]),
                 0,
                 "Hi".to_string(),
@@ -1946,6 +2051,7 @@ mod tests {
         assert!(other.news().await.contains("hello"));
         let articles = other
             .news_list_articles(
+                "",
                 &HlPath::new(["General"]),
                 hotline_proto::text_encoding::DEFAULT,
             )
@@ -1953,6 +2059,132 @@ mod tests {
             .unwrap();
         assert_eq!(articles.articles.len(), 1);
         assert_eq!(&*articles.articles[0].title, "Hi");
+    }
+
+    /// Own files and threaded news for `alice` only.
+    struct AliceStores {
+        files: Arc<InMemoryFileProvider>,
+        news: Arc<InMemoryNewsProvider>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::AccountStores for AliceStores {
+        async fn files(&self, login: &str) -> Result<Option<Arc<dyn FileProvider>>, &'static str> {
+            Ok((login == "alice").then(|| self.files.clone() as Arc<dyn FileProvider>))
+        }
+
+        async fn threaded_news(
+            &self,
+            login: &str,
+        ) -> Result<Option<Arc<dyn ThreadedNewsProvider>>, &'static str> {
+            Ok((login == "alice").then(|| self.news.clone() as Arc<dyn ThreadedNewsProvider>))
+        }
+    }
+
+    /// Own stores for `alice` that do not open.
+    struct BrokenAliceStores;
+
+    #[async_trait::async_trait]
+    impl crate::AccountStores for BrokenAliceStores {
+        async fn files(&self, login: &str) -> Result<Option<Arc<dyn FileProvider>>, &'static str> {
+            match login {
+                "alice" => Err("broken files"),
+                _ => Ok(None),
+            }
+        }
+
+        async fn threaded_news(
+            &self,
+            login: &str,
+        ) -> Result<Option<Arc<dyn ThreadedNewsProvider>>, &'static str> {
+            match login {
+                "alice" => Err("broken news"),
+                _ => Ok(None),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_whose_own_stores_do_not_open_gets_an_error() {
+        let state = SharedState::new(Providers {
+            account_stores: Arc::new(BrokenAliceStores),
+            ..Providers::default()
+        });
+        let alice = FileRequester { login: "alice" };
+        let root = HlPath::default();
+
+        assert_eq!(
+            state.list_files(alice, &root, Access::all()).await,
+            Err("broken files")
+        );
+        assert_eq!(
+            state.mkdir(alice, &root, "New", Access::all()).await,
+            Err("broken files".into())
+        );
+        assert_eq!(
+            state.news_mkcategory("alice", &root, "Own").await,
+            Err("broken news")
+        );
+
+        let bob = FileRequester { login: "bob" };
+        state.mkdir(bob, &root, "New", Access::all()).await.unwrap();
+        assert!(state.file_exists(bob, &root, "New").await);
+        state.news_mkcategory("bob", &root, "Shared").await.unwrap();
+        assert_eq!(state.news_list_dir("bob", &root).await.unwrap().len(), 1);
+    }
+
+    fn state_with_alice_stores() -> (
+        Arc<SharedState>,
+        Arc<InMemoryFileProvider>,
+        Arc<InMemoryNewsProvider>,
+    ) {
+        let files = Arc::new(InMemoryFileProvider::default());
+        let news = Arc::new(InMemoryNewsProvider::default());
+        let state = SharedState::new(Providers {
+            account_stores: Arc::new(AliceStores {
+                files: files.clone(),
+                news: news.clone(),
+            }),
+            ..Providers::default()
+        });
+        (state, files, news)
+    }
+
+    #[tokio::test]
+    async fn an_account_with_its_own_files_lists_only_them() {
+        let (state, files, _) = state_with_alice_stores();
+        files.seed(&HlPath::default(), "own.txt", "x");
+        let state = &state;
+        let list = |login| async move {
+            state
+                .list_files(FileRequester { login }, &HlPath::default(), Access::all())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|file| file.name.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(list("alice").await, ["own.txt"]);
+        assert!(list("bob").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_account_with_its_own_threaded_news_writes_only_there() {
+        let (state, _, news) = state_with_alice_stores();
+
+        state
+            .news_mkcategory("alice", &HlPath::default(), "Own")
+            .await
+            .unwrap();
+
+        let shared = state
+            .news_list_dir("bob", &HlPath::default())
+            .await
+            .unwrap();
+        assert!(shared.is_empty());
+        let own = news.list_dir(&[]).await.unwrap();
+        assert_eq!(own.len(), 1);
     }
 
     /// Matches openline's `AddToMsgBoard` header, body, and footer shape,

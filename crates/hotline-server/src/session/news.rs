@@ -97,7 +97,7 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let entries = match state.news_list_dir(&path).await {
+        let entries = match state.news_list_dir(&self.login, &path).await {
             Ok(entries) => entries,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -133,7 +133,10 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let listing = match state.news_list_articles(&path, self.encoding()).await {
+        let listing = match state
+            .news_list_articles(&self.login, &path, self.encoding())
+            .await
+        {
             Ok(listing) => listing,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -156,7 +159,7 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        if let Err(reason) = state.news_delete(&path, self.access).await {
+        if let Err(reason) = state.news_delete(&self.login, &path, self.access).await {
             return vec![tx.reply_error(reason)];
         }
         vec![tx.reply(vec![])]
@@ -180,7 +183,7 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        if let Err(reason) = state.news_mkdir(&path, &name).await {
+        if let Err(reason) = state.news_mkdir(&self.login, &path, &name).await {
             return vec![tx.reply_error(reason)];
         }
         vec![tx.reply(vec![])]
@@ -204,7 +207,7 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        if let Err(reason) = state.news_mkcategory(&path, &name).await {
+        if let Err(reason) = state.news_mkcategory(&self.login, &path, &name).await {
             return vec![tx.reply_error(reason)];
         }
         vec![tx.reply(vec![])]
@@ -228,7 +231,7 @@ impl Session {
         let Some(id) = tx.news_article_id() else {
             return vec![tx.reply_error("missing article id")];
         };
-        let detail = match state.news_article(&path, id).await {
+        let detail = match state.news_article(&self.login, &path, id).await {
             Ok(detail) => detail,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -295,6 +298,7 @@ impl Session {
 
         if let Err(reason) = state
             .news_post_article(
+                &self.login,
                 &path,
                 parent_id,
                 title,
@@ -329,7 +333,10 @@ impl Session {
             return vec![tx.reply_error("missing article id")];
         };
         let recursive = tx.news_article_recurse_delete();
-        if let Err(reason) = state.news_delete_article(&path, id, recursive).await {
+        if let Err(reason) = state
+            .news_delete_article(&self.login, &path, id, recursive)
+            .await
+        {
             return vec![tx.reply_error(reason)];
         }
         vec![tx.reply(vec![])]
@@ -507,7 +514,7 @@ mod tests {
     async fn get_news_cat_name_list_sends_the_old_field_below_version_15() {
         let state = Arc::<SharedState>::default();
         state
-            .news_mkcategory(&HlPath::default(), "General")
+            .news_mkcategory("", &HlPath::default(), "General")
             .await
             .unwrap();
         let mut session = test_session("Alice", Access::all());
@@ -561,7 +568,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         let session = test_session("Alice", Access::all());
         state
-            .news_mkdir(&HlPath::default(), "Bundle")
+            .news_mkdir("", &HlPath::default(), "Bundle")
             .await
             .unwrap();
 
@@ -604,7 +611,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         let session = test_session("Alice", Access::all());
         state
-            .news_mkcategory(&HlPath::default(), "General")
+            .news_mkcategory("", &HlPath::default(), "General")
             .await
             .unwrap();
         let path_field = || {
@@ -694,7 +701,7 @@ mod tests {
         let unicode = test_session("Bob", Access::all());
         unicode.encoding.set(utf8);
         state
-            .news_mkcategory(&HlPath::default(), "General")
+            .news_mkcategory("", &HlPath::default(), "General")
             .await
             .unwrap();
         let path = HlPath::new(["General"]);
@@ -716,10 +723,10 @@ mod tests {
             .try_into()
             .unwrap();
         assert!(!reply.is_error());
-        let stored = state.news_article(&path, 1).await.unwrap();
+        let stored = state.news_article("", &path, 1).await.unwrap();
         assert_eq!(stored.data["text/plain"], "caf\u{e9}".as_bytes());
 
-        let listing = state.news_list_articles(&path, utf8).await.unwrap();
+        let listing = state.news_list_articles("", &path, utf8).await.unwrap();
         assert_eq!(listing.articles[0].flavors[0].size, 5);
 
         let get = request(
@@ -772,7 +779,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         let session = test_session("Alice", Access::all());
         state
-            .news_mkcategory(&HlPath::default(), "General")
+            .news_mkcategory("", &HlPath::default(), "General")
             .await
             .unwrap();
 
@@ -795,7 +802,7 @@ mod tests {
             .unwrap();
         assert!(reply.is_error());
         let list = state
-            .news_list_articles(&HlPath::new(["General"]), encoding)
+            .news_list_articles("", &HlPath::new(["General"]), encoding)
             .await
             .unwrap();
         assert!(list.articles.is_empty());
@@ -809,7 +816,7 @@ mod tests {
         access.remove(Access::POST_NEWS_ART);
         let session = test_session("Alice", access);
         state
-            .news_mkcategory(&HlPath::default(), "General")
+            .news_mkcategory("", &HlPath::default(), "General")
             .await
             .unwrap();
 

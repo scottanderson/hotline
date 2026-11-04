@@ -40,18 +40,26 @@ disk, put your own implementations in `Providers`.
 
 `Providers` holds one implementation of each trait:
 
-| Field           | Trait                   | Default                   |
-|-----------------|-------------------------|---------------------------|
-| `accounts`      | `AccountProvider`       | `InMemoryAccountProvider` |
-| `files`         | `FileProvider`          | `InMemoryFileProvider`    |
-| `flat_news`     | `FlatNewsProvider`      | `InMemoryNewsProvider`    |
-| `threaded_news` | `ThreadedNewsProvider`  | `InMemoryNewsProvider`    |
-| `bans`          | `BanProvider`           | `InMemoryBanProvider`     |
-| `flood`         | `FloodPolicy`           | `NoFloodPolicy`           |
-| `banner`        | `BannerProvider`        | `NoBanner`                |
-| `commands`      | `ChatCommandDispatcher` | `DefaultChatCommands`     |
-| `activity`      | `ActivityLog`           | `NoActivityLog`           |
-| `policy`        | `ServerPolicy`          | `OpenlinePolicy`          |
+| Field            | Trait                   | Default                   |
+|------------------|-------------------------|---------------------------|
+| `accounts`       | `AccountProvider`       | `InMemoryAccountProvider` |
+| `files`          | `FileProvider`          | `InMemoryFileProvider`    |
+| `flat_news`      | `FlatNewsProvider`      | `InMemoryNewsProvider`    |
+| `threaded_news`  | `ThreadedNewsProvider`  | `InMemoryNewsProvider`    |
+| `account_stores` | `AccountStores`         | `NoAccountStores`         |
+| `bans`           | `BanProvider`           | `InMemoryBanProvider`     |
+| `flood`          | `FloodPolicy`           | `NoFloodPolicy`           |
+| `banner`         | `BannerProvider`        | `NoBanner`                |
+| `commands`       | `ChatCommandDispatcher` | `DefaultChatCommands`     |
+| `activity`       | `ActivityLog`           | `NoActivityLog`           |
+| `policy`         | `ServerPolicy`          | `OpenlinePolicy`          |
+
+`AccountStores` can give an account its own files and threaded news,
+like openline's `Users/<login>/Files` and `Users/<login>/News`
+folders. An account without its own store uses `files` and
+`threaded_news`. An error from `AccountStores` refuses the request. It
+does not fall back to the shared store. Flat news is the same for every
+account.
 
 ## Design
 

@@ -490,7 +490,7 @@ async fn receive_folder(
     for remaining in (0..*item_count).rev() {
         let body = read_u16_prefixed(stream).await?;
         let received = match FolderItemHeader::decode_body(&body, encoding) {
-            Ok(header) => match stored_item_path(&root, &header.path, state) {
+            Ok(header) => match stored_item_path(&root, &header.path, requester, state).await {
                 Some((dir, name)) => {
                     let is_folder = header.is_folder;
                     receive_folder_item(stream, requester, &dir, &name, is_folder, encoding, state)
@@ -584,19 +584,19 @@ fn split_item_path<'a>(root: &[String], path: &'a HlPath) -> Option<(HlPath, &'a
     Some((HlPath::new(root.iter().chain(parents)), name))
 }
 
-/// Like [`split_item_path`] for an uploaded item, with each name as
-/// [`SharedState::stored_file_name`] stores it. `None` if a name is
-/// invalid.
-fn stored_item_path(
+/// Like [`split_item_path`] for an item that `requester` uploads, with
+/// each name as [`SharedState::stored_file_names`] stores it. `None` if a
+/// name is invalid.
+async fn stored_item_path(
     root: &[String],
     path: &HlPath,
+    requester: FileRequester<'_>,
     state: &SharedState,
 ) -> Option<(HlPath, String)> {
-    let mut names = path
-        .components
-        .iter()
-        .map(|name| state.stored_file_name(name).ok())
-        .collect::<Option<Vec<_>>>()?;
+    let mut names = state
+        .stored_file_names(requester, &path.components)
+        .await
+        .ok()?;
     let name = names.pop()?;
     Some((HlPath::new(root.iter().chain(&names)), name))
 }
@@ -673,14 +673,21 @@ mod tests {
         assert_eq!(read.unwrap(), 0);
     }
 
-    #[test]
-    fn stored_item_path_validates_every_name() {
+    #[tokio::test]
+    async fn stored_item_path_validates_every_name() {
         let root = ["Uploads".to_string()];
         let state = state_with_files(InMemoryFileProvider::default());
-        let (dir, name) = stored_item_path(&root, &HlPath::new(["..", "a/b"]), &state).unwrap();
+        let requester = FileRequester { login: "guest" };
+        let path = HlPath::new(["..", "a/b"]);
+        let (dir, name) = stored_item_path(&root, &path, requester, &state)
+            .await
+            .unwrap();
         assert_eq!(dir, HlPath::new(["Uploads", "--"]));
         assert_eq!(name, "a-b");
-        assert!(stored_item_path(&root, &HlPath::new(["ok", ""]), &state).is_none());
+        let path = HlPath::new(["ok", ""]);
+        assert!(stored_item_path(&root, &path, requester, &state)
+            .await
+            .is_none());
     }
 
     fn state_with_files(files: InMemoryFileProvider) -> Arc<SharedState> {

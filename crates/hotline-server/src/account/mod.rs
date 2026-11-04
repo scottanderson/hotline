@@ -10,10 +10,12 @@
 mod access_extra;
 mod memory;
 mod provider;
+mod stores;
 
 pub use access_extra::AccessExtra;
 pub use memory::InMemoryAccountProvider;
 pub use provider::AccountProvider;
+pub use stores::{AccountStores, NoAccountStores};
 
 use hotline_proto::consts::Access;
 

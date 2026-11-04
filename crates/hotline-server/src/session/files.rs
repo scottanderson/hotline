@@ -42,8 +42,9 @@ impl Session {
         };
 
         let requester = FileRequester { login: &self.login };
-        let Some(entries) = state.list_files(requester, &dir, self.access).await else {
-            return vec![tx.reply_error("file or folder not found.")];
+        let entries = match state.list_files(requester, &dir, self.access).await {
+            Ok(entries) => entries,
+            Err(reason) => return vec![tx.reply_error(reason)],
         };
         let fields = entries
             .into_iter()
@@ -283,11 +284,11 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let name = match state.stored_file_name(&name) {
+        let requester = FileRequester { login: &self.login };
+        let name = match state.stored_file_name(requester, &name).await {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let requester = FileRequester { login: &self.login };
         let resume = tx.field(FieldId::FileXferOptions).map(Field::as_u32) == Some(1);
         let size = tx
             .field(FieldId::TransferSize)
@@ -419,11 +420,11 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let name = match state.stored_file_name(&name) {
+        let requester = FileRequester { login: &self.login };
+        let name = match state.stored_file_name(requester, &name).await {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let requester = FileRequester { login: &self.login };
         let resume = tx.field(FieldId::FileXferOptions).map(Field::as_u32) == Some(1);
         let size = tx
             .field(FieldId::TransferSize)
@@ -523,11 +524,11 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let name = match state.stored_file_name(&name) {
+        let requester = FileRequester { login: &self.login };
+        let name = match state.stored_file_name(requester, &name).await {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let requester = FileRequester { login: &self.login };
         if let Err(reason) = state.mkdir(requester, &dir, &name, self.access).await {
             return vec![tx.reply_error(reason)];
         }
@@ -606,14 +607,16 @@ impl Session {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
+        let requester = FileRequester { login: &self.login };
         let new_name = match tx
             .string(FieldId::FileNewName)
             .filter(|new_name| !new_name.is_empty() && *new_name != name)
-            .map(|new_name| state.stored_file_name(&new_name))
-            .transpose()
         {
-            Ok(new_name) => new_name,
-            Err(reason) => return vec![tx.reply_error(reason)],
+            Some(new_name) => match state.stored_file_name(requester, &new_name).await {
+                Ok(new_name) => Some(new_name),
+                Err(reason) => return vec![tx.reply_error(reason)],
+            },
+            None => None,
         };
         // A comment of one zero byte clears the comment.
         let comment = tx.string(FieldId::FileComment).map(|comment| {
@@ -626,7 +629,6 @@ impl Session {
         if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
         }
-        let requester = FileRequester { login: &self.login };
         if let Some(comment) = &comment {
             if let Err(reason) = state
                 .set_file_comment(requester, &dir, &name, comment, self.access)
@@ -694,11 +696,11 @@ impl Session {
         let link_name = tx
             .string(FieldId::FileNewName)
             .unwrap_or_else(|| name.clone());
-        let link_name = match state.stored_file_name(&link_name) {
+        let requester = FileRequester { login: &self.login };
+        let link_name = match state.stored_file_name(requester, &link_name).await {
             Ok(link_name) => link_name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let requester = FileRequester { login: &self.login };
         if let Err(reason) = state
             .symlink_file(requester, &dir, &name, &link_dir, &link_name, self.access)
             .await
