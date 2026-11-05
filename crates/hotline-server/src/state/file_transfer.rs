@@ -4,7 +4,7 @@ use crate::state::TransferTarget;
 
 /// A pending `HTXF` transfer's file identity, from [`crate::FileProvider`],
 /// framed as a flattened file object.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct FileTransfer {
     /// The file's login and path.
     pub target: TransferTarget,

@@ -512,7 +512,8 @@ mod tests {
         ));
     }
 
-    fn file_transfer(
+    async fn file_transfer(
+        state: &SharedState,
         name: &str,
         direction: crate::state::TransferDirection,
         size: u64,
@@ -521,6 +522,7 @@ mod tests {
             kind: crate::state::TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
                     login: "bob".into(),
+                    store: state.files_for("bob").await.unwrap(),
                     dir: Default::default(),
                     name: name.into(),
                 },
@@ -564,10 +566,11 @@ mod tests {
             .await;
         state.set_download_limits(1, 1);
         state
-            .register_transfer(file_transfer("up.txt", Put, 2048))
+            .register_transfer(file_transfer(&state, "up.txt", Put, 2048).await)
             .await;
         for name in ["first.txt", "second.txt"] {
-            let reference = state.register_transfer(file_transfer(name, Get, 10)).await;
+            let transfer = file_transfer(&state, name, Get, 10).await;
+            let reference = state.register_transfer(transfer).await;
             state.admit_download(reference, 2).await;
         }
         let request = request(

@@ -28,8 +28,8 @@ use crate::console::fields::{
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::file::{
-    partial_upload_name, BoxedReader, BoxedWriter, FileProvider, FileRequester, FinderInfo,
-    FolderItem, ItemTimes, PARTIAL_TYPE,
+    partial_upload_name, BoxedReader, FileProvider, FileRequester, FinderInfo, FolderItem,
+    PARTIAL_TYPE,
 };
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
@@ -487,7 +487,10 @@ impl SharedState {
 
     /// `login`'s own files, or the shared files. `Err` if its own files do
     /// not open.
-    async fn files_for(&self, login: &str) -> Result<Arc<dyn FileProvider>, &'static str> {
+    pub(crate) async fn files_for(
+        &self,
+        login: &str,
+    ) -> Result<Arc<dyn FileProvider>, &'static str> {
         Ok(self
             .account_stores()
             .files(login)
@@ -536,15 +539,14 @@ impl SharedState {
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
     pub async fn file_size(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         access: Access,
     ) -> Result<u64, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        let size = self
-            .files_for(requester.login)
-            .await?
+        let size = files
             .size(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -558,15 +560,14 @@ impl SharedState {
     /// [`myTran_DownloadFldr`]: hotline_proto::Opcode::DownloadFldr
     pub async fn walk_folder(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         access: Access,
     ) -> Result<Vec<FolderItem>, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        let items = self
-            .files_for(requester.login)
-            .await?
+        let items = files
             .walk(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
@@ -574,26 +575,6 @@ impl SharedState {
             .into_iter()
             .filter(|item| !dropbox_blocked(&item.path, None, access))
             .collect())
-    }
-
-    /// `name` as a new file or folder in `requester`'s files stores it.
-    pub async fn stored_file_name(
-        &self,
-        requester: FileRequester<'_>,
-        name: &str,
-    ) -> Result<String, &'static str> {
-        self.files_for(requester.login).await?.stored_name(name)
-    }
-
-    /// Each of `names` as a new file or folder in `requester`'s files
-    /// stores it.
-    pub async fn stored_file_names(
-        &self,
-        requester: FileRequester<'_>,
-        names: &[String],
-    ) -> Result<Vec<String>, &'static str> {
-        let files = self.files_for(requester.login).await?;
-        names.iter().map(|name| files.stored_name(name)).collect()
     }
 
     /// Whether a file or folder already exists at this path.
@@ -619,8 +600,10 @@ impl SharedState {
     /// as the resume offset (`0` otherwise).
     ///
     /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
+    #[allow(clippy::too_many_arguments)]
     pub async fn authorize_upload(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
@@ -628,8 +611,7 @@ impl SharedState {
         resume: bool,
         size: u64,
     ) -> Result<u64, Cow<'static, str>> {
-        let files = self.files_for(requester.login).await?;
-        if !self.folder_exists(requester, dir).await {
+        if !self.folder_exists(files, requester, dir).await {
             Err("file or folder not found.")?;
         }
         upload_destination_access(dir, access)?;
@@ -642,7 +624,7 @@ impl SharedState {
         } else if partial.is_some() {
             Err("file already exists.")?
         } else {
-            self.require_free_space(requester, dir, "file", name, size)
+            self.require_free_space(files, requester, dir, "file", name, size)
                 .await?;
             Ok(0)
         }
@@ -653,13 +635,14 @@ impl SharedState {
     /// unknown free space is enough.
     async fn require_free_space(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         kind: &str,
         name: &str,
         size: u64,
     ) -> Result<(), String> {
-        match self.files_for(requester.login).await?.free_space(requester, dir).await {
+        match files.free_space(requester, dir).await {
             Some(free) if size + UPLOAD_SPACE_MARGIN > free => Err(format!(
                 "Cannot accept upload of the {kind} \"{name}\" because there is not enough free disk space."
             )),
@@ -668,12 +651,14 @@ impl SharedState {
     }
 
     /// Whether `dir` is a folder that `requester` can see. The root always is.
-    async fn folder_exists(&self, requester: FileRequester<'_>, dir: &HlPath) -> bool {
+    async fn folder_exists(
+        &self,
+        files: &dyn FileProvider,
+        requester: FileRequester<'_>,
+        dir: &HlPath,
+    ) -> bool {
         let Some((name, parent)) = dir.components.split_last() else {
             return true;
-        };
-        let Ok(files) = self.files_for(requester.login).await else {
-            return false;
         };
         files
             .info(requester, &HlPath::new(parent), name)
@@ -689,8 +674,10 @@ impl SharedState {
     /// more bytes free.
     ///
     /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_folder_upload(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
@@ -698,8 +685,7 @@ impl SharedState {
         resume: bool,
         size: u64,
     ) -> Result<(), Cow<'static, str>> {
-        let files = self.files_for(requester.login).await?;
-        if !self.folder_exists(requester, dir).await {
+        if !self.folder_exists(files, requester, dir).await {
             Err("file or folder not found.")?;
         }
         upload_destination_access(dir, access)?;
@@ -712,7 +698,7 @@ impl SharedState {
         } else if existing.is_some() {
             Err("file already exists.")?;
         }
-        self.require_free_space(requester, dir, "folder", name, size)
+        self.require_free_space(files, requester, dir, "folder", name, size)
             .await?;
         if resume {
             return Ok(());
@@ -733,12 +719,12 @@ impl SharedState {
     /// [`myTran_UploadFldr`]: hotline_proto::Opcode::UploadFldr
     pub async fn prepare_folder_upload_item(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         is_folder: bool,
     ) -> Option<u64> {
-        let files = self.files_for(requester.login).await.ok()?;
         files.list(requester, dir).await?;
         if is_folder {
             if !files.exists(requester, dir, name).await {
@@ -755,80 +741,15 @@ impl SharedState {
         (!files.exists(requester, dir, name).await).then_some(0)
     }
 
-    /// Open a file for reading, for a [`myTran_DownloadFile`] (202) download.
-    ///
-    /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
-    pub async fn open_file_for_read(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-    ) -> std::io::Result<BoxedReader> {
-        self.files_for(requester.login)
-            .await
-            .map_err(std::io::Error::other)?
-            .open_read(requester, dir, name)
-            .await
-    }
-
-    /// Create a file for writing, for a [`myTran_UploadFile`] (203) upload.
-    ///
-    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
-    pub async fn create_file_for_write(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-    ) -> std::io::Result<BoxedWriter> {
-        self.files_for(requester.login)
-            .await
-            .map_err(std::io::Error::other)?
-            .create_write(requester, dir, name)
-            .await
-    }
-
-    /// Open an existing file for writing from `at` onward, continuing a
-    /// resumed [`myTran_UploadFile`] (203) upload.
-    ///
-    /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile
-    pub async fn resume_file_for_write(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-        at: u64,
-    ) -> std::io::Result<BoxedWriter> {
-        self.files_for(requester.login)
-            .await
-            .map_err(std::io::Error::other)?
-            .open_write_resume(requester, dir, name, at)
-            .await
-    }
-
-    /// The byte length of the resource fork of `dir`/`name`.
-    pub async fn resource_fork_size(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-    ) -> u64 {
-        let Ok(files) = self.files_for(requester.login).await else {
-            return 0;
-        };
-        files.resource_fork_size(requester, dir, name).await
-    }
-
     /// The byte length of the resource fork of `name`'s in-progress upload.
     /// 0 if there is no in-progress upload.
     pub async fn partial_resource_fork_size(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
     ) -> u64 {
-        let Ok(files) = self.files_for(requester.login).await else {
-            return 0;
-        };
         if files
             .partial_upload_size(requester, dir, name)
             .await
@@ -841,67 +762,22 @@ impl SharedState {
             .await
     }
 
-    /// Open the resource fork of `dir`/`name` for reading from `at` onward.
-    pub async fn open_resource_for_read(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-        at: u64,
-    ) -> std::io::Result<BoxedReader> {
-        self.files_for(requester.login)
-            .await
-            .map_err(std::io::Error::other)?
-            .open_resource_read(requester, dir, name, at)
-            .await
-    }
-
-    /// Open the resource fork of `name`'s in-progress upload for writing
-    /// from `at` onward.
-    pub async fn open_resource_for_write(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-        at: u64,
-    ) -> std::io::Result<BoxedWriter> {
-        self.files_for(requester.login)
-            .await
-            .map_err(std::io::Error::other)?
-            .open_resource_write(requester, dir, name, at)
-            .await
-    }
-
     /// One file or folder's listing metadata. `Err` if missing or
     /// drop-box-blocked.
     pub async fn file_info(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         access: Access,
     ) -> Result<FileNameWithInfo, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        let info = self
-            .files_for(requester.login)
-            .await?
+        let info = files
             .info(requester, dir, name)
             .await
             .ok_or("file or folder not found.")?;
         Ok(info)
-    }
-
-    /// When `dir`/`name` was made and last changed.
-    pub async fn file_times(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-    ) -> ItemTimes {
-        let Ok(files) = self.files_for(requester.login).await else {
-            return ItemTimes::default();
-        };
-        files.times(requester, dir, name).await
     }
 
     /// Delete a file, or a folder and everything under it, after
@@ -935,14 +811,14 @@ impl SharedState {
     /// Create a folder, after checking drop box visibility.
     pub async fn mkdir(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        self.files_for(requester.login)
-            .await?
+        files
             .mkdir(requester, dir, name)
             .await
             .map_err(|e| e.to_string())?;
@@ -953,13 +829,13 @@ impl SharedState {
     /// privilege and drop box visibility.
     pub async fn rename_file(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         new_name: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
-        let files = self.files_for(requester.login).await?;
         dropbox_access(dir, Some(name), access)?;
         let info = files
             .info(requester, dir, name)
@@ -1010,8 +886,10 @@ impl SharedState {
 
     /// Create an alias at `link_dir`/`link_name` pointing at
     /// `target_dir`/`target_name`, after the policy's drop box check.
+    #[allow(clippy::too_many_arguments)]
     pub async fn symlink_file(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         target_dir: &HlPath,
         target_name: &str,
@@ -1020,8 +898,7 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         self.drop_box_source(target_dir, target_name, access)?;
-        self.files_for(requester.login)
-            .await?
+        files
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await
             .map_err(|e| e.to_string())?;
@@ -1032,17 +909,14 @@ impl SharedState {
     /// one set. `Err` if missing or drop-box-blocked.
     pub async fn file_comment(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         access: Access,
     ) -> Result<Option<String>, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        Ok(self
-            .files_for(requester.login)
-            .await?
-            .comment(requester, dir, name)
-            .await)
+        Ok(files.comment(requester, dir, name).await)
     }
 
     /// Set a file or folder's comment, after checking the matching
@@ -1050,13 +924,13 @@ impl SharedState {
     /// when the policy stops on it.
     pub async fn set_file_comment(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         comment: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
-        let files = self.files_for(requester.login).await?;
         dropbox_access(dir, Some(name), access)?;
         let info = files
             .info(requester, dir, name)
@@ -1269,31 +1143,15 @@ impl SharedState {
         }
     }
 
-    /// Finish `dir`/`name`'s upload, once every byte has arrived.
-    pub async fn finish_upload(
-        &self,
-        requester: FileRequester<'_>,
-        dir: &HlPath,
-        name: &str,
-    ) -> std::io::Result<()> {
-        self.files_for(requester.login)
-            .await
-            .map_err(std::io::Error::other)?
-            .finish_upload(requester, dir, name)
-            .await
-    }
-
     /// The `INFO` fork data of the file `dir`/`name`, for a download.
     pub async fn info_fork(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         encoding: &'static Encoding,
     ) -> Vec<u8> {
-        let Ok(files) = self.files_for(requester.login).await else {
-            return Vec::new();
-        };
         let finder_info = files.finder_info(requester, dir, name).await;
         let FinderInfo {
             file_type,
@@ -1320,14 +1178,12 @@ impl SharedState {
     /// comment when not empty.
     pub async fn apply_info_fork(
         &self,
+        files: &dyn FileProvider,
         requester: FileRequester<'_>,
         dir: &HlPath,
         name: &str,
         info: &FlatFileInfo,
     ) {
-        let Ok(files) = self.files_for(requester.login).await else {
-            return;
-        };
         let finder_info = FinderInfo {
             file_type: info.file_type,
             creator: info.creator,
@@ -1985,6 +1841,7 @@ mod tests {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
                     login: "bob".into(),
+                    store: state.files_for("bob").await.unwrap(),
                     dir: HlPath::default(),
                     name: "a.txt".into(),
                 },
@@ -2025,6 +1882,7 @@ mod tests {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
                     login: "bob".into(),
+                    store: state.files_for("bob").await.unwrap(),
                     dir: HlPath::default(),
                     name: "a.txt".into(),
                 },
@@ -2226,17 +2084,18 @@ mod tests {
             state.list_files(alice, &root, Access::all()).await,
             Err("broken files")
         );
-        assert_eq!(
-            state.mkdir(alice, &root, "New", Access::all()).await,
-            Err("broken files".into())
-        );
+        assert_eq!(state.files_for("alice").await.err(), Some("broken files"));
         assert_eq!(
             state.news_mkcategory("alice", &root, "Own").await,
             Err("broken news")
         );
 
         let bob = FileRequester { login: "bob" };
-        state.mkdir(bob, &root, "New", Access::all()).await.unwrap();
+        let bob_files = state.files_for("bob").await.unwrap();
+        state
+            .mkdir(&*bob_files, bob, &root, "New", Access::all())
+            .await
+            .unwrap();
         assert!(state.file_exists(bob, &root, "New").await);
         state.news_mkcategory("bob", &root, "Shared").await.unwrap();
         assert_eq!(state.news_list_dir("bob", &root).await.unwrap().len(), 1);
@@ -2488,8 +2347,9 @@ mod tests {
         files.seed(&HlPath::new(["Top", "My Drop Box"]), "secret.txt", *b"s");
         let state = state_with_files(files);
         let requester = FileRequester { login: "alice" };
+        let store = state.files_for("alice").await.unwrap();
         let root = HlPath::default();
-        let walk = |access| state.walk_folder(requester, &root, "Top", access);
+        let walk = |access| state.walk_folder(&*store, requester, &root, "Top", access);
 
         let paths = |items: Vec<FolderItem>| -> Vec<Vec<String>> {
             items.into_iter().map(|i| i.path.components).collect()
@@ -2507,8 +2367,15 @@ mod tests {
         files.seed(&HlPath::new(["Drop Box"]), "a.txt", *b"a");
         let state = state_with_files(files);
         let requester = FileRequester { login: "alice" };
+        let store = state.files_for("alice").await.unwrap();
         assert!(state
-            .walk_folder(requester, &HlPath::default(), "Drop Box", Access::empty())
+            .walk_folder(
+                &*store,
+                requester,
+                &HlPath::default(),
+                "Drop Box",
+                Access::empty()
+            )
             .await
             .is_err());
     }
@@ -2521,10 +2388,11 @@ mod tests {
             ..Providers::default()
         });
         let requester = FileRequester { login: "alice" };
+        let store = state.files_for("alice").await.unwrap();
 
         {
-            let mut writer = state
-                .create_file_for_write(requester, &HlPath::default(), "a.txt")
+            let mut writer = store
+                .create_write(requester, &HlPath::default(), "a.txt")
                 .await
                 .unwrap();
             tokio::io::AsyncWriteExt::write_all(&mut writer, b"hi")
@@ -2541,18 +2409,30 @@ mod tests {
         assert_eq!(entries[0].creator, crate::file::PARTIAL_CREATOR);
 
         let info = state
-            .file_info(requester, &HlPath::default(), "a.txt.hpf", Access::all())
+            .file_info(
+                &*store,
+                requester,
+                &HlPath::default(),
+                "a.txt.hpf",
+                Access::all(),
+            )
             .await
             .unwrap();
         assert_eq!(info.file_type, crate::file::PARTIAL_TYPE);
         assert_eq!(info.creator, crate::file::PARTIAL_CREATOR);
 
-        state
+        store
             .finish_upload(requester, &HlPath::default(), "a.txt")
             .await
             .unwrap();
         let info = state
-            .file_info(requester, &HlPath::default(), "a.txt", Access::all())
+            .file_info(
+                &*store,
+                requester,
+                &HlPath::default(),
+                "a.txt",
+                Access::all(),
+            )
             .await
             .unwrap();
         assert_ne!(info.file_type, crate::file::PARTIAL_TYPE);
@@ -2561,10 +2441,12 @@ mod tests {
     #[tokio::test]
     async fn register_transfer_allocates_distinct_refs_and_take_consumes_them() {
         let state = Arc::<SharedState>::default();
+        let store = state.files_for("alice").await.unwrap();
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
                     login: "alice".into(),
+                    store: store.clone(),
                     dir: HlPath::default(),
                     name: "x".into(),
                 },
@@ -2598,6 +2480,7 @@ mod tests {
                 kind: TransferKind::File(crate::state::FileTransfer {
                     target: crate::state::TransferTarget {
                         login: "alice".into(),
+                        store: state.files_for("alice").await.unwrap(),
                         dir: HlPath::default(),
                         name: "x".into(),
                     },
@@ -2626,10 +2509,12 @@ mod tests {
     async fn an_admitted_download_whose_htxf_connection_never_arrives_frees_its_slot() {
         let state = Arc::<SharedState>::default();
         state.set_download_limits(1, 10);
+        let store = state.files_for("alice").await.unwrap();
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
                     login: "alice".into(),
+                    store: store.clone(),
                     dir: HlPath::default(),
                     name: "x".into(),
                 },
@@ -2671,10 +2556,12 @@ mod tests {
     async fn a_killed_download_refuses_its_htxf_connection_and_promotes_the_next() {
         let state = Arc::<SharedState>::default();
         state.set_download_limits(1, 10);
+        let store = state.files_for("alice").await.unwrap();
         let make = || PendingTransfer {
             kind: TransferKind::File(crate::state::FileTransfer {
                 target: crate::state::TransferTarget {
                     login: "alice".into(),
+                    store: store.clone(),
                     dir: HlPath::default(),
                     name: "x".into(),
                 },

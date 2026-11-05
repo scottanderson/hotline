@@ -14,7 +14,7 @@ use hotline_proto::text_encoding::Encoding;
 use hotline_proto::types::{HlPath, ResumeData};
 
 use crate::error::Result;
-use crate::file::FileRequester;
+use crate::file::{FileProvider, FileRequester};
 use crate::server::counting_stream::CountingStream;
 use crate::server::idle_stream::IdleStream;
 use crate::state::{
@@ -101,7 +101,7 @@ async fn handle_htxf_connection(
         }
         TransferKind::File(file) => match transfer.direction {
             TransferDirection::Get => {
-                let send = send_file(&mut stream, file, &transfer, state);
+                let send = send_file(&mut stream, file, &transfer);
                 run_download(state, reference, send).await
             }
             TransferDirection::Put => {
@@ -217,7 +217,6 @@ async fn send_file(
     stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     file: &FileTransfer,
     transfer: &PendingTransfer,
-    state: &SharedState,
 ) -> Result<()> {
     let FileTransfer {
         target,
@@ -228,8 +227,9 @@ async fn send_file(
         ..
     } = file;
     let TransferTarget { dir, name, .. } = target;
+    let store = &*target.store;
     let requester = target.requester();
-    let mut reader = state.open_file_for_read(requester, dir, name).await?;
+    let mut reader = store.open_read(requester, dir, name).await?;
     if *raw {
         tokio::io::copy(&mut reader, stream).await?;
     } else {
@@ -242,8 +242,8 @@ async fn send_file(
             len: resource_size - resource_offset,
         };
         skip_bytes(&mut reader, data.offset).await?;
-        let resource_reader = state
-            .open_resource_for_read(requester, dir, name, resource.offset)
+        let resource_reader = store
+            .open_resource_read(requester, dir, name, resource.offset)
             .await?;
         send_flat_file(
             stream,
@@ -286,7 +286,7 @@ async fn skip_bytes(reader: &mut (impl AsyncRead + Unpin), n: u64) -> Result<()>
 /// flattened-file-object framing with [`receive_flat_file`]. A resumed
 /// upload writes each fork from its resume offset instead of creating the
 /// file fresh. Renames the upload to its real name (see
-/// [`SharedState::finish_upload`]) on success, then stores its `INFO` fork
+/// [`FileProvider::finish_upload`]) on success, then stores its `INFO` fork
 /// (see [`SharedState::apply_info_fork`]); an error leaves it under its
 /// working name for a later resume.
 ///
@@ -298,16 +298,17 @@ async fn receive_file(
     state: &SharedState,
 ) -> Result<()> {
     let TransferTarget { dir, name, .. } = &file.target;
+    let store = &*file.target.store;
     let requester = file.target.requester();
     let mut out = if transfer.resume_offset > 0 || file.resource_offset > 0 {
-        state
-            .resume_file_for_write(requester, dir, name, transfer.resume_offset)
+        store
+            .open_write_resume(requester, dir, name, transfer.resume_offset)
             .await?
     } else {
-        state.create_file_for_write(requester, dir, name).await?
+        store.create_write(requester, dir, name).await?
     };
     let resource = ResourceSink {
-        state,
+        store,
         requester,
         dir,
         name,
@@ -315,9 +316,11 @@ async fn receive_file(
     };
     let info = receive_flat_file(stream, &mut out, file.encoding, resource).await?;
     out.shutdown().await?;
-    state.finish_upload(requester, dir, name).await?;
+    store.finish_upload(requester, dir, name).await?;
     if let Some(info) = info {
-        state.apply_info_fork(requester, dir, name, &info).await;
+        state
+            .apply_info_fork(store, requester, dir, name, &info)
+            .await;
     }
     Ok(())
 }
@@ -325,7 +328,7 @@ async fn receive_file(
 /// Where an upload's `MACR` fork goes: the resource fork of `name`'s
 /// in-progress upload, from `at` onward.
 struct ResourceSink<'a> {
-    state: &'a SharedState,
+    store: &'a dyn FileProvider,
     requester: FileRequester<'a>,
     dir: &'a HlPath,
     name: &'a str,
@@ -356,15 +359,13 @@ async fn receive_flat_file(
             copy_fork(stream, remaining, out).await?;
         } else if &fork_header.fork_type == b"MACR" {
             let ResourceSink {
-                state,
+                store,
                 requester,
                 dir,
                 name,
                 at,
             } = resource;
-            let mut writer = state
-                .open_resource_for_write(requester, dir, name, at)
-                .await?;
+            let mut writer = store.open_resource_write(requester, dir, name, at).await?;
             copy_fork(stream, remaining, &mut writer).await?;
             writer.shutdown().await?;
         } else {
@@ -411,6 +412,7 @@ async fn send_folder(
         ..
     } = folder;
     let TransferTarget { dir, name, .. } = target;
+    let store = &*target.store;
     let requester = target.requester();
     let root = folder_root(dir, name);
     let mut items = items.iter();
@@ -440,14 +442,16 @@ async fn send_folder(
                 };
                 let (dir, name) = split_item_path(&root, &item.path)
                     .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-                let mut reader = state.open_file_for_read(requester, &dir, name).await?;
-                let info = state.info_fork(requester, &dir, name, encoding).await;
-                let resource_size = state.resource_fork_size(requester, &dir, name).await;
+                let mut reader = store.open_read(requester, &dir, name).await?;
+                let info = state
+                    .info_fork(store, requester, &dir, name, encoding)
+                    .await;
+                let resource_size = store.resource_fork_size(requester, &dir, name).await;
                 let data = ResumedFork::new(item.size, resume.data.into());
                 let resource = ResumedFork::new(resource_size, resume.resource.into());
                 skip_bytes(&mut reader, data.offset).await?;
-                let resource_reader = state
-                    .open_resource_for_read(requester, &dir, name, resource.offset)
+                let resource_reader = store
+                    .open_resource_read(requester, &dir, name, resource.offset)
                     .await?;
                 let header_len = (htxf::flat_file_header_len(info.len()) + ForkHeader::LEN) as u64;
                 let flat_size = header_len + data.len + resource.len;
@@ -484,17 +488,20 @@ async fn receive_folder(
         ..
     } = folder;
     let TransferTarget { dir, name, .. } = target;
+    let store = &*target.store;
     let requester = target.requester();
     let root = folder_root(dir, name);
     write_folder_action(stream, FolderAction::NextFile).await?;
     for remaining in (0..*item_count).rev() {
         let body = read_u16_prefixed(stream).await?;
         let received = match FolderItemHeader::decode_body(&body, encoding) {
-            Ok(header) => match stored_item_path(&root, &header.path, requester, state).await {
+            Ok(header) => match stored_item_path(&root, &header.path, store) {
                 Some((dir, name)) => {
                     let is_folder = header.is_folder;
-                    receive_folder_item(stream, requester, &dir, &name, is_folder, encoding, state)
-                        .await?
+                    receive_folder_item(
+                        stream, store, requester, &dir, &name, is_folder, encoding, state,
+                    )
+                    .await?
                 }
                 None => false,
             },
@@ -511,8 +518,10 @@ async fn receive_folder(
 /// `SendFile`, or `ResumeFile` for an unfinished upload, unless
 /// [`SharedState::prepare_folder_upload_item`] skips the item. `true`
 /// once a file's data is received.
+#[allow(clippy::too_many_arguments)]
 async fn receive_folder_item(
     stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    store: &dyn FileProvider,
     requester: FileRequester<'_>,
     dir: &HlPath,
     name: &str,
@@ -521,19 +530,21 @@ async fn receive_folder_item(
     state: &SharedState,
 ) -> Result<bool> {
     let Some(resume_offset) = state
-        .prepare_folder_upload_item(requester, dir, name, is_folder)
+        .prepare_folder_upload_item(store, requester, dir, name, is_folder)
         .await
     else {
         return Ok(false);
     };
-    let resource_offset = state.partial_resource_fork_size(requester, dir, name).await;
+    let resource_offset = state
+        .partial_resource_fork_size(store, requester, dir, name)
+        .await;
     let resume = resume_offset > 0 || resource_offset > 0;
     let opened = if resume {
-        state
-            .resume_file_for_write(requester, dir, name, resume_offset)
+        store
+            .open_write_resume(requester, dir, name, resume_offset)
             .await
     } else {
-        state.create_file_for_write(requester, dir, name).await
+        store.create_write(requester, dir, name).await
     };
     let Ok(mut out) = opened else {
         return Ok(false);
@@ -555,7 +566,7 @@ async fn receive_folder_item(
     let mut flat_size = [0u8; 4];
     stream.read_exact(&mut flat_size).await?;
     let resource = ResourceSink {
-        state,
+        store,
         requester,
         dir,
         name,
@@ -563,9 +574,11 @@ async fn receive_folder_item(
     };
     let info = receive_flat_file(stream, &mut out, encoding, resource).await?;
     out.shutdown().await?;
-    state.finish_upload(requester, dir, name).await?;
+    store.finish_upload(requester, dir, name).await?;
     if let Some(info) = info {
-        state.apply_info_fork(requester, dir, name, &info).await;
+        state
+            .apply_info_fork(store, requester, dir, name, &info)
+            .await;
     }
     Ok(true)
 }
@@ -584,18 +597,19 @@ fn split_item_path<'a>(root: &[String], path: &'a HlPath) -> Option<(HlPath, &'a
     Some((HlPath::new(root.iter().chain(parents)), name))
 }
 
-/// Like [`split_item_path`] for an item that `requester` uploads, with
-/// each name as [`SharedState::stored_file_names`] stores it. `None` if a
+/// Like [`split_item_path`] for an item uploaded into `store`, with
+/// each name as [`FileProvider::stored_name`] stores it. `None` if a
 /// name is invalid.
-async fn stored_item_path(
+fn stored_item_path(
     root: &[String],
     path: &HlPath,
-    requester: FileRequester<'_>,
-    state: &SharedState,
+    store: &dyn FileProvider,
 ) -> Option<(HlPath, String)> {
-    let mut names = state
-        .stored_file_names(requester, &path.components)
-        .await
+    let mut names = path
+        .components
+        .iter()
+        .map(|name| store.stored_name(name))
+        .collect::<std::result::Result<Vec<_>, _>>()
         .ok()?;
     let name = names.pop()?;
     Some((HlPath::new(root.iter().chain(&names)), name))
@@ -677,17 +691,13 @@ mod tests {
     async fn stored_item_path_validates_every_name() {
         let root = ["Uploads".to_string()];
         let state = state_with_files(InMemoryFileProvider::default());
-        let requester = FileRequester { login: "guest" };
+        let store = shared_files(&state, "guest").await;
         let path = HlPath::new(["..", "a/b"]);
-        let (dir, name) = stored_item_path(&root, &path, requester, &state)
-            .await
-            .unwrap();
+        let (dir, name) = stored_item_path(&root, &path, &*store).unwrap();
         assert_eq!(dir, HlPath::new(["Uploads", "--"]));
         assert_eq!(name, "a-b");
         let path = HlPath::new(["ok", ""]);
-        assert!(stored_item_path(&root, &path, requester, &state)
-            .await
-            .is_none());
+        assert!(stored_item_path(&root, &path, &*store).is_none());
     }
 
     fn state_with_files(files: InMemoryFileProvider) -> Arc<SharedState> {
@@ -695,6 +705,11 @@ mod tests {
             files: Arc::new(files),
             ..Providers::default()
         })
+    }
+
+    /// The files store that `state` gives `login`.
+    async fn shared_files(state: &SharedState, login: &str) -> Arc<dyn FileProvider> {
+        state.files_for(login).await.unwrap()
     }
 
     /// `tokio::io::copy` returns early on a closed connection the same
@@ -707,6 +722,7 @@ mod tests {
         let file = FileTransfer {
             target: TransferTarget {
                 login: "alice".into(),
+                store: shared_files(&state, "alice").await,
                 dir: HlPath::default(),
                 name: "a.txt".into(),
             },
@@ -739,7 +755,13 @@ mod tests {
 
         assert_eq!(
             state
-                .file_size(requester, &HlPath::default(), "a.txt.hpf", Access::all())
+                .file_size(
+                    &*file.target.store,
+                    requester,
+                    &HlPath::default(),
+                    "a.txt.hpf",
+                    Access::all()
+                )
                 .await,
             Ok(10)
         );
@@ -750,6 +772,90 @@ mod tests {
         );
     }
 
+    /// Own files for each login: `first` at the first lookup, and `later`
+    /// after it, as when an account moves its folder.
+    struct MovingStores {
+        first: Arc<InMemoryFileProvider>,
+        later: Arc<InMemoryFileProvider>,
+        looked_up: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::AccountStores for MovingStores {
+        async fn files(
+            &self,
+            _login: &str,
+        ) -> std::result::Result<Option<Arc<dyn FileProvider>>, &'static str> {
+            let looked_up = self
+                .looked_up
+                .swap(true, std::sync::atomic::Ordering::SeqCst);
+            let store = if looked_up { &self.later } else { &self.first };
+            Ok(Some(store.clone()))
+        }
+
+        async fn threaded_news(
+            &self,
+            _login: &str,
+        ) -> std::result::Result<Option<Arc<dyn crate::ThreadedNewsProvider>>, &'static str>
+        {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn an_upload_finishes_in_the_store_of_its_request() {
+        let first = Arc::new(InMemoryFileProvider::default());
+        let later = Arc::new(InMemoryFileProvider::default());
+        let state = SharedState::new(Providers {
+            account_stores: Arc::new(MovingStores {
+                first: first.clone(),
+                later: later.clone(),
+                looked_up: Default::default(),
+            }),
+            ..Providers::default()
+        });
+        let file = FileTransfer {
+            target: TransferTarget {
+                login: "alice".into(),
+                store: shared_files(&state, "alice").await,
+                dir: HlPath::default(),
+                name: "a.txt".into(),
+            },
+            raw: false,
+            encoding: text_encoding::DEFAULT,
+            info: Vec::new(),
+            resource_size: 0,
+            resource_offset: 0,
+        };
+        let transfer = PendingTransfer {
+            kind: TransferKind::File(file.clone()),
+            direction: TransferDirection::Put,
+            size: 5,
+            resume_offset: 0,
+            client_ip: "127.0.0.1".parse().unwrap(),
+            user_id: 1,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut server_stream, _) = listener.accept().await.unwrap();
+        client
+            .write_all(&htxf::encode_flat_file(b"hello"))
+            .await
+            .unwrap();
+        drop(client);
+        receive_file(&mut server_stream, &file, &transfer, &state)
+            .await
+            .unwrap();
+
+        let requester = FileRequester { login: "alice" };
+        let root = HlPath::default();
+        assert_eq!(first.size(requester, &root, "a.txt").await, Some(5));
+        assert_eq!(later.list(requester, &root).await.unwrap_or_default(), []);
+    }
+
     #[tokio::test]
     async fn an_upload_stores_its_info_fork() {
         let state = state_with_files(InMemoryFileProvider::default());
@@ -757,6 +863,7 @@ mod tests {
         let file = FileTransfer {
             target: TransferTarget {
                 login: "alice".into(),
+                store: shared_files(&state, "alice").await,
                 dir: HlPath::default(),
                 name: "a.txt".into(),
             },
@@ -797,7 +904,13 @@ mod tests {
 
         let root = HlPath::default();
         let stored = state
-            .info_fork(requester, &root, "a.txt", text_encoding::DEFAULT)
+            .info_fork(
+                &*file.target.store,
+                requester,
+                &root,
+                "a.txt",
+                text_encoding::DEFAULT,
+            )
             .await;
         let stored = FlatFileInfo::decode(&stored, text_encoding::DEFAULT);
         assert_eq!(&stored.file_type, b"TEXT");
@@ -812,6 +925,7 @@ mod tests {
         let file = FileTransfer {
             target: TransferTarget {
                 login: "alice".into(),
+                store: shared_files(&state, "alice").await,
                 dir: HlPath::default(),
                 name: "a.txt".into(),
             },
@@ -846,7 +960,7 @@ mod tests {
         assert_eq!(read_resource_fork(&state, &[], "a.txt").await, b"rsrc");
     }
 
-    /// `resume_file_for_write` seeks to `resume_offset` before the
+    /// `open_write_resume` seeks to `resume_offset` before the
     /// client's bytes land, so a longer working file from an earlier
     /// attempt doesn't leave stale bytes past what the client resends.
     #[tokio::test]
@@ -858,6 +972,7 @@ mod tests {
         let file = FileTransfer {
             target: TransferTarget {
                 login: "alice".into(),
+                store: shared_files(&state, "alice").await,
                 dir: HlPath::default(),
                 name: "a.txt".into(),
             },
@@ -891,12 +1006,20 @@ mod tests {
 
         assert_eq!(
             state
-                .file_size(requester, &HlPath::default(), "a.txt", Access::all())
+                .file_size(
+                    &*file.target.store,
+                    requester,
+                    &HlPath::default(),
+                    "a.txt",
+                    Access::all()
+                )
                 .await,
             Ok(11)
         );
-        let mut reader = state
-            .open_file_for_read(requester, &HlPath::default(), "a.txt")
+        let mut reader = file
+            .target
+            .store
+            .open_read(requester, &HlPath::default(), "a.txt")
             .await
             .unwrap();
         let mut buf = Vec::new();
@@ -919,6 +1042,7 @@ mod tests {
                 kind: TransferKind::File(FileTransfer {
                     target: TransferTarget {
                         login: "alice".into(),
+                        store: shared_files(&state, "alice").await,
                         dir: HlPath::default(),
                         name: "a.txt".into(),
                     },
@@ -959,6 +1083,7 @@ mod tests {
                 kind: TransferKind::File(FileTransfer {
                     target: TransferTarget {
                         login: "bob".into(),
+                        store: shared_files(&state, "bob").await,
                         dir: HlPath::default(),
                         name: "a.txt".into(),
                     },
@@ -982,7 +1107,7 @@ mod tests {
     async fn htxf_connection_of_the_wrong_type_is_closed_and_the_transfer_stays() {
         let state = state_with_files(InMemoryFileProvider::default());
         let reference = state
-            .register_transfer(a_txt_transfer(TransferDirection::Get, 1))
+            .register_transfer(a_txt_transfer(&state, TransferDirection::Get, 1).await)
             .await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap())
@@ -1016,10 +1141,11 @@ mod tests {
         assert!(short_resource.is_err());
     }
 
-    #[test]
-    fn htxf_types_find_transfers_as_openline_does() {
-        let get = a_txt_transfer(TransferDirection::Get, 1);
-        let put = a_txt_transfer(TransferDirection::Put, 1);
+    #[tokio::test]
+    async fn htxf_types_find_transfers_as_openline_does() {
+        let state = Arc::<SharedState>::default();
+        let get = a_txt_transfer(&state, TransferDirection::Get, 1).await;
+        let put = a_txt_transfer(&state, TransferDirection::Put, 1).await;
         let banner = PendingTransfer {
             kind: TransferKind::Banner,
             ..get.clone()
@@ -1032,11 +1158,16 @@ mod tests {
     }
 
     /// A transfer of `a.txt` in the root folder, from loopback.
-    fn a_txt_transfer(direction: TransferDirection, user_id: u16) -> PendingTransfer {
+    async fn a_txt_transfer(
+        state: &SharedState,
+        direction: TransferDirection,
+        user_id: u16,
+    ) -> PendingTransfer {
         PendingTransfer {
             kind: TransferKind::File(FileTransfer {
                 target: TransferTarget {
                     login: "alice".into(),
+                    store: shared_files(state, "alice").await,
                     dir: HlPath::default(),
                     name: "a.txt".into(),
                 },
@@ -1084,7 +1215,7 @@ mod tests {
         let state = state_with_files(InMemoryFileProvider::default());
         let session = state.register_recipient(1).await;
         let reference = state
-            .register_transfer(a_txt_transfer(TransferDirection::Put, 1))
+            .register_transfer(a_txt_transfer(&state, TransferDirection::Put, 1).await)
             .await;
         let (mut client, server_stream, peer) = connect_htxf(reference).await;
         let full = htxf::encode_flat_file(b"hello world");
@@ -1112,7 +1243,7 @@ mod tests {
         let state = state_with_files(InMemoryFileProvider::default());
         let _session = state.register_recipient(1).await;
         let reference = state
-            .register_transfer(a_txt_transfer(TransferDirection::Put, 1))
+            .register_transfer(a_txt_transfer(&state, TransferDirection::Put, 1).await)
             .await;
         let (mut client, server_stream, peer) = connect_htxf(reference).await;
         let full = htxf::encode_flat_file(b"hello world");
@@ -1134,7 +1265,7 @@ mod tests {
         let state = state_with_files(InMemoryFileProvider::default());
         let banner = PendingTransfer {
             kind: TransferKind::Banner,
-            ..a_txt_transfer(TransferDirection::Get, 1)
+            ..a_txt_transfer(&state, TransferDirection::Get, 1).await
         };
         let reference = state.register_transfer(banner).await;
         let (_client, server_stream, peer) = connect_htxf_as(reference, HtxfType::Banner).await;
@@ -1149,7 +1280,7 @@ mod tests {
     async fn an_upload_whose_session_has_ended_is_refused() {
         let state = state_with_files(InMemoryFileProvider::default());
         let reference = state
-            .register_transfer(a_txt_transfer(TransferDirection::Put, 1))
+            .register_transfer(a_txt_transfer(&state, TransferDirection::Put, 1).await)
             .await;
         let (mut client, server_stream, peer) = connect_htxf(reference).await;
         client
@@ -1174,11 +1305,11 @@ mod tests {
         let state = state_with_files(files);
         state.set_download_limits(1, 10);
         let held = state
-            .register_transfer(a_txt_transfer(TransferDirection::Get, 1))
+            .register_transfer(a_txt_transfer(&state, TransferDirection::Get, 1).await)
             .await;
         assert_eq!(state.admit_download(held, 1).await, 0);
         let queued = state
-            .register_transfer(a_txt_transfer(TransferDirection::Get, 2))
+            .register_transfer(a_txt_transfer(&state, TransferDirection::Get, 2).await)
             .await;
         assert_eq!(state.admit_download(queued, 2).await, 1);
         let (client, server_stream, peer) = connect_htxf(queued).await;
@@ -1194,7 +1325,7 @@ mod tests {
 
         // Only `held` is ahead of a new download now.
         let third = state
-            .register_transfer(a_txt_transfer(TransferDirection::Get, 3))
+            .register_transfer(a_txt_transfer(&state, TransferDirection::Get, 3).await)
             .await;
         assert_eq!(state.admit_download(third, 3).await, 1);
     }
@@ -1261,7 +1392,8 @@ mod tests {
         (client, server)
     }
 
-    fn folder_transfer(
+    async fn folder_transfer(
+        state: &SharedState,
         name: &str,
         items: Vec<crate::file::FolderItem>,
         item_count: u32,
@@ -1269,6 +1401,7 @@ mod tests {
         FolderTransfer {
             target: TransferTarget {
                 login: "alice".into(),
+                store: shared_files(state, "alice").await,
                 dir: HlPath::default(),
                 name: name.into(),
             },
@@ -1365,8 +1498,9 @@ mod tests {
     async fn read_resource_fork(state: &SharedState, dir: &[&str], name: &str) -> Vec<u8> {
         let requester = FileRequester { login: "alice" };
         let dir = HlPath::new(dir.iter().copied());
-        let mut reader = state
-            .open_resource_for_read(requester, &dir, name, 0)
+        let mut reader = shared_files(state, "alice")
+            .await
+            .open_resource_read(requester, &dir, name, 0)
             .await
             .unwrap();
         let mut buf = Vec::new();
@@ -1376,8 +1510,9 @@ mod tests {
 
     async fn read_file(state: &SharedState, dir: &[&str], name: &str) -> Vec<u8> {
         let requester = FileRequester { login: "alice" };
-        let mut reader = state
-            .open_file_for_read(requester, &HlPath::new(dir.iter().copied()), name)
+        let mut reader = shared_files(state, "alice")
+            .await
+            .open_read(requester, &HlPath::new(dir.iter().copied()), name)
             .await
             .unwrap();
         let mut buf = Vec::new();
@@ -1392,11 +1527,12 @@ mod tests {
         files.seed(&HlPath::new(["Top"]), "b.txt", *b"hi");
         let state = state_with_files(files);
         let requester = FileRequester { login: "alice" };
+        let store = shared_files(&state, "alice").await;
         let items = state
-            .walk_folder(requester, &HlPath::default(), "Top", Access::all())
+            .walk_folder(&*store, requester, &HlPath::default(), "Top", Access::all())
             .await
             .unwrap();
-        let folder = folder_transfer("Top", items, 3);
+        let folder = folder_transfer(&state, "Top", items, 3).await;
         let (mut client, server) =
             start_folder_transfer(&state, folder, TransferDirection::Get).await;
 
@@ -1430,11 +1566,12 @@ mod tests {
         files.seed(&HlPath::new(["Top"]), "a.txt", *b"hello");
         let state = state_with_files(files);
         let requester = FileRequester { login: "alice" };
+        let store = shared_files(&state, "alice").await;
         let items = state
-            .walk_folder(requester, &HlPath::default(), "Top", Access::all())
+            .walk_folder(&*store, requester, &HlPath::default(), "Top", Access::all())
             .await
             .unwrap();
-        let folder = folder_transfer("Top", items, 1);
+        let folder = folder_transfer(&state, "Top", items, 1).await;
         let (mut client, server) =
             start_folder_transfer(&state, folder, TransferDirection::Get).await;
 
@@ -1464,11 +1601,12 @@ mod tests {
         files.seed_resource_fork(&HlPath::new(["Top"]), "a.txt", *b"rsrc");
         let state = state_with_files(files);
         let requester = FileRequester { login: "alice" };
+        let store = shared_files(&state, "alice").await;
         let items = state
-            .walk_folder(requester, &HlPath::default(), "Top", Access::all())
+            .walk_folder(&*store, requester, &HlPath::default(), "Top", Access::all())
             .await
             .unwrap();
-        let folder = folder_transfer("Top", items, 1);
+        let folder = folder_transfer(&state, "Top", items, 1).await;
         let (mut client, server) =
             start_folder_transfer(&state, folder, TransferDirection::Get).await;
 
@@ -1499,7 +1637,7 @@ mod tests {
         files.seed(&HlPath::new(["Top"]), "a.txt.hpf", *b"hello ");
         files.seed_resource_fork(&HlPath::new(["Top"]), "a.txt.hpf", *b"rs");
         let state = state_with_files(files);
-        let folder = folder_transfer("Top", Vec::new(), 1);
+        let folder = folder_transfer(&state, "Top", Vec::new(), 1).await;
         let (mut client, server) =
             start_folder_transfer(&state, folder, TransferDirection::Put).await;
 
@@ -1533,7 +1671,7 @@ mod tests {
         let files = InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Top"]), "exists.txt", *b"old");
         let state = state_with_files(files);
-        let folder = folder_transfer("Top", Vec::new(), 3);
+        let folder = folder_transfer(&state, "Top", Vec::new(), 3).await;
         let (mut client, server) =
             start_folder_transfer(&state, folder, TransferDirection::Put).await;
 
@@ -1563,7 +1701,7 @@ mod tests {
         let files = InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Top"]), "a.txt.hpf", *b"hello ");
         let state = state_with_files(files);
-        let folder = folder_transfer("Top", Vec::new(), 1);
+        let folder = folder_transfer(&state, "Top", Vec::new(), 1).await;
         let (mut client, server) =
             start_folder_transfer(&state, folder, TransferDirection::Put).await;
 
@@ -1585,7 +1723,7 @@ mod tests {
         let files = InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Top"]), "f", *b"x");
         let state = state_with_files(files);
-        let folder = folder_transfer("Top", Vec::new(), 2);
+        let folder = folder_transfer(&state, "Top", Vec::new(), 2).await;
         let (mut client, server) =
             start_folder_transfer(&state, folder, TransferDirection::Put).await;
 

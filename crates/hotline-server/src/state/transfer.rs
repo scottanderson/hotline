@@ -18,7 +18,7 @@ pub enum TransferDirection {
 }
 
 /// Which resource a pending `HTXF` transfer moves bytes for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum TransferKind {
     /// A file, see [`FileTransfer`].
     File(FileTransfer),
@@ -33,10 +33,9 @@ pub enum TransferKind {
 /// [`myTran_DownloadFile`] (202), [`myTran_UploadFile`] (203), or
 /// [`myTran_DownloadBanner`] (212) replies with a reference number, consumed
 /// once the client opens the second connection and sends that reference
-/// back. A [`TransferKind::File`] identifies the file by
-/// [`crate::FileRequester`] login plus directory/name, not a raw path, so
-/// completing the transfer still goes through the [`crate::FileProvider`]
-/// rather than assuming filesystem storage.
+/// back. A [`TransferKind::File`] identifies the file by the
+/// [`crate::FileProvider`] of the request, the login, the directory, and
+/// the name. The transfer reads and writes the file through that provider.
 ///
 /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
 /// [`myTran_UploadFile`]: hotline_proto::Opcode::UploadFile

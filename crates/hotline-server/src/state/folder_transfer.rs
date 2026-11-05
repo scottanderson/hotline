@@ -4,7 +4,7 @@ use hotline_proto::text_encoding::Encoding;
 
 /// A pending `HTXF` folder transfer's identity, from [`crate::FileProvider`],
 /// stepped through one [`FolderItem`] at a time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct FolderTransfer {
     /// The folder's login and path.
     pub target: TransferTarget,

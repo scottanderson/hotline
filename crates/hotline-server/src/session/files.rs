@@ -137,7 +137,14 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let data_size = match state.file_size(requester, &dir, &name, self.access).await {
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let data_size = match state
+            .file_size(&*store, requester, &dir, &name, self.access)
+            .await
+        {
             Ok(size) => size,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -152,13 +159,13 @@ impl Session {
             Vec::new()
         } else {
             state
-                .info_fork(requester, &dir, &name, self.encoding())
+                .info_fork(&*store, requester, &dir, &name, self.encoding())
                 .await
         };
         let resource_size = if raw {
             0
         } else {
-            state.resource_fork_size(requester, &dir, &name).await
+            store.resource_fork_size(requester, &dir, &name).await
         };
         let (data, resource) = match tx.field(FieldId::FileResumeData) {
             Some(field) if !raw => match types::ResumeData::decode(field.as_bytes()) {
@@ -182,6 +189,7 @@ impl Session {
         let kind = TransferKind::File(FileTransfer {
             target: TransferTarget {
                 login: self.login.clone(),
+                store,
                 dir,
                 name: name.as_str().into(),
             },
@@ -286,7 +294,11 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let name = match state.stored_file_name(requester, &name).await {
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let name = match store.stored_name(&name) {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -296,7 +308,15 @@ impl Session {
             .map(Field::as_u32)
             .unwrap_or(0);
         let resume_offset = match state
-            .authorize_upload(requester, &dir, &name, self.access, resume, size.into())
+            .authorize_upload(
+                &*store,
+                requester,
+                &dir,
+                &name,
+                self.access,
+                resume,
+                size.into(),
+            )
             .await
         {
             Ok(offset) => offset,
@@ -304,7 +324,7 @@ impl Session {
         };
         let resource_offset = if resume {
             state
-                .partial_resource_fork_size(requester, &dir, &name)
+                .partial_resource_fork_size(&*store, requester, &dir, &name)
                 .await
         } else {
             0
@@ -315,6 +335,7 @@ impl Session {
                 kind: TransferKind::File(FileTransfer {
                     target: TransferTarget {
                         login: self.login.clone(),
+                        store,
                         dir,
                         name: name.as_str().into(),
                     },
@@ -368,7 +389,14 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let items = match state.walk_folder(requester, &dir, &name, self.access).await {
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let items = match state
+            .walk_folder(&*store, requester, &dir, &name, self.access)
+            .await
+        {
             Ok(items) => items,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -385,6 +413,7 @@ impl Session {
         let kind = TransferKind::Folder(FolderTransfer {
             target: TransferTarget {
                 login: self.login.clone(),
+                store,
                 dir,
                 name: name.as_str().into(),
             },
@@ -422,7 +451,11 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let name = match state.stored_file_name(requester, &name).await {
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let name = match store.stored_name(&name) {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -432,7 +465,15 @@ impl Session {
             .map(Field::as_u32)
             .unwrap_or(0);
         if let Err(reason) = state
-            .start_folder_upload(requester, &dir, &name, self.access, resume, size.into())
+            .start_folder_upload(
+                &*store,
+                requester,
+                &dir,
+                &name,
+                self.access,
+                resume,
+                size.into(),
+            )
             .await
         {
             return vec![tx.reply_error(reason)];
@@ -452,6 +493,7 @@ impl Session {
                 kind: TransferKind::Folder(FolderTransfer {
                     target: TransferTarget {
                         login: self.login.clone(),
+                        store,
                         dir,
                         name: name.as_str().into(),
                     },
@@ -526,11 +568,18 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let name = match state.stored_file_name(requester, &name).await {
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let name = match store.stored_name(&name) {
             Ok(name) => name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        if let Err(reason) = state.mkdir(requester, &dir, &name, self.access).await {
+        if let Err(reason) = state
+            .mkdir(&*store, requester, &dir, &name, self.access)
+            .await
+        {
             return vec![tx.reply_error(reason)];
         }
         vec![tx.reply(vec![])]
@@ -555,18 +604,25 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
-        let info = match state.file_info(requester, &dir, &name, self.access).await {
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let info = match state
+            .file_info(&*store, requester, &dir, &name, self.access)
+            .await
+        {
             Ok(info) => info,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let comment = match state
-            .file_comment(requester, &dir, &name, self.access)
+            .file_comment(&*store, requester, &dir, &name, self.access)
             .await
         {
             Ok(comment) => comment,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let times = state.file_times(requester, &dir, &name).await;
+        let times = store.times(requester, &dir, &name).await;
         let date = |time: Option<SystemTime>| state.wire_date(time).encode().to_vec();
         let mut fields = if info.is_folder() {
             vec![
@@ -611,11 +667,15 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let requester = FileRequester { login: &self.login };
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
         let new_name = match tx
             .string(FieldId::FileNewName)
             .filter(|new_name| !new_name.is_empty() && *new_name != name)
         {
-            Some(new_name) => match state.stored_file_name(requester, &new_name).await {
+            Some(new_name) => match store.stored_name(&new_name) {
                 Ok(new_name) => Some(new_name),
                 Err(reason) => return vec![tx.reply_error(reason)],
             },
@@ -633,7 +693,7 @@ impl Session {
         }
         if let Some(comment) = &comment {
             if let Err(reason) = state
-                .set_file_comment(requester, &dir, &name, comment, self.access)
+                .set_file_comment(&*store, requester, &dir, &name, comment, self.access)
                 .await
             {
                 return vec![tx.reply_error(reason)];
@@ -641,7 +701,7 @@ impl Session {
         }
         if let Some(new_name) = &new_name {
             if let Err(reason) = state
-                .rename_file(requester, &dir, &name, new_name, self.access)
+                .rename_file(&*store, requester, &dir, &name, new_name, self.access)
                 .await
             {
                 return vec![tx.reply_error(reason)];
@@ -699,12 +759,24 @@ impl Session {
             .string(FieldId::FileNewName)
             .unwrap_or_else(|| name.clone());
         let requester = FileRequester { login: &self.login };
-        let link_name = match state.stored_file_name(requester, &link_name).await {
+        let store = match state.files_for(&self.login).await {
+            Ok(store) => store,
+            Err(reason) => return vec![tx.reply_error(reason)],
+        };
+        let link_name = match store.stored_name(&link_name) {
             Ok(link_name) => link_name,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         if let Err(reason) = state
-            .symlink_file(requester, &dir, &name, &link_dir, &link_name, self.access)
+            .symlink_file(
+                &*store,
+                requester,
+                &dir,
+                &name,
+                &link_dir,
+                &link_name,
+                self.access,
+            )
             .await
         {
             return vec![tx.reply_error(reason)];
@@ -774,7 +846,7 @@ mod tests {
         assert_eq!(size, 5);
 
         let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
-        assert_eq!(transfer.kind, TransferKind::Banner);
+        assert!(matches!(transfer.kind, TransferKind::Banner));
         assert_eq!(transfer.direction, TransferDirection::Get);
         assert_eq!(transfer.size, 5);
     }
@@ -1712,7 +1784,10 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let requester = FileRequester { login: "Alice" };
         state
-            .mkdir(requester, &HlPath::default(), "Empty", Access::all())
+            .files_for("Alice")
+            .await
+            .unwrap()
+            .mkdir(requester, &HlPath::default(), "Empty")
             .await
             .unwrap();
 
@@ -1823,7 +1898,10 @@ mod tests {
         let session = test_session("Alice", Access::all());
         let requester = FileRequester { login: "Alice" };
         state
-            .mkdir(requester, &HlPath::default(), "Empty", Access::all())
+            .files_for("Alice")
+            .await
+            .unwrap()
+            .mkdir(requester, &HlPath::default(), "Empty")
             .await
             .unwrap();
 
@@ -1945,7 +2023,13 @@ mod tests {
             .unwrap();
         assert!(!reply.is_error());
         let info = state
-            .file_info(requester, &HlPath::new(["Uploads"]), "New", Access::all())
+            .file_info(
+                &*state.files_for("Alice").await.unwrap(),
+                requester,
+                &HlPath::new(["Uploads"]),
+                "New",
+                Access::all(),
+            )
             .await
             .unwrap();
         assert_eq!(info.file_type, *b"fldr");
@@ -2329,13 +2413,14 @@ mod tests {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
         let session = test_session("Alice", Access::all());
         let requester = crate::file::FileRequester { login: "Alice" };
+        let files = state.files_for("Alice").await.unwrap();
 
         // Simulate an interrupted first attempt: bytes were written but
         // the upload never finished, so it's still under its `.hpf`
         // working name.
         {
-            let mut writer = state
-                .create_file_for_write(requester, &HlPath::default(), "a.txt")
+            let mut writer = files
+                .create_write(requester, &HlPath::default(), "a.txt")
                 .await
                 .unwrap();
             tokio::io::AsyncWriteExt::write_all(&mut writer, b"hello")
@@ -2344,7 +2429,13 @@ mod tests {
         }
 
         let info = state
-            .file_info(requester, &HlPath::default(), "a.txt.hpf", Access::all())
+            .file_info(
+                &*files,
+                requester,
+                &HlPath::default(),
+                "a.txt.hpf",
+                Access::all(),
+            )
             .await
             .unwrap();
         assert_eq!(info.file_type, crate::file::PARTIAL_TYPE);
@@ -2371,12 +2462,18 @@ mod tests {
             .data;
         assert_eq!(already_have, 5);
 
-        state
+        files
             .finish_upload(requester, &HlPath::default(), "a.txt")
             .await
             .unwrap();
         let info = state
-            .file_info(requester, &HlPath::default(), "a.txt", Access::all())
+            .file_info(
+                &*files,
+                requester,
+                &HlPath::default(),
+                "a.txt",
+                Access::all(),
+            )
             .await
             .unwrap();
         assert_ne!(info.file_type, crate::file::PARTIAL_TYPE);
@@ -3130,7 +3227,13 @@ mod tests {
         assert!(!reply.is_error());
         assert_eq!(
             state
-                .file_comment(requester, &HlPath::default(), "a.txt", Access::all())
+                .file_comment(
+                    &*state.files_for("Alice").await.unwrap(),
+                    requester,
+                    &HlPath::default(),
+                    "a.txt",
+                    Access::all()
+                )
                 .await
                 .unwrap(),
             Some("x".repeat(255))
@@ -3164,7 +3267,13 @@ mod tests {
         assert!(reply.is_error());
         assert_eq!(
             state
-                .file_comment(requester, &HlPath::default(), "a.txt", Access::all())
+                .file_comment(
+                    &*state.files_for("Alice").await.unwrap(),
+                    requester,
+                    &HlPath::default(),
+                    "a.txt",
+                    Access::all()
+                )
                 .await
                 .unwrap()
                 .as_deref(),
