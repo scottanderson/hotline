@@ -67,7 +67,7 @@ impl UserAccount {
             access: fields
                 .field(FieldId::UserAccess)
                 .and_then(Field::as_u64)
-                .map_or_else(Access::empty, Access::from_bits_truncate),
+                .map_or_else(Access::empty, Access::from_bits_retain),
         }
     }
 
@@ -173,5 +173,26 @@ impl HotlineClient {
         self.request(Opcode::SetUser, account.fields().into())
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_account_keeps_an_access_bit_that_no_flag_defines() {
+        let access = Access::SEND_CHAT | Access::from_bits_retain(1 << 51);
+        let account = UserAccount {
+            name: "Bob".into(),
+            login: "bob".into(),
+            password: Password::Empty,
+            access,
+        };
+        let encoding = hotline_proto::text_encoding::DEFAULT;
+        let record = FieldList::encode(&account.fields(), encoding).unwrap();
+        let fields = FieldList::decode(&record, encoding).unwrap();
+
+        assert_eq!(UserAccount::from_fields(&fields).access, access);
     }
 }

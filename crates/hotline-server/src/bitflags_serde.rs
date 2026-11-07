@@ -1,15 +1,19 @@
 //! `serde` support for any `bitflags` type: `"ALL"` for every
-//! currently-defined flag, otherwise an array of individual flag names.
+//! currently-defined flag, otherwise an array of individual flag names,
+//! and a hex string such as `"0x8000"` for the bits that no flag defines.
 //! Plug in per field via `#[serde(with = "bitflags_serde")]`.
 //!
 //! A non-human-readable format (e.g. a binary encoding) falls through to
 //! `bitflags::serde`'s own hex-string-of-bits representation instead.
 
+use bitflags::parser::ParseHex;
 use serde::de::{Error as _, SeqAccess, Unexpected, Visitor};
+use serde::ser::Error as _;
 use serde::{Deserializer, Serialize, Serializer};
 
-/// `"ALL"` when every currently-defined flag is set, otherwise an array
-/// of individual flag names.
+/// `"ALL"` when every currently-defined flag is set and no other bit,
+/// otherwise an array of individual flag names, then a hex string of the
+/// undefined bits if any are set.
 pub(crate) fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
 where
     T: bitflags::Flags,
@@ -22,17 +26,23 @@ where
     if value.bits() == T::all().bits() {
         return serializer.serialize_str("ALL");
     }
-    let names: Vec<&'static str> = value.iter_names().map(|(name, _)| name).collect();
-    names.serialize(serializer)
+    let mut iter = value.iter_names();
+    let mut items: Vec<String> = iter.by_ref().map(|(name, _)| name.to_owned()).collect();
+    if !iter.remaining().is_empty() {
+        let mut hex = String::new();
+        bitflags::parser::to_writer(iter.remaining(), &mut hex).map_err(S::Error::custom)?;
+        items.push(hex);
+    }
+    items.serialize(serializer)
 }
 
 /// Accepts `"ALL"` (every flag defined at parse time, so a future
 /// addition needs no data-file edits) or an array of individual flag
-/// names, e.g. `["READ_CHAT", "SEND_CHAT"]`.
+/// names and hex strings, e.g. `["READ_CHAT", "SEND_CHAT", "0x8000"]`.
 pub(crate) fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
 where
     T: bitflags::Flags,
-    T::Bits: bitflags::parser::ParseHex + serde::Deserialize<'de>,
+    T::Bits: ParseHex + serde::Deserialize<'de>,
     D: Deserializer<'de>,
 {
     if !deserializer.is_human_readable() {
@@ -41,7 +51,11 @@ where
 
     struct AllOrFlags<T>(std::marker::PhantomData<T>);
 
-    impl<'de, T: bitflags::Flags> Visitor<'de> for AllOrFlags<T> {
+    impl<'de, T> Visitor<'de> for AllOrFlags<T>
+    where
+        T: bitflags::Flags,
+        T::Bits: ParseHex,
+    {
         type Value = T;
 
         fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,8 +73,11 @@ where
         fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<T, A::Error> {
             let mut value = T::empty();
             while let Some(name) = seq.next_element::<String>()? {
-                let flag = T::from_name(&name)
-                    .ok_or_else(|| A::Error::custom(format!("unknown flag {name:?}")))?;
+                let flag = match name.strip_prefix("0x") {
+                    Some(hex) => T::Bits::parse_hex(hex).ok().map(T::from_bits_retain),
+                    None => T::from_name(&name),
+                }
+                .ok_or_else(|| A::Error::custom(format!("unknown flag {name:?}")))?;
                 value.insert(flag);
             }
             Ok(value)
@@ -113,6 +130,30 @@ mod tests {
     fn empty_round_trips_as_an_empty_array() {
         assert_eq!(serde_json::to_string(&Toy::empty()).unwrap(), "[]");
         assert_eq!(serde_json::from_str::<Toy>("[]").unwrap(), Toy::empty());
+    }
+
+    #[test]
+    fn undefined_bits_round_trip_as_a_hex_string() {
+        let value = Toy::A | Toy::from_bits_retain(0x80);
+        assert_eq!(serde_json::to_string(&value).unwrap(), "[\"A\",\"0x80\"]");
+        assert_eq!(
+            serde_json::from_str::<Toy>("[\"A\", \"0x80\"]").unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn all_with_an_undefined_bit_is_not_written_as_all() {
+        let value = Toy::all() | Toy::from_bits_retain(0x80);
+        assert_eq!(
+            serde_json::to_string(&value).unwrap(),
+            "[\"A\",\"B\",\"C\",\"0x80\"]"
+        );
+    }
+
+    #[test]
+    fn a_bad_hex_string_is_rejected() {
+        assert!(serde_json::from_str::<Toy>("[\"0xzz\"]").is_err());
     }
 
     #[test]

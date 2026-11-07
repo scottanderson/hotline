@@ -2255,6 +2255,9 @@ mod tests {
         let partial = test_session("Carol", Access::READ_CHAT);
         assert!(!partial.user_flags().contains(UserFlags::ALL_PRIVS));
         assert!(!partial.user_flags().contains(UserFlags::NO_PRIVS));
+
+        let undefined_only = test_session("Erin", Access::from_bits_retain(1 << 51));
+        assert!(!undefined_only.user_flags().contains(UserFlags::NO_PRIVS));
     }
 
     #[tokio::test]

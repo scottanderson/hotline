@@ -333,7 +333,7 @@ impl Session {
         let access = record
             .field(FieldId::UserAccess)
             .and_then(Field::as_u64)
-            .map(Access::from_bits_truncate)
+            .map(Access::from_bits_retain)
             .unwrap_or_else(Access::empty);
 
         if let Some(old_login) = old_login {
@@ -547,6 +547,43 @@ mod tests {
             "Cannot create account \"bob\" because there is already an account with that login."
         );
         assert_eq!(state.account("bob").await.unwrap(), Account::guest());
+    }
+
+    #[tokio::test]
+    async fn new_user_keeps_a_bit_that_no_flag_defines() {
+        let close_chat = Access::from_bits_retain(1 << 51);
+        let session = test_session("Admin", Access::all() | close_chat);
+        let state = Arc::<SharedState>::default();
+        let access = Access::SEND_CHAT | close_chat;
+
+        let create = request(
+            Opcode::NewUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::u64(FieldId::UserAccess, access.bits()),
+            ],
+        );
+        assert!(!session.on_new_user(&create, &state).await[0].is_error());
+
+        assert_eq!(state.account("bob").await.unwrap().access, access);
+    }
+
+    #[tokio::test]
+    async fn new_user_cannot_grant_a_bit_that_no_flag_defines_without_it() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+
+        let create = request(
+            Opcode::NewUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::u64(FieldId::UserAccess, 1 << 51),
+            ],
+        );
+        assert!(session.on_new_user(&create, &state).await[0].is_error());
+        assert!(state.account("bob").await.is_none());
     }
 
     #[tokio::test]
@@ -1113,6 +1150,26 @@ mod tests {
         assert_eq!(&*account.name, "Bob");
         assert_eq!(&*account.password, "secret");
         assert_eq!(account.access, Access::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn set_user_list_keeps_a_bit_that_no_flag_defines() {
+        let close_chat = Access::from_bits_retain(1 << 51);
+        let session = test_session("Admin", Access::all() | close_chat);
+        let state = Arc::<SharedState>::default();
+        let access = Access::SEND_CHAT | close_chat;
+
+        let record = user_list_record(
+            None,
+            "Bob",
+            "bob",
+            Field::obfuscated_string(FieldId::UserPassword, "secret"),
+            access,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        assert!(!session.on_set_user_list(&request, &state).await[0].is_error());
+
+        assert_eq!(state.account("bob").await.unwrap().access, access);
     }
 
     #[tokio::test]

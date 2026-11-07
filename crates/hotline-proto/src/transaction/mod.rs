@@ -350,13 +350,14 @@ impl Transaction<Received> {
             .map(|f| f.as_bytes().to_vec())
     }
 
-    /// The [`myField_UserAccess`] (110) field, if present.
+    /// The [`myField_UserAccess`] (110) field, if present, with each bit
+    /// kept, also a bit that no flag defines.
     ///
     /// [`myField_UserAccess`]: crate::FieldId::UserAccess
     pub fn access(&self) -> Option<Access> {
         self.field(FieldId::UserAccess)
             .and_then(Field::as_u64)
-            .map(Access::from_bits_truncate)
+            .map(Access::from_bits_retain)
     }
 
     /// The [`myField_Vers`] (160) field, if present.
