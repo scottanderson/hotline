@@ -516,10 +516,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Admin", Access::all());
         let state = Arc::<SharedState>::default();
-        state
-            .put_account("bob".into(), Account::guest())
-            .await
-            .unwrap();
+        state.put_account("bob", Account::guest()).await.unwrap();
 
         let create = request(
             Opcode::NewUser,
@@ -625,7 +622,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -676,7 +673,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -711,7 +708,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -745,7 +742,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -757,7 +754,7 @@ mod tests {
             .unwrap();
         state
             .put_account(
-                "carol".into(),
+                "carol",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -811,7 +808,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -897,7 +894,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -967,7 +964,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),
@@ -1049,7 +1046,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -1187,7 +1184,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "original".into(),
@@ -1220,7 +1217,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -1283,7 +1280,7 @@ mod tests {
         let (state, log) = state_recording_activity(Default::default());
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: "secret".into(),
@@ -1534,7 +1531,7 @@ mod tests {
             name: "Bob".into(),
             access: Access::empty(),
         };
-        state.put_account("bob".into(), account).await.unwrap();
+        state.put_account("bob", account).await.unwrap();
         let mut bob = test_session("Bob", Access::empty());
         bob.login = "bob".into();
         let mut bob_rx = state.register_recipient(bob.user_id).await;
@@ -1569,7 +1566,7 @@ mod tests {
                 name: name.into(),
                 access: Access::SEND_CHAT,
             };
-            state.put_account(login.into(), account).await.unwrap();
+            state.put_account(login, account).await.unwrap();
         }
         user_list_record(
             Some("bob"),
@@ -1743,7 +1740,7 @@ mod tests {
         let admin = test_session("Admin", Access::all());
         let (state, log) = state_recording_activity(Default::default());
         state
-            .put_account("bob".into(), Account::admin("bob's"))
+            .put_account("bob", Account::admin("bob's"))
             .await
             .unwrap();
         let record = user_list_record(
@@ -1797,10 +1794,7 @@ mod tests {
     async fn set_user_list_new_record_with_a_taken_login_sends_a_server_notice() {
         let session = test_session("Admin", Access::all());
         let state = Arc::<SharedState>::default();
-        state
-            .put_account("bob".into(), Account::guest())
-            .await
-            .unwrap();
+        state.put_account("bob", Account::guest()).await.unwrap();
         let mut rx = state.register_recipient(session.user_id).await;
 
         let record = user_list_record(
@@ -1833,7 +1827,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 Account {
                     access_extra: AccessExtra::default(),
                     password: Box::default(),

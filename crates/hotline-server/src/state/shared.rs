@@ -1782,9 +1782,10 @@ impl SharedState {
     /// Create or overwrite an account.
     pub async fn put_account(
         &self,
-        login: Box<str>,
+        login: impl Into<Box<str>>,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
+        let login = login.into();
         let _writes = self.account_writes.lock().await;
         self.accounts().put(login, account).await
     }
@@ -1793,9 +1794,10 @@ impl SharedState {
     /// An empty login gets the error for a taken login.
     pub async fn create_account(
         &self,
-        login: Box<str>,
+        login: impl Into<Box<str>>,
         account: Account,
     ) -> Result<(), Cow<'static, str>> {
+        let login = login.into();
         let _writes = self.account_writes.lock().await;
         if login.is_empty() || self.accounts().get(&login).await.is_some() {
             Err(format!(
@@ -1815,9 +1817,10 @@ impl SharedState {
     pub(crate) async fn replace_account(
         &self,
         old_login: &str,
-        login: Box<str>,
+        login: impl Into<Box<str>>,
         edit: impl FnOnce(Account) -> Account,
     ) -> Result<ReplacedAccount, NotReplaced> {
+        let login = login.into();
         let _writes = self.account_writes.lock().await;
         let Some(existing) = self.accounts().get(old_login).await else {
             Err(format!("No account with login \"{old_login}\"."))?
@@ -2340,35 +2343,26 @@ mod tests {
     #[tokio::test]
     async fn create_account_refuses_a_taken_login() {
         let state = Arc::<SharedState>::default();
-        state
-            .create_account("bob".into(), Account::guest())
-            .await
-            .unwrap();
-        assert!(state
-            .create_account("bob".into(), Account::guest())
-            .await
-            .is_err());
+        state.create_account("bob", Account::guest()).await.unwrap();
+        assert!(state.create_account("bob", Account::guest()).await.is_err());
     }
 
     #[tokio::test]
     async fn replace_account_refuses_a_deleted_login_and_writes_a_taken_rename_over_it() {
         let state = Arc::<SharedState>::default();
         assert!(state
-            .replace_account("bob", "bob".into(), |_| Account::guest())
+            .replace_account("bob", "bob", |_| Account::guest())
             .await
             .is_err());
         assert!(state.account("bob").await.is_none());
 
         state
-            .put_account("bob".into(), Account::admin("bob's"))
+            .put_account("bob", Account::admin("bob's"))
             .await
             .unwrap();
-        state
-            .put_account("amy".into(), Account::guest())
-            .await
-            .unwrap();
+        state.put_account("amy", Account::guest()).await.unwrap();
         let replaced = state
-            .replace_account("bob", "amy".into(), |bob| Account {
+            .replace_account("bob", "amy", |bob| Account {
                 name: "Edited".into(),
                 ..bob
             })
@@ -2385,7 +2379,7 @@ mod tests {
         );
 
         let replaced = state
-            .replace_account("bob", "bobby".into(), |_| Account::guest())
+            .replace_account("bob", "bobby", |_| Account::guest())
             .await
             .unwrap();
         assert!(!replaced.over_taken_login);

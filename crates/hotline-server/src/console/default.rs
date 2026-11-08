@@ -355,7 +355,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         state
             .put_account(
-                "bob".into(),
+                "bob",
                 crate::account::Account {
                     password: Box::default(),
                     name: "Bob".into(),
