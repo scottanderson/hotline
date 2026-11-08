@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn may_delete_news_folder_needs_both_privileges_for_a_bundle() {
-        let mut session = ClientSession::new("me".into(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         session.server_version = Some(190);
         session.news_folders = Some(
             [NewsFolder::Bundle, NewsFolder::Category]
@@ -579,7 +579,7 @@ mod tests {
     async fn a_session_browses_posts_and_reads_threaded_news() {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
 
         session
             .new_news_item(&client, None, "Top", NewsFolder::Bundle)
@@ -626,7 +626,7 @@ mod tests {
     async fn delete_news_item_of_the_open_bundle_leaves_a_row_to_select() {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
 
         session
             .new_news_item(&client, None, "Top", NewsFolder::Bundle)
@@ -660,7 +660,7 @@ mod tests {
     async fn new_news_item_at_the_root_closes_the_open_category() {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
 
         session
             .new_news_item(&client, None, "General", NewsFolder::Category)

@@ -169,7 +169,7 @@ mod tests {
         let addr = test_support::start_server_config(config, providers).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let dir = tempfile::tempdir().unwrap();
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
         session.download_dir = dir.path().to_path_buf();
         session.server_version = Some(190);
         let root = HlPath::default();

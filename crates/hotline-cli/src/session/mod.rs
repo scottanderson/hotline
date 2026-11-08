@@ -78,7 +78,7 @@ pub struct ClientSession {
 }
 
 impl ClientSession {
-    pub fn new(name: String, icon: u16, encoding: EncodingHandle) -> Self {
+    pub fn new(name: impl Into<Box<str>>, icon: u16, encoding: EncodingHandle) -> Self {
         Self {
             name: name.into(),
             icon,
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn granted_adds_the_old_server_privileges() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         session.access = Access::DOWNLOAD_FILE | Access::UPLOAD_FOLDER;
         assert_eq!(
             session.granted(),
@@ -547,7 +547,7 @@ mod tests {
     fn new_msg_adds_the_post_to_the_top_of_the_news() {
         use hotline_proto::opcode::Opcode;
 
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         session.news = Some("From bob\rold".to_string());
         let post = test_support::push(
             Opcode::NewMsg,
@@ -566,7 +566,7 @@ mod tests {
     async fn get_msgs_counts_only_a_change() {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
         for _ in 0..2 {
             session.get_msgs(&client).await;
         }
@@ -577,7 +577,7 @@ mod tests {
     fn new_msg_counts_a_post_before_the_news_is_fetched() {
         use hotline_proto::opcode::Opcode;
 
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let post = test_support::push(Opcode::NewMsg, vec![Field::string(FieldId::Data, "hi")]);
         let _ = session.apply_server_event(&post);
         assert_eq!((session.news.as_deref(), session.news_revision), (None, 1));
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn child_and_parent_folder_walk_the_path() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         assert_eq!(session.parent_folder(), None);
         session.file_path = session.child_folder("Games");
         assert_eq!(session.child_folder("Doom"), HlPath::new(["Games", "Doom"]));
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn server_banner_shows_its_url() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let banner = test_support::push(
             Opcode::ServerBanner,
             vec![
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn show_unmatched_error_shows_the_error_text() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let encoding = hotline_proto::text_encoding::DEFAULT;
         let invite = Transaction::request(Opcode::InviteToChat, 7, vec![]).received(encoding);
         let error = invite.reply_error("no such user");
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn server_banner_ignores_an_image_banner() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let before = session.lines.len();
         let banner = test_support::push(
             Opcode::ServerBanner,
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn user_broadcast_names_the_sender() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let broadcast = test_support::push(
             Opcode::UserBroadcast,
             vec![
@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn download_info_shows_the_place_in_the_queue() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let info = test_support::push(
             Opcode::DownloadInfo,
             vec![
@@ -669,7 +669,7 @@ mod tests {
 
     #[tokio::test]
     async fn download_info_marks_its_download_queued() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let task = tokio::spawn(std::future::pending::<()>());
         session.track_download(
             "doom.wad",
@@ -697,7 +697,7 @@ mod tests {
     async fn set_client_user_info_keeps_the_new_name_and_options() {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, mut events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
         let info = ClientUserInfo {
             name: "you".into(),
             icon: 3,
@@ -716,7 +716,7 @@ mod tests {
     fn chat_msg_shows_each_line_on_its_own() {
         use hotline_proto::opcode::Opcode;
 
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let chat = test_support::push(
             Opcode::ChatMsg,
             vec![Field::string(FieldId::Data, "\rAlice: one\rtwo")],
@@ -746,7 +746,7 @@ mod tests {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let invite = test_support::push(
             Opcode::InviteToChat,
             vec![
@@ -773,7 +773,7 @@ mod tests {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let admin_change = test_support::push(
             Opcode::NotifyChangeUser,
             vec![
@@ -809,7 +809,7 @@ mod tests {
         use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
 
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let joined = test_support::push(
             Opcode::NotifyChangeUser,
             vec![

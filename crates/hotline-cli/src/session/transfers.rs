@@ -543,7 +543,7 @@ mod tests {
         };
         let addr = test_support::start_server(providers).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
         session.download_dir = dir.to_path_buf();
         session.access = Access::all();
         (session, client)

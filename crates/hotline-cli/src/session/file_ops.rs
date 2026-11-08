@@ -109,7 +109,7 @@ mod tests {
         };
         let addr = test_support::start_server(providers).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
         let names = |session: &ClientSession| -> Vec<String> {
             let files = session.files.as_deref().unwrap_or_default();
             files.iter().map(|f| f.name.to_string()).collect()

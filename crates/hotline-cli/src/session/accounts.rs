@@ -155,7 +155,7 @@ mod tests {
     async fn session(version: u16) -> (ClientSession, HotlineClient) {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
         session.server_version = Some(version);
         session.access = Access::all();
         (session, client)

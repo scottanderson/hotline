@@ -224,7 +224,7 @@ mod tests {
     use crate::session::test_support;
 
     fn session_in_room(chat_id: u32) -> ClientSession {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         session.rooms.push(ChatRoom {
             id: chat_id,
             subject: "".into(),
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn invite_to_chat_queues_one_invitation_per_room() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let invite = |chat_id| {
             test_support::push(
                 Opcode::InviteToChat,
@@ -339,11 +339,11 @@ mod tests {
         let users = alice.get_user_name_list().await.unwrap();
         let bob_id = users.iter().find(|u| &*u.name == "bob").unwrap().user_id;
 
-        let mut alice_session = ClientSession::new("alice".to_string(), 0, alice.encoding());
+        let mut alice_session = ClientSession::new("alice", 0, alice.encoding());
         let chat_id = alice_session.invite_new_chat(&alice, bob_id).await.unwrap();
 
         let invite = test_support::next_push(&mut bob_events, Opcode::InviteToChat).await;
-        let mut bob_session = ClientSession::new("bob".to_string(), 0, bob.encoding());
+        let mut bob_session = ClientSession::new("bob", 0, bob.encoding());
         let _ = bob_session.apply_server_event(&invite);
         let invite = bob_session.invites.pop_front().unwrap();
         assert_eq!(invite.chat_id, chat_id);

@@ -47,7 +47,7 @@ mod tests {
     async fn keep_alive_on_an_old_server_fetches_the_user_list() {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
-        let mut session = ClientSession::new("me".to_string(), 0, client.encoding());
+        let mut session = ClientSession::new("me", 0, client.encoding());
         let before = session.lines.len();
 
         session.server_version = Some(190);

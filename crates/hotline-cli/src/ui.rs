@@ -918,7 +918,7 @@ mod tests {
 
     #[test]
     fn tab_labels_number_only_the_tab_bar() {
-        let mut session = ClientSession::new("me".to_string(), 0, Default::default());
+        let mut session = ClientSession::new("me", 0, Default::default());
         session.rooms.push(ChatRoom {
             id: 7,
             subject: "".into(),
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn push_tab_names_the_tab_of_a_chat_line_or_a_news_post() {
-        let mut session = ClientSession::new("me".to_string(), 0, EncodingHandle::default());
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         session.rooms.push(
             JoinedChat {
                 id: 7,
