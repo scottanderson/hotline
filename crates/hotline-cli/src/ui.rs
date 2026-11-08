@@ -885,6 +885,9 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
             draw_input_modal(frame, screen, format!("new {}", kind.label()), input);
         }
         Modal::Quit => draw_question(frame, screen, "quit?", "Disconnect and quit hlc?"),
+        Modal::Disconnected(reason) => {
+            draw_text_modal(frame, screen, 60, reason.title().into(), reason.text());
+        }
         Modal::DeleteNews { name, .. } => {
             draw_question(frame, screen, "delete?", format!("Delete {name}?"));
         }
@@ -963,7 +966,7 @@ mod tests {
 
     use super::*;
     use crate::line::Scrollback;
-    use crate::session::{ChatRoom, NewsTarget};
+    use crate::session::{ChatRoom, Disconnect, NewsTarget};
 
     #[test]
     fn account_circle_follows_openlines_icon_order() {
@@ -1149,6 +1152,17 @@ mod tests {
         let text = draw_to_text(&modal);
         assert!(text.contains("delete?"));
         assert!(text.contains("Delete Old news?"));
+
+        let reason = Disconnect::Message("back soon".into());
+        let text = draw_to_text(&Modal::Disconnected(reason));
+        assert!(text.contains("Disconnected"));
+        assert!(text.contains("You have been disconnected:"));
+        assert!(text.contains("back soon"));
+
+        let text = draw_to_text(&Modal::Disconnected(Disconnect::Closed));
+        assert!(text.contains("Connection Closed"));
+        assert!(text.contains("The connection with the server has been closed."));
+        assert!(text.contains("connecting later."));
 
         let text = draw_to_text(&Modal::Broadcast {
             input: "hello".into(),

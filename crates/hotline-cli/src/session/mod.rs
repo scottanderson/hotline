@@ -29,7 +29,7 @@ use crate::line::{Line, LineKind, Scrollback};
 
 pub use chat_room::{ChatInvite, ChatRoom};
 use downloads::RunningDownload;
-pub use event_outcome::EventOutcome;
+pub use event_outcome::{Disconnect, EventOutcome};
 pub use keep_alive::KEEP_ALIVE;
 pub use mode::Mode;
 pub use request::{Next, Request};
@@ -253,15 +253,28 @@ impl ClientSession {
         }
     }
 
-    /// [`myTran_DisconnectMsg`] (111).
+    /// [`myTran_DisconnectMsg`] (111): the server's reason to end the
+    /// connection. A message without text changes nothing.
     ///
     /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
     fn apply_disconnect_msg(&mut self, tx: &Transaction<Received>) -> EventOutcome {
-        let reason = tx
-            .string(FieldId::Data)
-            .unwrap_or_else(|| "disconnected by the server".to_string());
-        self.push(display_text(&reason), LineKind::Error);
-        EventOutcome::Quit
+        match tx.string(FieldId::Data).filter(|text| !text.is_empty()) {
+            Some(text) => {
+                let reason = Disconnect::Message(display_text(&text).into());
+                EventOutcome::Disconnected(self.disconnect(reason))
+            }
+            None => EventOutcome::Applied,
+        }
+    }
+
+    /// End the session with `reason`: show it in the chat, and leave the
+    /// agreement. Returns `reason`.
+    pub fn disconnect(&mut self, reason: Disconnect) -> Disconnect {
+        self.push(reason.line(), LineKind::Error);
+        if matches!(self.mode, Mode::Agreement(_)) {
+            self.mode = Mode::Chat;
+        }
+        reason
     }
 
     /// [`myTran_ServerBanner`] (122): show the banner's link, if it has one.
@@ -592,6 +605,35 @@ mod tests {
         );
         assert_eq!(&*session.lines.last().unwrap().text, "new news post");
         assert_eq!(session.news_revision, 1);
+    }
+
+    #[test]
+    fn disconnect_msg_ends_the_session_with_the_reason() {
+        use hotline_proto::opcode::Opcode;
+
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
+        session.show_agreement("terms".into());
+        let tx = test_support::push(
+            Opcode::DisconnectMsg,
+            vec![Field::string(FieldId::Data, "\rback soon")],
+        );
+        let outcome = session.apply_server_event(&tx);
+        assert!(
+            matches!(outcome, EventOutcome::Disconnected(Disconnect::Message(text)) if &*text == "back soon")
+        );
+        assert_eq!(&*session.lines.last().unwrap().text, "back soon");
+        assert!(matches!(session.mode, Mode::Chat));
+    }
+
+    #[test]
+    fn disconnect_msg_without_text_changes_nothing() {
+        use hotline_proto::opcode::Opcode;
+
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
+        let tx = test_support::push(Opcode::DisconnectMsg, vec![]);
+        let outcome = session.apply_server_event(&tx);
+        assert!(matches!(outcome, EventOutcome::Applied));
+        assert_eq!(session.lines.len(), 1);
     }
 
     #[tokio::test]

@@ -33,7 +33,8 @@ use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
 use line::Line;
 use session::{
-    ClientSession, EventOutcome, Mode, NewsFolder, NewsTarget, Next, Request, KEEP_ALIVE,
+    ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, Next, Request,
+    KEEP_ALIVE,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -124,6 +125,8 @@ async fn run(
     // A terminal that does not report focus has it.
     let mut focused = true;
     let mut should_quit = false;
+    // The reason that the connection ended.
+    let mut disconnected: Option<Disconnect> = None;
     // `true` while the screen lags behind the state.
     let mut stale = false;
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
@@ -133,6 +136,7 @@ async fn run(
 
     terminal.draw(|f| ui::draw(f, session, &mut view))?;
     while !should_quit {
+        let was_connected = disconnected.is_none();
         let mut happened = Bell::empty();
         tokio::select! {
             // A finished file transfer.
@@ -143,29 +147,33 @@ async fn run(
             // A reply to a request.
             Some(step) = tasks.next() => step(session, &mut view, &mut tasks),
             // No traffic or keep-alive attempt for a while.
-            () = tokio::time::sleep_until((idle_since(last_keep_alive) + KEEP_ALIVE).into()) => {
+            () = tokio::time::sleep_until((idle_since(last_keep_alive) + KEEP_ALIVE).into()),
+                if disconnected.is_none() =>
+            {
                 if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {
                     tasks.run(session.keep_alive(client));
                     last_keep_alive = Instant::now();
                 }
             }
             // Server-initiated traffic: chat, user list changes, ...
-            tx = events.recv() => {
-                let Some(tx) = tx else { break }; // connection closed
-                if let TransactionType::Push(opcode) = tx.r#type() {
-                    happened = Bell::for_push(opcode);
-                }
-                if let Some(tab) = ui::push_tab(session, &tx) {
-                    happened |= Bell::for_tab(tab, view.tab, focused);
-                }
-                match session.apply_server_event(&tx) {
-                    EventOutcome::NeedsAgreementAccept => {
-                        tasks.run(session.accept_agreement(client));
+            tx = events.recv(), if disconnected.is_none() => match tx {
+                None => disconnected = Some(session.disconnect(Disconnect::Closed)),
+                Some(tx) => {
+                    if let TransactionType::Push(opcode) = tx.r#type() {
+                        happened = Bell::for_push(opcode);
                     }
-                    EventOutcome::Quit => should_quit = true,
-                    EventOutcome::Applied => {}
+                    if let Some(tab) = ui::push_tab(session, &tx) {
+                        happened |= Bell::for_tab(tab, view.tab, focused);
+                    }
+                    match session.apply_server_event(&tx) {
+                        EventOutcome::NeedsAgreementAccept => {
+                            tasks.run(session.accept_agreement(client));
+                        }
+                        EventOutcome::Disconnected(reason) => disconnected = Some(reason),
+                        EventOutcome::Applied => {}
+                    }
                 }
-            }
+            },
             // Terminal input.
             ev = term_events.next() => {
                 let Some(Ok(ev)) = ev else { break };
@@ -213,8 +221,12 @@ async fn run(
         view.access = session.granted();
         view.note_revisions(ui::tab_revisions(session));
         bell.ring(happened)?;
-        if view.modal.is_none() {
-            view.modal = session.invites.pop_front().map(Modal::Invite);
+        // The end of the connection shows over any other modal.
+        if view.modal.is_none() || was_connected && disconnected.is_some() {
+            view.modal = match &disconnected {
+                Some(reason) => Some(Modal::Disconnected(reason.clone())),
+                None => session.invites.pop_front().map(Modal::Invite),
+            };
         }
         // One frame follows a burst of input, such as a drag.
         stale = event::poll(Duration::ZERO).unwrap_or(false);

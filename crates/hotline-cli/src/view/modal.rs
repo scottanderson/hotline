@@ -3,7 +3,7 @@ use hotline_proto::Access;
 
 use super::{AccountForm, OptionsForm, Palette, TextBox};
 use crate::file_edit::FileEdit;
-use crate::session::{ArticleText, ChatInvite, NewsFolder, NewsTarget};
+use crate::session::{ArticleText, ChatInvite, Disconnect, NewsFolder, NewsTarget};
 use crate::transfer::Conflict;
 
 /// A box drawn over the main screen that takes every key until it closes.
@@ -42,6 +42,8 @@ pub enum Modal {
     },
     /// A check before `hlc` closes the connection and quits.
     Quit,
+    /// The reason the server ended the connection. Closing it quits.
+    Disconnected(Disconnect),
     /// A check before the file or folder `name` is deleted.
     DeleteFile { name: Box<str> },
     /// The info of a file or folder.

@@ -469,6 +469,7 @@ impl View {
                 Hint::new("Esc", "cancel"),
             ],
             (Some(Modal::Quit), ..) => vec![Hint::new("y", "quit"), Hint::new("Esc", "cancel")],
+            (Some(Modal::Disconnected(_)), ..) => vec![Hint::new("Enter", "quit")],
             (Some(Modal::OpenAccount { .. }), ..) => {
                 vec![Hint::new("Enter", "open"), Hint::new("Esc", "cancel")]
             }
@@ -547,7 +548,7 @@ impl View {
     ) -> Action {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('c') {
-            if self.modal == Some(Modal::Quit) {
+            if matches!(self.modal, Some(Modal::Quit | Modal::Disconnected(_))) {
                 return Action::Quit;
             }
             self.modal = Some(Modal::Quit);
@@ -764,7 +765,8 @@ impl View {
                     text: input.take(),
                 };
             }
-            (Modal::Quit, KeyCode::Char('y')) => return Action::Quit,
+            (Modal::Quit, KeyCode::Char('y'))
+            | (Modal::Disconnected(_), KeyCode::Enter | KeyCode::Esc) => return Action::Quit,
             (Modal::DeleteNews { target, .. }, KeyCode::Char('y')) => {
                 return Action::DeleteNewsItem(*target);
             }
@@ -1248,6 +1250,7 @@ impl View {
                 | Modal::NewsName { .. }
                 | Modal::DeleteNews { .. }
                 | Modal::Quit
+                | Modal::Disconnected(_)
                 | Modal::Account(_)
                 | Modal::Options(_)
                 | Modal::OpenAccount { .. }
@@ -1614,7 +1617,7 @@ mod tests {
     use hotline_client::{ClientUserInfo, Password, UserAccount};
     use hotline_proto::types::{HlDate, UserChangeOptions, UserFlags};
 
-    use crate::session::{ArticleText, ChatInvite};
+    use crate::session::{ArticleText, ChatInvite, Disconnect};
 
     fn users() -> Vec<UserNameWithInfo> {
         ["Alice", "Bob"]
@@ -2812,6 +2815,26 @@ mod tests {
             view.handle_key(key(KeyCode::Char('y')), &users(), &files()),
             Action::Quit
         );
+    }
+
+    #[test]
+    fn enter_esc_or_ctrl_c_on_disconnected_quits() {
+        for key in [key(KeyCode::Enter), key(KeyCode::Esc), ctrl('c')] {
+            let mut view = View {
+                modal: Some(Modal::Disconnected(Disconnect::Closed)),
+                ..View::default()
+            };
+            assert_eq!(view.handle_key(key, &users(), &files()), Action::Quit);
+        }
+        let mut view = View {
+            modal: Some(Modal::Disconnected(Disconnect::Closed)),
+            ..View::default()
+        };
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('x')), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.modal, Some(Modal::Disconnected(Disconnect::Closed)));
     }
 
     #[test]

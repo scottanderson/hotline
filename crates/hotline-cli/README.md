@@ -48,6 +48,8 @@ previous and the next entry of that row. Each tab has a main pane and
 the user list. Tab moves between them, and Esc goes back to Chat. On
 Chat, Esc asks whether to quit. Ctrl-C asks too, from anywhere, and a
 second Ctrl-C quits.
+When the server ends the connection, a box shows its message, or that
+the connection closed. Enter, Esc, or Ctrl-C closes the box and quits.
 
 A tab label turns yellow when the tab changes while another tab shows.
 The Chat tab and each room change with each new line, and the News
