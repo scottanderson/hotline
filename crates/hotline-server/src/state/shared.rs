@@ -1359,8 +1359,8 @@ impl SharedState {
     }
 
     /// The full classic news text.
-    pub async fn news(&self) -> String {
-        self.flat_news().load().await.to_string()
+    pub async fn news(&self) -> Arc<str> {
+        self.flat_news().load().await
     }
 
     /// Prepend a new post to the classic news. Returns the formatted entry.
