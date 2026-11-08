@@ -443,7 +443,7 @@ impl Session {
             .await?;
 
         if let Some(subject) = subject {
-            state.set_chat_subject(chat_id, subject.clone()).await;
+            state.set_chat_subject(chat_id, &subject).await;
             self.broadcast_chat_field(
                 state,
                 chat_id,
@@ -453,7 +453,7 @@ impl Session {
             .await;
         }
         if let Some(password) = password {
-            state.set_chat_password(chat_id, password.clone()).await;
+            state.set_chat_password(chat_id, &password).await;
             self.broadcast_chat_field(
                 state,
                 chat_id,
@@ -1267,7 +1267,7 @@ mod tests {
         let reply = bob.on_join_chat(&join, &state).await;
         assert!(reply.field(FieldId::ChatSubject).is_none());
 
-        state.set_chat_subject(chat_id, "Topic".to_string()).await;
+        state.set_chat_subject(chat_id, "Topic").await;
         state.invite(chat_id, bob.user_id).await;
         let reply = bob.on_join_chat(&join, &state).await;
         assert_eq!(
@@ -1310,9 +1310,7 @@ mod tests {
         let bob = test_session("Bob", Access::all());
         let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
-        state
-            .set_chat_password(chat_id, "hunter2".to_string())
-            .await;
+        state.set_chat_password(chat_id, "hunter2").await;
 
         let no_password = request(
             Opcode::JoinChat,
@@ -1347,9 +1345,7 @@ mod tests {
         let bob = test_session("Bob", Access::all());
         let state = Arc::<SharedState>::default();
         let chat_id = state.create_chat_room(1).await;
-        state
-            .set_chat_password(chat_id, "hunter2".to_string())
-            .await;
+        state.set_chat_password(chat_id, "hunter2").await;
         state.invite(chat_id, bob.user_id).await;
 
         let join = request(

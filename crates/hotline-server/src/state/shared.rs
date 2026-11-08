@@ -1724,7 +1724,7 @@ impl SharedState {
     }
 
     /// Set a chat room's subject. `false` if the room doesn't exist.
-    pub async fn set_chat_subject(&self, chat_id: u32, subject: String) -> bool {
+    pub async fn set_chat_subject(&self, chat_id: u32, subject: &str) -> bool {
         self.chat_rooms
             .write()
             .await
@@ -1736,7 +1736,7 @@ impl SharedState {
     }
 
     /// Set a chat room's join password. `false` if the room doesn't exist.
-    pub async fn set_chat_password(&self, chat_id: u32, password: String) -> bool {
+    pub async fn set_chat_password(&self, chat_id: u32, password: &str) -> bool {
         self.chat_rooms
             .write()
             .await
