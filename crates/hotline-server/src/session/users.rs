@@ -149,7 +149,7 @@ impl Session {
     /// [`myField_Options`]: hotline_proto::FieldId::Options
     /// [`myField_Data`]: hotline_proto::FieldId::Data
     pub(super) async fn on_disconnect_user(
-        &mut self,
+        &self,
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
@@ -625,7 +625,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_denied_without_privilege() {
-        let mut session = test_session("Alice", Access::empty());
+        let session = test_session("Alice", Access::empty());
         let state = Arc::<SharedState>::default();
         let request = request(
             Opcode::DisconnectUser,
@@ -639,7 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_disconnects_target_with_no_wire_notice() {
-        let mut session = test_session("Alice", Access::all());
+        let session = test_session("Alice", Access::all());
         let state = Arc::<SharedState>::default();
         let mut target_rx = state.register_recipient(2).await;
         let request = request(
@@ -660,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_with_permanent_ban_option_bans_the_target_address() {
-        let mut session = test_session("Alice", Access::all());
+        let session = test_session("Alice", Access::all());
         let state = Arc::<SharedState>::default();
         let mut target = test_user(2, "Bob");
         target.access.remove(Access::CANNOT_BE_DISCON);
@@ -698,7 +698,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_with_temporary_ban_option_sends_the_temporary_ban_notice() {
-        let mut session = test_session("Alice", Access::all());
+        let session = test_session("Alice", Access::all());
         let state = Arc::<SharedState>::default();
         let mut target = test_user(2, "Bob");
         target.access.remove(Access::CANNOT_BE_DISCON);
@@ -735,7 +735,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_with_missing_uid_replies_success() {
-        let mut session = test_session("Alice", Access::all());
+        let session = test_session("Alice", Access::all());
         let state = Arc::<SharedState>::default();
         let request = request(Opcode::DisconnectUser, 1, vec![]);
         let replies = session.on_disconnect_user(&request, &state).await;
