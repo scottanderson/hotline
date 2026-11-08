@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use hotline_proto::consts::{Access, RequireFlags};
-use hotline_proto::htxf::{self, ResumedFork};
+use hotline_proto::htxf::{self, FlatFileInfo, ResumedFork};
+use hotline_proto::text_encoding;
 use hotline_proto::types::{self, HlPath};
 use hotline_proto::FieldId;
 use hotline_proto::{Field, ForkHeader, Received, Transaction};
@@ -538,7 +539,7 @@ impl Session {
     /// [`myTran_GetFileInfo`] (206): fetch a file or folder's metadata. A
     /// type or creator code with a display name sends the name, and any
     /// other sends the code. Only a file sends its size. Comment is sent
-    /// when one is stored.
+    /// when one is stored, cut to its first 255 bytes.
     ///
     /// [`myTran_GetFileInfo`]: hotline_proto::Opcode::GetFileInfo
     pub(super) async fn on_get_file_info(
@@ -587,6 +588,8 @@ impl Session {
         }
         fields.push(Field::bytes(FieldId::FileModifyDate, date(times.modified)));
         if let Some(comment) = comment {
+            let comment =
+                text_encoding::cut(self.encoding(), &comment, FlatFileInfo::MAX_COMMENT_LEN);
             fields.push(Field::string(FieldId::FileComment, comment));
         }
         vec![tx.reply(fields)]
@@ -594,7 +597,7 @@ impl Session {
 
     /// [`myTran_SetFileInfo`] (207): set a file or folder's
     /// [`myField_FileComment`] (210), then rename it. A comment sent with a
-    /// refused rename is still set.
+    /// refused rename is still set. A comment keeps its first 255 bytes.
     ///
     /// [`myTran_SetFileInfo`]: hotline_proto::Opcode::SetFileInfo
     /// [`myField_FileComment`]: hotline_proto::FieldId::FileComment
@@ -620,10 +623,9 @@ impl Session {
         };
         // A comment of one zero byte clears the comment.
         let comment = tx.string(FieldId::FileComment).map(|comment| {
-            if comment == "\0" {
-                String::new()
-            } else {
-                comment
+            match text_encoding::cut(self.encoding(), &comment, FlatFileInfo::MAX_COMMENT_LEN) {
+                "\0" => String::new(),
+                comment => comment.to_owned(),
             }
         });
         if new_name.is_none() && comment.is_none() {
@@ -723,7 +725,6 @@ mod tests {
     use crate::providers::Providers;
     use crate::session::test_support::*;
     use hotline_proto::opcode::Opcode;
-    use hotline_proto::text_encoding;
 
     #[tokio::test]
     async fn download_banner_denied_without_access_extra_banner_get() {
@@ -3073,6 +3074,66 @@ mod tests {
         assert_eq!(
             reply.received(encoding).string(FieldId::FileComment),
             Some("a note".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn get_file_info_cuts_a_comment_to_255_bytes() {
+        use crate::file::FileProvider;
+
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let requester = FileRequester { login: "Alice" };
+        files
+            .set_comment(requester, &HlPath::default(), "a.txt", &"x".repeat(300))
+            .await
+            .unwrap();
+        let state = state_with_files(files);
+        let mut session = test_session("Alice", Access::all());
+        session.access_extra.insert(AccessExtra::FILE_GETINFO);
+        let getinfo = request(
+            Opcode::GetFileInfo,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_get_file_info(&getinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        let comment = reply
+            .received(text_encoding::DEFAULT)
+            .string(FieldId::FileComment);
+        assert_eq!(comment, Some("x".repeat(255)));
+    }
+
+    #[tokio::test]
+    async fn set_file_info_keeps_the_first_255_bytes_of_a_comment() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+        let requester = FileRequester { login: "Alice" };
+        let setinfo = request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileComment, "x".repeat(300)),
+            ],
+        );
+        let [reply] = session
+            .on_set_file_info(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert_eq!(
+            state
+                .file_comment(requester, &HlPath::default(), "a.txt", Access::all())
+                .await
+                .unwrap(),
+            Some("x".repeat(255))
         );
     }
 
