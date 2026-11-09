@@ -9,7 +9,7 @@ pub enum Command {
     OpenTab(Tab),
     Broadcast,
     Options,
-    CancelDownload,
+    CancelTransfer,
     /// Invite a user to the room `chat_id`.
     Invite(u32),
     /// Set the subject of the room `chat_id`.
@@ -31,7 +31,7 @@ impl Command {
             }
             Self::Broadcast => "Broadcast".into(),
             Self::Options => "Options".into(),
-            Self::CancelDownload => "Cancel a download".into(),
+            Self::CancelTransfer => "Cancel a transfer".into(),
             Self::Invite(_) => "Invite to this room".into(),
             Self::Subject(_) => "Set the room subject".into(),
             Self::Leave(_) => "Leave this room".into(),
@@ -52,7 +52,7 @@ impl Command {
             Self::User(_, MenuItem::SendMessage) => "Enter",
             Self::User(_, MenuItem::GetInfo) => "i",
             Self::User(_, MenuItem::Disconnect) => "k",
-            Self::OpenTab(_) | Self::CancelDownload | Self::User(_, MenuItem::PrivateChat) => "",
+            Self::OpenTab(_) | Self::CancelTransfer | Self::User(_, MenuItem::PrivateChat) => "",
         }
     }
 

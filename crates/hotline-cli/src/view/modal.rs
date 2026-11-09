@@ -75,9 +75,9 @@ pub enum Modal {
     OpenAccount { input: TextBox },
     /// A check before the account `login` is deleted.
     DeleteAccount { login: Box<str> },
-    /// The downloads to cancel, as `(ID, label)`.
-    PickDownload {
-        downloads: Vec<(u64, Box<str>)>,
+    /// The transfers to cancel, as `(ID, label)`.
+    PickTransfer {
+        transfers: Vec<(u64, Box<str>)>,
         selected: usize,
     },
     /// The command palette.

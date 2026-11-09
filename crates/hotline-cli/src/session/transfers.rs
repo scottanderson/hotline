@@ -3,6 +3,7 @@
 use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use hotline_client::{FolderDownload, FolderUpload, HotlineClient};
@@ -13,7 +14,7 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::downloads::FirstWrite;
+use super::running::{FirstWrite, Kind};
 use super::{ClientSession, Request};
 use crate::line::{Line, LineKind};
 use crate::transfer::{Conflict, Start};
@@ -103,7 +104,13 @@ impl ClientSession {
                     };
                     let _ = done.send(line);
                 });
-                session.track_download(&name, reference, queued, task.abort_handle());
+                session.track(
+                    Kind::Download,
+                    &name,
+                    reference,
+                    queued,
+                    task.abort_handle(),
+                );
                 None
             }
         })
@@ -181,7 +188,13 @@ impl ClientSession {
                     };
                     let _ = done.send(line);
                 });
-                session.track_download(&name, reference, queued, task.abort_handle());
+                session.track(
+                    Kind::DownloadFolder,
+                    &name,
+                    reference,
+                    queued,
+                    task.abort_handle(),
+                );
                 None
             }
         })
@@ -237,7 +250,8 @@ impl ClientSession {
                         let local = conflict_local();
                         Err(Stop::Ask(Conflict::RemoteFolderExists { local }))
                     } else {
-                        start_folder_upload(&client, &path, &local, &name, start).await
+                        let upload = start_folder_upload(&client, &path, &local, &name, start);
+                        upload.await.map(|upload| (Kind::UploadFolder, upload))
                     }
                 }
                 Ok(_) => {
@@ -247,20 +261,23 @@ impl ClientSession {
                         let local = conflict_local();
                         Err(Stop::Ask(Conflict::PartialUpload { local }))
                     } else {
-                        start_file_upload(&client, &path, &local, &name, start).await
+                        let upload = start_file_upload(&client, &path, &local, &name, start);
+                        upload.await.map(|upload| (Kind::Upload, upload))
                     }
                 }
                 Err(e) => Err(Stop::Fail(format!("cannot read {}: {e}", local.display()))),
             };
             move |session: &mut Self| {
-                let (text, upload) = match started {
+                let (kind, (text, upload)) = match started {
                     Ok(started) => started,
                     Err(stop) => return session.stop(stop),
                 };
                 session.push(text, LineKind::System);
-                tokio::spawn(async move {
+                let task = tokio::spawn(async move {
                     let _ = done.send(upload.await);
                 });
+                let queued = Arc::default();
+                session.track(kind, &name, None, queued, task.abort_handle());
                 None
             }
         })

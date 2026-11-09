@@ -113,7 +113,7 @@ Alt-X also opens the palette, for a terminal that takes Ctrl-P.
 Shift-F10 and the Menu key also open the actions. The palette and
 the action menu show the key of each entry. A right click on a user
 opens a menu that also starts a private chat. Only the palette lists
-"Cancel a download".
+"Cancel a transfer".
 
 On macOS, Option with a letter types a symbol by default. Set the
 Option key to send Meta for the Alt keys. In Terminal, turn on "Use

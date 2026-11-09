@@ -406,16 +406,16 @@ async fn perform(
         Action::DownloadFolder { name, start } => {
             tasks.start(session.download_folder(client, &name, start, done), ask);
         }
-        Action::PickDownload => {
-            let downloads = session.running_downloads();
-            if !downloads.is_empty() {
-                view.modal = Some(Modal::PickDownload {
-                    downloads,
+        Action::PickTransfer => {
+            let transfers = session.running_transfers();
+            if !transfers.is_empty() {
+                view.modal = Some(Modal::PickTransfer {
+                    transfers,
                     selected: 0,
                 });
             }
         }
-        Action::KillDownload(id) => tasks.run(session.kill_download(client, id)),
+        Action::CancelTransfer(id) => tasks.run(session.cancel_transfer(client, id)),
         Action::Upload { path, start } => {
             let path = std::path::Path::new(&path);
             tasks.start(session.upload(client, path, start, done), ask);

@@ -777,16 +777,16 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
             let items = users.iter().map(|(_, name)| ListItem::new(&**name));
             draw_list_modal(frame, area, modal_block("invite to chat"), items, *selected);
         }
-        Modal::PickDownload {
-            downloads,
+        Modal::PickTransfer {
+            transfers,
             selected,
         } => {
             let area = screen.centered(
                 Constraint::Length(50),
-                Constraint::Length(list_height(downloads.len())),
+                Constraint::Length(list_height(transfers.len())),
             );
-            let items = downloads.iter().map(|(_, label)| ListItem::new(&**label));
-            let block = modal_block("cancel a download");
+            let items = transfers.iter().map(|(_, label)| ListItem::new(&**label));
+            let block = modal_block("cancel a transfer");
             draw_list_modal(frame, area, block, items, *selected);
         }
         Modal::Palette(palette) => {

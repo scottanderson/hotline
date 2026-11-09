@@ -1,4 +1,4 @@
-//! The downloads that run, and how to cancel one.
+//! The transfers that run, and how to cancel one.
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,11 +21,38 @@ const QUEUE_VERSION: u16 = 185;
 /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
 const KILL_DOWNLOAD_VERSION: u16 = 182;
 
-/// One download that runs on its own task.
-pub struct RunningDownload {
+/// What a transfer moves, and which way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+    Download,
+    DownloadFolder,
+    Upload,
+    UploadFolder,
+}
+
+impl Kind {
+    /// The start of the transfer's label.
+    const fn does(self) -> &'static str {
+        match self {
+            Self::Download => "Downloading",
+            Self::DownloadFolder => "Downloading folder",
+            Self::Upload => "Uploading",
+            Self::UploadFolder => "Uploading folder",
+        }
+    }
+
+    const fn is_download(self) -> bool {
+        matches!(self, Self::Download | Self::DownloadFolder)
+    }
+}
+
+/// One transfer that runs on its own task.
+pub struct RunningTransfer {
     id: u64,
+    kind: Kind,
     name: Box<str>,
-    /// The server's reference, `None` for an empty folder.
+    /// The server's reference of a download, `None` for an upload or an
+    /// empty folder.
     reference: Option<u32>,
     /// `true` while the server holds the download in its queue.
     queued: Arc<AtomicBool>,
@@ -40,17 +67,19 @@ impl ClientSession {
         Arc::new(AtomicBool::new(queued))
     }
 
-    /// Keep the download of `name` that runs on `task`.
-    pub(super) fn track_download(
+    /// Keep the transfer of `name` that runs on `task`.
+    pub(super) fn track(
         &mut self,
+        kind: Kind,
         name: &str,
         reference: Option<u32>,
         queued: Arc<AtomicBool>,
         task: AbortHandle,
     ) {
-        self.next_download_id = self.next_download_id.wrapping_add(1);
-        self.downloads.push(RunningDownload {
-            id: self.next_download_id,
+        self.next_transfer_id = self.next_transfer_id.wrapping_add(1);
+        self.transfers.push(RunningTransfer {
+            id: self.next_transfer_id,
+            kind,
             name: name.into(),
             reference,
             queued,
@@ -62,48 +91,53 @@ impl ClientSession {
     /// others. Returns the download's name.
     pub(super) fn set_queue_place(&self, reference: u32, waiting: u32) -> Option<Box<str>> {
         let download = self
-            .downloads
+            .transfers
             .iter()
-            .find(|d| d.reference == Some(reference))?;
+            .find(|t| t.kind.is_download() && t.reference == Some(reference))?;
         download.queued.store(waiting > 0, Ordering::Relaxed);
         Some(download.name.clone())
     }
 
-    /// Each download that still runs, as `(ID, label)`. With none, a line says so.
-    pub fn running_downloads(&mut self) -> Vec<(u64, Box<str>)> {
-        self.downloads.retain(|d| !d.task.is_finished());
-        if self.downloads.is_empty() {
-            self.push("no download runs", LineKind::System);
+    /// Each transfer that still runs, as `(ID, label)`. With none, a line says so.
+    pub fn running_transfers(&mut self) -> Vec<(u64, Box<str>)> {
+        self.transfers.retain(|t| !t.task.is_finished());
+        if self.transfers.is_empty() {
+            self.push("no transfer runs", LineKind::System);
         }
-        self.downloads
+        self.transfers
             .iter()
-            .map(|d| {
-                let label = if d.queued.load(Ordering::Relaxed) {
-                    format!("{} (queued)", d.name)
-                } else {
-                    d.name.to_string()
-                };
-                (d.id, label.into())
+            .map(|t| {
+                let mut label = format!("{} “{}”", t.kind.does(), t.name);
+                if t.queued.load(Ordering::Relaxed) {
+                    label.push_str(" (queued)");
+                }
+                (t.id, label.into())
             })
             .collect()
     }
 
-    /// Stop the download `id`. One that the server still holds in its queue
-    /// also leaves the queue, [`myTran_KillDownload`] (214). The `.hpf`
-    /// file stays for a resume.
+    /// Stop the transfer `id`. A download that the server still holds in its
+    /// queue also leaves the queue, [`myTran_KillDownload`] (214). The `.hpf`
+    /// file of a download stays for a resume. An upload closes its transfer
+    /// connection.
     ///
     /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
-    pub fn kill_download(&mut self, client: &HotlineClient, id: u64) -> Request<()> {
-        let Some(pos) = self.downloads.iter().position(|d| d.id == id) else {
+    pub fn cancel_transfer(&mut self, client: &HotlineClient, id: u64) -> Request<()> {
+        let Some(pos) = self.transfers.iter().position(|t| t.id == id) else {
             return Request::ready(());
         };
-        let download = self.downloads.remove(pos);
-        download.task.abort();
-        let in_queue = download.queued.load(Ordering::Relaxed);
+        let transfer = self.transfers.remove(pos);
+        transfer.task.abort();
+        if !transfer.kind.is_download() {
+            let text = format!("cancelled the upload of {}", transfer.name);
+            self.push(text, LineKind::System);
+            return Request::ready(());
+        }
+        let in_queue = transfer.queued.load(Ordering::Relaxed);
         let kill = in_queue && self.server_at_least(KILL_DOWNLOAD_VERSION);
-        let reference = download.reference.filter(|_| kill);
+        let reference = transfer.reference.filter(|_| kill);
         let client = client.clone();
-        let failed = format!("failed to cancel {}", download.name);
+        let failed = format!("failed to cancel {}", transfer.name);
         Request::report(
             async move {
                 match reference {
@@ -113,7 +147,7 @@ impl ClientSession {
             },
             failed,
             move |session: &mut Self, ()| {
-                let text = format!("cancelled the download of {}", download.name);
+                let text = format!("cancelled the download of {}", transfer.name);
                 session.push(text, LineKind::System);
             },
         )
@@ -161,7 +195,7 @@ mod tests {
     use crate::transfer::Start;
 
     #[tokio::test]
-    async fn kill_download_takes_a_queued_download_out_of_the_queue() {
+    async fn cancel_transfer_takes_a_queued_download_out_of_the_queue() {
         let files = InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"a");
         let providers = Providers {
@@ -186,10 +220,10 @@ mod tests {
             .download_file(&client, "a.txt", "b.txt", Start::Ask, &tx)
             .run(&mut session)
             .await;
-        let running = session.running_downloads();
-        assert_eq!(running, [(1, "a.txt (queued)".into())]);
+        let running = session.running_transfers();
+        assert_eq!(running, [(1, "Downloading “a.txt” (queued)".into())]);
 
-        session.kill_download(&client, 1).run(&mut session).await;
+        session.cancel_transfer(&client, 1).run(&mut session).await;
         assert_eq!(
             &*session.lines.last().unwrap().text,
             "cancelled the download of a.txt"
@@ -197,5 +231,23 @@ mod tests {
         assert!(dir.path().join("b.txt.hpf").exists());
         let next = client.download_file(&root, "a.txt", 0).await.unwrap();
         assert_eq!(next.waiting_count, 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_transfer_stops_an_upload() {
+        let addr = test_support::start_server(Providers::default()).await;
+        let (client, _events) = test_support::join_admin(addr, "me").await;
+        let mut session = ClientSession::new("me", 0, client.encoding());
+        let task = tokio::spawn(std::future::pending::<()>()).abort_handle();
+        session.track(Kind::Upload, "f", None, Arc::default(), task.clone());
+
+        session.cancel_transfer(&client, 1).run(&mut session).await;
+        assert_eq!(
+            &*session.lines.last().unwrap().text,
+            "cancelled the upload of f"
+        );
+        tokio::task::yield_now().await;
+        assert!(task.is_finished());
+        assert!(session.running_transfers().is_empty());
     }
 }

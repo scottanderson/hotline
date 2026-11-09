@@ -423,7 +423,7 @@ impl View {
             (Some(Modal::Subject { .. }), ..) => {
                 vec![Hint::new("Enter", "set"), Hint::new("Esc", "cancel")]
             }
-            (Some(Modal::PickDownload { .. }), ..) => {
+            (Some(Modal::PickTransfer { .. }), ..) => {
                 vec![
                     Hint::new("↑↓", "choose"),
                     Hint::new("Enter", "cancel it"),
@@ -618,7 +618,7 @@ impl View {
         commands.extend([
             Command::Broadcast,
             Command::Options,
-            Command::CancelDownload,
+            Command::CancelTransfer,
             Command::Quit,
         ]);
         commands
@@ -689,7 +689,7 @@ impl View {
                 Action::None
             }
             Command::Options => Action::EditOptions,
-            Command::CancelDownload => Action::PickDownload,
+            Command::CancelTransfer => Action::PickTransfer,
             Command::Invite(chat_id) => Action::PickInvitee(chat_id),
             Command::Subject(chat_id) => Action::EditChatSubject(chat_id),
             Command::Leave(chat_id) => Action::LeaveChat(chat_id),
@@ -857,32 +857,32 @@ impl View {
                 });
             }
             (
-                Modal::PickUser { selected, .. } | Modal::PickDownload { selected, .. },
+                Modal::PickUser { selected, .. } | Modal::PickTransfer { selected, .. },
                 KeyCode::Up,
             ) => {
                 *selected = selected.saturating_sub(1);
             }
             (
-                Modal::PickDownload {
+                Modal::PickTransfer {
                     selected,
-                    downloads,
+                    transfers,
                 },
                 KeyCode::Down,
             ) => {
                 *selected = selected
                     .saturating_add(1)
-                    .min(downloads.len().saturating_sub(1));
+                    .min(transfers.len().saturating_sub(1));
             }
             (
-                Modal::PickDownload {
+                Modal::PickTransfer {
                     selected,
-                    downloads,
+                    transfers,
                 },
                 KeyCode::Enter,
             ) => {
-                return downloads
+                return transfers
                     .get(*selected)
-                    .map_or(Action::None, |&(id, _)| Action::KillDownload(id));
+                    .map_or(Action::None, |&(id, _)| Action::CancelTransfer(id));
             }
             (
                 Modal::PickUser {
@@ -1254,7 +1254,7 @@ impl View {
                 | Modal::Invite(_)
                 | Modal::Subject { .. }
                 | Modal::PickUser { .. }
-                | Modal::PickDownload { .. }
+                | Modal::PickTransfer { .. }
                 | Modal::Palette(_)
                 | Modal::Post { .. }
                 | Modal::NewsName { .. }
@@ -2226,18 +2226,18 @@ mod tests {
     }
 
     #[test]
-    fn cancel_download_asks_for_a_download_and_cancels_the_chosen_one() {
+    fn cancel_transfer_asks_for_a_transfer_and_cancels_the_chosen_one() {
         let mut view = View::default();
-        assert_eq!(run_command(&mut view, "cancel"), Action::PickDownload);
-        view.modal = Some(Modal::PickDownload {
-            downloads: vec![(3, "a.txt".into()), (5, "b.txt (queued)".into())],
+        assert_eq!(run_command(&mut view, "cancel"), Action::PickTransfer);
+        view.modal = Some(Modal::PickTransfer {
+            transfers: vec![(3, "a.txt".into()), (5, "b.txt (queued)".into())],
             selected: 0,
         });
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::KillDownload(5)
+            Action::CancelTransfer(5)
         );
     }
 

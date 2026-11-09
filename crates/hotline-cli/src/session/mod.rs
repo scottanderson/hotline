@@ -4,12 +4,12 @@
 mod accounts;
 mod chat;
 mod chat_room;
-mod downloads;
 mod event_outcome;
 mod file_ops;
 mod keep_alive;
 mod mode;
 mod request;
+mod running;
 #[cfg(test)]
 mod test_support;
 mod threaded_news;
@@ -28,11 +28,11 @@ use hotline_proto::{Access, Field, Received, Transaction};
 use crate::line::{Line, LineKind, Scrollback};
 
 pub use chat_room::{ChatInvite, ChatRoom};
-use downloads::RunningDownload;
 pub use event_outcome::{Disconnect, EventOutcome};
 pub use keep_alive::KEEP_ALIVE;
 pub use mode::Mode;
 pub use request::{Next, Request};
+use running::RunningTransfer;
 pub use threaded_news::{ArticleText, NewsFolder, NewsFolderNode, NewsTarget, NewsThread};
 
 pub struct ClientSession {
@@ -71,10 +71,10 @@ pub struct ClientSession {
     pub rooms: Vec<ChatRoom>,
     /// Invitations that wait for an answer, oldest first.
     pub invites: VecDeque<ChatInvite>,
-    /// The downloads that run, oldest first.
-    downloads: Vec<RunningDownload>,
-    /// The ID of the last download kept in `downloads`.
-    next_download_id: u64,
+    /// The transfers that run, oldest first.
+    transfers: Vec<RunningTransfer>,
+    /// The ID of the last transfer kept in `transfers`.
+    next_transfer_id: u64,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
 }
@@ -105,8 +105,8 @@ impl ClientSession {
             news_preview: None,
             rooms: Vec::new(),
             invites: VecDeque::new(),
-            downloads: Vec::new(),
-            next_download_id: 0,
+            transfers: Vec::new(),
+            next_transfer_id: 0,
             encoding,
         }
     }
@@ -746,7 +746,8 @@ mod tests {
     async fn download_info_marks_its_download_queued() {
         let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let task = tokio::spawn(std::future::pending::<()>());
-        session.track_download(
+        session.track(
+            running::Kind::Download,
             "doom.wad",
             Some(9),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -764,7 +765,10 @@ mod tests {
             &*session.lines.last().unwrap().text,
             "doom.wad waits, 2 ahead in the queue"
         );
-        assert_eq!(&*session.running_downloads()[0].1, "doom.wad (queued)");
+        assert_eq!(
+            &*session.running_transfers()[0].1,
+            "Downloading “doom.wad” (queued)"
+        );
         task.abort();
     }
 
