@@ -34,9 +34,10 @@ use file_edit::FileEdit;
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
-use line::Line;
-use session::{ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, KEEP_ALIVE};
-use tasks::{TaskId, Tasks};
+use session::{
+    ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, TransferLine, KEEP_ALIVE,
+};
+use tasks::{Task, TaskId, Tasks};
 use tokio::sync::mpsc;
 use transfer::Conflict;
 use view::{AccountForm, Action, Focus, Modal, OptionsForm, TextBox, View};
@@ -132,7 +133,7 @@ async fn run(
     let mut disconnected: Option<Disconnect> = None;
     // `true` while the screen lags behind the state.
     let mut stale = false;
-    let (done_tx, mut done_rx) = mpsc::unbounded_channel();
+    let (lines_tx, mut lines_rx) = mpsc::unbounded_channel();
     let mut tasks = Tasks::new(client);
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -148,21 +149,24 @@ async fn run(
         let was_connected = disconnected.is_none();
         let mut happened = Bell::empty();
         tokio::select! {
-            // A finished file transfer.
-            Some(line) = done_rx.recv() => {
-                session.lines.push(line);
-                happened = Bell::TRANSFER;
-            }
+            // A file transfer that starts or ends.
+            Some(line) = lines_rx.recv() => match line {
+                TransferLine::Started(line) => session.lines.push(line),
+                TransferLine::Ended(line) => {
+                    session.lines.push(line);
+                    happened = Bell::TRANSFER;
+                }
+            },
             // A reply to a request.
             Some(step) = tasks.next() => step(session, &mut view, &mut tasks),
             // A moment while a task runs, to show its progress.
-            _ = tick.tick(), if !view.tasks.is_empty() => {}
+            _ = tick.tick(), if tasks.is_busy() || !view.tasks.is_empty() => {}
             // No traffic or keep-alive attempt for a while.
             () = tokio::time::sleep_until(keep_alive_due(last_keep_alive).into()),
                 if disconnected.is_none() =>
             {
                 if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {
-                    tasks.run(session.keep_alive(client));
+                    tasks.run(Task::unlisted(), session.keep_alive(client));
                     last_keep_alive = Instant::now();
                 }
             }
@@ -178,7 +182,7 @@ async fn run(
                     }
                     match session.apply_server_event(&tx) {
                         EventOutcome::NeedsAgreementAccept => {
-                            tasks.run(session.accept_agreement(client));
+                            tasks.run(Task::change("Logging in..."), session.accept_agreement(client));
                         }
                         EventOutcome::Disconnected(reason) => disconnected = Some(reason),
                         EventOutcome::Applied => {}
@@ -195,7 +199,10 @@ async fn run(
                         if matches!(session.mode, Mode::Agreement(_)) {
                             match key.code {
                                 KeyCode::Esc => should_quit = true,
-                                KeyCode::Enter => tasks.run(session.accept_agreement(client)),
+                                KeyCode::Enter => {
+                                    let request = session.accept_agreement(client);
+                                    tasks.run(Task::change("Logging in..."), request);
+                                }
                                 _ => {}
                             }
                             continue;
@@ -223,7 +230,7 @@ async fn run(
                     }
                     _ => Action::None,
                 };
-                should_quit = perform(action, session, &mut view, &mut tasks, &done_tx).await;
+                should_quit = perform(action, session, &mut view, &mut tasks, &lines_tx).await;
             }
         }
         view.set_tabs(ui::tab_labels(session));
@@ -270,13 +277,13 @@ fn ask(conflict: Option<Conflict>, _: &mut ClientSession, view: &mut View, _: &m
     open(view, conflict.map(Modal::ask));
 }
 
-/// Run `action`. A finished transfer sends its line to `done`. `true` means quit.
+/// Run `action`. A transfer sends its lines to `lines`. `true` means quit.
 async fn perform(
     action: Action,
     session: &mut ClientSession,
     view: &mut View,
     tasks: &mut Tasks,
-    done: &mpsc::UnboundedSender<Line>,
+    lines: &mpsc::UnboundedSender<TransferLine>,
 ) -> bool {
     let client = &tasks.client.clone();
     match action {
@@ -287,7 +294,8 @@ async fn perform(
             session.send_room_chat(client, chat_id, &text).await;
         }
         Action::InviteNewChat(user_id) => {
-            tasks.start(ClientSession::invite_new_chat(client, user_id), show_room);
+            let request = ClientSession::invite_new_chat(client, user_id);
+            tasks.start(Task::change("Opening private chat..."), request, show_room);
         }
         Action::PickInvitee(chat_id) => {
             let members = ui::tab_users(session, view::Tab::Room(chat_id));
@@ -307,7 +315,8 @@ async fn perform(
             session.invite_to_chat(client, chat_id, user_id).await;
         }
         Action::JoinChat(chat_id) => {
-            tasks.start(ClientSession::join_chat(client, chat_id), show_room)
+            let request = ClientSession::join_chat(client, chat_id);
+            tasks.start(Task::change("Joining private chat..."), request, show_room);
         }
         Action::RejectChatInvite(chat_id) => session.reject_chat_invite(client, chat_id).await,
         Action::LeaveChat(chat_id) => session.leave_chat(client, chat_id).await,
@@ -325,24 +334,38 @@ async fn perform(
             session.set_chat_subject(client, chat_id, &subject).await;
         }
         Action::SendInstantMsg { user_id, text } => {
-            tasks.run(ClientSession::send_instant_msg(client, user_id, &text));
+            let request = ClientSession::send_instant_msg(client, user_id, &text);
+            tasks.run(Task::change("Sending private message..."), request);
         }
         Action::GetClientInfoText(user_id) => {
             let request = ClientSession::get_client_info_text(client, user_id);
-            tasks.start(request, |info, _, view, _| {
-                open(view, info.map(Modal::Info))
+            let task = Task::read(format!("Get info for “{}”", session.user_name(user_id)));
+            tasks.start(task, request, |info, _, view, _| {
+                open(view, info.map(Modal::Info));
             });
         }
         Action::DisconnectUser { user_id, ban } => {
-            tasks.run(session.disconnect_user(client, user_id, ban));
+            let task = Task::change(format!("Disconnect user “{}”", session.user_name(user_id)));
+            tasks.run(task, session.disconnect_user(client, user_id, ban));
         }
-        Action::UserBroadcast(text) => tasks.run(ClientSession::user_broadcast(client, &text)),
+        Action::UserBroadcast(text) => {
+            let request = ClientSession::user_broadcast(client, &text);
+            tasks.run(Task::change("Broadcasting..."), request);
+        }
         Action::EditOptions => {
             view.modal = Some(Modal::Options(OptionsForm::edit(&session.user_info())));
         }
         Action::SetClientUserInfo(info) => session.set_client_user_info(client, info).await,
-        Action::GetMsgs => tasks.run(ClientSession::get_msgs(client)),
-        Action::OldPostNews(text) => tasks.run(ClientSession::old_post_news(client, &text)),
+        Action::GetMsgs => {
+            tasks.run(
+                Task::read("Transferring messages..."),
+                ClientSession::get_msgs(client),
+            );
+        }
+        Action::OldPostNews(text) => {
+            let request = ClientSession::old_post_news(client, &text);
+            tasks.run(Task::change("Posting message..."), request);
+        }
         Action::ListFiles => list_files(tasks, session.file_path.clone()),
         Action::OpenFolder(name) => list_files(tasks, session.child_folder(&name)),
         Action::ParentFolder => {
@@ -355,34 +378,46 @@ async fn perform(
             save_as,
             start,
         } => {
+            let task = Task::transfer(format!("Downloading “{name}”"));
+            let request = session.download_file(client, &name, &save_as, start, lines);
+            tasks.start(task, request, ask);
+        }
+        Action::DownloadFolder { name, start } => {
+            let task = Task::transfer(format!("Downloading folder “{name}”"));
             tasks.start(
-                session.download_file(client, &name, &save_as, start, done),
+                task,
+                session.download_folder(client, &name, start, lines),
                 ask,
             );
         }
-        Action::DownloadFolder { name, start } => {
-            tasks.start(session.download_folder(client, &name, start, done), ask);
-        }
+        Action::CancelTask(TaskId::Request(id)) => tasks.cancel(id),
         Action::CancelTask(TaskId::Transfer(id)) => {
             tasks.forget(TaskId::Transfer(id));
-            tasks.run(session.cancel_transfer(client, id));
+            let request = session.cancel_transfer(client, id);
+            tasks.run(Task::unlisted(), request);
         }
         Action::Upload { path, start } => {
             let path = std::path::Path::new(&path);
-            tasks.start(session.upload(client, path, start, done), ask);
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let does = if path.is_dir() {
+                "Uploading folder"
+            } else {
+                "Uploading"
+            };
+            let task = Task::transfer(format!("{does} “{name}”"));
+            tasks.start(task, session.upload(client, path, start, lines), ask);
         }
         Action::AskFileEdit { edit, name } => match edit {
             FileEdit::Comment => {
-                tasks.start(
-                    session.get_file_info(client, &name),
-                    move |info, _, view, _| {
-                        let input = info.map(|info| info.comment.into());
-                        open(
-                            view,
-                            input.map(|input| Modal::FileEdit { edit, name, input }),
-                        );
-                    },
-                );
+                let task = Task::read(format!("Get info for file/folder “{name}”"));
+                let request = session.get_file_info(client, &name);
+                tasks.start(task, request, move |info, _, view, _| {
+                    let input = info.map(|info| info.comment.into());
+                    open(
+                        view,
+                        input.map(|input| Modal::FileEdit { edit, name, input }),
+                    );
+                });
             }
             FileEdit::NewFolder | FileEdit::Rename | FileEdit::Move | FileEdit::Alias => {
                 let input = match edit {
@@ -398,16 +433,38 @@ async fn perform(
             }
         },
         Action::EditFile { edit, name, text } => {
-            tasks.run(session.edit_file(client, edit, &name, &text));
-        }
-        Action::DeleteFile(name) => tasks.run(session.delete_file(client, &name)),
-        Action::GetFileInfo(name) => {
-            tasks.start(session.get_file_info(client, &name), |info, _, view, _| {
-                open(view, info.map(Modal::FileInfo));
+            let task = Task::change(match edit {
+                FileEdit::NewFolder => format!("Create folder “{text}”"),
+                FileEdit::Rename | FileEdit::Comment => {
+                    format!("Set info for file/folder “{name}”")
+                }
+                FileEdit::Move => format!("Move file/folder “{name}”"),
+                FileEdit::Alias => format!("Make alias of “{name}”"),
             });
+            tasks.run(task, session.edit_file(client, edit, &name, &text));
+        }
+        Action::DeleteFile(name) => {
+            let kind = if session.lists_folder(&name) {
+                "folder"
+            } else {
+                "file"
+            };
+            let task = Task::change(format!("Delete {kind} “{name}”"));
+            tasks.run(task, session.delete_file(client, &name));
+        }
+        Action::GetFileInfo(name) => {
+            let task = Task::read(format!("Get info for file/folder “{name}”"));
+            tasks.start(
+                task,
+                session.get_file_info(client, &name),
+                |info, _, view, _| {
+                    open(view, info.map(Modal::FileInfo));
+                },
+            );
         }
         Action::ListThreadedNews => {
             tasks.start(
+                Task::read("Listing root news bundle..."),
                 session.list_threaded_news(client),
                 |(), session, view, tasks| {
                     view.news_folders = TableState::default().with_selected(Some(0));
@@ -422,11 +479,20 @@ async fn perform(
         Action::OpenNewsFolder(index) => {
             match session.news_folders.as_ref().and_then(|f| f.get(index)) {
                 Some(node) if node.kind == NewsFolder::Category => view.focus = Focus::NewsThreads,
-                Some(_) => tasks.run(session.toggle_news_folder(client, index)),
+                Some(node) => {
+                    let task = Task::read(format!("Listing news bundle “{}”", node.name()));
+                    tasks.run(task, session.toggle_news_folder(client, index));
+                }
                 None => {}
             }
         }
-        Action::ExpandNewsFolder(index) => tasks.run(session.expand_news_folder(client, index)),
+        Action::ExpandNewsFolder(index) => {
+            let name = session
+                .news_name(NewsTarget::Folder(index))
+                .unwrap_or_default();
+            let task = Task::read(format!("Listing news bundle “{name}”"));
+            tasks.run(task, session.expand_news_folder(client, index));
+        }
         Action::CollapseNewsFolder(index) => {
             let expanded = session
                 .news_folders
@@ -443,12 +509,11 @@ async fn perform(
         Action::PreviewArticle(index) => preview_news_article(session, tasks, index),
         Action::OpenArticle(index) => {
             if let Some(summary) = session.news_threads.get(index).map(|t| t.summary.clone()) {
-                tasks.start(
-                    session.read_article(client, &summary),
-                    |article, _, view, _| {
-                        open(view, article.map(Modal::Article));
-                    },
-                );
+                let task = Task::read(format!("Getting news article “{}”", summary.title));
+                let request = session.read_article(client, &summary);
+                tasks.start(task, request, |article, _, view, _| {
+                    open(view, article.map(Modal::Article));
+                });
             }
         }
         Action::NewPost => {
@@ -467,6 +532,7 @@ async fn perform(
             text,
         } => {
             tasks.start(
+                Task::change(format!("Posting article {title}")),
                 session.post_article(client, parent_id, &title, &text),
                 |(), session, view, tasks| reselect_news_thread(session, view, tasks),
             );
@@ -483,7 +549,19 @@ async fn perform(
             });
         }
         Action::DeleteNewsItem(target) => {
+            let name = session.news_name(target).unwrap_or_default();
+            let label = match target {
+                NewsTarget::Folder(index) => {
+                    let folders = session.news_folders.as_deref().unwrap_or_default();
+                    match folders.get(index) {
+                        Some(node) => format!("Deleting news {} {name}", node.kind.label()),
+                        None => format!("Deleting {name}"),
+                    }
+                }
+                NewsTarget::Article(_) => format!("Deleting article {name}"),
+            };
             tasks.start(
+                Task::change(label),
                 session.delete_news_item(client, target),
                 move |(), session, view, tasks| match target {
                     NewsTarget::Folder(_) => reselect_news_folder(session, view, tasks),
@@ -495,7 +573,12 @@ async fn perform(
             let count = session.news_folders.as_ref().map_or(0, Vec::len);
             let index = view.news_folders.selected().filter(|&i| i < count);
             let path = index.and_then(|i| session.news_folder_path(i));
+            let task = Task::change(match kind {
+                NewsFolder::Bundle => format!("Create news bundle “{name}”"),
+                NewsFolder::Category => format!("Create news category “{name}”"),
+            });
             tasks.start(
+                task,
                 session.new_news_item(client, index, &name, kind),
                 move |(), session, view, tasks| {
                     if let Some(row) = path.and_then(|path| session.news_folder_row(&path)) {
@@ -506,7 +589,8 @@ async fn perform(
             );
         }
         Action::ListAccounts => {
-            tasks.start(session.list_accounts(client), |(), _, view, _| {
+            let task = Task::read("Transferring list of accounts...");
+            tasks.start(task, session.list_accounts(client), |(), _, view, _| {
                 view.accounts = ListState::default().with_selected(Some(0));
             });
         }
@@ -515,15 +599,18 @@ async fn perform(
             view.modal = account.map(|a| Modal::Account(AccountForm::edit(a)));
         }
         Action::OpenAccount(login) => {
-            tasks.start(
-                ClientSession::open_account(client, &login),
-                |account, _, view, _| {
-                    open(view, account.map(|a| Modal::Account(AccountForm::edit(&a))));
-                },
-            );
+            let task = Task::read(format!("Opening account “{login}”"));
+            let request = ClientSession::open_account(client, &login);
+            tasks.start(task, request, |account, _, view, _| {
+                open(view, account.map(|a| Modal::Account(AccountForm::edit(&a))));
+            });
         }
         Action::SaveAccount { old_login, account } => {
-            tasks.run(session.save_account(client, old_login, account));
+            let task = Task::change(match &old_login {
+                None => format!("Creating account “{}”", account.login),
+                Some(old) => format!("Modifying account “{old}”"),
+            });
+            tasks.run(task, session.save_account(client, old_login, account));
         }
         Action::AskDeleteAccount(index) => {
             let account = session.accounts.as_ref().and_then(|a| a.get(index));
@@ -531,15 +618,22 @@ async fn perform(
                 login: a.login.clone(),
             });
         }
-        Action::DeleteAccount(login) => tasks.run(session.delete_account(client, &login)),
+        Action::DeleteAccount(login) => {
+            let task = Task::change(format!("Deleting account “{login}”"));
+            tasks.run(task, session.delete_account(client, &login));
+        }
     }
     false
 }
 
 /// List the folder `path`, and select its first item.
 fn list_files(tasks: &mut Tasks, path: HlPath) {
+    let task = Task::read(match path.components.last() {
+        Some(name) => format!("Listing folder “{name}”"),
+        None => "Listing root folder...".into(),
+    });
     let request = ClientSession::get_file_name_list(&tasks.client, path);
-    tasks.start(request, |listed, _, view, _| {
+    tasks.start(task, request, |listed, _, view, _| {
         if listed {
             view.files = ListState::default().with_selected(Some(0));
         }
@@ -557,12 +651,16 @@ fn reselect_news_folder(session: &mut ClientSession, view: &mut View, tasks: &mu
         .min(count.saturating_sub(1));
     view.news_folders.select(Some(index));
     let category = session.news_category.clone();
+    let name = session
+        .news_name(NewsTarget::Folder(index))
+        .unwrap_or_default();
+    let task = Task::read(format!("Listing news category “{name}”"));
     let request = session.highlight_news_folder(&tasks.client, index);
-    tasks.start(request, move |(), session, view, tasks| {
+    tasks.start(task, request, move |(), session, view, tasks| {
         if session.news_category != category || session.news_category.is_none() {
             view.news = TableState::default().with_selected(Some(0));
             view.preview_scroll = 0;
-            tasks.run(session.preview_article(&tasks.client, 0));
+            preview_news_article(session, tasks, 0);
         }
     });
 }
@@ -581,8 +679,16 @@ fn reselect_news_thread(session: &mut ClientSession, view: &mut View, tasks: &mu
 /// Show thread `index` in the preview, and scroll to the top for a new article.
 fn preview_news_article(session: &mut ClientSession, tasks: &mut Tasks, index: usize) {
     let shown = session.news_preview.as_ref().map(|article| article.id);
+    let title = session
+        .news_threads
+        .get(index)
+        .map(|t| t.summary.title.clone());
+    let task = Task::read(format!(
+        "Getting news article “{}”",
+        title.unwrap_or_default()
+    ));
     let request = session.preview_article(&tasks.client, index);
-    tasks.start(request, move |(), session, view, _| {
+    tasks.start(task, request, move |(), session, view, _| {
         if session.news_preview.as_ref().map(|article| article.id) != shown {
             view.preview_scroll = 0;
         }

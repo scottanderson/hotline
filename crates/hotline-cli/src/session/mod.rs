@@ -34,6 +34,7 @@ pub use mode::Mode;
 pub use request::{Next, Request};
 use running::RunningTransfer;
 pub use threaded_news::{ArticleText, NewsFolder, NewsFolderNode, NewsTarget, NewsThread};
+pub use transfers::TransferLine;
 
 pub struct ClientSession {
     pub name: Box<str>,
@@ -75,6 +76,8 @@ pub struct ClientSession {
     transfers: Vec<RunningTransfer>,
     /// The ID of the last transfer kept in `transfers`.
     next_transfer_id: u64,
+    /// The error lines shown in the chat.
+    error_count: u64,
     /// This connection's active text encoding, shared with the client's codec.
     encoding: EncodingHandle,
 }
@@ -107,6 +110,7 @@ impl ClientSession {
             invites: VecDeque::new(),
             transfers: Vec::new(),
             next_transfer_id: 0,
+            error_count: 0,
             encoding,
         }
     }
@@ -141,7 +145,15 @@ impl ClientSession {
     }
 
     fn push(&mut self, text: impl Into<Box<str>>, kind: LineKind) {
+        if kind == LineKind::Error {
+            self.error_count = self.error_count.wrapping_add(1);
+        }
         self.lines.push(Line::new(text, kind));
+    }
+
+    /// The error lines shown in the chat so far.
+    pub const fn error_count(&self) -> u64 {
+        self.error_count
     }
 
     /// `true` if the server's version is `version` or later.

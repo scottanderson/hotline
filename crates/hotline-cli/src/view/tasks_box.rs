@@ -123,7 +123,7 @@ mod tests {
         };
         view.set_tasks(vec![
             row(TaskId::Transfer(1), true),
-            row(TaskId::Transfer(4), false),
+            row(TaskId::Request(4), false),
         ]);
         view
     }
@@ -168,7 +168,7 @@ mod tests {
         );
         let _ = press(&mut view, KeyCode::Down);
         let _ = press(&mut view, KeyCode::Down);
-        assert_eq!(view.selected_task().unwrap().id, TaskId::Transfer(4));
+        assert_eq!(view.selected_task().unwrap().id, TaskId::Request(4));
         let hint = view.tasks_hints()[1];
         assert!(!hint.on);
         assert_eq!(press(&mut view, KeyCode::Enter), Action::None);
@@ -180,11 +180,11 @@ mod tests {
         view.focus = Focus::Tasks;
         let _ = press(&mut view, KeyCode::Down);
         view.set_tasks(vec![
-            row(TaskId::Transfer(2), true),
+            row(TaskId::Request(2), true),
             row(TaskId::Transfer(1), true),
-            row(TaskId::Transfer(4), false),
+            row(TaskId::Request(4), false),
         ]);
-        assert_eq!(view.selected_task().unwrap().id, TaskId::Transfer(4));
+        assert_eq!(view.selected_task().unwrap().id, TaskId::Request(4));
 
         view.set_tasks(Vec::new());
         assert_eq!(view.focus, Focus::Input);
@@ -202,7 +202,7 @@ mod tests {
         };
         let _ = view.handle_mouse(mouse, &areas, &[], &[], Instant::now());
         assert_eq!(view.focus, Focus::Tasks);
-        assert_eq!(view.selected_task().unwrap().id, TaskId::Transfer(4));
+        assert_eq!(view.selected_task().unwrap().id, TaskId::Request(4));
     }
 
     #[test]
