@@ -537,6 +537,7 @@ impl HotlineClient {
         let item_count = u32_field(FieldId::FldrItemCount).unwrap_or_default();
         Ok(FolderDownload {
             item_count,
+            transfer_size: u32_field(FieldId::TransferSize).unwrap_or_default(),
             waiting_count: u32_field(FieldId::WaitingCount).unwrap_or_default(),
             reference: (item_count > 0).then(|| reference(&reply)).transpose()?,
             transfer_addr: self.transfer_addr()?,

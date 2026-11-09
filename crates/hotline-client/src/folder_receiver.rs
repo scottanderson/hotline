@@ -6,7 +6,7 @@ use hotline_proto::htxf::{FolderAction, FolderItemHeader};
 use hotline_proto::types;
 use hotline_proto::wire::VecWriter;
 use hotline_proto::Encoding;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::error::Result;
@@ -17,15 +17,15 @@ use crate::flat_file::read_flat_file;
 /// [`Self::resume_file`] for each file to keep. A file that is not received
 /// is skipped.
 #[derive(Debug)]
-pub struct FolderReceiver {
-    stream: Option<TcpStream>,
+pub struct FolderReceiver<S = TcpStream> {
+    stream: Option<S>,
     remaining: u32,
     encoding: &'static Encoding,
 }
 
-impl FolderReceiver {
+impl<S: AsyncRead + AsyncWrite + Unpin> FolderReceiver<S> {
     pub(crate) const fn new(
-        stream: Option<TcpStream>,
+        stream: Option<S>,
         remaining: u32,
         encoding: &'static Encoding,
     ) -> Self {

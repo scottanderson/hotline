@@ -3,6 +3,8 @@
 use std::net::SocketAddr;
 
 use hotline_proto::{Encoding, HtxfHeader, HtxfType};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
 
 use crate::client::open_transfer;
 use crate::error::Result;
@@ -15,6 +17,8 @@ use crate::folder_receiver::FolderReceiver;
 pub struct FolderDownload {
     /// The files and folders inside the folder, at every depth.
     pub item_count: u32,
+    /// The bytes that the transfer connection carries.
+    pub transfer_size: u32,
     /// The downloads ahead of this one in the server's queue.
     pub waiting_count: u32,
     /// `None` for an empty folder, which has no transfer.
@@ -34,6 +38,15 @@ impl FolderDownload {
     /// through the items. A queued download waits on the open connection
     /// until the server starts it.
     pub async fn open(self) -> Result<FolderReceiver> {
+        self.open_with(std::convert::identity).await
+    }
+
+    /// Open the `HTXF` connection, and read and write it through the stream
+    /// that `wrap` makes, such as one that counts the bytes.
+    pub async fn open_with<S>(self, wrap: impl FnOnce(TcpStream) -> S) -> Result<FolderReceiver<S>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         let Some(reference) = self.reference else {
             return Ok(FolderReceiver::new(None, 0, self.encoding));
         };
@@ -44,7 +57,7 @@ impl FolderDownload {
         };
         let stream = open_transfer(self.transfer_addr, header).await?;
         Ok(FolderReceiver::new(
-            Some(stream),
+            Some(wrap(stream)),
             self.item_count,
             self.encoding,
         ))

@@ -14,6 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
+use crate::transfer::file_size_text;
 use crate::view::{
     allows, contains, privileges, AccountForm, Focus, Hint, MenuItem, Modal, OptionsForm, Tab,
     TextBox, View, OPTIONS,
@@ -578,7 +579,11 @@ fn check_row(on: bool, label: &str) -> String {
 
 /// The lines of `info`: size, type and creator if sent, and comment.
 fn file_info_lines(info: &FileInfo) -> Vec<String> {
-    let size = format!("size:    {} ({} bytes)", size_text(info.size), info.size);
+    let size = format!(
+        "size:    {} ({} bytes)",
+        file_size_text(info.size.into()),
+        info.size
+    );
     let kind = info.type_text.iter().map(|t| format!("type:    {t}"));
     let creator = info.creator_text.iter().map(|c| format!("creator: {c}"));
     let comment = format!("comment: {}", text_encoding::from_wire_lines(&info.comment));
@@ -594,25 +599,8 @@ fn file_label(file: &FileNameWithInfo) -> String {
     if file.is_folder() {
         format!("{}/", file.name)
     } else {
-        format!("{}  {}", file.name, size_text(file.size))
+        format!("{}  {}", file.name, file_size_text(file.size.into()))
     }
-}
-
-/// `bytes` in B, KB, MB, or GB.
-fn size_text(bytes: u32) -> String {
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-    let mut size = f64::from(bytes) / 1024.0;
-    let mut unit = "KB";
-    for next in ["MB", "GB"] {
-        if size < 1024.0 {
-            break;
-        }
-        size /= 1024.0;
-        unit = next;
-    }
-    format!("{size:.1} {unit}")
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
@@ -1194,14 +1182,6 @@ mod tests {
     }
 
     #[test]
-    fn size_text_picks_the_largest_unit_under_1024() {
-        assert_eq!(size_text(512), "512 B");
-        assert_eq!(size_text(1536), "1.5 KB");
-        assert_eq!(size_text(3 * 1024 * 1024), "3.0 MB");
-        assert_eq!(size_text(u32::MAX), "4.0 GB");
-    }
-
-    #[test]
     fn file_info_lines_leave_out_what_the_server_does_not_send() {
         let info = FileInfo {
             name: "a.txt".into(),
@@ -1212,11 +1192,7 @@ mod tests {
         };
         assert_eq!(
             file_info_lines(&info),
-            [
-                "size:    2.0 KB (2048 bytes)",
-                "creator: ttxt",
-                "comment: hi"
-            ]
+            ["size:    2K (2048 bytes)", "creator: ttxt", "comment: hi"]
         );
     }
 

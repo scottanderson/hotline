@@ -743,14 +743,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn download_info_marks_its_download_queued() {
+    async fn download_info_shows_the_place_of_its_download() {
         let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let task = tokio::spawn(std::future::pending::<()>());
+        let progress = std::sync::Arc::new(running::Progress::default());
+        progress.set_reference(9);
         session.track(
             running::Kind::Download,
             "doom.wad",
-            Some(9),
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            progress,
             task.abort_handle(),
         );
         let info = test_support::push(
@@ -767,7 +768,7 @@ mod tests {
         );
         assert_eq!(
             &*session.running_transfers()[0].1,
-            "Downloading “doom.wad” (queued)"
+            "All downloads slots are full. “doom.wad” is number 2 in the server queue. Please wait..."
         );
         task.abort();
     }

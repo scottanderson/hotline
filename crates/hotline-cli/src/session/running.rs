@@ -1,16 +1,17 @@
-//! The transfers that run, and how to cancel one.
+//! The transfers that run, how far each is, and how to cancel one.
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use hotline_client::HotlineClient;
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::task::AbortHandle;
 
 use super::{ClientSession, Request};
 use crate::line::LineKind;
+use crate::transfer::size_text;
 
 /// The lowest server version that holds a queued download before its
 /// transfer starts.
@@ -20,6 +21,68 @@ const QUEUE_VERSION: u16 = 185;
 ///
 /// [`myTran_KillDownload`]: hotline_proto::Opcode::KillDownload
 const KILL_DOWNLOAD_VERSION: u16 = 182;
+
+/// How far a transfer is.
+#[derive(Debug, Default)]
+pub struct Progress {
+    /// The downloads ahead of this one in the server's queue.
+    waiting: AtomicU32,
+    bytes: AtomicU64,
+    /// The bytes of the whole transfer, `0` if unknown.
+    total: AtomicU64,
+    items: AtomicU32,
+    /// The items of a folder transfer, `0` for a file.
+    item_count: AtomicU32,
+    /// The server's reference of a download.
+    reference: OnceLock<u32>,
+}
+
+impl Progress {
+    /// Set the size: `total` bytes, of which the first `offset` are there.
+    pub(super) fn set_size(&self, offset: u64, total: u64) {
+        self.bytes.store(offset, Ordering::Relaxed);
+        self.total.store(total, Ordering::Relaxed);
+    }
+
+    /// Set the number of items of a folder transfer.
+    pub(super) fn set_item_count(&self, count: u32) {
+        self.item_count.store(count, Ordering::Relaxed);
+    }
+
+    /// Keep the server's reference of a download.
+    pub(super) fn set_reference(&self, reference: u32) {
+        let _ = self.reference.set(reference);
+    }
+
+    /// Count one more item of a folder transfer.
+    pub(super) fn add_item(&self) {
+        self.items.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Note that `waiting` downloads are ahead of this one in the server's queue.
+    pub(super) fn set_waiting(&self, waiting: u32) {
+        self.waiting.store(waiting, Ordering::Relaxed);
+    }
+
+    /// Count `n` bytes that moved. The first bytes end the wait in the queue.
+    fn count(&self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        self.waiting.store(0, Ordering::Relaxed);
+        self.bytes.fetch_add(n as u64, Ordering::Relaxed);
+    }
+
+    /// The bytes, such as `1.5M/2M`. `None` before any size is known.
+    fn sizes(&self) -> Option<String> {
+        let bytes = self.bytes.load(Ordering::Relaxed);
+        match self.total.load(Ordering::Relaxed) {
+            0 if bytes == 0 => None,
+            0 => Some(size_text(bytes)),
+            total => Some(format!("{}/{}", size_text(bytes), size_text(total))),
+        }
+    }
+}
 
 /// What a transfer moves, and which way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,20 +114,14 @@ pub struct RunningTransfer {
     id: u64,
     kind: Kind,
     name: Box<str>,
-    /// The server's reference of a download, `None` for an upload or an
-    /// empty folder.
-    reference: Option<u32>,
-    /// `true` while the server holds the download in its queue.
-    queued: Arc<AtomicBool>,
+    progress: Arc<Progress>,
     task: AbortHandle,
 }
 
 impl ClientSession {
-    /// A flag that is `true` while a download waits in the server's queue
-    /// behind `waiting_count` others.
-    pub(super) fn queued_flag(&self, waiting_count: u32) -> Arc<AtomicBool> {
-        let queued = waiting_count > 0 && self.server_at_least(QUEUE_VERSION);
-        Arc::new(AtomicBool::new(queued))
+    /// `true` if the server holds a queued download before its transfer starts.
+    pub(super) fn server_queues(&self) -> bool {
+        self.server_at_least(QUEUE_VERSION)
     }
 
     /// Keep the transfer of `name` that runs on `task`.
@@ -72,8 +129,7 @@ impl ClientSession {
         &mut self,
         kind: Kind,
         name: &str,
-        reference: Option<u32>,
-        queued: Arc<AtomicBool>,
+        progress: Arc<Progress>,
         task: AbortHandle,
     ) {
         self.next_transfer_id = self.next_transfer_id.wrapping_add(1);
@@ -81,8 +137,7 @@ impl ClientSession {
             id: self.next_transfer_id,
             kind,
             name: name.into(),
-            reference,
-            queued,
+            progress,
             task,
         });
     }
@@ -93,8 +148,8 @@ impl ClientSession {
         let download = self
             .transfers
             .iter()
-            .find(|t| t.kind.is_download() && t.reference == Some(reference))?;
-        download.queued.store(waiting > 0, Ordering::Relaxed);
+            .find(|t| t.kind.is_download() && t.progress.reference.get() == Some(&reference))?;
+        download.progress.set_waiting(waiting);
         Some(download.name.clone())
     }
 
@@ -107,9 +162,23 @@ impl ClientSession {
         self.transfers
             .iter()
             .map(|t| {
+                let progress = &t.progress;
+                let waiting = progress.waiting.load(Ordering::Relaxed);
                 let mut label = format!("{} “{}”", t.kind.does(), t.name);
-                if t.queued.load(Ordering::Relaxed) {
-                    label.push_str(" (queued)");
+                if waiting > 0 {
+                    label = format!(
+                        "All downloads slots are full. “{}” is number {waiting} in the server queue. Please wait...",
+                        t.name
+                    );
+                } else {
+                    if let Some(sizes) = progress.sizes() {
+                        label.push_str(&format!(" ({sizes})"));
+                    }
+                    let count = progress.item_count.load(Ordering::Relaxed);
+                    if count > 0 {
+                        let items = progress.items.load(Ordering::Relaxed).min(count);
+                        label.push_str(&format!(" [{items} of {count}]"));
+                    }
                 }
                 (t.id, label.into())
             })
@@ -133,9 +202,9 @@ impl ClientSession {
             self.push(text, LineKind::System);
             return Request::ready(());
         }
-        let in_queue = transfer.queued.load(Ordering::Relaxed);
+        let in_queue = transfer.progress.waiting.load(Ordering::Relaxed) > 0;
         let kill = in_queue && self.server_at_least(KILL_DOWNLOAD_VERSION);
-        let reference = transfer.reference.filter(|_| kill);
+        let reference = transfer.progress.reference.get().copied().filter(|_| kill);
         let client = client.clone();
         let failed = format!("failed to cancel {}", transfer.name);
         Request::report(
@@ -154,26 +223,52 @@ impl ClientSession {
     }
 }
 
-/// A writer that clears its download's queued flag on the first write.
-pub(super) struct FirstWrite<W> {
-    inner: W,
-    queued: Arc<AtomicBool>,
+/// The way of a stream that [`Counted`] counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Reads,
+    Writes,
 }
 
-impl<W> FirstWrite<W> {
-    pub(super) const fn new(inner: W, queued: Arc<AtomicBool>) -> Self {
-        Self { inner, queued }
+/// A stream that counts the bytes of one side in a [`Progress`]. The
+/// first bytes also end the wait in the server's queue.
+pub(super) struct Counted<T> {
+    inner: T,
+    progress: Arc<Progress>,
+    side: Side,
+}
+
+impl<T> Counted<T> {
+    /// Count the bytes that `inner` reads.
+    pub(super) const fn reads(inner: T, progress: Arc<Progress>) -> Self {
+        Self {
+            inner,
+            progress,
+            side: Side::Reads,
+        }
+    }
+
+    /// Count the bytes that `inner` writes.
+    pub(super) const fn writes(inner: T, progress: Arc<Progress>) -> Self {
+        Self {
+            inner,
+            progress,
+            side: Side::Writes,
+        }
     }
 }
 
-impl<W: AsyncWrite + Unpin> AsyncWrite for FirstWrite<W> {
+impl<W: AsyncWrite + Unpin> AsyncWrite for Counted<W> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        self.queued.store(false, Ordering::Relaxed);
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+        let written = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if let (Side::Writes, Poll::Ready(Ok(n))) = (self.side, &written) {
+            self.progress.count(*n);
+        }
+        written
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
@@ -185,6 +280,22 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for FirstWrite<W> {
     }
 }
 
+impl<R: AsyncRead + Unpin> AsyncRead for Counted<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let read = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if self.side == Side::Reads {
+            self.progress
+                .count(buf.filled().len().saturating_sub(before));
+        }
+        read
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hotline_proto::types::HlPath;
@@ -193,6 +304,13 @@ mod tests {
     use super::*;
     use crate::session::test_support;
     use crate::transfer::Start;
+
+    /// Track a transfer that never ends.
+    fn track(session: &mut ClientSession, kind: Kind, progress: Arc<Progress>) -> AbortHandle {
+        let task = tokio::spawn(std::future::pending::<()>()).abort_handle();
+        session.track(kind, "f", progress, task.clone());
+        task
+    }
 
     #[tokio::test]
     async fn cancel_transfer_takes_a_queued_download_out_of_the_queue() {
@@ -221,7 +339,13 @@ mod tests {
             .run(&mut session)
             .await;
         let running = session.running_transfers();
-        assert_eq!(running, [(1, "Downloading “a.txt” (queued)".into())]);
+        assert_eq!(
+            running,
+            [(
+                1,
+                "All downloads slots are full. “a.txt” is number 1 in the server queue. Please wait...".into()
+            )]
+        );
 
         session.cancel_transfer(&client, 1).run(&mut session).await;
         assert_eq!(
@@ -238,8 +362,7 @@ mod tests {
         let addr = test_support::start_server(Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let mut session = ClientSession::new("me", 0, client.encoding());
-        let task = tokio::spawn(std::future::pending::<()>()).abort_handle();
-        session.track(Kind::Upload, "f", None, Arc::default(), task.clone());
+        let task = track(&mut session, Kind::Upload, Arc::default());
 
         session.cancel_transfer(&client, 1).run(&mut session).await;
         assert_eq!(
@@ -249,5 +372,41 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(task.is_finished());
         assert!(session.running_transfers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn running_transfers_shows_the_bytes_of_a_known_size() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let progress = Arc::new(Progress::default());
+        progress.set_size(25, 100);
+        let _ = track(&mut session, Kind::Upload, progress);
+        assert_eq!(&*session.running_transfers()[0].1, "Uploading “f” (25/100)");
+    }
+
+    #[tokio::test]
+    async fn running_transfers_counts_the_items_of_a_folder() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let progress = Arc::new(Progress::default());
+        progress.set_item_count(2);
+        progress.add_item();
+        let _ = track(&mut session, Kind::UploadFolder, progress);
+        assert_eq!(
+            session.running_transfers(),
+            [(1, "Uploading folder “f” [1 of 2]".into())]
+        );
+    }
+
+    #[test]
+    fn sizes_give_the_bytes_and_the_total() {
+        let progress = Progress::default();
+        progress.set_size(1024, 10 * 1024);
+        assert_eq!(progress.sizes().unwrap(), "1K/10K");
+        progress.count(2048);
+        assert_eq!(progress.sizes().unwrap(), "3K/10K");
+    }
+
+    #[test]
+    fn sizes_wait_for_a_size() {
+        assert_eq!(Progress::default().sizes(), None);
     }
 }

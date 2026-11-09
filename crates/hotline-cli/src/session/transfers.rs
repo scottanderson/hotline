@@ -2,7 +2,6 @@
 
 use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -14,7 +13,7 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::running::{FirstWrite, Kind};
+use super::running::{Counted, Kind, Progress};
 use super::{ClientSession, Request};
 use crate::line::{Line, LineKind};
 use crate::transfer::{Conflict, Start};
@@ -84,9 +83,13 @@ impl ClientSession {
                 let from = from_text(offset);
                 session.push(format!("downloading {name}{from}{queue}"), LineKind::System);
 
-                let queued = session.queued_flag(download.waiting_count);
-                let reference = Some(download.reference());
-                let mut out = FirstWrite::new(BufWriter::new(file), queued.clone());
+                let progress = Arc::new(Progress::default());
+                progress.set_size(offset.into(), download.file_size.into());
+                progress.set_reference(download.reference());
+                if session.server_queues() {
+                    progress.set_waiting(download.waiting_count);
+                }
+                let mut out = Counted::writes(BufWriter::new(file), progress.clone());
                 let task_name = name.clone();
                 let task = tokio::spawn(async move {
                     let name = task_name;
@@ -104,13 +107,7 @@ impl ClientSession {
                     };
                     let _ = done.send(line);
                 });
-                session.track(
-                    Kind::Download,
-                    &name,
-                    reference,
-                    queued,
-                    task.abort_handle(),
-                );
+                session.track(Kind::Download, &name, progress, task.abort_handle());
                 None
             }
         })
@@ -173,13 +170,19 @@ impl ClientSession {
                     LineKind::System,
                 );
 
-                let queued = session.queued_flag(download.waiting_count);
-                let reference = download.reference();
-                let task_queued = queued.clone();
+                let progress = Arc::new(Progress::default());
+                progress.set_item_count(items);
+                if let Some(reference) = download.reference() {
+                    progress.set_reference(reference);
+                }
+                if session.server_queues() {
+                    progress.set_waiting(download.waiting_count);
+                }
+                let task_progress = progress.clone();
                 let task_name = name.clone();
                 let task = tokio::spawn(async move {
                     let name = task_name;
-                    let line = match receive_folder(download, &root, start, &task_queued).await {
+                    let line = match receive_folder(download, &root, start, &task_progress).await {
                         Ok((files, bytes)) => Line::system(format!(
                             "downloaded {name} ({files} files, {bytes} bytes) to {}",
                             root.display()
@@ -188,13 +191,7 @@ impl ClientSession {
                     };
                     let _ = done.send(line);
                 });
-                session.track(
-                    Kind::DownloadFolder,
-                    &name,
-                    reference,
-                    queued,
-                    task.abort_handle(),
-                );
+                session.track(Kind::DownloadFolder, &name, progress, task.abort_handle());
                 None
             }
         })
@@ -242,6 +239,8 @@ impl ClientSession {
         let done = done.clone();
         Request::new(async move {
             let conflict_local = || local.to_string_lossy().into();
+            let progress = Arc::new(Progress::default());
+            let task_progress = progress.clone();
             let started = match tokio::fs::metadata(&local).await {
                 Ok(metadata) if metadata.is_dir() => {
                     if !access.contains(Access::UPLOAD_FOLDER) {
@@ -250,7 +249,14 @@ impl ClientSession {
                         let local = conflict_local();
                         Err(Stop::Ask(Conflict::RemoteFolderExists { local }))
                     } else {
-                        let upload = start_folder_upload(&client, &path, &local, &name, start);
+                        let upload = start_folder_upload(
+                            &client,
+                            &path,
+                            &local,
+                            &name,
+                            start,
+                            task_progress,
+                        );
                         upload.await.map(|upload| (Kind::UploadFolder, upload))
                     }
                 }
@@ -261,7 +267,8 @@ impl ClientSession {
                         let local = conflict_local();
                         Err(Stop::Ask(Conflict::PartialUpload { local }))
                     } else {
-                        let upload = start_file_upload(&client, &path, &local, &name, start);
+                        let upload =
+                            start_file_upload(&client, &path, &local, &name, start, task_progress);
                         upload.await.map(|upload| (Kind::Upload, upload))
                     }
                 }
@@ -276,8 +283,7 @@ impl ClientSession {
                 let task = tokio::spawn(async move {
                     let _ = done.send(upload.await);
                 });
-                let queued = Arc::default();
-                session.track(kind, &name, None, queued, task.abort_handle());
+                session.track(kind, &name, progress, task.abort_handle());
                 None
             }
         })
@@ -306,6 +312,7 @@ async fn start_file_upload(
     local: &Path,
     name: &str,
     start: Start,
+    progress: Arc<Progress>,
 ) -> Result<Upload, Stop> {
     let cannot_read =
         |e: std::io::Error| Stop::Fail(format!("cannot read {}: {e}", local.display()));
@@ -323,8 +330,10 @@ async fn start_file_upload(
     let from = from_text(offset);
     let name = name.to_string();
     let text = format!("uploading {name}{from}");
+    progress.set_size(offset.into(), size);
+    let mut data = Counted::reads(BufReader::new(file), progress);
     let transfer = async move {
-        match upload.send(&mut BufReader::new(file)).await {
+        match upload.send(&mut data).await {
             Ok(bytes) => Line::system(format!("uploaded {name} ({bytes} bytes)")),
             Err(e) => Line::error(format!("failed to upload {name}: {e}")),
         }
@@ -342,6 +351,7 @@ async fn start_folder_upload(
     local: &Path,
     name: &str,
     start: Start,
+    progress: Arc<Progress>,
 ) -> Result<Upload, Stop> {
     let root = local.to_path_buf();
     let items = tokio::task::spawn_blocking(move || walk_local(&root))
@@ -362,8 +372,10 @@ async fn start_folder_upload(
         .map_err(|e| Stop::Fail(format!("failed to upload {name}: {e}")))?;
     let name = name.to_string();
     let text = format!("uploading {name} ({item_count} items)");
+    progress.set_item_count(item_count);
+    progress.set_size(0, total_size);
     let transfer = async move {
-        match send_folder(upload, items).await {
+        match send_folder(upload, items, &progress).await {
             Ok((files, bytes)) => {
                 Line::system(format!("uploaded {name} ({files} files, {bytes} bytes)"))
             }
@@ -375,18 +387,20 @@ async fn start_folder_upload(
 
 /// Save each item of `download` under the local folder `root`. With
 /// [`Start::Resume`], a file that is there is skipped and a `.hpf` file is
-/// continued. The first item clears `queued`. Returns the number of files
-/// and bytes saved.
+/// continued. Each item and each byte of the connection counts in
+/// `progress`. Returns the number of files and bytes saved.
 async fn receive_folder(
     download: FolderDownload,
     root: &Path,
     start: Start,
-    queued: &AtomicBool,
+    progress: &Arc<Progress>,
 ) -> anyhow::Result<(u32, u64)> {
-    let mut receiver = download.open().await?;
+    let mut receiver = download
+        .open_with(|stream| Counted::reads(stream, progress.clone()))
+        .await?;
     let (mut files, mut bytes) = (0_u32, 0_u64);
     while let Some(item) = receiver.next_item().await? {
-        queued.store(false, Ordering::Relaxed);
+        progress.add_item();
         let local = item
             .path
             .components
@@ -482,8 +496,13 @@ fn walk_local(root: &Path) -> std::io::Result<Vec<LocalItem>> {
     Ok(items)
 }
 
-/// Send `items` on `upload`. Returns the number of files and bytes sent.
-async fn send_folder(upload: FolderUpload, items: Vec<LocalItem>) -> anyhow::Result<(u32, u64)> {
+/// Send `items` on `upload`. Each item counts in `progress`. Returns the
+/// number of files and bytes sent.
+async fn send_folder(
+    upload: FolderUpload,
+    items: Vec<LocalItem>,
+    progress: &Arc<Progress>,
+) -> anyhow::Result<(u32, u64)> {
     let Some(mut sender) = upload.open().await? else {
         return Ok((0, 0));
     };
@@ -494,10 +513,11 @@ async fn send_folder(upload: FolderUpload, items: Vec<LocalItem>) -> anyhow::Res
             path: HlPath::new(item.path),
         };
         let offset = sender.send_item(&header).await?;
+        progress.add_item();
         if let (Some(offset), Some((local, size))) = (offset, item.file) {
             let mut file = File::open(&local).await?;
             file.seek(SeekFrom::Start(offset)).await?;
-            let mut data = BufReader::new(file);
+            let mut data = Counted::reads(BufReader::new(file), progress.clone());
             let sent = sender
                 .send_file(&mut data, size.saturating_sub(offset))
                 .await?;
