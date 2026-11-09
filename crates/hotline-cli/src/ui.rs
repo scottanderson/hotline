@@ -30,6 +30,8 @@ pub struct Areas {
     pub body: Rect,
     pub input: Rect,
     pub users: Rect,
+    /// The tasks box under the user list.
+    pub tasks: Rect,
     pub hints: Rect,
 }
 
@@ -72,11 +74,22 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
     rows
 }
 
+/// The most lines the tasks box shows before it scrolls.
+const MAX_TASK_LINES: usize = 5;
+
 /// `input` is the text in the input line, which grows to fit it. With `None`,
 /// the input line has no rows. The hint line grows to fit `hints`. Without
-/// `users`, the user list has no columns. Without `rooms`, the room row has
-/// no rows.
-pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool, rooms: bool) -> Areas {
+/// `rooms`, the room row has no rows. The right column shows with `users`
+/// or a task. Under the user list, the tasks box grows to fit `task_lines`,
+/// and has none for `0`. Without the user list, it fills the column.
+pub fn areas(
+    screen: Rect,
+    input: Option<&str>,
+    hints: &[Hint],
+    users: bool,
+    rooms: bool,
+    task_lines: usize,
+) -> Areas {
     let hint_rows = hint_rows(hints, screen.width).len() as u16;
     let [tabs, rooms, middle, hints] = screen.layout(&Layout::vertical([
         Constraint::Length(1),
@@ -84,10 +97,25 @@ pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool, roo
         Constraint::Min(6),
         Constraint::Length(hint_rows),
     ]));
-    let [left, users] = middle.layout(&Layout::horizontal([
+    let [left, right] = middle.layout(&Layout::horizontal([
         Constraint::Min(20),
-        Constraint::Length(if users { 24 } else { 0 }),
+        Constraint::Length(if users || task_lines > 0 { 24 } else { 0 }),
     ]));
+    let task_rows = match task_lines {
+        0 => 0,
+        n => (n.min(MAX_TASK_LINES) as u16).saturating_add(2),
+    };
+    let [users, tasks] = if users {
+        right.layout(&Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length(task_rows),
+        ]))
+    } else {
+        right.layout(&Layout::vertical([
+            Constraint::Length(0),
+            Constraint::Fill(1),
+        ]))
+    };
     let [body, input] = left.layout(&Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(input.map_or(0, |text| input_rows(text).saturating_add(2))),
@@ -99,6 +127,7 @@ pub fn areas(screen: Rect, input: Option<&str>, hints: &[Hint], users: bool, roo
         body,
         input,
         users,
+        tasks,
         hints,
     }
 }
@@ -251,6 +280,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         &hints,
         view.shows_users(),
         !room_row.is_empty(),
+        view.task_lines(),
     );
     draw_tabs(frame, areas.tabs, view, view.bar_tabs(), true);
     draw_tabs(frame, areas.rooms, view, &room_row, false);
@@ -274,6 +304,9 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     draw_input(frame, areas.input, view);
     if view.shows_users() {
         draw_users(frame, areas.users, session, view);
+    }
+    if view.shows_tasks() {
+        draw_tasks(frame, areas.tasks, view);
     }
     draw_hints(frame, areas.hints, view, &hints);
     if let Some(modal) = &view.modal {
@@ -686,12 +719,32 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
     view.users_offset = state.offset();
 }
 
+/// Draw the tasks box.
+fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
+    let items: Vec<ListItem> = view
+        .tasks
+        .iter()
+        .map(|row| ListItem::new(&*row.label))
+        .collect();
+    let focused = view.focus == Focus::Tasks;
+    let title = format!("tasks ({})", view.tasks.len());
+    let list = List::new(items)
+        .block(Block::bordered().border_style(border(focused)).title(title))
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let selected = view.selected_task().map(|_| view.task_selected());
+    let mut state = ListState::default()
+        .with_offset(view.tasks_offset)
+        .with_selected(selected.filter(|_| focused));
+    frame.render_stateful_widget(list, area, &mut state);
+    view.tasks_offset = state.offset();
+}
+
 fn draw_hints(frame: &mut Frame, area: Rect, view: &View, hints: &[Hint]) {
     let lines: Vec<UiLine> = hint_rows(hints, area.width)
         .into_iter()
         .map(|row| {
             let spans = row.iter().flat_map(|hint| {
-                let style = enabled_style(allows(view.access, hint.enabled_by));
+                let style = enabled_style(hint.on && allows(view.access, hint.enabled_by));
                 [
                     Span::styled(hint.key, style.add_modifier(Modifier::BOLD)),
                     Span::styled(format!(" {}  ", hint.does), style),
@@ -764,18 +817,6 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
             );
             let items = users.iter().map(|(_, name)| ListItem::new(&**name));
             draw_list_modal(frame, area, modal_block("invite to chat"), items, *selected);
-        }
-        Modal::PickTransfer {
-            transfers,
-            selected,
-        } => {
-            let area = screen.centered(
-                Constraint::Length(50),
-                Constraint::Length(list_height(transfers.len())),
-            );
-            let items = transfers.iter().map(|(_, label)| ListItem::new(&**label));
-            let block = modal_block("cancel a transfer");
-            draw_list_modal(frame, area, block, items, *selected);
         }
         Modal::Palette(palette) => {
             let rows: Vec<ListItem> = palette

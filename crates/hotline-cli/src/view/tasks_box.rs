@@ -1,0 +1,228 @@
+//! The tasks box in the right column.
+
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::Rect;
+
+use super::{contains, row_at, Action, Focus, Hint, View};
+use crate::tasks::TaskRow;
+use crate::ui;
+
+impl View {
+    /// Show `rows` in the tasks box. The selection stays on its task. With
+    /// no task, the focus leaves the box.
+    pub fn set_tasks(&mut self, rows: Vec<TaskRow>) {
+        let id = self.selected_task().map(|row| row.id);
+        self.task_selected = id
+            .and_then(|id| rows.iter().position(|row| row.id == id))
+            .unwrap_or(self.task_selected)
+            .min(rows.len().saturating_sub(1));
+        self.tasks = rows;
+        if self.focus == Focus::Tasks && !self.shows_tasks() {
+            self.focus = Focus::main(self.tab);
+        }
+    }
+
+    /// `true` while a task runs, which shows the tasks box.
+    pub const fn shows_tasks(&self) -> bool {
+        !self.tasks.is_empty()
+    }
+
+    /// The lines of all the rows of the tasks box, one for each row.
+    pub const fn task_lines(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// The selected row of the tasks box.
+    pub fn selected_task(&self) -> Option<&TaskRow> {
+        self.tasks.get(self.task_selected)
+    }
+
+    /// The index of the selected row of the tasks box.
+    pub const fn task_selected(&self) -> usize {
+        self.task_selected
+    }
+
+    /// The row of the tasks box at `x`, `y`.
+    pub(super) fn task_at(&self, list: Rect, x: u16, y: u16) -> Option<usize> {
+        let inner = ui::inner(list);
+        if !self.shows_tasks() || !contains(inner, x, y) {
+            return None;
+        }
+        row_at(
+            self.tasks_offset,
+            y.saturating_sub(inner.y),
+            self.tasks.len(),
+        )
+    }
+
+    pub(super) fn tasks_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Tab | KeyCode::Esc => self.focus = Focus::main(self.tab),
+            KeyCode::Up => self.task_selected = self.task_selected.saturating_sub(1),
+            KeyCode::Down => {
+                self.task_selected = self
+                    .task_selected
+                    .saturating_add(1)
+                    .min(self.tasks.len().saturating_sub(1));
+            }
+            KeyCode::Enter => {
+                if let Some(row) = self.selected_task().filter(|row| row.cancellable) {
+                    return Action::CancelTask(row.id);
+                }
+            }
+            _ => {}
+        }
+        Action::None
+    }
+
+    /// The keys of the tasks box.
+    pub(super) fn tasks_hints(&self) -> Vec<Hint> {
+        let cancellable = self.selected_task().is_some_and(|row| row.cancellable);
+        let main = self.main_name();
+        vec![
+            Hint::new("↑↓", "select"),
+            Hint::new("Enter", "cancel").only_if(cancellable),
+            Hint::new("Tab", main),
+            Hint::new("Esc", main),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use hotline_proto::Access;
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    use super::*;
+    use crate::tasks::TaskId;
+    use crate::view::Tab;
+
+    fn row(id: TaskId, cancellable: bool) -> TaskRow {
+        TaskRow {
+            id,
+            label: "a task".into(),
+            cancellable,
+        }
+    }
+
+    fn press(view: &mut View, code: KeyCode) -> Action {
+        view.handle_key(KeyEvent::from(code), &[], &[])
+    }
+
+    fn alt_j(view: &mut View) -> Action {
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
+        view.handle_key(key, &[], &[])
+    }
+
+    fn view_with_tasks() -> View {
+        let mut view = View {
+            access: Access::all(),
+            ..View::default()
+        };
+        view.set_tasks(vec![
+            row(TaskId::Transfer(1), true),
+            row(TaskId::Transfer(4), false),
+        ]);
+        view
+    }
+
+    #[test]
+    fn alt_j_focuses_the_tasks_box_only_while_it_shows() {
+        let mut view = View::default();
+        let _ = alt_j(&mut view);
+        assert_eq!(view.focus, Focus::Input);
+
+        let mut view = view_with_tasks();
+        let _ = alt_j(&mut view);
+        assert_eq!(view.focus, Focus::Tasks);
+        let _ = press(&mut view, KeyCode::Esc);
+        assert_eq!(view.focus, Focus::Input);
+    }
+
+    #[test]
+    fn tab_goes_from_the_user_list_to_the_tasks_box() {
+        let mut view = View {
+            focus: Focus::Users,
+            ..View::default()
+        };
+        let _ = press(&mut view, KeyCode::Tab);
+        assert_eq!(view.focus, Focus::Input);
+
+        let mut view = view_with_tasks();
+        view.focus = Focus::Users;
+        let _ = press(&mut view, KeyCode::Tab);
+        assert_eq!(view.focus, Focus::Tasks);
+        let _ = press(&mut view, KeyCode::Tab);
+        assert_eq!(view.focus, Focus::Input);
+    }
+
+    #[test]
+    fn enter_cancels_only_a_task_that_can_stop() {
+        let mut view = view_with_tasks();
+        view.focus = Focus::Tasks;
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Action::CancelTask(TaskId::Transfer(1))
+        );
+        let _ = press(&mut view, KeyCode::Down);
+        let _ = press(&mut view, KeyCode::Down);
+        assert_eq!(view.selected_task().unwrap().id, TaskId::Transfer(4));
+        let hint = view.tasks_hints()[1];
+        assert!(!hint.on);
+        assert_eq!(press(&mut view, KeyCode::Enter), Action::None);
+    }
+
+    #[test]
+    fn set_tasks_keeps_the_selected_task_and_frees_the_focus() {
+        let mut view = view_with_tasks();
+        view.focus = Focus::Tasks;
+        let _ = press(&mut view, KeyCode::Down);
+        view.set_tasks(vec![
+            row(TaskId::Transfer(2), true),
+            row(TaskId::Transfer(1), true),
+            row(TaskId::Transfer(4), false),
+        ]);
+        assert_eq!(view.selected_task().unwrap().id, TaskId::Transfer(4));
+
+        view.set_tasks(Vec::new());
+        assert_eq!(view.focus, Focus::Input);
+    }
+
+    #[test]
+    fn a_click_on_a_task_selects_it_and_focuses_the_box() {
+        let mut view = view_with_tasks();
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, false, 2);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: areas.tasks.x + 1,
+            row: areas.tasks.y + 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        let _ = view.handle_mouse(mouse, &areas, &[], &[], Instant::now());
+        assert_eq!(view.focus, Focus::Tasks);
+        assert_eq!(view.selected_task().unwrap().id, TaskId::Transfer(4));
+    }
+
+    #[test]
+    fn the_tasks_box_fills_the_right_column_without_the_user_list() {
+        let mut view = view_with_tasks();
+        view.tab = Tab::Threaded;
+        assert!(!view.shows_users());
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], false, false, 2);
+        assert_eq!(areas.users.height, 0);
+        assert_eq!(areas.tasks.height, areas.body.height);
+    }
+
+    #[test]
+    fn tab_from_the_news_preview_moves_to_the_tasks_box() {
+        let mut view = view_with_tasks();
+        view.tab = Tab::Threaded;
+        view.focus = Focus::NewsPreview;
+        let _ = press(&mut view, KeyCode::Tab);
+        assert_eq!(view.focus, Focus::Tasks);
+        let _ = press(&mut view, KeyCode::Tab);
+        assert_eq!(view.focus, Focus::NewsFolders);
+    }
+}

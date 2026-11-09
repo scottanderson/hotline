@@ -9,7 +9,8 @@ pub enum Command {
     OpenTab(Tab),
     Broadcast,
     Options,
-    CancelTransfer,
+    /// Focus the tasks box.
+    Tasks,
     /// Invite a user to the room `chat_id`.
     Invite(u32),
     /// Set the subject of the room `chat_id`.
@@ -31,7 +32,7 @@ impl Command {
             }
             Self::Broadcast => "Broadcast".into(),
             Self::Options => "Options".into(),
-            Self::CancelTransfer => "Cancel a transfer".into(),
+            Self::Tasks => "Show the tasks".into(),
             Self::Invite(_) => "Invite to this room".into(),
             Self::Subject(_) => "Set the room subject".into(),
             Self::Leave(_) => "Leave this room".into(),
@@ -45,6 +46,7 @@ impl Command {
         match self {
             Self::Broadcast => "Alt-A",
             Self::Options => "Alt-O",
+            Self::Tasks => "Alt-J",
             Self::Invite(_) => "Alt-I",
             Self::Subject(_) => "Alt-S",
             Self::Leave(_) => "Alt-W",
@@ -52,7 +54,7 @@ impl Command {
             Self::User(_, MenuItem::SendMessage) => "Enter",
             Self::User(_, MenuItem::GetInfo) => "i",
             Self::User(_, MenuItem::Disconnect) => "k",
-            Self::OpenTab(_) | Self::CancelTransfer | Self::User(_, MenuItem::PrivateChat) => "",
+            Self::OpenTab(_) | Self::User(_, MenuItem::PrivateChat) => "",
         }
     }
 

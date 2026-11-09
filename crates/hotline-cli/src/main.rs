@@ -8,6 +8,7 @@ mod file_edit;
 mod line;
 mod locale;
 mod session;
+mod tasks;
 mod tracker;
 mod transfer;
 mod ui;
@@ -34,14 +35,14 @@ use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
 use line::Line;
-use session::{
-    ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, Next, Request,
-    KEEP_ALIVE,
-};
+use session::{ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, KEEP_ALIVE};
+use tasks::{TaskId, Tasks};
 use tokio::sync::mpsc;
-use tokio::task::JoinSet;
 use transfer::Conflict;
 use view::{AccountForm, Action, Focus, Modal, OptionsForm, TextBox, View};
+
+/// How often the tasks box shows new progress.
+const TICK: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -133,6 +134,8 @@ async fn run(
     let mut stale = false;
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
     let mut tasks = Tasks::new(client);
+    let mut tick = tokio::time::interval(TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_keep_alive = Instant::now();
     let idle_since = |last_keep_alive| client.last_traffic().max(last_keep_alive);
     let keep_alive_due = |last_keep_alive| {
@@ -152,6 +155,8 @@ async fn run(
             }
             // A reply to a request.
             Some(step) = tasks.next() => step(session, &mut view, &mut tasks),
+            // A moment while a task runs, to show its progress.
+            _ = tick.tick(), if !view.tasks.is_empty() => {}
             // No traffic or keep-alive attempt for a while.
             () = tokio::time::sleep_until(keep_alive_due(last_keep_alive).into()),
                 if disconnected.is_none() =>
@@ -208,6 +213,7 @@ async fn run(
                             &view.hints(files),
                             view.shows_users(),
                             view.has_room_row(),
+                            view.task_lines(),
                         );
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())
                     }
@@ -225,6 +231,7 @@ async fn run(
         view.news_count = session.news_threads.len();
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
         view.access = session.granted();
+        view.set_tasks(tasks.rows(session));
         view.note_revisions(ui::tab_revisions(session));
         bell.ring(happened)?;
         // The end of the connection shows over any other modal.
@@ -241,56 +248,6 @@ async fn run(
         }
     }
     Ok(())
-}
-
-/// What a reply does to the session and the view.
-type Step = Box<dyn FnOnce(&mut ClientSession, &mut View, &mut Tasks) + Send>;
-
-/// The requests that run off the event loop.
-struct Tasks {
-    set: JoinSet<Step>,
-    client: HotlineClient,
-}
-
-impl Tasks {
-    fn new(client: &HotlineClient) -> Self {
-        Self {
-            set: JoinSet::new(),
-            client: client.clone(),
-        }
-    }
-
-    /// Run `request`, then give its value to `then`.
-    fn start<T: Send + 'static>(
-        &mut self,
-        request: Request<T>,
-        then: impl FnOnce(T, &mut ClientSession, &mut View, &mut Self) + Send + 'static,
-    ) {
-        self.set.spawn(async move {
-            let apply = request.reply().await;
-            let step: Step = Box::new(move |session, view, tasks| match apply(session) {
-                Next::Done(value) => then(value, session, view, tasks),
-                Next::Then(request) => tasks.start(request, then),
-            });
-            step
-        });
-    }
-
-    /// Run `request`.
-    fn run(&mut self, request: Request<()>) {
-        self.start(request, |(), _, _, _| {});
-    }
-
-    /// The step of the next reply. `None` when no request runs.
-    async fn next(&mut self) -> Option<Step> {
-        loop {
-            match self.set.join_next().await? {
-                Ok(step) => return Some(step),
-                Err(e) if e.is_cancelled() => {}
-                Err(e) => std::panic::resume_unwind(e.into_panic()),
-            }
-        }
-    }
 }
 
 /// Show `modal`, if any.
@@ -406,16 +363,10 @@ async fn perform(
         Action::DownloadFolder { name, start } => {
             tasks.start(session.download_folder(client, &name, start, done), ask);
         }
-        Action::PickTransfer => {
-            let transfers = session.running_transfers();
-            if !transfers.is_empty() {
-                view.modal = Some(Modal::PickTransfer {
-                    transfers,
-                    selected: 0,
-                });
-            }
+        Action::CancelTask(TaskId::Transfer(id)) => {
+            tasks.forget(TaskId::Transfer(id));
+            tasks.run(session.cancel_transfer(client, id));
         }
-        Action::CancelTransfer(id) => tasks.run(session.cancel_transfer(client, id)),
         Action::Upload { path, start } => {
             let path = std::path::Path::new(&path);
             tasks.start(session.upload(client, path, start, done), ask);

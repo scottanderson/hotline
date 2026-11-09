@@ -81,6 +81,7 @@ or the folder privilege, for the kind of the selected item.
 | Ctrl-O | a room, user list    | the actions of the room or the selected user    |
 | Alt-A  | outside a dialog     | a broadcast                                     |
 | Alt-O  | outside a dialog     | your name, icon, and options                    |
+| Alt-J  | the tasks box shows  | move to the tasks box                           |
 | Alt-,  | Chat, a room         | the previous room, or Public                    |
 | Alt-.  | Chat, a room         | the next room, or Public                        |
 | Alt-I  | a room               | invite a user                                   |
@@ -112,8 +113,7 @@ text in one step.
 Alt-X also opens the palette, for a terminal that takes Ctrl-P.
 Shift-F10 and the Menu key also open the actions. The palette and
 the action menu show the key of each entry. A right click on a user
-opens a menu that also starts a private chat. Only the palette lists
-"Cancel a transfer".
+opens a menu that also starts a private chat.
 
 On macOS, Option with a letter types a symbol by default. Set the
 Option key to send Meta for the Alt keys. In Terminal, turn on "Use
@@ -124,6 +124,18 @@ Backspace goes up. `d` downloads, `u` uploads a local file or folder,
 `n` creates a folder, `x` deletes, `i` shows info, `r` renames, `c`
 sets the comment, `m` moves, and `a` makes an alias. A download goes
 to `name.hpf` first. If one is there, `hlc` asks whether to resume it.
+
+A tasks box shows each transfer with its progress, in the order the
+user started them. A transfer shows its bytes, such as `1.5M/2M`. A
+download that waits in the server's queue shows its place. A transfer
+that ends well stays in its place, and goes 500 ms after the last task
+ends. A transfer that fails or that the user cancels goes at once. The
+error line in the chat tells why a transfer failed. The box shows only while it has a task, on each tab. Under the user list,
+Tab moves from the user list to the box. On Threaded News, the box
+fills the right column, and Tab moves from the preview to the box.
+Alt-J moves to it from anywhere. A click selects a task. Enter cancels
+the selected transfer. A cancelled download that waits in the server's
+queue leaves the queue. A cancelled upload closes its connection.
 
 The Threaded News tab has no user list. It has three panes: a tree of
 bundles (🗞️) and categories (📰) on the left, the threads of the

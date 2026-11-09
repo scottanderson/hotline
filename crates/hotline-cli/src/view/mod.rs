@@ -8,6 +8,7 @@ mod hint;
 mod modal;
 mod options_form;
 mod tab;
+mod tasks_box;
 mod text_box;
 
 use std::collections::{HashMap, HashSet};
@@ -24,6 +25,7 @@ use ratatui::widgets::{ListState, TableState};
 
 use crate::file_edit::FileEdit;
 use crate::session::{NewsFolder, NewsTarget};
+use crate::tasks::TaskRow;
 use crate::transfer::{Conflict, Start};
 use crate::ui::{self, Areas};
 
@@ -88,6 +90,8 @@ pub enum Focus {
     NewsPreview,
     /// The account list on the Admin tab.
     Accounts,
+    /// The tasks box under the user list.
+    Tasks,
 }
 
 impl Focus {
@@ -144,6 +148,12 @@ pub struct View {
     pub account_count: usize,
     /// The privileges from [`crate::session::ClientSession::granted`].
     pub access: Access,
+    /// The rows of the tasks box.
+    pub tasks: Vec<TaskRow>,
+    /// The selected row of the tasks box.
+    task_selected: usize,
+    /// The first row that the tasks box shows.
+    pub tasks_offset: usize,
     /// The tabs that changed since the user last showed them.
     pub updated: HashSet<Tab>,
     /// The revision of each tab when the user last showed it.
@@ -176,6 +186,9 @@ impl Default for View {
             accounts: ListState::default().with_selected(Some(0)),
             account_count: 0,
             access: Access::empty(),
+            tasks: Vec::new(),
+            task_selected: 0,
+            tasks_offset: 0,
             updated: HashSet::new(),
             seen: HashMap::new(),
             selected_user: None,
@@ -297,6 +310,7 @@ impl View {
     pub fn hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint> {
         match (&self.modal, self.focus, self.tab) {
             (None, Focus::Users, _) => self.users_hints(),
+            (None, Focus::Tasks, _) => self.tasks_hints(),
             (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => self.files_hints(files),
             _ => self.focus_hints(),
         }
@@ -345,21 +359,27 @@ impl View {
         files.get(selected(self.files.selected(), files.len()))
     }
 
-    /// The keys of the user list.
-    fn users_hints(&self) -> Vec<Hint> {
-        let main = match Focus::main(self.tab) {
+    /// The name of the main area of the tab, for a hint.
+    const fn main_name(&self) -> &'static str {
+        match Focus::main(self.tab) {
             Focus::Files => "files",
             Focus::NewsFolders | Focus::NewsThreads | Focus::NewsPreview => "news",
             Focus::Accounts => "accounts",
-            Focus::Input | Focus::Users => "input",
-        };
+            Focus::Input | Focus::Users | Focus::Tasks => "input",
+        }
+    }
+
+    /// The keys of the user list.
+    fn users_hints(&self) -> Vec<Hint> {
+        let main = self.main_name();
+        let tab = if self.shows_tasks() { "tasks" } else { main };
         vec![
             Hint::new("↑↓", "select"),
             Hint::new("^O", "actions"),
             Hint::new("Enter", "message").enabled_by(MenuItem::SendMessage.enabled_by()),
             Hint::new("i", "info").enabled_by(MenuItem::GetInfo.enabled_by()),
             Hint::new("k", "disconnect").enabled_by(MenuItem::Disconnect.enabled_by()),
-            Hint::new("Tab", main),
+            Hint::new("Tab", tab),
             Hint::new("Esc", main),
         ]
     }
@@ -422,13 +442,6 @@ impl View {
             }
             (Some(Modal::Subject { .. }), ..) => {
                 vec![Hint::new("Enter", "set"), Hint::new("Esc", "cancel")]
-            }
-            (Some(Modal::PickTransfer { .. }), ..) => {
-                vec![
-                    Hint::new("↑↓", "choose"),
-                    Hint::new("Enter", "cancel it"),
-                    Hint::new("Esc", "close"),
-                ]
             }
             (Some(Modal::PickUser { .. }), ..) => {
                 vec![
@@ -509,7 +522,8 @@ impl View {
             (None, Focus::NewsPreview, _) => vec![
                 Hint::new("↑↓", "scroll"),
                 Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
-                Hint::new("Tab", "folders"),
+                Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
+                Hint::new("Tab", "folders").only_if(!self.shows_tasks()),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::Input, Tab::Chat) => [
@@ -540,7 +554,8 @@ impl View {
                 Hint::new("Tab", "users"),
                 Hint::new("Esc", "chat"),
             ],
-            (None, Focus::Users | Focus::Files, _) | (None, Focus::Input, Tab::Files) => Vec::new(),
+            (None, Focus::Users | Focus::Files | Focus::Tasks, _)
+            | (None, Focus::Input, Tab::Files) => Vec::new(),
         }
     }
 
@@ -601,6 +616,7 @@ impl View {
             Focus::NewsThreads => self.news_threads_key(key),
             Focus::NewsPreview => self.news_preview_key(key),
             Focus::Accounts => self.accounts_key(key),
+            Focus::Tasks => self.tasks_key(key),
         }
     }
 
@@ -615,12 +631,11 @@ impl View {
         if self.focus == Focus::Users {
             commands.extend(self.user_commands(users));
         }
-        commands.extend([
-            Command::Broadcast,
-            Command::Options,
-            Command::CancelTransfer,
-            Command::Quit,
-        ]);
+        commands.extend([Command::Broadcast, Command::Options]);
+        if self.shows_tasks() {
+            commands.push(Command::Tasks);
+        }
+        commands.push(Command::Quit);
         commands
     }
 
@@ -655,7 +670,8 @@ impl View {
             | Focus::NewsFolders
             | Focus::NewsThreads
             | Focus::NewsPreview
-            | Focus::Accounts => Vec::new(),
+            | Focus::Accounts
+            | Focus::Tasks => Vec::new(),
         }
     }
 
@@ -667,6 +683,7 @@ impl View {
         let command = match key.code {
             KeyCode::Char('a') => Command::Broadcast,
             KeyCode::Char('o') => Command::Options,
+            KeyCode::Char('j') => Command::Tasks,
             KeyCode::Char('i') => Command::Invite(self.tab.chat_id()?),
             KeyCode::Char('s') => Command::Subject(self.tab.chat_id()?),
             KeyCode::Char('w') => Command::Leave(self.tab.chat_id()?),
@@ -689,7 +706,10 @@ impl View {
                 Action::None
             }
             Command::Options => Action::EditOptions,
-            Command::CancelTransfer => Action::PickTransfer,
+            Command::Tasks => {
+                self.focus = Focus::Tasks;
+                Action::None
+            }
             Command::Invite(chat_id) => Action::PickInvitee(chat_id),
             Command::Subject(chat_id) => Action::EditChatSubject(chat_id),
             Command::Leave(chat_id) => Action::LeaveChat(chat_id),
@@ -856,33 +876,8 @@ impl View {
                     }
                 });
             }
-            (
-                Modal::PickUser { selected, .. } | Modal::PickTransfer { selected, .. },
-                KeyCode::Up,
-            ) => {
+            (Modal::PickUser { selected, .. }, KeyCode::Up) => {
                 *selected = selected.saturating_sub(1);
-            }
-            (
-                Modal::PickTransfer {
-                    selected,
-                    transfers,
-                },
-                KeyCode::Down,
-            ) => {
-                *selected = selected
-                    .saturating_add(1)
-                    .min(transfers.len().saturating_sub(1));
-            }
-            (
-                Modal::PickTransfer {
-                    selected,
-                    transfers,
-                },
-                KeyCode::Enter,
-            ) => {
-                return transfers
-                    .get(*selected)
-                    .map_or(Action::None, |&(id, _)| Action::CancelTransfer(id));
             }
             (
                 Modal::PickUser {
@@ -951,6 +946,7 @@ impl View {
 
     fn users_key(&mut self, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         match key.code {
+            KeyCode::Tab if self.shows_tasks() => self.focus = Focus::Tasks,
             KeyCode::Tab | KeyCode::Esc => self.focus = Focus::main(self.tab),
             KeyCode::Up => self.move_selection(users, false),
             KeyCode::Down => self.move_selection(users, true),
@@ -1205,6 +1201,7 @@ impl View {
 
     fn news_preview_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
+            KeyCode::Tab if self.shows_tasks() => self.focus = Focus::Tasks,
             KeyCode::Tab => self.focus = Focus::NewsFolders,
             KeyCode::Esc => return self.set_tab(Tab::Chat),
             KeyCode::Up => self.scroll_preview(-1),
@@ -1254,7 +1251,6 @@ impl View {
                 | Modal::Invite(_)
                 | Modal::Subject { .. }
                 | Modal::PickUser { .. }
-                | Modal::PickTransfer { .. }
                 | Modal::Palette(_)
                 | Modal::Post { .. }
                 | Modal::NewsName { .. }
@@ -1279,6 +1275,11 @@ impl View {
                 }
                 if let Some(user_id) = self.user_at(areas.users, x, y, users) {
                     return self.click_user(user_id, users, now);
+                }
+                if let Some(index) = self.task_at(areas.tasks, x, y) {
+                    self.task_selected = index;
+                    self.focus = Focus::Tasks;
+                    return Action::None;
                 }
                 if let Some(index) = self.file_at(areas.body, x, y, files) {
                     return self.click_file(index, files, now);
@@ -1447,7 +1448,12 @@ impl View {
             return Action::None;
         }
         self.tab = tab;
-        if self.focus != Focus::Users || !self.shows_users() {
+        let side = match self.focus {
+            Focus::Users => self.shows_users(),
+            Focus::Tasks => self.shows_tasks(),
+            _ => false,
+        };
+        if !side {
             self.focus = Focus::main(tab);
         }
         if !self.may(tab.enabled_by()) {
@@ -1664,7 +1670,7 @@ mod tests {
     }
 
     fn areas() -> Areas {
-        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, false)
+        ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, false, 0)
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -2226,22 +2232,6 @@ mod tests {
     }
 
     #[test]
-    fn cancel_transfer_asks_for_a_transfer_and_cancels_the_chosen_one() {
-        let mut view = View::default();
-        assert_eq!(run_command(&mut view, "cancel"), Action::PickTransfer);
-        view.modal = Some(Modal::PickTransfer {
-            transfers: vec![(3, "a.txt".into()), (5, "b.txt (queued)".into())],
-            selected: 0,
-        });
-        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
-        let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
-        assert_eq!(
-            view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::CancelTransfer(5)
-        );
-    }
-
-    #[test]
     fn news_tabs_fetch_nothing_without_the_read_privilege() {
         let mut view = View::default();
         assert_eq!(
@@ -2428,7 +2418,7 @@ mod tests {
         let mut view = View::default();
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], true, false);
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], true, false, 0);
         let inner = ui::inner(areas.body);
         let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
         let now = Instant::now();
@@ -2618,7 +2608,7 @@ mod tests {
     #[test]
     fn a_click_on_the_room_row_shows_its_room() {
         let mut view = view_with_rooms();
-        let areas = ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, true);
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), Some(""), &[], true, true, 0);
         let row = areas.rooms;
         let x = (row.x..row.right())
             .find(|&x| ui::tab_at(row, x, row.y, &view.room_row()) == Some(Tab::Room(7)))

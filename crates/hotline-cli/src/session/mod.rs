@@ -11,7 +11,7 @@ mod mode;
 mod request;
 mod running;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 mod threaded_news;
 mod transfers;
 
@@ -751,6 +751,7 @@ mod tests {
         session.track(
             running::Kind::Download,
             "doom.wad",
+            std::time::Instant::now(),
             progress,
             task.abort_handle(),
         );
@@ -767,7 +768,7 @@ mod tests {
             "doom.wad waits, 2 ahead in the queue"
         );
         assert_eq!(
-            &*session.running_transfers()[0].1,
+            session.running_transfers()[0].label,
             "All downloads slots are full. “doom.wad” is number 2 in the server queue. Please wait..."
         );
         task.abort();

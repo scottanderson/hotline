@@ -3,6 +3,7 @@
 use std::io::{ErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::future::BoxFuture;
 use hotline_client::{FolderDownload, FolderUpload, HotlineClient};
@@ -43,6 +44,7 @@ impl ClientSession {
         start: Start,
         done: &UnboundedSender<Line>,
     ) -> Request<Option<Conflict>> {
+        let started_at = Instant::now();
         let local = self.download_dir.join(local_name(save_as));
         let partial = partial_path(&local);
         let client = client.clone();
@@ -90,6 +92,7 @@ impl ClientSession {
                     progress.set_waiting(download.waiting_count);
                 }
                 let mut out = Counted::writes(BufWriter::new(file), progress.clone());
+                let task_progress = progress.clone();
                 let task_name = name.clone();
                 let task = tokio::spawn(async move {
                     let name = task_name;
@@ -99,15 +102,24 @@ impl ClientSession {
                         Ok::<_, anyhow::Error>(bytes)
                     };
                     let line = match received.await {
-                        Ok(bytes) => Line::system(format!(
-                            "downloaded {name} ({bytes} bytes) to {}",
-                            local.display()
-                        )),
+                        Ok(bytes) => {
+                            task_progress.succeed();
+                            Line::system(format!(
+                                "downloaded {name} ({bytes} bytes) to {}",
+                                local.display()
+                            ))
+                        }
                         Err(e) => Line::error(format!("failed to download {name}: {e}")),
                     };
                     let _ = done.send(line);
                 });
-                session.track(Kind::Download, &name, progress, task.abort_handle());
+                session.track(
+                    Kind::Download,
+                    &name,
+                    started_at,
+                    progress,
+                    task.abort_handle(),
+                );
                 None
             }
         })
@@ -128,6 +140,7 @@ impl ClientSession {
         start: Start,
         done: &UnboundedSender<Line>,
     ) -> Request<Option<Conflict>> {
+        let started_at = Instant::now();
         let root = self.download_dir.join(local_name(name));
         let client = client.clone();
         let path = self.file_path.clone();
@@ -183,15 +196,24 @@ impl ClientSession {
                 let task = tokio::spawn(async move {
                     let name = task_name;
                     let line = match receive_folder(download, &root, start, &task_progress).await {
-                        Ok((files, bytes)) => Line::system(format!(
-                            "downloaded {name} ({files} files, {bytes} bytes) to {}",
-                            root.display()
-                        )),
+                        Ok((files, bytes)) => {
+                            task_progress.succeed();
+                            Line::system(format!(
+                                "downloaded {name} ({files} files, {bytes} bytes) to {}",
+                                root.display()
+                            ))
+                        }
                         Err(e) => Line::error(format!("failed to download {name}: {e}")),
                     };
                     let _ = done.send(line);
                 });
-                session.track(Kind::DownloadFolder, &name, progress, task.abort_handle());
+                session.track(
+                    Kind::DownloadFolder,
+                    &name,
+                    started_at,
+                    progress,
+                    task.abort_handle(),
+                );
                 None
             }
         })
@@ -227,6 +249,7 @@ impl ClientSession {
             );
             return Request::ready(None);
         };
+        let started_at = Instant::now();
         let access = self.granted();
         let lists_folder = self.lists_folder(&name);
         let lists_partial = self
@@ -283,7 +306,7 @@ impl ClientSession {
                 let task = tokio::spawn(async move {
                     let _ = done.send(upload.await);
                 });
-                session.track(kind, &name, progress, task.abort_handle());
+                session.track(kind, &name, started_at, progress, task.abort_handle());
                 None
             }
         })
@@ -331,10 +354,13 @@ async fn start_file_upload(
     let name = name.to_string();
     let text = format!("uploading {name}{from}");
     progress.set_size(offset.into(), size);
-    let mut data = Counted::reads(BufReader::new(file), progress);
+    let mut data = Counted::reads(BufReader::new(file), progress.clone());
     let transfer = async move {
         match upload.send(&mut data).await {
-            Ok(bytes) => Line::system(format!("uploaded {name} ({bytes} bytes)")),
+            Ok(bytes) => {
+                progress.succeed();
+                Line::system(format!("uploaded {name} ({bytes} bytes)"))
+            }
             Err(e) => Line::error(format!("failed to upload {name}: {e}")),
         }
     };
@@ -377,6 +403,7 @@ async fn start_folder_upload(
     let transfer = async move {
         match send_folder(upload, items, &progress).await {
             Ok((files, bytes)) => {
+                progress.succeed();
                 Line::system(format!("uploaded {name} ({files} files, {bytes} bytes)"))
             }
             Err(e) => Line::error(format!("failed to upload {name}: {e}")),

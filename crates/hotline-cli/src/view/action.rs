@@ -2,6 +2,7 @@ use hotline_client::{Ban, ClientUserInfo, UserAccount};
 
 use crate::file_edit::FileEdit;
 use crate::session::{NewsFolder, NewsTarget};
+use crate::tasks::TaskId;
 use crate::transfer::{Conflict, Start};
 
 /// What the caller must do after one key press or mouse click.
@@ -66,10 +67,8 @@ pub enum Action {
         name: Box<str>,
         start: Start,
     },
-    /// Ask which transfer to cancel.
-    PickTransfer,
-    /// Cancel the transfer with this ID.
-    CancelTransfer(u64),
+    /// Cancel the task with this ID.
+    CancelTask(TaskId),
     /// Upload the local file or folder at `path` to the current folder.
     Upload {
         path: String,

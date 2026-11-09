@@ -1,9 +1,10 @@
 //! The transfers that run, how far each is, and how to cancel one.
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use hotline_client::HotlineClient;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -11,6 +12,7 @@ use tokio::task::AbortHandle;
 
 use super::{ClientSession, Request};
 use crate::line::LineKind;
+use crate::tasks::{TaskId, TaskRow};
 use crate::transfer::size_text;
 
 /// The lowest server version that holds a queued download before its
@@ -35,6 +37,8 @@ pub struct Progress {
     item_count: AtomicU32,
     /// The server's reference of a download.
     reference: OnceLock<u32>,
+    /// `true` after the transfer ends well.
+    succeeded: AtomicBool,
 }
 
 impl Progress {
@@ -57,6 +61,11 @@ impl Progress {
     /// Count one more item of a folder transfer.
     pub(super) fn add_item(&self) {
         self.items.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Note that the transfer ended well.
+    pub(super) fn succeed(&self) {
+        self.succeeded.store(true, Ordering::Relaxed);
     }
 
     /// Note that `waiting` downloads are ahead of this one in the server's queue.
@@ -114,6 +123,8 @@ pub struct RunningTransfer {
     id: u64,
     kind: Kind,
     name: Box<str>,
+    /// When the user started the transfer.
+    started: Instant,
     progress: Arc<Progress>,
     task: AbortHandle,
 }
@@ -124,11 +135,13 @@ impl ClientSession {
         self.server_at_least(QUEUE_VERSION)
     }
 
-    /// Keep the transfer of `name` that runs on `task`.
+    /// Keep the transfer of `name` that the user started at `started` and
+    /// that runs on `task`.
     pub(super) fn track(
         &mut self,
         kind: Kind,
         name: &str,
+        started: Instant,
         progress: Arc<Progress>,
         task: AbortHandle,
     ) {
@@ -137,6 +150,7 @@ impl ClientSession {
             id: self.next_transfer_id,
             kind,
             name: name.into(),
+            started,
             progress,
             task,
         });
@@ -153,36 +167,54 @@ impl ClientSession {
         Some(download.name.clone())
     }
 
-    /// Each transfer that still runs, as `(ID, label)`. With none, a line says so.
-    pub fn running_transfers(&mut self) -> Vec<(u64, Box<str>)> {
-        self.transfers.retain(|t| !t.task.is_finished());
-        if self.transfers.is_empty() {
-            self.push("no transfer runs", LineKind::System);
-        }
-        self.transfers
-            .iter()
-            .map(|t| {
-                let progress = &t.progress;
-                let waiting = progress.waiting.load(Ordering::Relaxed);
-                let mut label = format!("{} “{}”", t.kind.does(), t.name);
-                if waiting > 0 {
-                    label = format!(
-                        "All downloads slots are full. “{}” is number {waiting} in the server queue. Please wait...",
-                        t.name
-                    );
-                } else {
-                    if let Some(sizes) = progress.sizes() {
-                        label.push_str(&format!(" ({sizes})"));
-                    }
-                    let count = progress.item_count.load(Ordering::Relaxed);
-                    if count > 0 {
-                        let items = progress.items.load(Ordering::Relaxed).min(count);
-                        label.push_str(&format!(" [{items} of {count}]"));
-                    }
+    /// Forget each transfer that ended. Returns each transfer that failed.
+    pub fn end_transfers(&mut self) -> Vec<TaskId> {
+        let mut failed = Vec::new();
+        self.transfers.retain(|t| {
+            let ended = t.task.is_finished();
+            if ended && !t.progress.succeeded.load(Ordering::Relaxed) {
+                failed.push(TaskId::Transfer(t.id));
+            }
+            !ended
+        });
+        failed
+    }
+
+    /// The row of each transfer, oldest first.
+    #[cfg(test)]
+    pub fn running_transfers(&self) -> Vec<TaskRow> {
+        self.transfer_rows().map(|(_, row)| row).collect()
+    }
+
+    /// The row of each transfer, oldest first, with the time the user
+    /// started it.
+    pub fn transfer_rows(&self) -> impl Iterator<Item = (Instant, TaskRow)> + '_ {
+        self.transfers.iter().map(|t| {
+            let progress = &t.progress;
+            let waiting = progress.waiting.load(Ordering::Relaxed);
+            let mut label = format!("{} “{}”", t.kind.does(), t.name);
+            if waiting > 0 {
+                label = format!(
+                    "All downloads slots are full. “{}” is number {waiting} in the server queue. Please wait...",
+                    t.name
+                );
+            } else {
+                if let Some(sizes) = progress.sizes() {
+                    label.push_str(&format!(" ({sizes})"));
                 }
-                (t.id, label.into())
-            })
-            .collect()
+                let count = progress.item_count.load(Ordering::Relaxed);
+                if count > 0 {
+                    let items = progress.items.load(Ordering::Relaxed).min(count);
+                    label.push_str(&format!(" [{items} of {count}]"));
+                }
+            }
+            let row = TaskRow {
+                id: TaskId::Transfer(t.id),
+                label,
+                cancellable: true,
+            };
+            (t.started, row)
+        })
     }
 
     /// Stop the transfer `id`. A download that the server still holds in its
@@ -308,7 +340,7 @@ mod tests {
     /// Track a transfer that never ends.
     fn track(session: &mut ClientSession, kind: Kind, progress: Arc<Progress>) -> AbortHandle {
         let task = tokio::spawn(std::future::pending::<()>()).abort_handle();
-        session.track(kind, "f", progress, task.clone());
+        session.track(kind, "f", Instant::now(), progress, task.clone());
         task
     }
 
@@ -338,13 +370,19 @@ mod tests {
             .download_file(&client, "a.txt", "b.txt", Start::Ask, &tx)
             .run(&mut session)
             .await;
+        let label = || session.running_transfers()[0].label.clone();
+        tokio::time::timeout(test_support::WAIT, async {
+            while label() == "Downloading “a.txt”" {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         let running = session.running_transfers();
+        assert_eq!(running.len(), 1);
         assert_eq!(
-            running,
-            [(
-                1,
-                "All downloads slots are full. “a.txt” is number 1 in the server queue. Please wait...".into()
-            )]
+            running[0].label,
+            "All downloads slots are full. “a.txt” is number 1 in the server queue. Please wait..."
         );
 
         session.cancel_transfer(&client, 1).run(&mut session).await;
@@ -375,12 +413,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn end_transfers_gives_each_transfer_that_failed() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let first = track(&mut session, Kind::Download, Arc::default());
+        let _ = track(&mut session, Kind::Upload, Arc::default());
+        first.abort();
+        tokio::task::yield_now().await;
+        assert_eq!(session.end_transfers(), [TaskId::Transfer(1)]);
+        assert_eq!(session.running_transfers()[0].label, "Uploading “f”");
+    }
+
+    #[tokio::test]
+    async fn end_transfers_keeps_quiet_about_a_transfer_that_succeeded() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let progress = Arc::new(Progress::default());
+        progress.succeed();
+        let task = track(&mut session, Kind::Upload, progress);
+        task.abort();
+        tokio::task::yield_now().await;
+        assert_eq!(session.end_transfers(), []);
+        assert!(session.running_transfers().is_empty());
+    }
+
+    #[tokio::test]
     async fn running_transfers_shows_the_bytes_of_a_known_size() {
         let mut session = ClientSession::new("me", 0, Default::default());
         let progress = Arc::new(Progress::default());
         progress.set_size(25, 100);
         let _ = track(&mut session, Kind::Upload, progress);
-        assert_eq!(&*session.running_transfers()[0].1, "Uploading “f” (25/100)");
+        assert_eq!(
+            session.running_transfers()[0].label,
+            "Uploading “f” (25/100)"
+        );
     }
 
     #[tokio::test]
@@ -392,7 +456,11 @@ mod tests {
         let _ = track(&mut session, Kind::UploadFolder, progress);
         assert_eq!(
             session.running_transfers(),
-            [(1, "Uploading folder “f” [1 of 2]".into())]
+            [TaskRow {
+                id: TaskId::Transfer(1),
+                label: "Uploading folder “f” [1 of 2]".into(),
+                cancellable: true,
+            }]
         );
     }
 

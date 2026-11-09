@@ -249,30 +249,17 @@ one-shared-room model.
 
 ## Backlog, in priority order
 
-1. **No HTTP tunnel listeners.** openline also listens on the base
+1. **The tasks box shows no request.** It shows only the transfers.
+   openline's client also keeps each request as a task (`CMyTask`).
+   Decided: a task is each TRTP request that hlc sends and that waits
+   for its reply transaction, of every opcode, such as a file list, a
+   news read, or a user info request. Enter cancels a request that
+   only reads.
+2. **No HTTP tunnel listeners.** openline also listens on the base
    port plus 2 and plus 3 for HTTP-tunnelled clients (`HotlineServ.cp`,
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-2. **hlc has no task list.** Ctrl-K lists only the downloads that run,
-   and Enter cancels one. hlc does not keep its uploads, and it shows
-   no progress. It shows no request that waits for its reply.
-   openline's client keeps each transfer as a task
-   (`CMyDownloadTask`, `CMyUploadTask`). Decided:
-   - A task is each TRTP request that hlc sends and that waits for its
-     reply transaction, of every opcode, such as a file list, a news
-     read, or a user info request. Each file or folder transfer is a
-     task too.
-   - A tasks box under the user list shows each task with its
-     progress. The box shows only while a task is active, and it hides
-     when none is.
-   - Tab moves the focus into the box. The arrow keys select a task,
-     and Enter cancels it.
-   - Ctrl-T replaces Ctrl-K and focuses the box.
-   - A cancelled download that waits in the queue sends
-     `myTran_KillDownload` (214), as now. A cancelled upload closes its
-     transfer connection and sends nothing, as openline's
-     `~CMyUploadTask` does.
 3. **`hlc` has no config file.** Keep the settings in
    `$XDG_CONFIG_HOME/hlc/config.toml`, or `~/.config/hlc/config.toml`
    when the variable is not set, on macOS too. The file holds the
