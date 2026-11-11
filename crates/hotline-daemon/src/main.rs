@@ -27,7 +27,7 @@ use hotline_server::{
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::{fmt, prelude::*};
 
-use accounts::{random_password, FileAccountProvider, ADMIN_LOGIN, GUEST_LOGIN};
+use accounts::{random_password, AccountDeletion, FileAccountProvider, ADMIN_LOGIN, GUEST_LOGIN};
 use activity::{FileActivityLog, LogPaths};
 use args::Args;
 use banner::FileBannerProvider;
@@ -91,7 +91,12 @@ async fn main() -> anyhow::Result<()> {
                 args.accounts_dir
             )
         })?
-        .with_fork_store(args.fork_store);
+        .with_fork_store(args.fork_store)
+        .with_deletion(if args.no_trash {
+            AccountDeletion::Remove
+        } else {
+            AccountDeletion::Trash(args.trash_dir.clone().into())
+        });
     if accounts.is_empty().await {
         let password = random_password()?;
         accounts

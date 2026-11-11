@@ -40,6 +40,15 @@ const FILES_DIR: &str = "files";
 /// The file in an account's folder that holds its own threaded news.
 const NEWS_FILE: &str = "news.json";
 
+/// What a delete does with the folder of an account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountDeletion {
+    /// Move the folder into this trash folder, as openline does.
+    Trash(PathBuf),
+    /// Remove the folder with all that it holds.
+    Remove,
+}
+
 /// Persists each account as `<login>/account.json` under a directory,
 /// with an in-memory cache so `get` never touches disk.
 ///
@@ -50,6 +59,7 @@ pub struct FileAccountProvider {
     dir: PathBuf,
     cache: RwLock<HashMap<Box<str>, Account>>,
     fork_store: ForkStoreKind,
+    deletion: AccountDeletion,
     files: Stores<DiskFileProvider>,
     news: Stores<FileThreadedNewsProvider>,
 }
@@ -59,14 +69,10 @@ type Stores<T> = std::sync::RwLock<HashMap<Box<str>, Arc<T>>>;
 
 impl FileAccountProvider {
     /// Loads every account under `dir`. A new `dir` is private to this
-    /// user on Unix.
+    /// user on Unix. A delete moves the folder into `trash/`.
     pub async fn open(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
-        let mut builder = tokio::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        builder.mode(0o700);
-        builder.create(&dir).await?;
+        create_private_dir(&dir).await?;
 
         let mut cache = HashMap::new();
         let mut entries = tokio::fs::read_dir(&dir).await?;
@@ -93,6 +99,7 @@ impl FileAccountProvider {
             dir,
             cache: RwLock::new(cache),
             fork_store: ForkStoreKind::AppleDouble,
+            deletion: AccountDeletion::Trash(PathBuf::from("trash")),
             files: Stores::default(),
             news: Stores::default(),
         })
@@ -101,6 +108,12 @@ impl FileAccountProvider {
     /// Keep the Mac metadata of each account's own files in `fork_store`.
     pub const fn with_fork_store(mut self, fork_store: ForkStoreKind) -> Self {
         self.fork_store = fork_store;
+        self
+    }
+
+    /// Delete the folder of an account as `deletion` says.
+    pub fn with_deletion(mut self, deletion: AccountDeletion) -> Self {
+        self.deletion = deletion;
         self
     }
 
@@ -137,6 +150,49 @@ impl FileAccountProvider {
             store.move_root(folder.join(FILES_DIR));
             files.insert(login.into(), store);
         }
+    }
+
+    /// Removes the account file `path`, then the rest of `folder`. A
+    /// failure to remove the rest leaves the folder and logs a warning.
+    async fn remove_account(
+        &self,
+        login: &str,
+        path: &Path,
+        folder: &Path,
+    ) -> Result<bool, Cow<'static, str>> {
+        match tokio::fs::remove_file(path).await {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            other => other.map_err(|e| e.to_string())?,
+        }
+        self.cache.write().await.remove(login);
+        self.forget_stores(login);
+        if let Err(error) = tokio::fs::remove_dir_all(folder).await {
+            let folder = folder.display();
+            tracing::warn!(%error, %folder, "could not remove a deleted account's folder");
+        }
+        Ok(true)
+    }
+
+    /// Moves `folder` into `trash` under the name that [`free_path`]
+    /// gives.
+    async fn trash_account(
+        &self,
+        login: &str,
+        path: &Path,
+        folder: &Path,
+        trash: &Path,
+    ) -> Result<bool, Cow<'static, str>> {
+        if metadata(path).await.map_err(|e| e.to_string())?.is_none() {
+            return Ok(false);
+        }
+        create_private_dir(trash).await.map_err(|e| e.to_string())?;
+        let trashed = free_path(trash, login).await.map_err(|e| e.to_string())?;
+        tokio::fs::rename(folder, &trashed)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.cache.write().await.remove(login);
+        self.forget_stores(login);
+        Ok(true)
     }
 
     async fn write_account(&self, login: &str, account: &Account) -> std::io::Result<()> {
@@ -187,23 +243,15 @@ impl AccountProvider for FileAccountProvider {
         Ok(())
     }
 
-    /// Removes the account file, then the rest of the account's folder. A
-    /// failure to remove the rest leaves the folder and logs a warning.
+    /// Deletes the account's folder as [`Self::with_deletion`] says.
     async fn delete(&self, login: &str) -> Result<bool, Cow<'static, str>> {
         let (Some(path), Some(folder)) = (self.path_for(login), self.folder_for(login)) else {
             return Ok(false);
         };
-        match tokio::fs::remove_file(path).await {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            other => other.map_err(|e| e.to_string())?,
+        match &self.deletion {
+            AccountDeletion::Trash(trash) => self.trash_account(login, &path, &folder, trash).await,
+            AccountDeletion::Remove => self.remove_account(login, &path, &folder).await,
         }
-        self.cache.write().await.remove(login);
-        self.forget_stores(login);
-        if let Err(error) = tokio::fs::remove_dir_all(&folder).await {
-            let folder = folder.display();
-            tracing::warn!(%error, %folder, "could not remove a deleted account's folder");
-        }
-        Ok(true)
     }
 
     /// Moves the account's folder, then writes `account` into it, so a
@@ -318,6 +366,29 @@ async fn metadata(path: &Path) -> std::io::Result<Option<std::fs::Metadata>> {
     }
 }
 
+/// Make `dir` and its parents. A new `dir` is private to this user on
+/// Unix.
+async fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = tokio::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(dir).await
+}
+
+/// `name` in `dir`, or else `name` with the first number from 1 that
+/// gives a name not in `dir`, as openline names an item in the trash.
+async fn free_path(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
+    let mut path = dir.join(name);
+    for number in 1u32.. {
+        if metadata(&path).await?.is_none() {
+            break;
+        }
+        path = dir.join(format!("{name}{number}"));
+    }
+    Ok(path)
+}
+
 /// The open store of `login` in `stores`.
 fn open_store<T>(stores: &Stores<T>, login: &str) -> Option<Arc<T>> {
     stores
@@ -414,7 +485,10 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_the_file_and_reports_whether_it_existed() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        let provider = FileAccountProvider::open(dir.path())
+            .await
+            .unwrap()
+            .with_deletion(AccountDeletion::Remove);
         provider.put("alice".into(), alice()).await.unwrap();
 
         assert_eq!(provider.delete("alice").await, Ok(true));
@@ -590,7 +664,10 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_the_account_folder() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        let provider = FileAccountProvider::open(dir.path())
+            .await
+            .unwrap()
+            .with_deletion(AccountDeletion::Remove);
         provider.put("alice".into(), alice()).await.unwrap();
         let root = dir.path().join("alice").join(FILES_DIR);
         std::fs::create_dir(&root).unwrap();
@@ -604,9 +681,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_moves_the_account_folder_to_the_trash_under_a_free_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash = dir.path().join("trash");
+        let provider = FileAccountProvider::open(dir.path().join("accounts"))
+            .await
+            .unwrap()
+            .with_deletion(AccountDeletion::Trash(trash.clone()));
+        for _ in 0..3 {
+            provider.put("alice".into(), alice()).await.unwrap();
+            assert_eq!(provider.delete("alice").await, Ok(true));
+        }
+
+        assert_eq!(provider.delete("alice").await, Ok(false));
+        assert_eq!(provider.get("alice").await, None);
+        assert!(!dir.path().join("accounts").join("alice").exists());
+        for name in ["alice", "alice1", "alice2"] {
+            assert!(trash.join(name).join(ACCOUNT_FILE).is_file());
+        }
+    }
+
+    #[tokio::test]
     async fn delete_that_cannot_remove_the_account_file_keeps_the_folder() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = FileAccountProvider::open(dir.path()).await.unwrap();
+        let provider = FileAccountProvider::open(dir.path())
+            .await
+            .unwrap()
+            .with_deletion(AccountDeletion::Remove);
         std::fs::create_dir_all(dir.path().join("alice").join(ACCOUNT_FILE)).unwrap();
         std::fs::create_dir(dir.path().join("alice").join(FILES_DIR)).unwrap();
 

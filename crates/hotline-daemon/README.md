@@ -25,6 +25,7 @@ hls --port 5500
 | Path            | Contents                         | Flag                |
 |-----------------|----------------------------------|---------------------|
 | `accounts/`     | one folder for each account      | `--accounts-dir`    |
+| `trash/`        | the folders of deleted accounts  | `--trash-dir`       |
 | `files/`        | the files clients see            | `--files-dir`       |
 | `news.txt`      | classic news                     | `--news-file`       |
 | `news.json`     | threaded news                    | `--news-tree-file`  |
@@ -62,7 +63,11 @@ must use the same encoding, for example `hlc --encoding utf-8`.
 Each account is a folder, `accounts/<login>/`, as on openline. The
 folder holds the account in `account.json`. A new account fails if its
 folder exists. A rename of the account renames its folder. A delete
-removes the folder with all that it holds.
+moves the folder into `trash/`, as openline moves it to the trash. If
+`trash/` holds a folder of that name, the folder gets the first free
+name with a number from 1 at the end, such as `alice1`. The move does
+not copy, so put `--trash-dir` on the file system of `--accounts-dir`.
+`--no-trash` removes the folder with all that it holds.
 
 An account can have its own files and threaded news, as on openline.
 Make the folder `accounts/<login>/files/` for its own files, and the

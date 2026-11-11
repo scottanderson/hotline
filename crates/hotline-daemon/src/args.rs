@@ -43,6 +43,16 @@ pub struct Args {
     #[arg(long, default_value = "accounts")]
     pub accounts_dir: String,
 
+    /// Directory that a deleted account's folder moves to (created if
+    /// missing). Put it on the file system of `--accounts-dir`.
+    #[arg(long, default_value = "trash")]
+    pub trash_dir: String,
+
+    /// Remove a deleted account's folder in place of moving it to
+    /// `--trash-dir`.
+    #[arg(long)]
+    pub no_trash: bool,
+
     /// Directory that clients see (created if missing).
     #[arg(long, default_value = "files")]
     pub files_dir: String,
