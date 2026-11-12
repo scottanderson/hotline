@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use bytes::{Buf, BytesMut};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
-use hotline_proto::{Received, Transaction, TransactionHeader};
+use hotline_proto::{Received, TransCounter, Transaction, TransactionHeader};
 use tokio_util::codec::{Decoder, Encoder};
 
 use decode_state::DecodeState;
@@ -39,8 +39,8 @@ const fn max_pending_partials(max_transaction_len: u32) -> usize {
 pub struct TransactionCodec {
     state: DecodeState,
     decode_prefix: fn(&[u8; TransactionHeader::LEN]) -> TransactionHeader,
-    /// Next `trans` to stamp on an outgoing push; `None` on a client codec.
-    next_push_trans: Option<u32>,
+    /// Gives the `trans` of each outgoing push. `None` on a client codec.
+    next_push_trans: Option<TransCounter>,
     /// This connection's active text encoding, owned by whoever sets up the connection.
     encoding: EncodingHandle,
     /// Split transactions awaiting their remaining parts, keyed by
@@ -74,7 +74,7 @@ impl TransactionCodec {
         Self {
             state: DecodeState::default(),
             decode_prefix: TransactionHeader::decode_from_client,
-            next_push_trans: Some(1),
+            next_push_trans: Some(TransCounter::new()),
             encoding,
             partials: HashMap::new(),
             max_transaction_len: SERVER_MAX_TRANSACTION_LEN,

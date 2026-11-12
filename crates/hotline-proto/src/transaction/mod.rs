@@ -31,7 +31,9 @@
 use std::{debug_assert_matches, fmt};
 
 mod header;
+mod trans_counter;
 pub use header::TransactionHeader;
+pub use trans_counter::TransCounter;
 
 use crate::error::{ProtoError, Result};
 use crate::field::FieldId;
@@ -77,10 +79,9 @@ impl Transaction {
     }
 
     /// Assign this push's per-connection `trans` sequence number.
-    pub const fn with_push_trans(mut self, next: Option<&mut u32>) -> Self {
-        if let (TransactionType::Push(_), Some(next)) = (self.r#type, next) {
-            self.trans = *next;
-            *next += 1;
+    pub const fn with_push_trans(mut self, counter: Option<&mut TransCounter>) -> Self {
+        if let (TransactionType::Push(_), Some(counter)) = (self.r#type, counter) {
+            self.trans = counter.next_trans();
         }
         self
     }

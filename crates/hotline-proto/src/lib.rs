@@ -26,7 +26,7 @@ pub use handshake::{ClientHandshake, ServerHandshake, SUB_PROTOCOL_HOTLINE};
 pub use htxf::{ForkHeader, HtxfHeader, HtxfType};
 pub use opcode::{Opcode, TransactionType};
 pub use text_encoding::Encoding;
-pub use transaction::{Transaction, TransactionHeader};
+pub use transaction::{TransCounter, Transaction, TransactionHeader};
 pub use wire::{PStringTooLong, PacketWriter, VecWriter};
 
 #[cfg(doctest)]
