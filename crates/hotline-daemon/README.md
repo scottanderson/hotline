@@ -19,7 +19,8 @@ hls --port 5500
 
 ## Files
 
-`hls` keeps its data in the current directory by default:
+`hls` keeps its data in the current directory by default. `-C DIR`
+(`--directory`) runs `hls` in `DIR`, so each relative path is in `DIR`:
 
 | Path            | Contents                         | Flag                |
 |-----------------|----------------------------------|---------------------|

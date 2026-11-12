@@ -35,6 +35,10 @@ pub struct Args {
     #[arg(long, default_value = "Hotline")]
     pub agreement: String,
 
+    /// Directory to run in. Each relative path is in it.
+    #[arg(short = 'C', long)]
+    pub directory: Option<PathBuf>,
+
     /// Directory to store account files in (created if missing).
     #[arg(long, default_value = "accounts")]
     pub accounts_dir: String,

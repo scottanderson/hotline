@@ -61,6 +61,11 @@ async fn main() -> anyhow::Result<()> {
         ))
         .init();
 
+    if let Some(dir) = &args.directory {
+        std::env::set_current_dir(dir)
+            .with_context(|| format!("failed to change to directory {} (-C)", dir.display()))?;
+    }
+
     if let Some(dir) = &args.import_news {
         return import_news(dir, &args).await;
     }
