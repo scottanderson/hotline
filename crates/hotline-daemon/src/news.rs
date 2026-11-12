@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use hotline_proto::text_encoding::Encoding;
 use hotline_server::{
     FlatNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle, NewsCategory, NewsItemKind,
-    NewsListKind, ThreadedNewsProvider, HLNZ_MAGIC,
+    NewsListKind, PostError, ThreadedNewsProvider, HLNZ_MAGIC,
 };
 use tokio::sync::Mutex;
 
@@ -160,7 +160,7 @@ impl ThreadedNewsProvider for FileThreadedNewsProvider {
         flags: u32,
         mime_type: Box<str>,
         data: Box<[u8]>,
-    ) -> Result<u32, &'static str> {
+    ) -> Result<u32, PostError> {
         let _guard = self.lock.lock().await;
         let mut tree = Arc::unwrap_or_clone(self.cache.load_full());
         let id = tree.post_article(components, parent_id, title, poster, flags, mime_type, data)?;

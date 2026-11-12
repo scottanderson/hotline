@@ -34,6 +34,12 @@ pub enum Silent {
         /// The missing privilege.
         reason: Cow<'static, str>,
     },
+    /// The category gave out article ID `u32::MAX`, so
+    /// [`myTran_PostNewsArt`] (410) has no ID for the article. openline
+    /// sends no reply.
+    ///
+    /// [`myTran_PostNewsArt`]: hotline_proto::Opcode::PostNewsArt
+    NoArticleId,
     /// The comment write in [`myTran_SetFileInfo`] (207) failed. openline
     /// still renames.
     ///

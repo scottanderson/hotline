@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::{NewsArticle, NewsArticleDetail, NewsItemKind, NewsListKind};
+use super::{NewsArticle, NewsArticleDetail, NewsItemKind, NewsListKind, PostError};
 
 /// Classic (flat) news persistence, supplied by the embedding application
 /// like [`crate::AccountProvider`]/[`crate::FileProvider`].
@@ -49,7 +49,7 @@ pub trait ThreadedNewsProvider: Send + Sync {
         flags: u32,
         mime_type: Box<str>,
         data: Box<[u8]>,
-    ) -> Result<u32, &'static str>;
+    ) -> Result<u32, PostError>;
     /// Deletes an article from the category at `components`. If
     /// `recursive`, every reply under it is deleted too; otherwise its
     /// first reply is promoted into its place.

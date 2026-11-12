@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::news::category::MAX_REPLY_CHAIN_LEN;
 use crate::news::{
-    NewsArticle, NewsArticleView, NewsCategory, NewsItemKind, NewsListKind, NewsNode,
+    NewsArticle, NewsArticleView, NewsCategory, NewsItemKind, NewsListKind, NewsNode, PostError,
 };
 
 /// Deepest bundle nesting, our own limit. Keeps a saved tree within
@@ -181,7 +181,7 @@ impl NewsBundle {
         flags: u32,
         mime_type: Box<str>,
         data: Box<[u8]>,
-    ) -> Result<u32, &'static str> {
+    ) -> Result<u32, PostError> {
         // Each is wire-encoded with a 1-byte length prefix in the
         // article listing (`myField_NewsArtListData` (321)). Openline
         // actually caps title/flavor at a much smaller fixed buffer and
@@ -189,13 +189,13 @@ impl NewsBundle {
         // up to the wire format's real 255-byte limit and errors past
         // it, a deliberate, more permissive divergence.
         if title.len() > 255 || poster.len() > 255 || mime_type.len() > 255 {
-            return Err("post data too long");
+            Err("post data too long")?;
         }
         let category = self
             .category_mut(components)
             .ok_or("no such news category")?;
         if parent_id != 0 && category.depth_of(parent_id) + 1 >= MAX_REPLY_CHAIN_LEN {
-            return Err("reply chain is too deep");
+            Err("reply chain is too deep")?;
         }
         category.add_article(parent_id, title, poster, flags, mime_type, data)
     }
@@ -346,7 +346,7 @@ mod tests {
                 b"x".as_slice().into(),
             )
             .unwrap_err();
-        assert_eq!(err, "no such parent article");
+        assert_eq!(err, PostError::Invalid("no such parent article"));
     }
 
     /// Posts a reply to `parent_id` `count` times, each reply the parent
@@ -408,7 +408,7 @@ mod tests {
                 b"x".as_slice().into(),
             )
             .unwrap_err();
-        assert_eq!(err, "reply chain is too deep");
+        assert_eq!(err, PostError::Invalid("reply chain is too deep"));
         // The rejected post left the chain exactly at the cap.
         assert_eq!(
             root.list_articles(&path).unwrap().len(),

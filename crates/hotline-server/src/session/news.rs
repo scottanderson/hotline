@@ -8,7 +8,8 @@ use hotline_proto::FieldId;
 use hotline_proto::{Field, Received, Transaction};
 
 use crate::flood::FloodEvent;
-use crate::news::{body_from_wire, body_to_wire};
+use crate::news::{body_from_wire, body_to_wire, PostError};
+use crate::policy::Silent;
 use crate::state::SharedState;
 
 use super::connection::{Session, MAX_FLAT_NEWS_LEN};
@@ -296,7 +297,7 @@ impl Session {
             .unwrap_or_else(|| "text/plain".to_string());
         let data = body_from_wire(&mime_type, data, encoding);
 
-        if let Err(reason) = state
+        let posted = state
             .news_post_article(
                 &self.login,
                 &path,
@@ -307,11 +308,17 @@ impl Session {
                 mime_type.into(),
                 data,
             )
-            .await
-        {
-            return vec![tx.reply_error(reason)];
+            .await;
+        match posted {
+            Ok(_) => vec![tx.reply(vec![])],
+            Err(PostError::Invalid(reason)) => vec![tx.reply_error(reason)],
+            Err(PostError::NoArticleId) => state
+                .policy()
+                .error(Silent::NoArticleId)
+                .map(|error| tx.reply_error(error))
+                .into_iter()
+                .collect(),
         }
-        vec![tx.reply(vec![])]
     }
 
     /// [`myTran_DelNewsArt`] (411): delete a threaded news article.
@@ -806,6 +813,55 @@ mod tests {
             .await
             .unwrap();
         assert!(list.articles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn post_news_art_without_an_article_id_follows_the_policy() {
+        struct Refuse;
+        impl crate::ServerPolicy for Refuse {
+            fn error(&self, _case: crate::Silent) -> Option<std::borrow::Cow<'static, str>> {
+                Some("refused".into())
+            }
+        }
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::all());
+        let post = request(
+            Opcode::PostNewsArt,
+            1,
+            vec![
+                Field::bytes(
+                    FieldId::NewsPath,
+                    HlPath::new(["General"]).encode(encoding).unwrap(),
+                ),
+                Field::string(FieldId::NewsArtTitle, "Hello"),
+                Field::bytes(FieldId::NewsArtData, b"hi".to_vec()),
+            ],
+        );
+        let state = |policy: Arc<dyn crate::ServerPolicy>| {
+            let mut tree = crate::NewsBundle::default();
+            let full = crate::NewsCategory::from_articles(
+                uuid::Uuid::new_v4(),
+                0,
+                std::collections::HashMap::new(),
+                vec![],
+            );
+            tree.insert_category(&[], "General", full).unwrap();
+            SharedState::new(crate::Providers {
+                threaded_news: Arc::new(crate::InMemoryNewsProvider::with_tree(tree)),
+                policy,
+                ..crate::Providers::default()
+            })
+        };
+
+        let openline = state(Arc::new(crate::OpenlinePolicy));
+        assert!(session.on_post_news_art(&post, &openline).await.is_empty());
+        let refuse = state(Arc::new(Refuse));
+        let [reply] = session
+            .on_post_news_art(&post, &refuse)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(reply.is_error());
     }
 
     #[tokio::test]

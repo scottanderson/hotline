@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::news::flavor_map::{self, FlavorMapRef};
 use crate::news::iso_date;
-use crate::news::NewsArticle;
+use crate::news::{NewsArticle, PostError};
 
 /// Longest reply chain, our own limit. Keeps a saved thread within
 /// serde_json's nesting limit.
@@ -23,11 +23,13 @@ pub(crate) const MAX_REPLY_CHAIN_LEN: usize = 32;
 pub struct NewsCategory {
     /// The category's unique ID.
     pub guid: Uuid,
-    /// Incremented by one each time an article is added. Never reset.
+    /// Incremented by one each time an article is added, and wraps.
     pub add_sn: u32,
     /// Always `1`: openline's own `delSN` never actually updates past its
     /// initial value once a category is created.
     pub del_sn: u32,
+    /// The ID of the next article, or 0 after the category gave out
+    /// `u32::MAX` articles.
     next_article_id: u32,
     /// Every article, keyed by ID.
     pub articles: HashMap<u32, NewsArticle>,
@@ -104,12 +106,15 @@ impl NewsCategory {
         flags: u32,
         mime_type: Box<str>,
         data: Box<[u8]>,
-    ) -> Result<u32, &'static str> {
+    ) -> Result<u32, PostError> {
         let id = self.next_article_id;
+        if id == 0 {
+            return Err(PostError::NoArticleId);
+        }
         self.siblings_of_mut(parent_id)
             .ok_or("no such parent article")?
             .push(id);
-        self.next_article_id += 1;
+        self.next_article_id = id.wrapping_add(1);
         self.articles.insert(
             id,
             NewsArticle {
@@ -122,7 +127,7 @@ impl NewsCategory {
                 children: Vec::new(),
             },
         );
-        self.add_sn += 1;
+        self.add_sn = self.add_sn.wrapping_add(1);
         Ok(id)
     }
 
@@ -352,6 +357,18 @@ mod tests {
         assert_ne!(a.guid, b.guid);
         assert_eq!(a.guid.get_version_num(), 4);
         assert_eq!(b.guid.get_version_num(), 4);
+    }
+
+    #[test]
+    fn add_article_gives_out_u32_max_and_then_no_id() {
+        let mut category =
+            NewsCategory::from_articles(Uuid::new_v4(), u32::MAX, HashMap::new(), vec![]);
+        let mut post = || category.add_article(0, "".into(), "".into(), 0, "".into(), [].into());
+
+        assert_eq!(post(), Ok(u32::MAX));
+        assert_eq!(post(), Err(PostError::NoArticleId));
+        assert_eq!(category.add_sn, 0);
+        assert_eq!(category.roots, [u32::MAX]);
     }
 
     #[test]

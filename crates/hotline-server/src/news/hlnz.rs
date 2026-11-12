@@ -253,12 +253,17 @@ impl NewsCategory {
             articles: HashMap::new(),
         };
         let roots = reader.siblings(header.first_article, 0, 0)?;
-        let next_article_id = reader
+        let after_last = reader
             .articles
             .keys()
             .max()
-            .map_or(1, |&id| id.saturating_add(1))
-            .max(header.next_article_id);
+            .map_or(1, |&id| id.wrapping_add(1));
+        // 0 means that the category gave out `u32::MAX`.
+        let next_article_id = if after_last == 0 || header.next_article_id == 0 {
+            0
+        } else {
+            after_last.max(header.next_article_id)
+        };
         let mut articles = reader.articles;
         for article in articles.values_mut() {
             article.date = to_utc(article.date, zone);
@@ -278,6 +283,7 @@ mod tests {
     use hotline_proto::wire::{PacketWriter, VecWriter};
 
     use super::*;
+    use crate::news::PostError;
 
     const BLOCK: usize = 256;
     const NEXT_ARTICLE_AT: usize = 44;
@@ -549,6 +555,15 @@ mod tests {
             NewsCategory::from_hlnz(&file(&thread(), 3, 1), text_encoding::DEFAULT, &Utc).unwrap();
 
         assert_eq!(category.add_sn, 4);
+    }
+
+    #[test]
+    fn from_hlnz_keeps_a_next_id_of_0_as_no_id_left() {
+        let mut category =
+            NewsCategory::from_hlnz(&file(&thread(), 3, 0), text_encoding::DEFAULT, &Utc).unwrap();
+
+        let post = category.add_article(0, "".into(), "".into(), 0, "".into(), [].into());
+        assert_eq!(post, Err(PostError::NoArticleId));
     }
 
     #[test]

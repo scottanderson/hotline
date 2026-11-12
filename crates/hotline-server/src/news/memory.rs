@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 
 use crate::news::{
     FlatNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle, NewsItemKind, NewsListKind,
-    ThreadedNewsProvider,
+    PostError, ThreadedNewsProvider,
 };
 use crate::sync::{read, write};
 
@@ -18,6 +18,17 @@ pub struct InMemoryNewsProvider {
     flat_lock: Mutex<()>,
     tree: ArcSwap<NewsBundle>,
     tree_lock: Mutex<()>,
+}
+
+impl InMemoryNewsProvider {
+    /// A provider that holds `tree`.
+    #[cfg(test)]
+    pub(crate) fn with_tree(tree: NewsBundle) -> Self {
+        Self {
+            tree: ArcSwap::from_pointee(tree),
+            ..Self::default()
+        }
+    }
 }
 
 #[async_trait]
@@ -92,7 +103,7 @@ impl ThreadedNewsProvider for InMemoryNewsProvider {
         flags: u32,
         mime_type: Box<str>,
         data: Box<[u8]>,
-    ) -> Result<u32, &'static str> {
+    ) -> Result<u32, PostError> {
         let _guard = self.tree_lock.lock().await;
         let mut tree = Arc::unwrap_or_clone(self.tree.load_full());
         let id = tree.post_article(components, parent_id, title, poster, flags, mime_type, data)?;

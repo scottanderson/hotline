@@ -33,7 +33,7 @@ use crate::file::{
 };
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
-    body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind,
+    body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind, PostError,
     ThreadedNewsProvider,
 };
 use crate::policy::{ServerPolicy, Silent, TakenLogin, TimeZone};
@@ -1430,7 +1430,7 @@ impl SharedState {
         flags: u32,
         mime_type: Box<str>,
         data: Box<[u8]>,
-    ) -> Result<u32, &'static str> {
+    ) -> Result<u32, PostError> {
         self.threaded_news_for(login)
             .await?
             .post_article(

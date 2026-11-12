@@ -167,6 +167,13 @@ works this way.
   `ProcessTran_SendInstantMsg` and `ProcessTran_UserBroadcast` handle
   it as an empty message and reply with success. `hls` replies with an
   error (`Silent::MessageWithoutData`).
+- **A post with no article ID left is an error.** openline gives out
+  article ID 4294967295 and stores 0 as the next ID. Its next
+  `ProcessTran_PostNewsArt` throws in `_NZ_AddIDToHash`, so the client
+  gets no reply and the server shows an alert. When the ID hash bucket
+  of 0 is empty, openline adds an article with ID 0 instead, and
+  replies with an error. `hls` adds nothing and replies with an error
+  (`Silent::NoArticleId`).
 - **A zero uploaded type reads as the type for the name.** openline's
   Mac `_FSSetFlatFileInfo` stores the `INFO` fork's type and creator as
   they are, also a zero type. `hls` stores them too, but a stored zero

@@ -51,7 +51,7 @@ pub use file::{
 pub use flood::{FloodDecision, FloodEvent, FloodPolicy, InMemoryFloodPolicy, NoFloodPolicy};
 pub use news::{
     FlatNewsProvider, InMemoryNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle,
-    NewsCategory, NewsItemKind, NewsListKind, ThreadedNewsProvider, HLNZ_MAGIC,
+    NewsCategory, NewsItemKind, NewsListKind, PostError, ThreadedNewsProvider, HLNZ_MAGIC,
 };
 pub use policy::{OpenlinePolicy, ServerPolicy, Silent, TakenLogin, TimeZone};
 pub use providers::Providers;
