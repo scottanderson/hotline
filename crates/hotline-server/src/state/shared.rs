@@ -1806,13 +1806,14 @@ impl SharedState {
         self.flood().reset(user_id).await;
     }
 
-    /// Delete an account. `Err("no such account")` if it didn't exist.
+    /// Delete an account. The error names `login`, as openline's does.
     pub async fn delete_account(&self, login: &str) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
-        if !self.accounts().delete(login).await? {
-            Err("no such account")?;
+        match self.accounts().delete(login).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!("No account with login \"{login}\"."))?,
+            Err(error) => Err(format!("Cannot delete account \"{login}\":\r{error}"))?,
         }
-        Ok(())
     }
 
     /// Every account, login and details together, sorted by login for a

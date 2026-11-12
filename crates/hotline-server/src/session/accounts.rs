@@ -986,6 +986,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_user_of_a_missing_account_names_the_login() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let encoding = text_encoding::DEFAULT;
+
+        let delete = request(
+            Opcode::DeleteUser,
+            1,
+            vec![Field::obfuscated_string(FieldId::UserLogin, "bob")],
+        );
+        let replies = session.on_delete_user(&delete, &state).await;
+
+        assert_eq!(
+            replies[0]
+                .received(encoding)
+                .string(FieldId::ErrorText)
+                .unwrap(),
+            "No account with login \"bob\"."
+        );
+    }
+
+    #[tokio::test]
     async fn account_crud_denied_without_matching_privilege() {
         let session = test_session("Alice", Access::empty());
         let state = Arc::<SharedState>::default();
@@ -1413,6 +1435,29 @@ mod tests {
         assert!(state.account("bob").await.is_some());
         assert!(state.account("bobby").await.is_some());
         assert!(bob_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_user_that_fails_to_delete_names_the_login_and_the_error() {
+        let session = test_session("Admin", Access::all());
+        let accounts = crate::account::InMemoryAccountProvider::default();
+        let state = state_with_accounts(std::sync::Arc::new(FailingDeleteAccounts(accounts)));
+        let encoding = text_encoding::DEFAULT;
+
+        let delete = request(
+            Opcode::DeleteUser,
+            1,
+            vec![Field::obfuscated_string(FieldId::UserLogin, "bob")],
+        );
+        let replies = session.on_delete_user(&delete, &state).await;
+
+        assert_eq!(
+            replies[0]
+                .received(encoding)
+                .string(FieldId::ErrorText)
+                .unwrap(),
+            "Cannot delete account \"bob\":\rdisk full"
+        );
     }
 
     /// Account storage whose `rename` moves the account, then fails to
