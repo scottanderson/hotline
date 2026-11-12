@@ -39,6 +39,8 @@ pub enum Silent {
     ///
     /// [`myTran_SetFileInfo`]: hotline_proto::Opcode::SetFileInfo
     CommentWrite {
+        /// The name of the file or folder.
+        name: String,
         /// The write error.
         error: io::Error,
     },

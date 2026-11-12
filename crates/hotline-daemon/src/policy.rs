@@ -14,7 +14,9 @@ impl ServerPolicy for HlsPolicy {
         match case {
             Silent::MessageWithoutData => Some("missing message".into()),
             Silent::ChatRequest { reason } | Silent::DropBoxSource { reason } => Some(reason),
-            Silent::CommentWrite { error } => Some(error.to_string().into()),
+            Silent::CommentWrite { name, error } => {
+                Some(format!("Cannot set info for \"{name}\":\r{error}").into())
+            }
             _ => None,
         }
     }
@@ -25,5 +27,24 @@ impl ServerPolicy for HlsPolicy {
 
     fn taken_login(&self) -> TakenLogin {
         TakenLogin::Refuse
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn error_names_the_file_of_a_failed_comment_write() {
+        let case = Silent::CommentWrite {
+            name: "a.txt".into(),
+            error: io::Error::other("disk full"),
+        };
+        assert_eq!(
+            HlsPolicy.error(case).as_deref(),
+            Some("Cannot set info for \"a.txt\":\rdisk full")
+        );
     }
 }

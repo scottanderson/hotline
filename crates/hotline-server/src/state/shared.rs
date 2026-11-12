@@ -947,7 +947,10 @@ impl SharedState {
         };
         tracing::debug!(%error, name, "comment write failed");
         self.policy()
-            .error(Silent::CommentWrite { error })
+            .error(Silent::CommentWrite {
+                name: name.to_owned(),
+                error,
+            })
             .map_or(Ok(()), Err)
     }
 
