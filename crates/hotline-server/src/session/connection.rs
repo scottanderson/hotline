@@ -717,8 +717,8 @@ impl Session {
             FieldId::ServerBannerType,
             kind.type_tag().to_vec(),
         )];
-        if let BannerKind::Url(url) = &kind {
-            fields.push(Field::string(FieldId::ServerBannerUrl, url.clone()));
+        if let BannerKind::Url(url) = kind {
+            fields.push(Field::string(FieldId::ServerBannerUrl, url));
         }
         Some(Transaction::push(Opcode::ServerBanner, fields))
     }

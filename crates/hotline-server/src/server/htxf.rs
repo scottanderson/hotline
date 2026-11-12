@@ -1151,7 +1151,7 @@ mod tests {
         let put = a_txt_transfer(&state, TransferDirection::Put, 1).await;
         let banner = PendingTransfer {
             kind: TransferKind::Banner,
-            ..get.clone()
+            ..get
         };
         assert!(get.accepts(HtxfType::File) && get.accepts(HtxfType::Unknown(7)));
         assert!(!get.accepts(HtxfType::Folder) && !get.accepts(HtxfType::Banner));

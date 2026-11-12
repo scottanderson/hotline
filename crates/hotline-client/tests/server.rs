@@ -444,7 +444,7 @@ async fn upload_file_resumes_a_partial_upload() {
     let files = Arc::new(InMemoryFileProvider::default());
     files.seed(&HlPath::new(["Uploads"]), "new.txt.hpf", *b"hel");
     let providers = Providers {
-        files: files.clone(),
+        files,
         ..Providers::default()
     };
     let addr = start_server_with(providers).await;
@@ -472,7 +472,7 @@ async fn upload_file_stores_the_data_in_the_upload_folder() {
     let files = Arc::new(InMemoryFileProvider::default());
     files.seed(&HlPath::new(["Uploads"]), "keep.txt", *b"");
     let providers = Providers {
-        files: files.clone(),
+        files,
         ..Providers::default()
     };
     let addr = start_server_with(providers).await;

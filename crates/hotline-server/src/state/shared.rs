@@ -1334,8 +1334,8 @@ impl SharedState {
                     date: self.wire_article_date(article.date),
                     parent_id: article.parent_id,
                     flags: article.flags,
-                    title: article.title.clone(),
-                    poster: article.poster.clone(),
+                    title: article.title,
+                    poster: article.poster,
                     flavors: article
                         .data
                         .iter()
@@ -1862,7 +1862,7 @@ mod tests {
             client_ip: "192.0.2.1".parse().unwrap(),
             user_id: 2,
         };
-        let reference = state.register_transfer(transfer.clone()).await;
+        let reference = state.register_transfer(transfer).await;
         let pending = state.transfer_report(2).await;
         assert_eq!(pending.active.len(), 1);
         assert_eq!(pending.active[0].done, 0);
@@ -1959,10 +1959,7 @@ mod tests {
     async fn connections_closed_resolves_once_each_inbox_drops() {
         let state = Arc::new(SharedState::default());
         let rx = state.register_recipient(1).await;
-        let waiting = tokio::spawn({
-            let state = state.clone();
-            async move { state.connections_closed().await }
-        });
+        let waiting = tokio::spawn(async move { state.connections_closed().await });
         tokio::task::yield_now().await;
         assert!(!waiting.is_finished());
 

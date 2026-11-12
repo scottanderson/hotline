@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
         ..ServerConfig::default()
     };
 
-    let accounts = FileAccountProvider::open(args.accounts_dir.clone())
+    let accounts = FileAccountProvider::open(&args.accounts_dir)
         .await
         .with_context(|| {
             format!(
@@ -97,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
         .with_deletion(if args.no_trash {
             AccountDeletion::Remove
         } else {
-            AccountDeletion::Trash(args.trash_dir.clone().into())
+            AccountDeletion::Trash(args.trash_dir.into())
         });
     if accounts.is_empty().await {
         let password = random_password()?;
@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let accounts = Arc::new(accounts);
     let files = Arc::new(
-        DiskFileProvider::open(args.files_dir.clone())
+        DiskFileProvider::open(&args.files_dir)
             .await
             .with_context(|| {
                 format!(
@@ -127,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
             .with_fork_store(args.fork_store.store()),
     );
     let flat_news = Arc::new(
-        FileFlatNewsProvider::open(args.news_file.clone())
+        FileFlatNewsProvider::open(&args.news_file)
             .await
             .with_context(|| {
                 format!(
@@ -137,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
             })?,
     );
     let threaded_news = Arc::new(
-        FileThreadedNewsProvider::open(args.news_tree_file.clone())
+        FileThreadedNewsProvider::open(&args.news_tree_file)
             .await
             .with_context(|| {
                 format!(
@@ -147,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
             })?,
     );
     let bans = Arc::new(
-        FileBanProvider::open(args.ban_file.clone())
+        FileBanProvider::open(&args.ban_file)
             .await
             .with_context(|| format!("failed to open ban file {} (--ban-file)", args.ban_file))?,
     );
@@ -157,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(UrlBannerProvider::new(value))
         }
         Some(path) => Arc::new(
-            FileBannerProvider::open(path.clone())
+            FileBannerProvider::open(&path)
                 .await
                 .with_context(|| format!("failed to open banner file {path} (--banner)"))?,
         ),
@@ -165,10 +165,10 @@ async fn main() -> anyhow::Result<()> {
     };
     let commands = Arc::new(DefaultChatCommands);
     let log_paths = LogPaths {
-        downloads: args.download_log.clone(),
-        uploads: args.upload_log.clone(),
-        connects: args.connect_log.clone(),
-        accounts: args.account_log.clone(),
+        downloads: args.download_log,
+        uploads: args.upload_log,
+        connects: args.connect_log,
+        accounts: args.account_log,
     };
     log_paths.check().await?;
     let activity = Arc::new(FileActivityLog::new(log_paths));
