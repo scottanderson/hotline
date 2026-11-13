@@ -163,10 +163,11 @@ impl Tasks {
         then: impl FnOnce(T, &mut ClientSession, &mut View, &mut Self) + Send + 'static,
     ) {
         self.last_id = self.last_id.wrapping_add(1);
-        self.spawn(self.last_id, Instant::now(), task, request, then);
+        self.spawn(self.last_id, Instant::now(), task, request, then, false);
     }
 
     /// Run `request` as the request `id`, whose chain started at `started`.
+    /// `failed` is `true` if an earlier reply of its chain showed an error.
     fn spawn<T: Send + 'static>(
         &mut self,
         id: u64,
@@ -174,6 +175,7 @@ impl Tasks {
         task: Task,
         request: Request<T>,
         then: impl FnOnce(T, &mut ClientSession, &mut View, &mut Self) + Send + 'static,
+        failed: bool,
     ) {
         let next_task = task.clone();
         let keeps_row = task.keeps_row;
@@ -181,15 +183,19 @@ impl Tasks {
             let apply = request.reply().await;
             let step: Step = Box::new(move |session, view, tasks| {
                 let errors = session.error_count();
-                match apply(session) {
+                let next = apply(session);
+                // A chain that shows an error failed, and its row goes at once.
+                let failed = failed || session.error_count() != errors;
+                match next {
                     Next::Done(value) => {
-                        // A reply that shows an error failed, and its row goes at once.
-                        if !keeps_row || session.error_count() != errors {
+                        if !keeps_row || failed {
                             tasks.forget(TaskId::Request(id));
                         }
                         then(value, session, view, tasks);
                     }
-                    Next::Then(request) => tasks.spawn(id, started, next_task, request, then),
+                    Next::Then(request) => {
+                        tasks.spawn(id, started, next_task, request, then, failed);
+                    }
                 }
             });
             (id, step)
@@ -408,6 +414,23 @@ mod tests {
             ClientSession::get_file_name_list(&tasks.client, missing),
             |_, _, _, _| {},
         );
+        assert_eq!(tasks.rows(&mut session).len(), 1);
+        let step = tasks.next().await.unwrap();
+        step(&mut session, &mut View::default(), &mut tasks);
+        assert!(tasks.rows(&mut session).is_empty());
+    }
+
+    #[tokio::test]
+    async fn rows_drop_a_chain_whose_first_request_failed() {
+        let (mut tasks, mut session) = tasks().await;
+        let client = tasks.client.clone();
+        let missing = HlPath::new(["missing"]);
+        let request = ClientSession::get_file_name_list(&tasks.client, missing)
+            .and_then(move |_, _| ClientSession::get_msgs(&client));
+        tasks.run(Task::read("Listing folder “missing”"), request);
+        assert_eq!(tasks.rows(&mut session).len(), 1);
+        let step = tasks.next().await.unwrap();
+        step(&mut session, &mut View::default(), &mut tasks);
         assert_eq!(tasks.rows(&mut session).len(), 1);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
