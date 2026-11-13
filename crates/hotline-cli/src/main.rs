@@ -240,6 +240,7 @@ async fn run(
         view.news_count = session.news_threads.len();
         view.account_count = session.accounts.as_ref().map_or(0, Vec::len);
         view.access = session.granted();
+        tasks.update(session);
         view.set_tasks(tasks.rows(session));
         view.note_revisions(ui::tab_revisions(session));
         bell.ring(happened)?;

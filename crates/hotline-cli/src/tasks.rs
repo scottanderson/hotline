@@ -149,7 +149,7 @@ pub struct Tasks {
     set: JoinSet<(u64, Step)>,
     running: Vec<Running>,
     last_id: u64,
-    /// The rows of the running tasks that `rows` gave last, with their start.
+    /// The rows of the running tasks at the last `update`, with their start.
     shown: Vec<(Instant, TaskRow)>,
     /// The rows of the tasks that ended well, with their start.
     finished: Vec<(Instant, TaskRow)>,
@@ -265,14 +265,43 @@ impl Tasks {
         }
     }
 
-    /// The rows of the task list: each transfer of `session`, each request,
-    /// and each task that ended well, in the order the user started them.
-    /// The finished rows go [`KEEP_FINISHED`] after the last task ends. A
-    /// transfer that failed goes at once.
-    pub fn rows(&mut self, session: &mut ClientSession) -> Vec<TaskRow> {
+    /// End each transfer of `session` that stopped, and start the next
+    /// queued one. A task that ended well gets a finished row. The finished
+    /// rows go [`KEEP_FINISHED`] after the last task ends. A transfer that
+    /// failed goes at once.
+    pub fn update(&mut self, session: &mut ClientSession) {
         for id in session.end_transfers() {
             self.forget(id);
         }
+        let running = self.running_rows(session);
+        let now = Instant::now();
+        let count = self.finished.len();
+        let ended = self
+            .shown
+            .drain(..)
+            .filter(|(_, row)| running.iter().all(|(_, r)| r.id != row.id));
+        self.finished
+            .extend(ended.map(|(started, row)| (started, row.finished())));
+        if self.finished.len() > count {
+            self.finished_at = now;
+        } else if now.saturating_duration_since(self.finished_at) >= KEEP_FINISHED {
+            self.finished.clear();
+        }
+        self.shown = running;
+    }
+
+    /// The rows of the task list: each transfer of `session`, each request,
+    /// and each task that ended well, in the order the user started them.
+    pub fn rows(&self, session: &ClientSession) -> Vec<TaskRow> {
+        let mut rows = self.running_rows(session);
+        rows.extend(self.finished.iter().cloned());
+        rows.sort_by_key(|&(started, _)| started);
+        rows.into_iter().map(|(_, row)| row).collect()
+    }
+
+    /// The rows of the transfers of `session` and of the requests, with
+    /// their start.
+    fn running_rows(&self, session: &ClientSession) -> Vec<(Instant, TaskRow)> {
         let requests = self.running.iter().filter_map(|r| {
             let row = TaskRow {
                 id: TaskId::Request(r.id),
@@ -283,24 +312,7 @@ impl Tasks {
             };
             Some((r.started, row))
         });
-        let mut rows: Vec<_> = session.transfer_rows().chain(requests).collect();
-        let now = Instant::now();
-        let count = self.finished.len();
-        let ended = self
-            .shown
-            .drain(..)
-            .filter(|(_, row)| rows.iter().all(|(_, r)| r.id != row.id));
-        self.finished
-            .extend(ended.map(|(started, row)| (started, row.finished())));
-        if self.finished.len() > count {
-            self.finished_at = now;
-        } else if now.saturating_duration_since(self.finished_at) >= KEEP_FINISHED {
-            self.finished.clear();
-        }
-        self.shown.clone_from(&rows);
-        rows.extend(self.finished.iter().cloned());
-        rows.sort_by_key(|&(started, _)| started);
-        rows.into_iter().map(|(_, row)| row).collect()
+        session.transfer_rows().chain(requests).collect()
     }
 }
 
@@ -316,6 +328,12 @@ mod tests {
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let session = ClientSession::new("me", 0, client.encoding());
         (Tasks::new(&client), session)
+    }
+
+    /// The rows after an `update`, as the event loop shows them.
+    fn update(tasks: &mut Tasks, session: &mut ClientSession) -> Vec<TaskRow> {
+        tasks.update(session);
+        tasks.rows(session)
     }
 
     #[tokio::test]
@@ -349,7 +367,7 @@ mod tests {
         tasks.cancel(1);
         assert!(!tasks.is_busy());
         assert!(tasks.next().await.is_none());
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
     }
 
     #[tokio::test]
@@ -375,17 +393,17 @@ mod tests {
             Task::read("Listing root folder..."),
             ClientSession::get_msgs(&tasks.client),
         );
-        assert_eq!(tasks.rows(&mut session).len(), 1);
+        assert_eq!(update(&mut tasks, &mut session).len(), 1);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
 
-        let rows = tasks.rows(&mut session);
+        let rows = update(&mut tasks, &mut session);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "Listing root folder...");
         assert_eq!(rows[0].stop, None);
         assert_eq!(rows[0].ratio, Some(1.0));
         tasks.finished_at -= KEEP_FINISHED;
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
     }
 
     #[tokio::test]
@@ -395,20 +413,20 @@ mod tests {
             Task::read("Listing root folder..."),
             ClientSession::get_msgs(&tasks.client),
         );
-        tasks.rows(&mut session);
+        update(&mut tasks, &mut session);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
         tasks.run(
             Task::read("Transferring messages..."),
             ClientSession::get_msgs(&tasks.client),
         );
-        let rows = tasks.rows(&mut session);
+        let rows = update(&mut tasks, &mut session);
         let labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(
             labels,
             ["Listing root folder...", "Transferring messages..."]
         );
-        assert_eq!(rows[0].stop, None);
+        assert_eq!(rows[0].ratio, Some(1.0));
     }
 
     #[tokio::test]
@@ -416,10 +434,10 @@ mod tests {
         let (mut tasks, mut session) = tasks().await;
         tasks.run(Task::unlisted(), ClientSession::get_msgs(&tasks.client));
         assert!(tasks.is_busy());
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
     }
 
     #[tokio::test]
@@ -431,10 +449,10 @@ mod tests {
             ClientSession::get_file_name_list(&tasks.client, missing),
             |_, _, _, _| {},
         );
-        assert_eq!(tasks.rows(&mut session).len(), 1);
+        assert_eq!(update(&mut tasks, &mut session).len(), 1);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
     }
 
     #[tokio::test]
@@ -445,13 +463,13 @@ mod tests {
         let request = ClientSession::get_file_name_list(&tasks.client, missing)
             .and_then(move |_, _| ClientSession::get_msgs(&client));
         tasks.run(Task::read("Listing folder “missing”"), request);
-        assert_eq!(tasks.rows(&mut session).len(), 1);
+        assert_eq!(update(&mut tasks, &mut session).len(), 1);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
-        assert_eq!(tasks.rows(&mut session).len(), 1);
+        assert_eq!(update(&mut tasks, &mut session).len(), 1);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
     }
 
     #[tokio::test]
@@ -461,10 +479,10 @@ mod tests {
             Task::transfer("Downloading “a”"),
             ClientSession::get_msgs(&tasks.client),
         );
-        assert_eq!(tasks.rows(&mut session).len(), 1);
+        assert_eq!(update(&mut tasks, &mut session).len(), 1);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
     }
 
     #[tokio::test]
@@ -474,9 +492,9 @@ mod tests {
             Task::read("Listing root folder..."),
             ClientSession::get_msgs(&tasks.client),
         );
-        assert_eq!(tasks.rows(&mut session).len(), 1);
+        assert_eq!(update(&mut tasks, &mut session).len(), 1);
         tasks.cancel(1);
-        assert!(tasks.rows(&mut session).is_empty());
+        assert!(update(&mut tasks, &mut session).is_empty());
     }
 
     #[test]
@@ -501,7 +519,7 @@ mod tests {
             ClientSession::get_msgs(&tasks.client),
         );
         assert_eq!(
-            tasks.rows(&mut session),
+            update(&mut tasks, &mut session),
             [TaskRow {
                 id: TaskId::Request(1),
                 label: "Logging in...".into(),
