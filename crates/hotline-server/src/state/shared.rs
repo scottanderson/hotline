@@ -1486,13 +1486,10 @@ impl SharedState {
         user_id: u16,
         password: &str,
     ) -> Result<(), &'static str> {
-        let mut joined = Err("no such chat room");
-        let mut change = |room: &mut ChatRoom| {
-            joined = room.join(user_id, password);
-            true
-        };
-        self.chat_rooms().update(chat_id, &mut change).await;
-        joined
+        self.chat_rooms()
+            .with_room(chat_id, |room| room.join(user_id, password))
+            .await
+            .unwrap_or(Err("no such chat room"))
     }
 
     /// Add `user_id` to a chat room directly, no invite or password
@@ -1501,24 +1498,19 @@ impl SharedState {
     ///
     /// [`myTran_JoinChat`]: hotline_proto::Opcode::JoinChat
     pub(crate) async fn add_chat_member(&self, chat_id: u32, user_id: u16) {
-        let mut change = |room: &mut ChatRoom| {
-            room.add_member(user_id);
-            true
-        };
-        self.chat_rooms().update(chat_id, &mut change).await;
+        self.chat_rooms()
+            .with_room(chat_id, |room| room.add_member(user_id))
+            .await;
     }
 
     /// Mark `user_id` as invited to a chat room. Returns whether this was
     /// a new invite (`false` if already invited, or if the room doesn't
     /// exist).
     pub async fn invite(&self, chat_id: u32, user_id: u16) -> bool {
-        let mut invited = false;
-        let mut change = |room: &mut ChatRoom| {
-            invited = room.invited.insert(user_id);
-            true
-        };
-        self.chat_rooms().update(chat_id, &mut change).await;
-        invited
+        self.chat_rooms()
+            .with_room(chat_id, |room| room.invited.insert(user_id))
+            .await
+            .unwrap_or(false)
     }
 
     /// Invite `target_id` to a chat room on `inviter`'s behalf: `target_id`
@@ -1534,25 +1526,19 @@ impl SharedState {
         if !self.has_user(target_id).await {
             return Err("no such user");
         }
-        let mut invited = Err("no such chat room");
-        let mut change = |room: &mut ChatRoom| {
-            invited = room.invite_by(inviter, target_id);
-            true
-        };
-        self.chat_rooms().update(chat_id, &mut change).await;
-        invited
+        self.chat_rooms()
+            .with_room(chat_id, |room| room.invite_by(inviter, target_id))
+            .await
+            .unwrap_or(Err("no such chat room"))
     }
 
     /// Clear a pending invite without joining, e.g. on decline. Returns
     /// whether there was one to clear.
     pub async fn invite_declined(&self, chat_id: u32, user_id: u16) -> bool {
-        let mut declined = false;
-        let mut change = |room: &mut ChatRoom| {
-            declined = room.invited.remove(&user_id);
-            true
-        };
-        self.chat_rooms().update(chat_id, &mut change).await;
-        declined
+        self.chat_rooms()
+            .with_room(chat_id, |room| room.invited.remove(&user_id))
+            .await
+            .unwrap_or(false)
     }
 
     /// Whether `user_id` has a pending invite to a chat room.
@@ -1593,20 +1579,18 @@ impl SharedState {
 
     /// Set a chat room's subject. `false` if the room doesn't exist.
     pub async fn set_chat_subject(&self, chat_id: u32, subject: &str) -> bool {
-        let mut change = |room: &mut ChatRoom| {
-            room.subject = subject.into();
-            true
-        };
-        self.chat_rooms().update(chat_id, &mut change).await
+        self.chat_rooms()
+            .with_room(chat_id, |room| room.subject = subject.into())
+            .await
+            .is_some()
     }
 
     /// Set a chat room's join password. `false` if the room doesn't exist.
     pub async fn set_chat_password(&self, chat_id: u32, password: &str) -> bool {
-        let mut change = |room: &mut ChatRoom| {
-            room.password = password.into();
-            true
-        };
-        self.chat_rooms().update(chat_id, &mut change).await
+        self.chat_rooms()
+            .with_room(chat_id, |room| room.password = password.into())
+            .await
+            .is_some()
     }
 
     /// Whether `user_id` may change a chat room's subject/password: the

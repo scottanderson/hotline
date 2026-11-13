@@ -28,3 +28,22 @@ pub trait ChatRoomProvider: Send + Sync {
         change: &mut (dyn for<'r> FnMut(u32, &'r mut ChatRoom) -> bool + Send),
     );
 }
+
+impl dyn ChatRoomProvider + '_ {
+    /// Run `change` on the room `chat_id`, and keep the room. `None` if
+    /// the room does not exist.
+    pub async fn with_room<R: Send>(
+        &self,
+        chat_id: u32,
+        change: impl FnOnce(&mut ChatRoom) -> R + Send,
+    ) -> Option<R> {
+        let mut change = Some(change);
+        let mut result = None;
+        let mut run = |room: &mut ChatRoom| {
+            result = change.take().map(|change| change(room));
+            true
+        };
+        self.update(chat_id, &mut run).await;
+        result
+    }
+}
