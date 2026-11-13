@@ -895,7 +895,7 @@ async fn get_info(mut file: File, setting: bool) -> io::Result<Option<Info>> {
             return Ok(None);
         };
         let mut delta = ATTR_BUF_SIZE - (FINDER_INFO_AT + FINDER_INFO_LEN);
-        second.offset.checked_add(delta).ok_or_else(out_of_range)?;
+        let moved_offset = second.offset.checked_add(delta).ok_or_else(out_of_range)?;
         let write_len;
         if second.len != 0 {
             shift_down(
@@ -905,19 +905,14 @@ async fn get_info(mut file: File, setting: bool) -> io::Result<Option<Info>> {
                 u64::from(delta),
             )
             .await?;
-            let fork_end = u64::from(second.offset)
-                .saturating_add(u64::from(second.len))
-                .saturating_add(u64::from(delta));
+            let fork_end = u64::from(moved_offset).saturating_add(u64::from(second.len));
             file_len = file_len.max(fork_end);
             write_len = ATTR_HEADER_END as usize;
         } else {
-            let fork_end = (second.offset as usize)
-                .saturating_add(delta as usize)
-                .saturating_add(EMPTY_FORK_LEN as usize);
-            if fork_end > read_len {
+            if (moved_offset as usize).saturating_add(EMPTY_FORK_LEN as usize) > read_len {
                 return Ok(None);
             }
-            file_len = u64::from(second.offset).saturating_add(u64::from(delta));
+            file_len = u64::from(moved_offset);
             file.set_len(file_len).await?;
             delta = delta.saturating_sub(EMPTY_FORK_LEN);
             let pad = (FINDER_INFO_AT + FINDER_INFO_LEN) as usize;
