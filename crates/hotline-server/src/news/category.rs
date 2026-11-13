@@ -332,6 +332,8 @@ impl<'de> Deserialize<'de> for NewsCategory {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     #[test]
@@ -564,16 +566,20 @@ mod tests {
         let depth = 1000;
         let mut json = String::new();
         for id in 0..depth {
-            json.push_str(&format!(
+            write!(
+                json,
                 "{{\"id\":{id},\"date\":\"2024-01-01T00:00:00.000Z\",\
                  \"title\":\"x\",\"poster\":\"alice\",\
                  \"data\":{{\"text/plain\":\"\"}},\"children\":["
-            ));
+            )
+            .unwrap();
         }
-        json.push_str(&format!(
+        write!(
+            json,
             "{{\"id\":{depth},\"date\":\"2024-01-01T00:00:00.000Z\",\
              \"title\":\"x\",\"poster\":\"alice\",\"data\":{{\"text/plain\":\"\"}}}}"
-        ));
+        )
+        .unwrap();
         json.push_str(&"]}".repeat(depth as usize));
         let json = format!(
             "{{\"guid\":\"{}\",\"next_article_id\":{},\"articles\":[{json}]}}",

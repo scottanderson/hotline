@@ -1,5 +1,6 @@
 //! `HTRK` tracker query: list the servers a tracker knows about.
 
+use std::fmt::Write as _;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
@@ -82,14 +83,15 @@ pub fn format_list(list: &ServerList) -> String {
     let mut out = format!("{} server(s)\n", list.total);
     for server in &list.servers {
         let ip = Ipv4Addr::from(server.ip);
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "{:<21} {:>4} users  {}",
             format!("{ip}:{}", server.port),
             server.user_count,
             server.name,
-        ));
+        );
         if !server.description.is_empty() {
-            out.push_str(&format!("  {}", server.description));
+            let _ = write!(out, "  {}", server.description);
         }
         out.push('\n');
     }

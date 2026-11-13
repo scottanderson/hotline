@@ -1,5 +1,6 @@
 //! The transfers that run, how far each is, and how to cancel one.
 
+use std::fmt::Write as _;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -297,11 +298,11 @@ impl ClientSession {
                     t.name
                 );
             } else if let Some(stats) = progress.stats(now) {
-                label.push_str(&format!(" ({stats})"));
+                let _ = write!(label, " ({stats})");
                 let count = progress.item_count.load(Ordering::Relaxed);
                 if count > 0 {
                     let items = progress.items.load(Ordering::Relaxed).min(count);
-                    label.push_str(&format!(" [{items} of {count}]"));
+                    let _ = write!(label, " [{items} of {count}]");
                 }
             }
             let row = TaskRow {

@@ -25,6 +25,7 @@ unsafe_code = "warn"
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"
 expect_used = "warn"
+format_push_string = "warn"
 indexing_slicing = "warn"
 missing_const_for_fn = "warn"
 missing_panics_doc = "warn"
