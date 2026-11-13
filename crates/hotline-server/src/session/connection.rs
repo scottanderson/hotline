@@ -2480,6 +2480,21 @@ mod tests {
         (server, Framed::new(client, codec))
     }
 
+    /// Wait until `state` holds `count` connections.
+    ///
+    /// # Panics
+    ///
+    /// If the count stays different for 10,000 turns of the runtime.
+    async fn wait_for_connections(state: &SharedState, count: usize) {
+        for _ in 0..10_000 {
+            if state.connection_count().await == count {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(state.connection_count().await, count);
+    }
+
     /// A [`myTran_Login`] (107) with a login that has no account.
     ///
     /// [`myTran_Login`]: hotline_proto::Opcode::Login
@@ -2505,9 +2520,7 @@ mod tests {
     async fn kick_sends_a_server_msg_and_closes() {
         let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
-        while state.connection_count().await == 0 {
-            tokio::task::yield_now().await;
-        }
+        wait_for_connections(&state, 1).await;
 
         state.kick(1, "Go away.").await;
 
@@ -2524,9 +2537,7 @@ mod tests {
     async fn kick_writes_the_queued_pushes_before_the_notice() {
         let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
-        while state.connection_count().await == 0 {
-            tokio::task::yield_now().await;
-        }
+        wait_for_connections(&state, 1).await;
         let data = vec![Field::string(FieldId::Data, "first")];
         state
             .send_to(1, Transaction::push(Opcode::ServerMsg, data))
@@ -2548,9 +2559,7 @@ mod tests {
     async fn kick_leaves_the_server_before_it_writes_the_notice() {
         let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
-        while state.connection_count().await == 0 {
-            tokio::task::yield_now().await;
-        }
+        wait_for_connections(&state, 1).await;
         let data = vec![Field::string(FieldId::Data, "a".repeat(60_000))];
         let push = Transaction::push(Opcode::ServerMsg, data);
         // More than the socket buffers hold, and less than the queue, so the notice waits.
@@ -2561,13 +2570,7 @@ mod tests {
 
         state.kick(1, "Go away.").await;
 
-        for _ in 0..10_000 {
-            if state.connection_count().await == 0 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        assert_eq!(state.connection_count().await, 0);
+        wait_for_connections(&state, 0).await;
         assert!(!server.is_finished());
         let mut last = None;
         while let Some(Ok(tx)) = client.next().await {
@@ -2580,9 +2583,7 @@ mod tests {
     async fn disconnect_closes_with_no_message_and_no_drain() {
         let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
-        while state.connection_count().await == 0 {
-            tokio::task::yield_now().await;
-        }
+        wait_for_connections(&state, 1).await;
 
         state.disconnect(1).await;
 
@@ -2595,9 +2596,7 @@ mod tests {
     async fn kick_closes_after_the_drain_when_the_client_stays_open() {
         let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
-        while state.connection_count().await == 0 {
-            tokio::task::yield_now().await;
-        }
+        wait_for_connections(&state, 1).await;
         let start = tokio::time::Instant::now();
 
         state.kick(1, "Go away.").await;
@@ -2613,9 +2612,7 @@ mod tests {
     async fn kick_ends_a_session_whose_client_does_not_read() {
         let state = Arc::<SharedState>::default();
         let (server, mut client) = run_session(state.clone()).await;
-        while state.connection_count().await == 0 {
-            tokio::task::yield_now().await;
-        }
+        wait_for_connections(&state, 1).await;
         let data = vec![Field::string(FieldId::Data, "a".repeat(60_000))];
         let push = Transaction::push(Opcode::ServerMsg, data);
         // Far more than the socket buffers and the queue hold, so a write blocks.

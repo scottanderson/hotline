@@ -379,9 +379,14 @@ mod tests {
             request,
             |_, _, _, _| {},
         );
-        while !tasks.running[0].abort.is_finished() {
-            tokio::task::yield_now().await;
-        }
+        let replied = async {
+            while !tasks.running[0].abort.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::time::timeout(test_support::WAIT, replied)
+            .await
+            .unwrap();
         tasks.cancel(1);
         assert!(tasks.next().await.is_none());
     }
