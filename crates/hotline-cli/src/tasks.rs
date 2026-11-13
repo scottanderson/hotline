@@ -24,59 +24,76 @@ pub enum Stop {
     Disconnect,
 }
 
+/// The kind of a request, which sets what the task list lets the user do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A request that only reads. The user can cancel it.
+    Read,
+    /// A request that changes the server. The user cannot cancel it.
+    Change,
+    /// A step of the login. A stop ends the connection.
+    Login,
+    /// The start of a transfer, whose own row follows it.
+    Transfer,
+}
+
+impl Kind {
+    /// What Enter does on the request.
+    const fn stop(self) -> Option<Stop> {
+        match self {
+            Self::Read => Some(Stop::Cancel),
+            Self::Login => Some(Stop::Disconnect),
+            Self::Change | Self::Transfer => None,
+        }
+    }
+
+    /// `true` if the row stays for a moment after the request ends.
+    const fn keeps_row(self) -> bool {
+        !matches!(self, Self::Transfer)
+    }
+}
+
 /// A request as the task list shows it.
 #[derive(Debug, Clone)]
 pub struct Task {
     /// The text of the row, `None` for a request with no row.
     label: Option<Box<str>>,
-    stop: Option<Stop>,
-    /// `true` if the row stays for a moment after the request ends.
-    keeps_row: bool,
+    kind: Kind,
 }
 
 impl Task {
-    /// A request that only reads. The user can cancel it.
+    /// A request that only reads.
     pub fn read(label: impl Into<Box<str>>) -> Self {
-        Self {
-            label: Some(label.into()),
-            stop: Some(Stop::Cancel),
-            keeps_row: true,
-        }
+        Self::new(Kind::Read, label)
     }
 
-    /// A request that changes the server. The user cannot cancel it.
+    /// A request that changes the server.
     pub fn change(label: impl Into<Box<str>>) -> Self {
-        Self {
-            label: Some(label.into()),
-            stop: None,
-            keeps_row: true,
-        }
+        Self::new(Kind::Change, label)
     }
 
-    /// A step of the login. A stop ends the connection.
+    /// A step of the login.
     pub fn login(label: impl Into<Box<str>>) -> Self {
-        Self {
-            label: Some(label.into()),
-            stop: Some(Stop::Disconnect),
-            keeps_row: true,
-        }
+        Self::new(Kind::Login, label)
     }
 
-    /// The start of a transfer, whose own row follows it.
+    /// The start of a transfer.
     pub fn transfer(label: impl Into<Box<str>>) -> Self {
-        Self {
-            label: Some(label.into()),
-            stop: None,
-            keeps_row: false,
-        }
+        Self::new(Kind::Transfer, label)
     }
 
     /// A request with no row, such as a keep-alive.
     pub const fn unlisted() -> Self {
         Self {
             label: None,
-            stop: None,
-            keeps_row: true,
+            kind: Kind::Change,
+        }
+    }
+
+    fn new(kind: Kind, label: impl Into<Box<str>>) -> Self {
+        Self {
+            label: Some(label.into()),
+            kind,
         }
     }
 }
@@ -178,7 +195,7 @@ impl Tasks {
         failed: bool,
     ) {
         let next_task = task.clone();
-        let keeps_row = task.keeps_row;
+        let keeps_row = task.kind.keeps_row();
         let abort = self.set.spawn(async move {
             let apply = request.reply().await;
             let step: Step = Box::new(move |session, view, tasks| {
@@ -260,7 +277,7 @@ impl Tasks {
             let row = TaskRow {
                 id: TaskId::Request(r.id),
                 label: r.task.label.as_deref()?.to_string(),
-                stop: r.task.stop,
+                stop: r.task.kind.stop(),
                 queued: false,
                 ratio: None,
             };
