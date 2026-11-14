@@ -2,6 +2,7 @@
 //! and the hint line read the same table.
 
 use std::borrow::Cow;
+use std::cmp::Reverse;
 
 use hotline_proto::Access;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -29,6 +30,24 @@ pub enum Intent {
     Reconnect,
     /// Open the Connect to form.
     ConnectTo,
+    /// Move between the title and the text of an article.
+    SwitchField,
+    /// Send a message.
+    Send,
+    /// Upload the path in the box.
+    Upload,
+    /// Save the text in the box.
+    Save,
+    /// Set the subject of a chat room.
+    SetSubject,
+    /// Post an article.
+    Post,
+    /// Create a news bundle or category.
+    Create,
+    /// Open the account with the login in the box.
+    OpenAccount,
+    /// Start a new line in a message.
+    NewLine,
     /// Quit `hlc`.
     Quit,
     /// Close a box that only shows text.
@@ -50,6 +69,15 @@ impl Intent {
         Self::Join,
         Self::Reconnect,
         Self::ConnectTo,
+        Self::SwitchField,
+        Self::Send,
+        Self::Upload,
+        Self::Save,
+        Self::SetSubject,
+        Self::Post,
+        Self::Create,
+        Self::OpenAccount,
+        Self::NewLine,
         Self::Quit,
         Self::Close,
         Self::Cancel,
@@ -67,6 +95,15 @@ impl Intent {
             Self::Join => "join",
             Self::Reconnect => "reconnect",
             Self::ConnectTo => "connect to",
+            Self::SwitchField => "title or text",
+            Self::Send => "send",
+            Self::Upload => "upload",
+            Self::Save => "save",
+            Self::SetSubject => "set",
+            Self::Post => "post",
+            Self::Create => "create",
+            Self::OpenAccount => "open",
+            Self::NewLine => "new line",
             Self::Quit => "quit",
             Self::Close => "close",
             Self::Cancel => "cancel",
@@ -100,10 +137,11 @@ pub struct KeyChord {
 impl KeyChord {
     /// `code` with no modifier.
     pub const fn plain(code: KeyCode) -> Self {
-        Self {
-            code,
-            modifiers: KeyModifiers::NONE,
-        }
+        Self::new(code, KeyModifiers::NONE)
+    }
+
+    pub const fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
+        Self { code, modifiers }
     }
 
     /// `true` if `key` presses this chord. A chord with no modifier takes
@@ -134,14 +172,31 @@ impl KeyChord {
         })
     }
 
-    /// The chord as a hint shows it, such as `Esc` or `y`.
+    /// The chord as a hint shows it, such as `Esc`, `y`, `⇧Enter`, or `^J`.
     pub fn label(self) -> Cow<'static, str> {
-        match self.code {
+        let key = match self.code {
+            KeyCode::Char(c) if self.modifiers.contains(KeyModifiers::CONTROL) => {
+                c.to_ascii_uppercase().to_string().into()
+            }
+            KeyCode::Char(c) => c.to_string().into(),
             KeyCode::Esc => "Esc".into(),
             KeyCode::Enter => "Enter".into(),
-            KeyCode::Char(c) => c.to_string().into(),
             code => code.to_string().into(),
+        };
+        let mut label: String = [
+            (KeyModifiers::ALT, "Alt-"),
+            (KeyModifiers::CONTROL, "^"),
+            (KeyModifiers::SHIFT, "⇧"),
+        ]
+        .into_iter()
+        .filter(|&(modifier, _)| self.modifiers.contains(modifier))
+        .map(|(_, prefix)| prefix)
+        .collect();
+        if label.is_empty() {
+            return key;
         }
+        label.push_str(&key);
+        label.into()
     }
 }
 
@@ -159,31 +214,49 @@ pub struct Keymap {
 
 impl Default for Keymap {
     fn default() -> Self {
-        const CLOSE: &[(KeyCode, Intent)] = &[
-            (KeyCode::Esc, Intent::Close),
-            (KeyCode::Enter, Intent::Close),
+        const fn key(code: KeyCode, intent: Intent) -> (KeyChord, Intent) {
+            (KeyChord::plain(code), intent)
+        }
+        const fn chord(
+            code: KeyCode,
+            modifiers: KeyModifiers,
+            intent: Intent,
+        ) -> (KeyChord, Intent) {
+            (KeyChord::new(code, modifiers), intent)
+        }
+        const CANCEL: (KeyChord, Intent) = key(KeyCode::Esc, Intent::Cancel);
+        const CLOSE: &[(KeyChord, Intent)] = &[
+            key(KeyCode::Esc, Intent::Close),
+            key(KeyCode::Enter, Intent::Close),
         ];
-        const DELETE: &[(KeyCode, Intent)] = &[
-            (KeyCode::Char('y'), Intent::Delete),
-            (KeyCode::Esc, Intent::Cancel),
+        const DELETE: &[(KeyChord, Intent)] = &[key(KeyCode::Char('y'), Intent::Delete), CANCEL];
+        const NEW_LINE: [(KeyChord, Intent); 3] = [
+            chord(KeyCode::Enter, KeyModifiers::SHIFT, Intent::NewLine),
+            chord(KeyCode::Enter, KeyModifiers::ALT, Intent::NewLine),
+            chord(KeyCode::Char('j'), KeyModifiers::CONTROL, Intent::NewLine),
         ];
-        let modals: [(ModalKind, &[(KeyCode, Intent)]); 10] = [
+        const MESSAGE: &[(KeyChord, Intent)] = &[
+            key(KeyCode::Enter, Intent::Send),
+            NEW_LINE[0],
+            NEW_LINE[1],
+            NEW_LINE[2],
+            CANCEL,
+        ];
+        const SAVE: &[(KeyChord, Intent)] = &[key(KeyCode::Enter, Intent::Save), CANCEL];
+        let modals: [(ModalKind, &[(KeyChord, Intent)]); 19] = [
             (ModalKind::Info, CLOSE),
             (ModalKind::FileInfo, CLOSE),
             (
                 ModalKind::Quit,
-                &[
-                    (KeyCode::Char('y'), Intent::Quit),
-                    (KeyCode::Esc, Intent::Cancel),
-                ],
+                &[key(KeyCode::Char('y'), Intent::Quit), CANCEL],
             ),
             (
                 ModalKind::Disconnect,
                 &[
-                    (KeyCode::Char('d'), Intent::DisconnectUser),
-                    (KeyCode::Char('t'), Intent::TemporaryBan),
-                    (KeyCode::Char('p'), Intent::PermanentBan),
-                    (KeyCode::Esc, Intent::Cancel),
+                    key(KeyCode::Char('d'), Intent::DisconnectUser),
+                    key(KeyCode::Char('t'), Intent::TemporaryBan),
+                    key(KeyCode::Char('p'), Intent::PermanentBan),
+                    CANCEL,
                 ],
             ),
             (ModalKind::DeleteFile, DELETE),
@@ -192,36 +265,66 @@ impl Default for Keymap {
             (
                 ModalKind::Disconnected,
                 &[
-                    (KeyCode::Char('r'), Intent::Reconnect),
-                    (KeyCode::Char('c'), Intent::ConnectTo),
-                    (KeyCode::Char('q'), Intent::Quit),
-                    (KeyCode::Esc, Intent::Close),
-                    (KeyCode::Enter, Intent::Close),
+                    key(KeyCode::Char('r'), Intent::Reconnect),
+                    key(KeyCode::Char('c'), Intent::ConnectTo),
+                    key(KeyCode::Char('q'), Intent::Quit),
+                    key(KeyCode::Esc, Intent::Close),
+                    key(KeyCode::Enter, Intent::Close),
                 ],
             ),
             (
                 ModalKind::Invite,
                 &[
-                    (KeyCode::Enter, Intent::Join),
-                    (KeyCode::Esc, Intent::Decline),
+                    key(KeyCode::Enter, Intent::Join),
+                    key(KeyCode::Esc, Intent::Decline),
                 ],
             ),
             (
                 ModalKind::Article,
                 &[
-                    (KeyCode::Char('r'), Intent::Reply),
-                    (KeyCode::Esc, Intent::Close),
-                    (KeyCode::Enter, Intent::Close),
+                    key(KeyCode::Char('r'), Intent::Reply),
+                    key(KeyCode::Esc, Intent::Close),
+                    key(KeyCode::Enter, Intent::Close),
                 ],
+            ),
+            (ModalKind::InstantMsg, MESSAGE),
+            (ModalKind::Broadcast, MESSAGE),
+            (
+                ModalKind::Upload,
+                &[key(KeyCode::Enter, Intent::Upload), CANCEL],
+            ),
+            (ModalKind::SaveAs, SAVE),
+            (ModalKind::FileEdit, SAVE),
+            (
+                ModalKind::Subject,
+                &[key(KeyCode::Enter, Intent::SetSubject), CANCEL],
+            ),
+            (
+                ModalKind::Post,
+                &[
+                    key(KeyCode::Tab, Intent::SwitchField),
+                    key(KeyCode::Enter, Intent::Post),
+                    NEW_LINE[0],
+                    NEW_LINE[1],
+                    NEW_LINE[2],
+                    CANCEL,
+                ],
+            ),
+            (
+                ModalKind::NewsName,
+                &[key(KeyCode::Enter, Intent::Create), CANCEL],
+            ),
+            (
+                ModalKind::OpenAccount,
+                &[key(KeyCode::Enter, Intent::OpenAccount), CANCEL],
             ),
         ];
         Self::new(
             modals
                 .into_iter()
                 .flat_map(|(kind, keys)| {
-                    keys.iter().map(move |&(code, intent)| {
-                        (Scope::Modal(kind), KeyChord::plain(code), intent)
-                    })
+                    keys.iter()
+                        .map(move |&(chord, intent)| (Scope::Modal(kind), chord, intent))
                 })
                 .collect(),
         )
@@ -283,12 +386,14 @@ impl Keymap {
         }
     }
 
-    /// The intent of `key` in the first scope of `scopes` that binds it.
+    /// The intent of `key` in the first scope of `scopes` that binds it. The
+    /// chord with the most modifiers wins, as `⇧Enter` over `Enter`.
     pub fn intent(&self, scopes: &[Scope], key: KeyEvent) -> Option<Intent> {
         scopes.iter().find_map(|&scope| {
             self.bindings
                 .iter()
-                .find(|&&(s, chord, _)| s == scope && chord.matches(key))
+                .filter(|&&(s, chord, _)| s == scope && chord.matches(key))
+                .min_by_key(|&&(_, chord, _)| Reverse(chord.modifiers.bits().count_ones()))
                 .map(|&(_, _, intent)| intent)
         })
     }
@@ -357,6 +462,39 @@ mod tests {
         assert_eq!(keymap.intent(&[INFO, QUIT], esc), Some(Intent::Close));
         let up = key(KeyCode::Up, KeyModifiers::NONE);
         assert_eq!(keymap.intent(&[QUIT], up), None);
+    }
+
+    #[test]
+    fn intent_prefers_the_chord_with_more_modifiers() {
+        let keymap = Keymap::default();
+        let message = [Scope::Modal(ModalKind::InstantMsg)];
+        let intent = |code, modifiers| keymap.intent(&message, key(code, modifiers));
+        assert_eq!(
+            intent(KeyCode::Enter, KeyModifiers::NONE),
+            Some(Intent::Send)
+        );
+        assert_eq!(
+            intent(KeyCode::Enter, KeyModifiers::SHIFT),
+            Some(Intent::NewLine)
+        );
+        assert_eq!(
+            intent(KeyCode::Enter, KeyModifiers::ALT),
+            Some(Intent::NewLine)
+        );
+        assert_eq!(
+            intent(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            Some(Intent::NewLine)
+        );
+        assert_eq!(intent(KeyCode::Char('j'), KeyModifiers::NONE), None);
+    }
+
+    #[test]
+    fn label_shows_the_modifiers() {
+        let label = |code, modifiers| KeyChord::new(code, modifiers).label();
+        assert_eq!(label(KeyCode::Enter, KeyModifiers::SHIFT), "⇧Enter");
+        assert_eq!(label(KeyCode::Char('j'), KeyModifiers::CONTROL), "^J");
+        assert_eq!(label(KeyCode::Char('t'), KeyModifiers::ALT), "Alt-t");
+        assert_eq!(label(KeyCode::Tab, KeyModifiers::NONE), "Tab");
     }
 
     #[test]

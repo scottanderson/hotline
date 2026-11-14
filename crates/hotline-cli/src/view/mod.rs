@@ -440,13 +440,6 @@ impl View {
     /// The keys of the modal or the focused area, other than the user list.
     fn focus_hints(&self) -> Vec<Hint<'_>> {
         match (&self.modal, self.focus, self.tab) {
-            (Some(Modal::InstantMsg { .. } | Modal::Broadcast { .. }), ..) => {
-                vec![
-                    Hint::new("Enter", "send"),
-                    Hint::new("⇧Enter", "new line"),
-                    Hint::new("Esc", "cancel"),
-                ]
-            }
             (Some(Modal::Palette(_)), ..) => {
                 vec![
                     Hint::new("↑↓", "choose"),
@@ -462,30 +455,6 @@ impl View {
                 ]
             }
             (
-                Some(
-                    Modal::Info(_)
-                    | Modal::FileInfo(_)
-                    | Modal::Quit
-                    | Modal::Disconnect { .. }
-                    | Modal::DeleteFile { .. }
-                    | Modal::DeleteNews { .. }
-                    | Modal::DeleteAccount { .. }
-                    | Modal::Disconnected(_)
-                    | Modal::Invite(_)
-                    | Modal::Article(_),
-                ),
-                ..,
-            ) => self.keymap_hints(),
-            (Some(Modal::FileEdit { .. }), ..) => {
-                vec![Hint::new("Enter", "save"), Hint::new("Esc", "cancel")]
-            }
-            (Some(Modal::Upload { .. }), ..) => {
-                vec![Hint::new("Enter", "upload"), Hint::new("Esc", "cancel")]
-            }
-            (Some(Modal::SaveAs { .. }), ..) => {
-                vec![Hint::new("Enter", "save"), Hint::new("Esc", "cancel")]
-            }
-            (
                 Some(Modal::Confirm(
                     Conflict::PartialDownload { .. } | Conflict::LocalFolderExists { .. },
                 )),
@@ -498,24 +467,12 @@ impl View {
             (Some(Modal::Confirm(_)), ..) => {
                 vec![Hint::new("r", "resume"), Hint::new("Esc", "cancel")]
             }
-            (Some(Modal::Subject { .. }), ..) => {
-                vec![Hint::new("Enter", "set"), Hint::new("Esc", "cancel")]
-            }
             (Some(Modal::PickUser { .. }), ..) => {
                 vec![
                     Hint::new("↑↓", "choose"),
                     Hint::new("Enter", "invite"),
                     Hint::new("Esc", "cancel"),
                 ]
-            }
-            (Some(Modal::Post { .. }), ..) => vec![
-                Hint::new("Tab", "title or text"),
-                Hint::new("Enter", "post"),
-                Hint::new("⇧Enter", "new line"),
-                Hint::new("Esc", "cancel"),
-            ],
-            (Some(Modal::NewsName { .. }), ..) => {
-                vec![Hint::new("Enter", "create"), Hint::new("Esc", "cancel")]
             }
             (Some(Modal::Account(form)), ..) => vec![
                 Hint::new("↑↓", "row"),
@@ -535,9 +492,7 @@ impl View {
                 Hint::new("Enter", "save"),
                 Hint::new("Esc", "cancel"),
             ],
-            (Some(Modal::OpenAccount { .. }), ..) => {
-                vec![Hint::new("Enter", "open"), Hint::new("Esc", "cancel")]
-            }
+            (Some(_), ..) => self.keymap_hints(),
             (None, Focus::Accounts, _) | (None, Focus::Input, Tab::Admin) => vec![
                 Hint::new("↑↓", "select"),
                 Hint::new("Enter", "edit").enabled_by(Access::OPEN_USER | Access::CREATE_USER),
@@ -828,70 +783,7 @@ impl View {
             return self.connect_form_key(form, key);
         }
         match (&mut modal, plain_code(key)) {
-            (Modal::FileEdit { edit, name, input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::EditFile {
-                    edit: *edit,
-                    name: std::mem::take(name),
-                    text: input.take(),
-                };
-            }
-            (Modal::OpenAccount { input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::OpenAccount(input.take());
-            }
-            (Modal::Post { body, on_body, .. }, _) if is_new_line(key) => {
-                if *on_body {
-                    body.insert('\n');
-                }
-            }
-            (Modal::Post { on_body, .. }, KeyCode::Tab) => *on_body = !*on_body,
-            (
-                Modal::Post {
-                    parent_id,
-                    title,
-                    body,
-                    ..
-                },
-                KeyCode::Enter,
-            ) if !title.is_empty() => {
-                return Action::PostArticle {
-                    parent_id: *parent_id,
-                    title: title.take(),
-                    text: body.take(),
-                };
-            }
-            (Modal::NewsName { kind, input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::NewNewsItem {
-                    name: input.take(),
-                    kind: *kind,
-                };
-            }
-            (Modal::InstantMsg { input, .. } | Modal::Broadcast { input }, _)
-                if is_new_line(key) =>
-            {
-                input.insert('\n');
-            }
             (_, KeyCode::Esc) => return Action::None,
-            (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::SendInstantMsg {
-                    user_id: *user_id,
-                    text: input.take(),
-                };
-            }
-            (Modal::Broadcast { input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::UserBroadcast(input.take());
-            }
-            (Modal::Upload { input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::Upload {
-                    path: input.take(),
-                    start: Start::Ask,
-                };
-            }
-            (Modal::Subject { chat_id, input }, KeyCode::Enter) => {
-                return Action::SetChatSubject {
-                    chat_id: *chat_id,
-                    subject: input.take(),
-                };
-            }
             (
                 Modal::PickUser {
                     chat_id,
@@ -919,13 +811,6 @@ impl View {
                 *selected = selected
                     .saturating_add(1)
                     .min(users.len().saturating_sub(1));
-            }
-            (Modal::SaveAs { name, input }, KeyCode::Enter) if !input.is_empty() => {
-                return Action::DownloadFile {
-                    name: std::mem::take(name),
-                    save_as: input.take().into(),
-                    start: Start::Ask,
-                };
             }
             (Modal::UserMenu { selected, .. }, KeyCode::Up) => {
                 *selected = selected.saturating_sub(1);
@@ -1018,6 +903,77 @@ impl View {
             }
             (Modal::Disconnected(_), Intent::Reconnect) => return Action::Reconnect,
             (Modal::Disconnected(_), Intent::ConnectTo) => return Action::OpenConnect,
+            (Modal::InstantMsg { user_id, input, .. }, Intent::Send) if !input.is_empty() => {
+                return Action::SendInstantMsg {
+                    user_id: *user_id,
+                    text: input.take(),
+                };
+            }
+            (Modal::Broadcast { input }, Intent::Send) if !input.is_empty() => {
+                return Action::UserBroadcast(input.take());
+            }
+            (Modal::InstantMsg { input, .. } | Modal::Broadcast { input }, Intent::NewLine) => {
+                input.insert('\n');
+            }
+            (Modal::Upload { input }, Intent::Upload) if !input.is_empty() => {
+                return Action::Upload {
+                    path: input.take(),
+                    start: Start::Ask,
+                };
+            }
+            (Modal::SaveAs { name, input }, Intent::Save) if !input.is_empty() => {
+                return Action::DownloadFile {
+                    name: std::mem::take(name),
+                    save_as: input.take().into(),
+                    start: Start::Ask,
+                };
+            }
+            (Modal::FileEdit { edit, name, input }, Intent::Save) if !input.is_empty() => {
+                return Action::EditFile {
+                    edit: *edit,
+                    name: std::mem::take(name),
+                    text: input.take(),
+                };
+            }
+            (Modal::Subject { chat_id, input }, Intent::SetSubject) => {
+                return Action::SetChatSubject {
+                    chat_id: *chat_id,
+                    subject: input.take(),
+                };
+            }
+            (Modal::Post { on_body, .. }, Intent::SwitchField) => *on_body = !*on_body,
+            (
+                Modal::Post {
+                    parent_id,
+                    title,
+                    body,
+                    ..
+                },
+                Intent::Post,
+            ) if !title.is_empty() => {
+                return Action::PostArticle {
+                    parent_id: *parent_id,
+                    title: title.take(),
+                    text: body.take(),
+                };
+            }
+            (
+                Modal::Post {
+                    body,
+                    on_body: true,
+                    ..
+                },
+                Intent::NewLine,
+            ) => body.insert('\n'),
+            (Modal::NewsName { kind, input }, Intent::Create) if !input.is_empty() => {
+                return Action::NewNewsItem {
+                    name: input.take(),
+                    kind: *kind,
+                };
+            }
+            (Modal::OpenAccount { input }, Intent::OpenAccount) if !input.is_empty() => {
+                return Action::OpenAccount(input.take());
+            }
             _ => {}
         }
         self.modal = Some(modal);
@@ -2495,7 +2451,7 @@ mod tests {
 
     #[test]
     fn keymap_hints_come_from_the_key_table() {
-        let view = View {
+        let mut view = View {
             modal: Some(Modal::Quit),
             ..View::default()
         };
@@ -2508,6 +2464,21 @@ mod tests {
         assert_eq!(
             hints(&view),
             [("y".into(), "quit"), ("Esc".into(), "cancel")]
+        );
+        view.modal = Some(Modal::Post {
+            parent_id: 0,
+            title: TextBox::new(),
+            body: TextBox::new(),
+            on_body: false,
+        });
+        assert_eq!(
+            hints(&view),
+            [
+                ("Tab".into(), "title or text"),
+                ("Enter".into(), "post"),
+                ("⇧Enter".into(), "new line"),
+                ("Esc".into(), "cancel"),
+            ]
         );
     }
 
