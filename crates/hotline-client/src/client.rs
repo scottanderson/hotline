@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::num::NonZero;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -67,7 +68,28 @@ struct Shared {
 /// only by the clones of [`HotlineClient`].
 struct Writer {
     sink: Mutex<SplitSink<Conn, Transaction>>,
-    next_id: AtomicU32,
+    trans_counter: AtomicTransCounter,
+}
+
+/// Gives out the transaction ID of each request: 1 up to `u32::MAX`, then
+/// 1 again, and never 0.
+struct AtomicTransCounter(AtomicU32);
+
+impl AtomicTransCounter {
+    /// A counter whose first ID is 1.
+    const fn new() -> Self {
+        Self(AtomicU32::new(1))
+    }
+
+    /// The next transaction ID. A 0 from the counter goes to the next one.
+    fn next(&self) -> NonZero<u32> {
+        loop {
+            let id = self.0.fetch_add(1, Ordering::Relaxed);
+            if let Some(id) = NonZero::new(id) {
+                return id;
+            }
+        }
+    }
 }
 
 /// A connected, logged-in-or-not Hotline client session. Cloning is
@@ -119,7 +141,7 @@ impl HotlineClient {
             Self {
                 writer: Arc::new(Writer {
                     sink: Mutex::new(writer),
-                    next_id: AtomicU32::new(1),
+                    trans_counter: AtomicTransCounter::new(),
                 }),
                 shared,
                 encoding,
@@ -144,7 +166,7 @@ impl HotlineClient {
         opcode: Opcode,
         fields: Vec<Field>,
     ) -> Result<Transaction<Received>> {
-        let id = self.writer.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.writer.trans_counter.next().get();
         let tx = Transaction::request(opcode, id, fields);
 
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -337,7 +359,7 @@ impl HotlineClient {
 
     /// Send a request that gets no reply.
     async fn send_without_reply(&self, opcode: Opcode, fields: Vec<Field>) -> Result<()> {
-        let id = self.writer.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.writer.trans_counter.next().get();
         let tx = Transaction::request(opcode, id, fields);
         self.send(tx).await
     }
@@ -708,4 +730,24 @@ async fn read_loop(
     // makes this race-free.
     let old = std::mem::replace(&mut *shared.pending.lock().await, PendingState::Closed);
     drop(old); // dropping each sender fails its matching reply_rx.await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_counts_up_from_1() {
+        let counter = AtomicTransCounter::new();
+        assert_eq!(counter.next().get(), 1);
+        assert_eq!(counter.next().get(), 2);
+    }
+
+    #[test]
+    fn next_skips_0_at_the_wrap() {
+        let counter = AtomicTransCounter(AtomicU32::new(u32::MAX));
+        assert_eq!(counter.next().get(), u32::MAX);
+        assert_eq!(counter.next().get(), 1);
+        assert_eq!(counter.next().get(), 2);
+    }
 }
