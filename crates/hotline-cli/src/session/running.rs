@@ -39,6 +39,8 @@ pub struct Progress {
     bytes: AtomicU64,
     /// The bytes of the whole transfer, `0` if unknown.
     total: AtomicU64,
+    /// `true` after the size is set.
+    sized: AtomicBool,
     items: AtomicU32,
     /// The items of a folder transfer, `0` for a file.
     item_count: AtomicU32,
@@ -46,6 +48,8 @@ pub struct Progress {
     started: OnceLock<(Instant, u64)>,
     /// The server's reference of a download.
     reference: OnceLock<u32>,
+    /// `true` after a folder upload sends its last item.
+    finishing: AtomicBool,
     /// `true` after the transfer ends well.
     succeeded: AtomicBool,
 }
@@ -55,6 +59,7 @@ impl Progress {
     pub(super) fn set_size(&self, offset: u64, total: u64) {
         self.bytes.store(offset, Ordering::Relaxed);
         self.total.store(total, Ordering::Relaxed);
+        self.sized.store(true, Ordering::Relaxed);
     }
 
     /// Set the number of items of a folder transfer.
@@ -70,6 +75,11 @@ impl Progress {
     /// Count one more item of a folder transfer.
     pub(super) fn add_item(&self) {
         self.items.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Note that a folder upload sent its last item.
+    pub(super) fn finish(&self) {
+        self.finishing.store(true, Ordering::Relaxed);
     }
 
     /// Note that the transfer ended well.
@@ -114,6 +124,19 @@ impl Progress {
             size_text(total),
             seconds_text(left)
         ))
+    }
+
+    /// `true` when an upload of `kind` sent all its data and waits for the
+    /// end of its transfer.
+    fn is_finishing(&self, kind: Kind) -> bool {
+        match kind {
+            Kind::Upload => {
+                self.sized.load(Ordering::Relaxed)
+                    && self.bytes.load(Ordering::Relaxed) >= self.total.load(Ordering::Relaxed)
+            }
+            Kind::UploadFolder => self.finishing.load(Ordering::Relaxed),
+            Kind::Download | Kind::DownloadFolder => false,
+        }
     }
 
     /// The part that is done, from 0 to 1: the place in the server's queue
@@ -191,6 +214,36 @@ pub struct RunningTransfer {
     task: AbortHandle,
     /// Starts the transfer, `None` after it starts.
     turn: Option<oneshot::Sender<()>>,
+}
+
+impl RunningTransfer {
+    /// The label of the transfer's row at `now`.
+    fn label(&self, queued: bool, finishing: bool, now: Instant) -> String {
+        let (name, progress) = (&self.name, &self.progress);
+        let waiting = progress.waiting.load(Ordering::Relaxed);
+        if !queued && waiting > 0 {
+            return format!(
+                "All downloads slots are full. “{name}” is number {waiting} in the server queue. Please wait..."
+            );
+        }
+        let stats = (!queued && !finishing)
+            .then(|| progress.stats(now))
+            .flatten();
+        let mut label = format!("{} “{name}”", self.kind.does());
+        if queued {
+            label.push_str(" (queued)");
+        } else if finishing {
+            label.push_str(" (finishing)");
+        } else if let Some(stats) = stats {
+            let _ = write!(label, " ({stats})");
+            let count = progress.item_count.load(Ordering::Relaxed);
+            if count > 0 {
+                let items = progress.items.load(Ordering::Relaxed).min(count);
+                let _ = write!(label, " [{items} of {count}]");
+            }
+        }
+        label
+    }
 }
 
 impl ClientSession {
@@ -288,29 +341,19 @@ impl ClientSession {
         self.transfers.iter().map(move |t| {
             let progress = &t.progress;
             let queued = t.turn.is_some();
-            let waiting = progress.waiting.load(Ordering::Relaxed);
-            let mut label = format!("{} “{}”", t.kind.does(), t.name);
-            if queued {
-                label.push_str(" (queued)");
-            } else if waiting > 0 {
-                label = format!(
-                    "All downloads slots are full. “{}” is number {waiting} in the server queue. Please wait...",
-                    t.name
-                );
-            } else if let Some(stats) = progress.stats(now) {
-                let _ = write!(label, " ({stats})");
-                let count = progress.item_count.load(Ordering::Relaxed);
-                if count > 0 {
-                    let items = progress.items.load(Ordering::Relaxed).min(count);
-                    let _ = write!(label, " [{items} of {count}]");
-                }
-            }
+            let finishing = !queued && progress.is_finishing(t.kind);
+            let label = t.label(queued, finishing, now);
+            let ratio = if finishing {
+                Some(1.0)
+            } else {
+                progress.ratio()
+            };
             let row = TaskRow {
                 id: TaskId::Transfer(t.id),
                 label,
                 stop: Some(Stop::Cancel),
                 queued,
-                ratio: progress.ratio().filter(|_| !queued),
+                ratio: ratio.filter(|_| !queued),
             };
             (t.started, row)
         })
@@ -606,6 +649,44 @@ mod tests {
                 ratio: Some(0.5),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn running_transfers_show_an_upload_that_sent_its_data_as_finishing() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let progress = Arc::new(Progress::default());
+        progress.set_size(0, 10);
+        let _ = track(&mut session, Kind::Upload, progress.clone());
+        progress.count(10);
+        let row = &session.running_transfers()[0];
+        assert_eq!(row.label, "Uploading “f” (finishing)");
+        assert_eq!(row.ratio, Some(1.0));
+    }
+
+    #[tokio::test]
+    async fn running_transfers_show_an_empty_upload_as_finishing() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let progress = Arc::new(Progress::default());
+        let _ = track(&mut session, Kind::Upload, progress.clone());
+        assert_eq!(session.running_transfers()[0].label, "Uploading “f”");
+        progress.set_size(0, 0);
+        let row = &session.running_transfers()[0];
+        assert_eq!(row.label, "Uploading “f” (finishing)");
+        assert_eq!(row.ratio, Some(1.0));
+    }
+
+    #[tokio::test]
+    async fn running_transfers_show_a_folder_upload_after_its_last_item_as_finishing() {
+        let mut session = ClientSession::new("me", 0, Default::default());
+        let progress = Arc::new(Progress::default());
+        progress.set_item_count(1);
+        progress.set_size(0, 10);
+        let _ = track(&mut session, Kind::UploadFolder, progress.clone());
+        progress.add_item();
+        progress.finish();
+        let row = &session.running_transfers()[0];
+        assert_eq!(row.label, "Uploading folder “f” (finishing)");
+        assert_eq!(row.ratio, Some(1.0));
     }
 
     #[test]

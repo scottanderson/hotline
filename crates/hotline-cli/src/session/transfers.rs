@@ -592,6 +592,7 @@ async fn send_folder(
             files = files.saturating_add(1);
         }
     }
+    progress.finish();
     sender.finish().await?;
     Ok((files, bytes))
 }
