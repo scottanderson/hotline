@@ -88,6 +88,38 @@ pub enum Modal {
 }
 
 impl Modal {
+    /// The kind of this modal, without its data.
+    pub const fn kind(&self) -> ModalKind {
+        match self {
+            Self::InstantMsg { .. } => ModalKind::InstantMsg,
+            Self::UserMenu { .. } => ModalKind::UserMenu,
+            Self::Disconnect { .. } => ModalKind::Disconnect,
+            Self::Broadcast { .. } => ModalKind::Broadcast,
+            Self::Options(_) => ModalKind::Options,
+            Self::Info(_) => ModalKind::Info,
+            Self::Upload { .. } => ModalKind::Upload,
+            Self::Confirm(_) => ModalKind::Confirm,
+            Self::FileEdit { .. } => ModalKind::FileEdit,
+            Self::Quit => ModalKind::Quit,
+            Self::Disconnected(_) => ModalKind::Disconnected,
+            Self::Connect(_) => ModalKind::Connect,
+            Self::DeleteFile { .. } => ModalKind::DeleteFile,
+            Self::FileInfo(_) => ModalKind::FileInfo,
+            Self::SaveAs { .. } => ModalKind::SaveAs,
+            Self::Invite(_) => ModalKind::Invite,
+            Self::Subject { .. } => ModalKind::Subject,
+            Self::Article(_) => ModalKind::Article,
+            Self::Post { .. } => ModalKind::Post,
+            Self::NewsName { .. } => ModalKind::NewsName,
+            Self::DeleteNews { .. } => ModalKind::DeleteNews,
+            Self::Account(_) => ModalKind::Account,
+            Self::OpenAccount { .. } => ModalKind::OpenAccount,
+            Self::DeleteAccount { .. } => ModalKind::DeleteAccount,
+            Self::Palette(_) => ModalKind::Palette,
+            Self::PickUser { .. } => ModalKind::PickUser,
+        }
+    }
+
     /// The text box with the focus, in a modal that has one.
     pub const fn input_mut(&mut self) -> Option<&mut TextBox> {
         match self {
@@ -119,6 +151,37 @@ impl Modal {
             conflict => Self::Confirm(conflict),
         }
     }
+}
+
+/// A [`Modal`] variant without its data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModalKind {
+    InstantMsg,
+    UserMenu,
+    Disconnect,
+    Broadcast,
+    Options,
+    Info,
+    Upload,
+    Confirm,
+    FileEdit,
+    Quit,
+    Disconnected,
+    Connect,
+    DeleteFile,
+    FileInfo,
+    SaveAs,
+    Invite,
+    Subject,
+    Article,
+    Post,
+    NewsName,
+    DeleteNews,
+    Account,
+    OpenAccount,
+    DeleteAccount,
+    Palette,
+    PickUser,
 }
 
 /// One entry in [`Modal::UserMenu`].

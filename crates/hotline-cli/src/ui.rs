@@ -59,11 +59,11 @@ fn input_rows(text: &str) -> u16 {
 }
 
 /// `hints` laid out in rows no wider than `width`, keeping each hint whole.
-fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
+fn hint_rows<'a>(hints: &'a [Hint<'a>], width: u16) -> Vec<&'a [Hint<'a>]> {
     let mut rows = Vec::new();
     let (mut start, mut used) = (0, 0_usize);
     for (i, hint) in hints.iter().enumerate() {
-        let len = text_width(hint.key)
+        let len = text_width(&hint.key)
             .saturating_add(text_width(hint.does))
             .saturating_add(3);
         if used > 0 && used.saturating_add(len) > usize::from(width) {
@@ -312,6 +312,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         view.side(),
         !sub_row.is_empty(),
     );
+    draw_hints(frame, areas.hints, view, &hints);
     draw_tabs(frame, areas.tabs, view, view.bar_tabs(), true);
     draw_tabs(frame, areas.sub_row, view, &sub_row, false);
     match view.tab {
@@ -343,7 +344,6 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     if view.tab == Tab::Tasks {
         draw_task_scrollbar(frame, areas.body, view);
     }
-    draw_hints(frame, areas.hints, view, &hints);
     if let Some(modal) = &view.modal {
         draw_modal(frame, areas.screen, modal, view.access);
     }
@@ -910,7 +910,7 @@ fn draw_hints(frame: &mut Frame, area: Rect, view: &View, hints: &[Hint]) {
             let spans = row.iter().flat_map(|hint| {
                 let style = enabled_style(hint.on && allows(view.access, hint.enabled_by));
                 [
-                    Span::styled(hint.key, style.add_modifier(Modifier::BOLD)),
+                    Span::styled(&*hint.key, style.add_modifier(Modifier::BOLD)),
                     Span::styled(format!(" {}  ", hint.does), style),
                 ]
             });

@@ -7,6 +7,7 @@ mod command;
 mod connect_form;
 mod divider;
 mod hint;
+mod keymap;
 mod modal;
 mod options_form;
 mod tab;
@@ -37,6 +38,7 @@ pub use command::{Command, Palette};
 pub use connect_form::ConnectForm;
 pub use divider::{Divider, Splits};
 pub use hint::Hint;
+pub use keymap::{Intent, Keymap, Scope};
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OPTIONS, OptionsForm, QUEUE_TRANSFERS};
 pub use tab::Tab;
@@ -174,6 +176,8 @@ pub struct View {
     pub splits: Splits,
     /// The divider that the user drags.
     dragging: Option<Divider>,
+    /// The keys of each intent.
+    pub keymap: Keymap,
 }
 
 impl Default for View {
@@ -212,6 +216,7 @@ impl Default for View {
             last_click: None,
             splits: Splits::default(),
             dragging: None,
+            keymap: Keymap::default(),
         }
     }
 }
@@ -329,7 +334,7 @@ impl View {
     }
 
     /// The keys of the modal or the focused pane.
-    pub fn hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint> {
+    pub fn hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
         match (&self.modal, self.focus, self.tab) {
             (None, Focus::Users, _) => self.users_hints(),
             (None, Focus::Tasks, _) => self.tasks_hints(),
@@ -339,7 +344,7 @@ impl View {
     }
 
     /// The keys of the file list, with the privileges for the selected item.
-    fn files_hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint> {
+    fn files_hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
         let folder = self
             .selected_file(files)
             .is_some_and(FileNameWithInfo::is_folder);
@@ -392,7 +397,7 @@ impl View {
     }
 
     /// The keys of the user list.
-    fn users_hints(&self) -> Vec<Hint> {
+    fn users_hints(&self) -> Vec<Hint<'_>> {
         let main = self.main_name();
         vec![
             Hint::new("↑↓", "select"),
@@ -405,8 +410,35 @@ impl View {
         ]
     }
 
+    /// The scope of the keys: the scope of the modal, if one shows.
+    pub fn scope(&self) -> Option<Scope> {
+        self.modal.as_ref().map(|modal| Scope::Modal(modal.kind()))
+    }
+
+    /// The hints of the intents that [`Self::keymap`] binds in [`Self::scope`].
+    /// The keys of one intent with the same modifiers show as a range of three
+    /// or more keys in a row, as in `F1-F9`, or with `/` between, as in
+    /// `Esc/Enter`.
+    fn keymap_hints(&self) -> Vec<Hint<'_>> {
+        let scope = self.scope();
+        Intent::ALL
+            .iter()
+            .copied()
+            .filter_map(|intent| {
+                let scopes = scope.as_slice();
+                let chords = self.keymap.chords(scopes, intent);
+                let modifiers = chords.clone().next()?.modifiers;
+                let key = self
+                    .keymap
+                    .hint_key(chords.filter(move |chord| chord.modifiers == modifiers));
+                let does = intent.label();
+                Some(Hint::new(key, does))
+            })
+            .collect()
+    }
+
     /// The keys of the modal or the focused area, other than the user list.
-    fn focus_hints(&self) -> Vec<Hint> {
+    fn focus_hints(&self) -> Vec<Hint<'_>> {
         match (&self.modal, self.focus, self.tab) {
             (Some(Modal::InstantMsg { .. } | Modal::Broadcast { .. }), ..) => {
                 vec![
@@ -429,7 +461,7 @@ impl View {
                     Hint::new("Esc", "close"),
                 ]
             }
-            (Some(Modal::Info(_) | Modal::FileInfo(_)), ..) => vec![Hint::new("Esc", "close")],
+            (Some(Modal::Info(_) | Modal::FileInfo(_) | Modal::Quit), ..) => self.keymap_hints(),
             (Some(Modal::FileEdit { .. }), ..) => {
                 vec![Hint::new("Enter", "save"), Hint::new("Esc", "cancel")]
             }
@@ -512,7 +544,6 @@ impl View {
                 Hint::new("Enter", "save"),
                 Hint::new("Esc", "cancel"),
             ],
-            (Some(Modal::Quit), ..) => vec![Hint::new("y", "quit"), Hint::new("Esc", "cancel")],
             (Some(Modal::Disconnected(_)), ..) => vec![
                 Hint::new("r", "reconnect"),
                 Hint::new("c", "connect to"),
@@ -793,6 +824,9 @@ impl View {
     }
 
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
+        if let Some(intent) = self.keymap.intent(&[Scope::Modal(modal.kind())], key) {
+            return Self::modal_intent(intent);
+        }
         if let Modal::Palette(palette) = modal {
             return self.palette_key(palette, key, users);
         }
@@ -843,9 +877,7 @@ impl View {
                     text: input.take(),
                 };
             }
-            (Modal::Quit, KeyCode::Char('y')) | (Modal::Disconnected(_), KeyCode::Char('q')) => {
-                return Action::Quit;
-            }
+            (Modal::Disconnected(_), KeyCode::Char('q')) => return Action::Quit,
             (Modal::Disconnected(_), KeyCode::Char('r')) => return Action::Reconnect,
             (Modal::Disconnected(_), KeyCode::Char('c')) => return Action::OpenConnect,
             (Modal::DeleteNews { target, .. }, KeyCode::Char('y')) => {
@@ -893,11 +925,7 @@ impl View {
             {
                 input.insert('\n');
             }
-            (_, KeyCode::Esc)
-            | (
-                Modal::Info(_) | Modal::FileInfo(_) | Modal::Article(_) | Modal::Disconnected(_),
-                KeyCode::Enter,
-            ) => {
+            (_, KeyCode::Esc) | (Modal::Article(_) | Modal::Disconnected(_), KeyCode::Enter) => {
                 return Action::None;
             }
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
@@ -990,6 +1018,14 @@ impl View {
         }
         self.modal = Some(modal);
         Action::None
+    }
+
+    /// Do `intent` in a modal. Each intent closes the modal.
+    const fn modal_intent(intent: Intent) -> Action {
+        match intent {
+            Intent::Close | Intent::Cancel => Action::None,
+            Intent::Quit => Action::Quit,
+        }
     }
 
     fn confirm_key(&mut self, conflict: Conflict, key: KeyEvent) -> Action {
@@ -2459,6 +2495,24 @@ mod tests {
             .iter()
             .find(|hint| hint.key == key && hint.does == does)
             .map(|hint| view.may(hint.enabled_by))
+    }
+
+    #[test]
+    fn keymap_hints_come_from_the_key_table() {
+        let view = View {
+            modal: Some(Modal::Quit),
+            ..View::default()
+        };
+        let hints = |view: &View| -> Vec<(String, &str)> {
+            view.hints(&files())
+                .into_iter()
+                .map(|hint| (hint.key.into_owned(), hint.does))
+                .collect()
+        };
+        assert_eq!(
+            hints(&view),
+            [("y".into(), "quit"), ("Esc".into(), "cancel")]
+        );
     }
 
     #[test]

@@ -27,6 +27,7 @@ futures = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 bitflags = { workspace = true }
+rustc-hash = { workspace = true }
 ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 crossterm = { workspace = true }
 sys-locale = { workspace = true }

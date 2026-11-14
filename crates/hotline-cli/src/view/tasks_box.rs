@@ -83,7 +83,7 @@ impl View {
     }
 
     /// The keys of the task list.
-    pub(super) fn tasks_hints(&self) -> Vec<Hint> {
+    pub(super) fn tasks_hints(&self) -> Vec<Hint<'_>> {
         let stop = self.selected_task().and_then(|row| row.stop);
         let stop = match stop {
             Some(Stop::Disconnect) => Hint::new("Enter", "disconnect"),
@@ -187,7 +187,7 @@ mod tests {
         let _ = press(&mut view, KeyCode::Down);
         let _ = press(&mut view, KeyCode::Down);
         assert_eq!(view.selected_task().unwrap().id, TaskId::Request(4));
-        let hint = view.tasks_hints()[1];
+        let hint = &view.tasks_hints()[1];
         assert!(!hint.on);
         assert_eq!(press(&mut view, KeyCode::Enter), Action::None);
     }
