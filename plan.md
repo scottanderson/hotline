@@ -211,6 +211,13 @@ works this way.
   Both keep the password as the user typed it. On Unix, `hlc` writes
   the settings file with mode 0600, so that only the owner can read
   the passwords.
+- **`hlc` connects to a bookmark at the start without a check.**
+  openline's client connects at the start only in a custom
+  distribution (`bAutoconnectEveryLaunch` in `Hotline.cp`), and asks
+  first (message 1121). On the first launch, it connects to
+  `hlserver.com` without such a distribution. `hlc` connects to the
+  bookmark that `auto_connect` names without a question, and with no
+  such bookmark it starts with no connection.
 
 ## Openline vs. mhxd divergences (resolved)
 

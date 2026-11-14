@@ -4,6 +4,7 @@ use clap::Parser;
 use hotline_proto::text_encoding::{self, Encoding};
 
 use crate::bell::Bell;
+use crate::config::Config;
 use crate::connect::{DEFAULT_PORT, Target};
 
 /// Terminal UI Hotline client. A flag overrides the setting of the same
@@ -11,7 +12,8 @@ use crate::connect::{DEFAULT_PORT, Target};
 #[derive(Parser, Debug)]
 #[command(name = "hlc", version, about)]
 pub struct Args {
-    /// Server host. Without it, `hlc` starts without a connection.
+    /// Server host. Without it, `hlc` connects to the bookmark that the
+    /// settings file names in `auto_connect`, if any.
     #[arg(long)]
     pub host: Option<String>,
 
@@ -69,15 +71,20 @@ impl Args {
         }
     }
 
-    /// The server to connect to at the start, if `--host` names one.
-    pub fn target(&self) -> Option<Target> {
-        self.host.as_ref().map(|host| Target {
-            host: host.clone(),
-            port: self.port.unwrap_or(DEFAULT_PORT),
-            login: self.login.clone(),
-            password: self.password.clone(),
-            encoding: self.encoding,
-        })
+    /// The server to connect to at the start: `--host`, or else the
+    /// bookmark that `config` names in `auto_connect`.
+    pub fn target(&self, config: &Config) -> Option<Target> {
+        match &self.host {
+            Some(host) => Some(Target {
+                name: None,
+                host: host.clone(),
+                port: self.port.unwrap_or(DEFAULT_PORT),
+                login: self.login.clone(),
+                password: self.password.clone(),
+                encoding: self.encoding,
+            }),
+            None => config.auto_connect(self.encoding),
+        }
     }
 }
 
@@ -98,14 +105,34 @@ mod tests {
     #[test]
     fn target_takes_the_host_and_its_login() {
         let args = Args::parse_from(["hlc", "--host", "example.com", "--login", "alice"]);
-        let target = args.target().unwrap();
+        let target = args.target(&Config::default()).unwrap();
         assert_eq!(
             (target.address(), target.login.as_str()),
             ("example.com:5500".into(), "alice")
         );
         let args = Args::parse_from(["hlc", "--host", "example.com", "--port", "6000"]);
-        assert_eq!(args.target().unwrap().address(), "example.com:6000");
-        assert!(Args::parse_from(["hlc"]).target().is_none());
+        let target = args.target(&Config::default()).unwrap();
+        assert_eq!(target.address(), "example.com:6000");
+    }
+
+    #[test]
+    fn target_without_a_host_takes_the_bookmark_that_connects_at_the_start() {
+        let args = Args::parse_from(["hlc"]);
+        let mut config = Config::default();
+        assert!(args.target(&config).is_none());
+        config.bookmarks.push(crate::config::Bookmark {
+            name: Some("a".into()),
+            address: "example.org".into(),
+            login: "bob".into(),
+            password: "".into(),
+        });
+        assert!(args.target(&config).is_none());
+        config.auto_connect = Some("a".into());
+        let target = args.target(&config).unwrap();
+        assert_eq!(
+            (target.address(), target.login.as_str()),
+            ("example.org:5500".into(), "bob")
+        );
     }
 
     #[test]

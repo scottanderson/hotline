@@ -38,8 +38,9 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --name Alice
 Use `HLC_PASSWORD` in place of `--password` when other users share the
 host, because they can read a command line.
 
-Without `--host`, hlc starts with no connection and shows the Connect
-to form.
+Without `--host`, hlc connects to the bookmark that `auto_connect`
+names in the settings file. With no such bookmark, hlc starts with no
+connection and shows the Connect to form.
 
 The line at the bottom of the screen shows the keys of the focused
 pane.
@@ -219,6 +220,7 @@ automatic_response = true
 automatic_response_text = "Back soon."
 refuse_pm = false
 refuse_chat = false
+auto_connect = "Home"
 
 [bell]
 chat = false
@@ -246,7 +248,8 @@ is a saved server. Its `address` is `host` or `host:port`, and `login`
 and `password` can be left out for a guest login. Without a `name`,
 or with an empty one, the bookmark has the name `login@address`, or
 `address` for a guest. That name follows a change of the login or the
-address. The file holds each
+address. `auto_connect` names the bookmark that hlc connects to when
+it starts. The file holds each
 password as plain text. On Unix, hlc writes the file so that only you
 can read it.
 

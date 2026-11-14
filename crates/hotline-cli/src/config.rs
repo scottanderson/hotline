@@ -5,10 +5,12 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use hotline_proto::text_encoding::Encoding;
 use hotline_proto::types::UserChangeOptions;
 use serde::{Deserialize, Serialize};
 
 use crate::bell::Bell;
+use crate::connect::{Target, parse_address};
 
 mod edit;
 
@@ -34,6 +36,9 @@ pub struct Config {
     pub refuse_chat: bool,
     /// The events that ring the bell.
     pub bell: Bell,
+    /// The name of the bookmark that `hlc` connects to when it starts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_connect: Option<Box<str>>,
     /// The saved servers, in the order of the server list.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bookmarks: Vec<Bookmark>,
@@ -73,6 +78,20 @@ impl Bookmark {
             Some(name) => name.into(),
         }
     }
+
+    /// The server and the login of the bookmark, with `encoding`. `None`
+    /// when [`parse_address`] refuses the address.
+    pub fn target(&self, encoding: &'static Encoding) -> Option<Target> {
+        let (host, port) = parse_address(&self.address)?;
+        Some(Target {
+            name: Some(self.name().into()),
+            host,
+            port,
+            login: self.login.to_string(),
+            password: self.password.to_string(),
+            encoding,
+        })
+    }
 }
 
 impl Default for Config {
@@ -86,6 +105,7 @@ impl Default for Config {
             refuse_pm: false,
             refuse_chat: false,
             bell: Bell::DEFAULT,
+            auto_connect: None,
             bookmarks: Vec::new(),
         }
     }
@@ -100,6 +120,15 @@ impl Config {
             Some(old) => *old = bookmark,
             None => self.bookmarks.push(bookmark),
         }
+    }
+
+    /// The server of the first bookmark with the name in `auto_connect`.
+    pub fn auto_connect(&self, encoding: &'static Encoding) -> Option<Target> {
+        let name = self.auto_connect.as_deref()?;
+        self.bookmarks
+            .iter()
+            .find(|bookmark| *bookmark.name() == *name)?
+            .target(encoding)
     }
 }
 
@@ -341,6 +370,7 @@ mod tests {
                     password: "".into(),
                 },
             ],
+            auto_connect: Some("Home".into()),
             ..Config::default()
         };
         write(&file, &config).unwrap();
@@ -416,12 +446,6 @@ mod tests {
 
     #[test]
     fn save_bookmark_replaces_the_bookmark_of_the_same_name() {
-        let bookmark = |name: &str, address: &str| Bookmark {
-            name: Some(name.into()),
-            address: address.into(),
-            login: "".into(),
-            password: "".into(),
-        };
         let mut config = Config::default();
         config.save_bookmark(bookmark("a", "one"));
         config.save_bookmark(bookmark("b", "two"));
@@ -429,6 +453,51 @@ mod tests {
         assert_eq!(
             config.bookmarks,
             [bookmark("a", "three"), bookmark("b", "two")]
+        );
+    }
+
+    fn bookmark(name: &str, address: &str) -> Bookmark {
+        Bookmark {
+            name: Some(name.into()),
+            address: address.into(),
+            login: "alice".into(),
+            password: "secret".into(),
+        }
+    }
+
+    #[test]
+    fn auto_connect_takes_the_bookmark_that_it_names() {
+        let encoding = hotline_proto::text_encoding::DEFAULT;
+        let mut config = Config {
+            bookmarks: vec![
+                bookmark("a", "one"),
+                bookmark("b", "two:6000"),
+                bookmark("b", "three"),
+            ],
+            ..Config::default()
+        };
+        assert!(config.auto_connect(encoding).is_none());
+        config.auto_connect = Some("c".into());
+        assert!(config.auto_connect(encoding).is_none());
+        config.auto_connect = Some("b".into());
+        let target = config.auto_connect(encoding).unwrap();
+        assert_eq!(
+            (target.address(), target.login, target.password),
+            ("two:6000".into(), "alice".into(), "secret".into())
+        );
+    }
+
+    #[test]
+    fn auto_connect_gives_nothing_for_a_bad_address() {
+        let config = Config {
+            bookmarks: vec![bookmark("a", "one:x"), bookmark("b", "two")],
+            auto_connect: Some("a".into()),
+            ..Config::default()
+        };
+        assert!(
+            config
+                .auto_connect(hotline_proto::text_encoding::DEFAULT)
+                .is_none()
         );
     }
 }

@@ -2,7 +2,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::TextBox;
 use crate::config::Bookmark;
-use crate::connect::{DEFAULT_PORT, short_address};
+use crate::connect::{parse_address, short_address};
 
 /// A server to connect to, and the login on it: three text rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,23 +57,15 @@ impl ConnectForm {
         "*".repeat(self.password.as_str().graphemes(true).count())
     }
 
-    /// The host and the port of the address, with [`DEFAULT_PORT`] when it
-    /// names no port. `None` when the host is blank or the port is not a
-    /// number. An IPv6 host with a port is in brackets, as in `[::1]:5500`.
+    /// The host and the port of the address, as [`parse_address`] gives
+    /// them.
     pub fn server(&self) -> Option<(String, u16)> {
-        let text = self.address.as_str().trim();
-        let (host, port) = match text.rsplit_once(':') {
-            Some((host, port)) if !host.contains(':') || host.ends_with(']') => {
-                (host, port.parse().ok()?)
-            }
-            _ => (text, DEFAULT_PORT),
-        };
-        (!host.is_empty()).then(|| host.to_string()).zip(Some(port))
+        parse_address(self.address.as_str())
     }
 
     /// The address of the bookmark: `host` or `host:port`, without the
-    /// port [`DEFAULT_PORT`]. `None` when [`ConnectForm::server`] refuses
-    /// the address.
+    /// port [`DEFAULT_PORT`](crate::connect::DEFAULT_PORT). `None` when
+    /// [`ConnectForm::server`] refuses the address.
     fn bookmark_address(&self) -> Option<String> {
         self.server().map(|(host, port)| short_address(&host, port))
     }
@@ -103,29 +95,6 @@ impl ConnectForm {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn server(address: &str) -> Option<(String, u16)> {
-        ConnectForm::new(address, "", "").server()
-    }
-
-    #[test]
-    fn server_takes_the_port_after_the_last_colon() {
-        assert_eq!(
-            server("example.com:6000"),
-            Some(("example.com".into(), 6000))
-        );
-        assert_eq!(server(" example.com "), Some(("example.com".into(), 5500)));
-        assert_eq!(server("[::1]:6000"), Some(("[::1]".into(), 6000)));
-        assert_eq!(server("[::1]"), Some(("[::1]".into(), 5500)));
-    }
-
-    #[test]
-    fn server_refuses_a_blank_host_or_a_bad_port() {
-        assert_eq!(server(""), None);
-        assert_eq!(server(":6000"), None);
-        assert_eq!(server("example.com:x"), None);
-        assert_eq!(server("example.com:70000"), None);
-    }
 
     #[test]
     fn bookmark_takes_its_name_from_the_login_and_the_address() {

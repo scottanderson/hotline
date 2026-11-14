@@ -191,10 +191,10 @@ mod tests {
     #[test]
     fn update_keeps_the_comments_of_each_bookmark_that_stays() {
         let old = "# home\n[[bookmarks]]\nname = \"a\"\naddress = \"a.example\"\n\n# work\n[[bookmarks]]\nname = \"b\"\naddress = \"b.example\"\n\n# play\n[[bookmarks]]\nname = \"c\"\naddress = \"c.example\"\n";
-        let new = "[[bookmarks]]\nname = \"a\"\naddress = \"a.example\"\n\n[[bookmarks]]\nname = \"c\"\naddress = \"c.example\"\nauto_connect = true\n\n[[bookmarks]]\nname = \"d\"\naddress = \"d.example\"\n";
+        let new = "[[bookmarks]]\nname = \"a\"\naddress = \"a.example\"\n\n[[bookmarks]]\nname = \"c\"\naddress = \"c.example\"\nlogin = \"alice\"\n\n[[bookmarks]]\nname = \"d\"\naddress = \"d.example\"\n";
         assert_eq!(
             update(old, new).unwrap(),
-            "# home\n[[bookmarks]]\nname = \"a\"\naddress = \"a.example\"\n\n# play\n[[bookmarks]]\nname = \"c\"\naddress = \"c.example\"\nauto_connect = true\n\n[[bookmarks]]\nname = \"d\"\naddress = \"d.example\"\n"
+            "# home\n[[bookmarks]]\nname = \"a\"\naddress = \"a.example\"\n\n# play\n[[bookmarks]]\nname = \"c\"\naddress = \"c.example\"\nlogin = \"alice\"\n\n[[bookmarks]]\nname = \"d\"\naddress = \"d.example\"\n"
         );
     }
 

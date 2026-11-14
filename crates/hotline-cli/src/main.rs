@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let config = &file.config;
     let bell = args.bell(config.bell);
-    let target = args.target();
+    let target = args.target(config);
     let icon = args.icon.unwrap_or(config.icon);
     let mut session = ClientSession::new(name, icon, EncodingHandle::default());
     session.options = config.user_options();
@@ -322,6 +322,7 @@ async fn run(
                             disconnect(&client, session, &mut tasks).await;
                         }
                         let new = Target {
+                            name: None,
                             host,
                             port,
                             login,
@@ -406,8 +407,8 @@ fn start_connect(
     target: &Target,
     session: &mut ClientSession,
 ) -> BoxFuture<'static, anyhow::Result<Connection>> {
-    let address = target.address();
-    session.show_status(format!("connecting to {address}..."));
+    session.show_status(format!("connecting to {}...", target.display_name()));
+    let address = short_address(&target.host, target.port);
     let connecting = connect::connect(target.clone());
     Box::pin(async move {
         connecting
