@@ -14,6 +14,15 @@ pub enum Action {
     Reconnect,
     /// End the connection, and stay open.
     Disconnect,
+    /// Ask for a server to connect to.
+    OpenConnect,
+    /// End the connection, if any, and connect to `host`.
+    Connect {
+        host: String,
+        port: u16,
+        login: String,
+        password: String,
+    },
     /// Send public chat, sent unchanged even when it starts with `/`.
     SendChat(String),
     /// Send chat to the private chat room `chat_id`.

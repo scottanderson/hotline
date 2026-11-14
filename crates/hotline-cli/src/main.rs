@@ -43,7 +43,7 @@ use session::{
 use tasks::{Task, TaskId, Tasks};
 use tokio::sync::mpsc;
 use transfer::Conflict;
-use view::{AccountForm, Action, Focus, Modal, OptionsForm, TextBox, View};
+use view::{AccountForm, Action, ConnectForm, Focus, Modal, OptionsForm, TextBox, View};
 
 /// How often the task list shows new progress.
 const TICK: std::time::Duration = std::time::Duration::from_millis(250);
@@ -128,7 +128,7 @@ async fn run(
     terminal: &mut DefaultTerminal,
     session: &mut ClientSession,
     connection: Connection,
-    target: Target,
+    mut target: Target,
     bell: Bell,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
@@ -257,16 +257,36 @@ async fn run(
                 match perform(action, session, &mut view, &mut tasks, &lines_tx).await {
                     Flow::Go => {}
                     Flow::Quit => should_quit = true,
+                    Flow::OpenConnect => {
+                        let address = target.address();
+                        let form = ConnectForm::new(&address, &target.login, &target.password);
+                        view.modal = Some(Modal::Connect(form));
+                    }
+                    Flow::Connect {
+                        host,
+                        port,
+                        login,
+                        password,
+                    } => {
+                        if !view.disconnected {
+                            disconnect(&client, session, &mut view, &mut tasks).await;
+                        }
+                        target = Target {
+                            host,
+                            port,
+                            login,
+                            password,
+                            encoding: target.encoding,
+                        };
+                        session.show_status(format!("connecting to {}...", target.address()));
+                        connecting = Some(Box::pin(connect::connect(target.clone())));
+                    }
                     Flow::Reconnect => {
                         session.show_status(format!("connecting to {}...", target.address()));
                         connecting = Some(Box::pin(connect::connect(target.clone())));
                     }
                     Flow::Disconnect if !view.disconnected => {
-                        if let Err(e) = client.close().await {
-                            session.show_error(format!("failed to disconnect: {e}"));
-                        }
-                        session.show_status("disconnected");
-                        end_connection(session, &mut view, &mut tasks);
+                        disconnect(&client, session, &mut view, &mut tasks).await;
                     }
                     Flow::Disconnect => {}
                 }
@@ -311,6 +331,20 @@ fn keep_alive_due(client: &HotlineClient, last_keep_alive: Instant) -> Instant {
     idle.checked_add(KEEP_ALIVE).unwrap_or(idle)
 }
 
+/// End the connection to `client`, and drop its state.
+async fn disconnect(
+    client: &HotlineClient,
+    session: &mut ClientSession,
+    view: &mut View,
+    tasks: &mut Tasks,
+) {
+    if let Err(e) = client.close().await {
+        session.show_error(format!("failed to disconnect: {e}"));
+    }
+    session.show_status("disconnected");
+    end_connection(session, view, tasks);
+}
+
 /// Drop the state of the connection that ended, and stop its tasks.
 fn end_connection(session: &mut ClientSession, view: &mut View, tasks: &mut Tasks) {
     session.clear();
@@ -347,6 +381,15 @@ enum Flow {
     Reconnect,
     /// End the connection, and stay open.
     Disconnect,
+    /// Ask for a server to connect to.
+    OpenConnect,
+    /// End the connection, if any, and connect to `host`.
+    Connect {
+        host: String,
+        port: u16,
+        login: String,
+        password: String,
+    },
 }
 
 /// Run `action`. A transfer sends its lines to `lines`.
@@ -363,6 +406,20 @@ async fn perform(
         Action::Quit => return Flow::Quit,
         Action::Reconnect => return Flow::Reconnect,
         Action::Disconnect => return Flow::Disconnect,
+        Action::OpenConnect => return Flow::OpenConnect,
+        Action::Connect {
+            host,
+            port,
+            login,
+            password,
+        } => {
+            return Flow::Connect {
+                host,
+                port,
+                login,
+                password,
+            };
+        }
         Action::SendChat(text) => session.send_chat(client, &text).await,
         Action::SendRoomChat { chat_id, text } => {
             session.send_room_chat(client, chat_id, &text).await;

@@ -4,6 +4,7 @@
 mod account_form;
 mod action;
 mod command;
+mod connect_form;
 mod divider;
 mod hint;
 mod modal;
@@ -33,6 +34,7 @@ use crate::ui::{self, Areas};
 pub use account_form::{privileges, AccountForm};
 pub use action::Action;
 pub use command::{Command, Palette};
+pub use connect_form::ConnectForm;
 pub use divider::{Divider, Splits};
 pub use hint::Hint;
 pub use modal::{MenuItem, Modal};
@@ -498,6 +500,12 @@ impl View {
                 Hint::new("Enter", "save").enabled_by(form.saved_by()),
                 Hint::new("Esc", "cancel"),
             ],
+            (Some(Modal::Connect(_)), ..) => vec![
+                Hint::new("↑↓", "row"),
+                Hint::new("Tab", "next row"),
+                Hint::new("Enter", "connect"),
+                Hint::new("Esc", "cancel"),
+            ],
             (Some(Modal::Options(_)), ..) => vec![
                 Hint::new("↑↓", "row"),
                 Hint::new("Space", "toggle"),
@@ -507,6 +515,7 @@ impl View {
             (Some(Modal::Quit), ..) => vec![Hint::new("y", "quit"), Hint::new("Esc", "cancel")],
             (Some(Modal::Disconnected(_)), ..) => vec![
                 Hint::new("r", "reconnect"),
+                Hint::new("c", "connect to"),
                 Hint::new("q", "quit"),
                 Hint::new("Esc", "close"),
             ],
@@ -666,6 +675,7 @@ impl View {
             } else {
                 Command::Disconnect
             },
+            Command::ConnectTo,
             Command::Quit,
         ]);
         commands
@@ -752,6 +762,7 @@ impl View {
             Command::Subject(chat_id) => Action::EditChatSubject(chat_id),
             Command::Leave(chat_id) => Action::LeaveChat(chat_id),
             Command::Reconnect => Action::Reconnect,
+            Command::ConnectTo => Action::OpenConnect,
             Command::Disconnect => Action::Disconnect,
             Command::Quit => {
                 self.modal = Some(Modal::Quit);
@@ -794,6 +805,9 @@ impl View {
         if let Modal::Options(form) = modal {
             return self.options_form_key(form, key);
         }
+        if let Modal::Connect(form) = modal {
+            return self.connect_form_key(form, key);
+        }
         match (&mut modal, plain_code(key)) {
             (Modal::Article(article), KeyCode::Char('r')) if self.may(Access::POST_NEWS_ART) => {
                 let title = match article.title.strip_prefix("Re: ") {
@@ -833,6 +847,7 @@ impl View {
                 return Action::Quit;
             }
             (Modal::Disconnected(_), KeyCode::Char('r')) => return Action::Reconnect,
+            (Modal::Disconnected(_), KeyCode::Char('c')) => return Action::OpenConnect,
             (Modal::DeleteNews { target, .. }, KeyCode::Char('y')) => {
                 return Action::DeleteNewsItem(*target);
             }
@@ -1154,6 +1169,31 @@ impl View {
         Action::None
     }
 
+    fn connect_form_key(&mut self, mut form: ConnectForm, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => return Action::None,
+            KeyCode::Enter => {
+                if let Some((host, port)) = form.server() {
+                    return Action::Connect {
+                        host,
+                        port,
+                        login: form.login.take(),
+                        password: form.password.take(),
+                    };
+                }
+            }
+            KeyCode::Up => form.row = form.row.saturating_sub(1),
+            KeyCode::Down => form.row = form.row.saturating_add(1).min(ConnectForm::ROWS - 1),
+            KeyCode::Tab => form.next_row(),
+            KeyCode::BackTab => form.previous_row(),
+            _ => {
+                form.text_mut().edit(key);
+            }
+        }
+        self.modal = Some(Modal::Connect(form));
+        Action::None
+    }
+
     fn accounts_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Tab => self.focus = self.side_focus(),
@@ -1304,6 +1344,7 @@ impl View {
                 | Modal::DeleteNews { .. }
                 | Modal::Quit
                 | Modal::Disconnected(_)
+                | Modal::Connect(_)
                 | Modal::Account(_)
                 | Modal::Options(_)
                 | Modal::OpenAccount { .. }
@@ -2987,6 +3028,58 @@ mod tests {
     }
 
     #[test]
+    fn connect_form_sends_the_server_and_the_login() {
+        let mut view = View {
+            modal: Some(Modal::Connect(ConnectForm::new(
+                "example.com:x",
+                "alice",
+                "",
+            ))),
+            ..View::default()
+        };
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::None
+        );
+        assert!(matches!(view.modal, Some(Modal::Connect(_))));
+        view.handle_key(key(KeyCode::Backspace), &users(), &files());
+        view.handle_key(key(KeyCode::Char('1')), &users(), &files());
+        view.handle_key(key(KeyCode::Down), &users(), &files());
+        view.handle_key(key(KeyCode::Down), &users(), &files());
+        view.handle_key(key(KeyCode::Char('p')), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::Connect {
+                host: "example.com".into(),
+                port: 1,
+                login: "alice".into(),
+                password: "p".into(),
+            }
+        );
+        assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn connect_form_tab_moves_to_the_next_row_and_back() {
+        let mut view = View {
+            modal: Some(Modal::Connect(ConnectForm::new("", "", ""))),
+            ..View::default()
+        };
+        let mut row = |code| {
+            view.handle_key(key(code), &users(), &files());
+            match &view.modal {
+                Some(Modal::Connect(form)) => form.row,
+                _ => panic!("the form closed"),
+            }
+        };
+        assert_eq!(row(KeyCode::Tab), 1);
+        assert_eq!(row(KeyCode::Tab), 2);
+        assert_eq!(row(KeyCode::Tab), 0);
+        assert_eq!(row(KeyCode::BackTab), 2);
+        assert_eq!(row(KeyCode::BackTab), 1);
+    }
+
+    #[test]
     fn palette_offers_disconnect_or_reconnect() {
         let mut view = View::default();
         assert!(view.commands(&[]).contains(&Command::Disconnect));
@@ -2994,6 +3087,7 @@ mod tests {
         view.disconnected = true;
         assert!(view.commands(&[]).contains(&Command::Reconnect));
         assert!(!view.commands(&[]).contains(&Command::Disconnect));
+        assert!(view.commands(&[]).contains(&Command::ConnectTo));
     }
 
     #[test]

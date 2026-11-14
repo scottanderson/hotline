@@ -5,6 +5,9 @@ use hotline_proto::text_encoding::Encoding;
 use hotline_proto::{Received, Transaction};
 use tokio::sync::mpsc;
 
+/// The port of a server whose address names none.
+pub const DEFAULT_PORT: u16 = 5500;
+
 /// A server, and the account that logs in to it.
 #[derive(Clone)]
 pub struct Target {

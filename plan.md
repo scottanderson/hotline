@@ -233,6 +233,11 @@ works this way.
   does not have the focus. A terminal that does not report focus
   counts as focused. `hlc` has no sound for a user who joins or
   leaves.
+- **`hlc` connects to another server without a check.** openline's
+  `CMyApplication::DoConnect` (`Hotline.cp`) asks to confirm when
+  transfers run (`ConfirmDisconnect`), then disconnects. `hlc` ends the
+  connection and its transfers when the user accepts the Connect to
+  form.
 
 ## Openline vs. mhxd divergences (resolved)
 

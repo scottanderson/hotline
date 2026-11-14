@@ -21,6 +21,8 @@ pub enum Command {
     Reconnect,
     /// End the connection, and stay open.
     Disconnect,
+    /// Ask for a server, then connect to it.
+    ConnectTo,
     Quit,
     /// Run `item` of the user menu on the user `user_id`.
     User(u16, MenuItem),
@@ -42,6 +44,7 @@ impl Command {
             Self::Leave(_) => "Leave this room".into(),
             Self::Reconnect => "Reconnect".into(),
             Self::Disconnect => "Disconnect".into(),
+            Self::ConnectTo => "Connect to".into(),
             Self::Quit => "Quit".into(),
             Self::User(_, item) => item.label().into(),
         }
@@ -67,7 +70,10 @@ impl Command {
             Self::User(_, MenuItem::SendMessage) => "Enter",
             Self::User(_, MenuItem::GetInfo) => "i",
             Self::User(_, MenuItem::Disconnect) => "k",
-            Self::Reconnect | Self::Disconnect | Self::User(_, MenuItem::PrivateChat) => "",
+            Self::Reconnect
+            | Self::Disconnect
+            | Self::ConnectTo
+            | Self::User(_, MenuItem::PrivateChat) => "",
         }
     }
 

@@ -20,8 +20,8 @@ use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::transfer::file_size_text;
 use crate::view::{
-    allows, contains, privileges, AccountForm, Focus, Hint, MenuItem, Modal, OptionsForm, Splits,
-    Tab, TextBox, View, OPTIONS, QUEUE_TRANSFERS,
+    allows, contains, privileges, AccountForm, ConnectForm, Focus, Hint, MenuItem, Modal,
+    OptionsForm, Splits, Tab, TextBox, View, OPTIONS, QUEUE_TRANSFERS,
 };
 
 /// Where each part of the main screen is drawn.
@@ -625,6 +625,24 @@ fn options_form_rows(form: &OptionsForm) -> Vec<String> {
         .collect()
 }
 
+/// The rows of `form`: the server, the login, and the password.
+fn connect_form_rows(form: &ConnectForm) -> Vec<String> {
+    vec![
+        text_row("server:", form.address.as_str()),
+        text_row("login:", form.login.as_str()),
+        text_row("password:", &form.password_text()),
+    ]
+}
+
+/// The column of the cursor in the text of the selected row of `form`.
+fn connect_form_cursor(form: &ConnectForm) -> usize {
+    match form.row {
+        0 => text_width(form.address.before_cursor()),
+        1 => text_width(form.login.before_cursor()),
+        _ => form.password.before_cursor().graphemes(true).count(),
+    }
+}
+
 /// A form row with `label`, then `text`.
 fn text_row(label: &str, text: &str) -> String {
     format!("{label:FORM_LABEL$}{text}")
@@ -1062,6 +1080,15 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
             if let Some(column) = options_form_cursor(form) {
                 set_form_cursor(frame, area, form.row, column);
             }
+        }
+        Modal::Connect(form) => {
+            let rows = connect_form_rows(form);
+            let area = screen.centered(
+                Constraint::Length(60),
+                Constraint::Length(list_height(rows.len())),
+            );
+            draw_list_modal(frame, area, modal_block("connect to"), rows, form.row);
+            set_form_cursor(frame, area, form.row, connect_form_cursor(form));
         }
         Modal::OpenAccount { input } => {
             draw_input_modal(frame, screen, "open the account with login".into(), input);

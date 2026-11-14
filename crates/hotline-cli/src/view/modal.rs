@@ -1,7 +1,7 @@
 use hotline_client::{ClientInfoText, FileInfo};
 use hotline_proto::Access;
 
-use super::{AccountForm, OptionsForm, Palette, TextBox};
+use super::{AccountForm, ConnectForm, OptionsForm, Palette, TextBox};
 use crate::file_edit::FileEdit;
 use crate::session::{ArticleText, ChatInvite, Disconnect, NewsFolder, NewsTarget};
 use crate::transfer::Conflict;
@@ -44,6 +44,8 @@ pub enum Modal {
     Quit,
     /// The reason the server ended the connection.
     Disconnected(Disconnect),
+    /// A server to connect to.
+    Connect(ConnectForm),
     /// A check before the file or folder `name` is deleted.
     DeleteFile { name: Box<str> },
     /// The info of a file or folder.
