@@ -41,9 +41,16 @@ impl Command {
         }
     }
 
-    /// The key that runs the command without the palette.
-    pub const fn key(self) -> &'static str {
+    /// The key that runs the command without the palette. A tab of the
+    /// tab bar `bar_tabs` has its function key.
+    pub fn key(self, bar_tabs: &[(Tab, String)]) -> &'static str {
         match self {
+            Self::OpenTab(tab) => bar_tabs
+                .iter()
+                .position(|&(t, _)| t == tab)
+                .and_then(|i| TAB_KEYS.get(i))
+                .copied()
+                .unwrap_or_default(),
             Self::Broadcast => "Alt-A",
             Self::Options => "Alt-O",
             Self::Tasks => "Alt-T",
@@ -54,7 +61,7 @@ impl Command {
             Self::User(_, MenuItem::SendMessage) => "Enter",
             Self::User(_, MenuItem::GetInfo) => "i",
             Self::User(_, MenuItem::Disconnect) => "k",
-            Self::OpenTab(_) | Self::User(_, MenuItem::PrivateChat) => "",
+            Self::User(_, MenuItem::PrivateChat) => "",
         }
     }
 
@@ -68,47 +75,65 @@ impl Command {
     }
 }
 
+/// The keys of the tabs of the tab bar, in order.
+const TAB_KEYS: [&str; 9] = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9"];
+
+/// One row of the palette.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub command: Command,
+    /// The text the palette shows and matches.
+    pub label: String,
+    /// The key that runs the command, or `""`.
+    pub key: &'static str,
+}
+
 /// The command palette, or the action menu: the commands that match `input`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Palette {
     /// The title shown while `input` is empty.
     pub title: &'static str,
     pub input: TextBox,
-    /// Each command and its label, in palette order.
-    commands: Vec<(Command, String)>,
+    /// The rows, in palette order.
+    entries: Vec<Entry>,
     pub selected: usize,
 }
 
 impl Palette {
+    /// A palette of `commands`. `tabs` names each tab, and `bar_tabs` are
+    /// the tabs of the tab bar.
     pub fn new(
         title: &'static str,
         commands: impl IntoIterator<Item = Command>,
         tabs: &[(Tab, String)],
+        bar_tabs: &[(Tab, String)],
     ) -> Self {
         Self {
             title,
             input: TextBox::new(),
-            commands: commands
+            entries: commands
                 .into_iter()
-                .map(|command| (command, command.label(tabs)))
+                .map(|command| Entry {
+                    command,
+                    label: command.label(tabs),
+                    key: command.key(bar_tabs),
+                })
                 .collect(),
             selected: 0,
         }
     }
 
-    /// The commands whose label holds `input`, ignoring case.
-    pub fn matches(&self) -> impl Iterator<Item = &(Command, String)> {
+    /// The rows whose label holds `input`, ignoring case.
+    pub fn matches(&self) -> impl Iterator<Item = &Entry> {
         let input = self.input.as_str().to_lowercase();
-        self.commands
+        self.entries
             .iter()
-            .filter(move |(_, label)| label.to_lowercase().contains(&input))
+            .filter(move |entry| entry.label.to_lowercase().contains(&input))
     }
 
     /// The selected command, if any matches.
     pub fn chosen(&self) -> Option<Command> {
-        self.matches()
-            .nth(self.selected)
-            .map(|&(command, _)| command)
+        self.matches().nth(self.selected).map(|entry| entry.command)
     }
 
     pub const fn select_previous(&mut self) {

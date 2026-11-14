@@ -604,7 +604,8 @@ impl View {
         }
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         if (ctrl && key.code == KeyCode::Char('p')) || (alt && key.code == KeyCode::Char('x')) {
-            let palette = Palette::new("commands", self.commands(users), &self.tabs);
+            let commands = self.commands(users);
+            let palette = Palette::new("commands", commands, &self.tabs, self.bar_tabs());
             self.modal = Some(Modal::Palette(palette));
             return Action::None;
         }
@@ -615,7 +616,10 @@ impl View {
             let commands = self.focus_commands(users);
             if !commands.is_empty() {
                 self.modal = Some(Modal::Palette(Palette::new(
-                    "actions", commands, &self.tabs,
+                    "actions",
+                    commands,
+                    &self.tabs,
+                    self.bar_tabs(),
                 )));
             }
             return Action::None;
@@ -2021,6 +2025,28 @@ mod tests {
         let alt_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT);
         assert_eq!(view.handle_key(alt_r, &users(), &files()), Action::None);
         assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn palette_key_shows_the_function_key_of_each_bar_tab() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        let Some(Modal::Palette(palette)) = &view.modal else {
+            panic!("no palette");
+        };
+        let keys: Vec<_> = palette
+            .matches()
+            .filter_map(|entry| match entry.command {
+                Command::OpenTab(tab) => Some((tab, entry.key)),
+                _ => None,
+            })
+            .collect();
+        let bar: Vec<_> = view.bar_tabs().iter().map(|&(tab, _)| tab).collect();
+        assert!(!bar.is_empty());
+        for (i, tab) in bar.iter().enumerate() {
+            let want = format!("F{}", i + 1);
+            assert!(keys.contains(&(*tab, want.as_str())), "{tab:?}");
+        }
     }
 
     #[test]

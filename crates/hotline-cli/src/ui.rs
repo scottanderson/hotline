@@ -971,9 +971,9 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
         Modal::Palette(palette) => {
             let rows: Vec<ListItem> = palette
                 .matches()
-                .map(|(command, label)| {
-                    let style = enabled_style(allows(access, command.enabled_by()));
-                    ListItem::new(format!("{label:<38}{}", command.key())).style(style)
+                .map(|entry| {
+                    let style = enabled_style(allows(access, entry.command.enabled_by()));
+                    ListItem::new(format!("{:<38}{}", entry.label, entry.key)).style(style)
                 })
                 .collect();
             let area = screen.centered(
