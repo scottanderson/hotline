@@ -4,6 +4,7 @@
 
 mod args;
 mod bell;
+mod config;
 mod connect;
 mod file_edit;
 mod line;
@@ -32,6 +33,7 @@ use ratatui::widgets::{ListState, TableState};
 
 use args::Args;
 use bell::Bell;
+use config::ConfigFile;
 use connect::{Connection, Target, short_address};
 use file_edit::FileEdit;
 use futures::future::{BoxFuture, OptionFuture};
@@ -62,19 +64,50 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let target = args.target();
-    let mut session = ClientSession::new(args.name, args.icon, EncodingHandle::default());
-    session.download_dir = args.download_dir;
-    let bell = if args.no_bell {
-        Bell::empty()
-    } else {
-        Bell::DEFAULT
+    let mut file = ConfigFile::load()?;
+    let config = &mut file.config;
+    let name: Box<str> = match (args.name.as_deref(), config.name.as_deref()) {
+        (Some(name), _) | (None, Some(name)) => name.into(),
+        (None, None) => {
+            let name = ask_name()?;
+            config.name = Some(name.clone());
+            file.save()?;
+            name
+        }
     };
+    let config = &file.config;
+    let bell = args.bell(config.bell);
+    let target = args.target();
+    let icon = args.icon.unwrap_or(config.icon);
+    let mut session = ClientSession::new(name, icon, EncodingHandle::default());
+    session.options = config.user_options();
+    session.automatic_response = config.automatic_response_text.clone();
+    session.queue_transfers = config.queue_transfers;
+    session.download_dir = args.download_dir;
 
     let (mut terminal, enhanced) = setup_terminal()?;
-    let result = run(&mut terminal, &mut session, target, args.encoding, bell).await;
+    let result = run(
+        &mut terminal,
+        &mut session,
+        target,
+        args.encoding,
+        bell,
+        &mut file,
+    )
+    .await;
     restore_terminal(enhanced)?;
     result
+}
+
+/// Ask for the name in the user list on standard input. A blank name gives
+/// `unnamed`.
+fn ask_name() -> std::io::Result<Box<str>> {
+    print!("Name: ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let name = line.trim();
+    Ok(if name.is_empty() { "unnamed" } else { name }.into())
 }
 
 /// Set up the terminal with [`ratatui::try_init`], mouse capture, focus
@@ -124,6 +157,7 @@ async fn run(
     start: Option<Target>,
     encoding: &'static Encoding,
     bell: Bell,
+    file: &mut ConfigFile,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
     let mut view = View::default();
@@ -268,6 +302,7 @@ async fn run(
                     &mut view,
                     &mut tasks,
                     &lines_tx,
+                    file,
                 )
                 .await;
                 match flow {
@@ -465,6 +500,7 @@ async fn perform(
     view: &mut View,
     tasks: &mut Tasks,
     lines: &mpsc::UnboundedSender<TransferLine>,
+    file: &mut ConfigFile,
 ) -> Flow {
     match action {
         Action::None => {}
@@ -494,6 +530,15 @@ async fn perform(
             queue_transfers,
         } => {
             session.queue_transfers = queue_transfers;
+            let config = &mut file.config;
+            config.name = Some(info.name.clone());
+            config.icon = info.icon;
+            config.set_user_options(info.options);
+            config.automatic_response_text = info.automatic_response.clone();
+            config.queue_transfers = queue_transfers;
+            if let Err(e) = file.save() {
+                session.show_error(format!("failed to save the settings: {e:#}"));
+            }
             match client {
                 Some(client) => session.set_client_user_info(client, info).await,
                 None => session.set_user_info(info),

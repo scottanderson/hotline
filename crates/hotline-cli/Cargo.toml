@@ -33,6 +33,9 @@ crossterm = { workspace = true }
 sys-locale = { workspace = true }
 chrono = { workspace = true, features = ["unstable-locales"] }
 unicode-segmentation = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
 
 [dev-dependencies]
 hotline-server = { workspace = true }

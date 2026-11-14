@@ -27,12 +27,13 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --name Alice
 | `--port`         | 5500        | the server's port, with `--host`               |
 | `--login`        | (guest)     | the account login                              |
 | `--password`     | (none)      | the password, also read from `HLC_PASSWORD`    |
-| `--name`         | `RustHL`    | the name in the user list                      |
+| `--name`         | (asked)     | the name in the user list                      |
 | `--icon`         | 414         | the icon ID                                    |
 | `--download-dir` | `.`         | the folder that downloads go to                |
 | `--encoding`     | `macintosh` | the text encoding, the same as the server's    |
 | `--tracker`      |             | list a tracker's servers and exit, no login    |
-| `--no-bell`      | off         | do not ring the terminal bell                  |
+| `--bell`         |             | ring the terminal bell                         |
+| `--no-bell`      |             | do not ring the terminal bell                  |
 
 Use `HLC_PASSWORD` in place of `--password` when other users share the
 host, because they can read a command line.
@@ -75,7 +76,9 @@ The terminal bell rings on each chat line in a room that you cannot
 see: another tab or room shows, or the terminal does not have the
 focus. It also rings on a private message, an administrator message,
 a broadcast, an invitation to a private chat, and the end of a file
-transfer. `--no-bell` turns it off.
+transfer. The `bell` setting changes these events. `--no-bell` turns
+the bell off. `--bell` turns it on, with the default events when the
+`bell` setting is empty.
 
 A key, a command, a menu item, or a tab that needs a privilege you do
 not have shows in gray, and it does nothing. hlc gets the privileges
@@ -170,7 +173,8 @@ Each transfer waits until each older transfer ends. A waiting transfer
 shows `(queued)`, and the list title counts these transfers. `s` starts
 the selected transfer at once. The `queue transfers` row of the options
 form (Alt-O) turns the queue off, and then each transfer starts at
-once. The queue is on when `hlc` starts.
+once. The `queue_transfers` setting turns the queue on or off when
+`hlc` starts.
 
 The Threaded News tab has three panes: a tree of bundles (📚) and
 categories (📰) on the left, the threads of the selected category on the
@@ -191,6 +195,47 @@ no accounts and `o` is gray. `n` needs the create user privilege, and
 `x` needs the delete user privilege. The form saves a new account with
 the create user privilege, and a changed account with the modify user
 privilege.
+
+## Settings
+
+hlc keeps its settings in `$XDG_CONFIG_HOME/hlc/config.toml`, or in
+`~/.config/hlc/config.toml` when `XDG_CONFIG_HOME` is not set or not
+an absolute path. This is the same on macOS. A flag overrides the
+setting of the same name, and the file overrides the default in the
+table above. A setting that is not in the file has its default.
+
+```toml
+name = "Alice"
+icon = 414
+queue_transfers = true
+automatic_response = true
+automatic_response_text = "Back soon."
+refuse_pm = false
+refuse_chat = false
+
+[bell]
+chat = false
+room = true
+news = false
+message = true
+invite = true
+transfer = true
+```
+
+`queue_transfers` turns the transfer queue on and off.
+`automatic_response`, `refuse_pm`, and `refuse_chat` turn on and off
+the options of the options form (Alt-O). `automatic_response_text` is
+the reply to a private message. The file keeps it when the option is
+off, and leaves it out when it is blank. `[bell]` turns on and off
+each event that rings the bell. A
+missing event has the value in the example.
+
+When the file has no name and you do not give `--name`, hlc asks for
+a name before it connects, and saves it. A blank name gives
+`unnamed`. The options form (Alt-O) saves the name, the icon, the
+options, the automatic response, and the queue setting when you accept
+it. A save keeps your comments, and the text of each setting
+that does not change.
 
 ## License
 

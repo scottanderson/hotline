@@ -190,6 +190,12 @@ works this way.
   does not have the focus. A terminal that does not report focus
   counts as focused. `hlc` has no sound for a user who joins or
   leaves.
+- **`hlc` asks only for a name on the first run.** openline's client
+  shows a wizard on the first launch that asks for a name and an icon
+  (`CMyApplication::DoWizard` in `Hotline.cp`). A blank name gives
+  `unnamed` in both. `hlc` asks for the name on standard input, and
+  takes the icon from the settings file or `--icon`. Its default is
+  414, as in openline.
 - **`hlc` connects to another server without a check.** openline's
   `CMyApplication::DoConnect` (`Hotline.cp`) asks to confirm when
   transfers run (`ConfirmDisconnect`), then disconnects. `hlc` ends the
@@ -216,19 +222,6 @@ one-shared-room model.
    `UHttpTransport.cp`). Only openline's own client uses the tunnel.
    `HLProtocol.md` does not document it, mhxd does not implement it,
    and no client is at hand to test against. Revisit this gap later.
-2. **`hlc` has no config file.** Keep the settings in
-   `$XDG_CONFIG_HOME/hlc/config.toml`, or `~/.config/hlc/config.toml`
-   when the variable is not set, on macOS too. The file holds the
-   defaults of the command-line options: the name, the icon, the
-   server, the options bits, and the bell. It also holds the `queue
-   transfers` option. A flag overrides the file, and the file
-   overrides the built-in default. `--bell` and
-   `--no-bell` turn the bell on and off. The file chooses the events
-   that ring it. On the first run with no name in the file and no
-   `--name`, `hlc` asks for a name and saves it. A change in the
-   options form (Alt-O) saves too. Derive `serde` on the settings
-   type. The format is open: TOML with the `toml` crate, or JSON with
-   the workspace's `serde_json`, which adds no new crate.
 
 See AGENTS.md for durable working conventions (verification loop, commit
 hygiene, rustdoc style, reference-naming rules); this file only tracks

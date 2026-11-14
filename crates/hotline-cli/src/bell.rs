@@ -1,9 +1,12 @@
 //! The terminal bell, which rings on a private message, an invitation, a
 //! finished transfer, and a chat line in a room tab that the user cannot see.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use hotline_proto::opcode::Opcode;
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::view::Tab;
 
@@ -27,7 +30,7 @@ bitflags::bitflags! {
 }
 
 impl Bell {
-    /// The events that ring the bell unless `--no-bell` is given.
+    /// The events that ring the bell by default.
     pub const DEFAULT: Self = Self::ROOM
         .union(Self::MESSAGE)
         .union(Self::INVITE)
@@ -64,6 +67,31 @@ impl Bell {
             out.flush()?;
         }
         Ok(())
+    }
+}
+
+/// A table with a boolean for each lowercase event name, such as
+/// `room = true`. A missing event has its value in [`Bell::DEFAULT`].
+impl Serialize for Bell {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(
+            Self::all()
+                .iter_names()
+                .map(|(name, event)| (name.to_ascii_lowercase(), self.contains(event))),
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for Bell {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        BTreeMap::<String, bool>::deserialize(deserializer)?
+            .iter()
+            .try_fold(Self::DEFAULT, |mut bell, (name, &on)| {
+                let event = Self::from_name(&name.to_ascii_uppercase())
+                    .ok_or_else(|| D::Error::custom(format!("no bell event named `{name}`")))?;
+                bell.set(event, on);
+                Ok(bell)
+            })
     }
 }
 

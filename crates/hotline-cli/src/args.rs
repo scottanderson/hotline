@@ -3,9 +3,11 @@ use std::path::PathBuf;
 use clap::Parser;
 use hotline_proto::text_encoding::{self, Encoding};
 
+use crate::bell::Bell;
 use crate::connect::{DEFAULT_PORT, Target};
 
-/// Terminal UI Hotline client.
+/// Terminal UI Hotline client. A flag overrides the setting of the same
+/// name in the settings file.
 #[derive(Parser, Debug)]
 #[command(name = "hlc", version, about)]
 pub struct Args {
@@ -26,12 +28,12 @@ pub struct Args {
     pub password: String,
 
     /// The name in the user list.
-    #[arg(long, default_value = "RustHL")]
-    pub name: String,
+    #[arg(long)]
+    pub name: Option<String>,
 
     /// Icon ID.
-    #[arg(long, default_value_t = 414)]
-    pub icon: u16,
+    #[arg(long)]
+    pub icon: Option<u16>,
 
     /// Folder that downloads are saved in.
     #[arg(long, default_value = ".")]
@@ -41,6 +43,10 @@ pub struct Args {
     /// `macintosh` or `utf-8`. It must match the server's.
     #[arg(long, default_value = "macintosh", value_parser = text_encoding::from_label)]
     pub encoding: &'static Encoding,
+
+    /// Ring the terminal bell on the events of the settings file.
+    #[arg(long, conflicts_with = "no_bell")]
+    pub bell: bool,
 
     /// Do not ring the terminal bell.
     #[arg(long)]
@@ -53,6 +59,16 @@ pub struct Args {
 }
 
 impl Args {
+    /// The events that ring the bell, given the events of the settings file.
+    /// `--bell` with no events in the file gives [`Bell::DEFAULT`].
+    pub const fn bell(&self, file: Bell) -> Bell {
+        match (self.bell, self.no_bell) {
+            (_, true) => Bell::empty(),
+            (true, false) if file.is_empty() => Bell::DEFAULT,
+            _ => file,
+        }
+    }
+
     /// The server to connect to at the start, if `--host` names one.
     pub fn target(&self) -> Option<Target> {
         self.host.as_ref().map(|host| Target {
@@ -68,6 +84,16 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bell_takes_the_events_of_the_file_unless_a_flag_turns_it_off() {
+        let args = |flags: &[&str]| Args::parse_from([&["hlc"], flags].concat());
+        assert_eq!(args(&[]).bell(Bell::ROOM), Bell::ROOM);
+        assert_eq!(args(&[]).bell(Bell::empty()), Bell::empty());
+        assert_eq!(args(&["--no-bell"]).bell(Bell::ROOM), Bell::empty());
+        assert_eq!(args(&["--bell"]).bell(Bell::ROOM), Bell::ROOM);
+        assert_eq!(args(&["--bell"]).bell(Bell::empty()), Bell::DEFAULT);
+    }
 
     #[test]
     fn target_takes_the_host_and_its_login() {
