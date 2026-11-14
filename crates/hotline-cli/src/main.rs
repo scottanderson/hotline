@@ -4,6 +4,7 @@
 
 mod args;
 mod bell;
+mod connect;
 mod file_edit;
 mod line;
 mod locale;
@@ -30,7 +31,9 @@ use ratatui::DefaultTerminal;
 
 use args::Args;
 use bell::Bell;
+use connect::{Connection, Target};
 use file_edit::FileEdit;
+use futures::future::{BoxFuture, OptionFuture};
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
 use hotline_proto::types::HlPath;
@@ -56,13 +59,17 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let addr = format!("{}:{}", args.host, args.port);
-    let (client, mut events) = HotlineClient::connect(&addr).await?;
-    client.encoding().set(args.encoding);
-    let login = client.login(&args.login, &args.password).await?;
+    let target = Target {
+        host: args.host,
+        port: args.port,
+        login: args.login,
+        password: args.password,
+        encoding: args.encoding,
+    };
+    let connection = connect::connect(target.clone()).await?;
 
-    let mut session = ClientSession::new(args.name, args.icon, client.encoding());
-    session.server_version = login.version;
+    let mut session = ClientSession::new(args.name, args.icon, connection.client.encoding());
+    session.server_version = connection.login.version;
     session.download_dir = args.download_dir;
     let bell = if args.no_bell {
         Bell::empty()
@@ -71,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let (mut terminal, enhanced) = setup_terminal()?;
-    let result = run(&mut terminal, &mut session, &client, &mut events, bell).await;
+    let result = run(&mut terminal, &mut session, connection, target, bell).await;
     restore_terminal(enhanced)?;
     result
 }
@@ -120,8 +127,8 @@ fn restore_input(enhanced: bool) -> std::io::Result<()> {
 async fn run(
     terminal: &mut DefaultTerminal,
     session: &mut ClientSession,
-    client: &HotlineClient,
-    events: &mut mpsc::UnboundedReceiver<hotline_proto::Transaction<hotline_proto::Received>>,
+    connection: Connection,
+    target: Target,
     bell: Bell,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
@@ -129,25 +136,26 @@ async fn run(
     // A terminal that does not report focus has it.
     let mut focused = true;
     let mut should_quit = false;
-    // The reason that the connection ended.
-    let mut disconnected: Option<Disconnect> = None;
     // `true` while the screen lags behind the state.
     let mut stale = false;
     let (lines_tx, mut lines_rx) = mpsc::unbounded_channel();
-    let mut tasks = Tasks::new(client);
+    let Connection {
+        mut client,
+        mut events,
+        ..
+    } = connection;
+    let mut tasks = Tasks::new(&client);
+    // A new connection and its login, while they run.
+    let mut connecting: Option<BoxFuture<'static, anyhow::Result<Connection>>> = None;
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_keep_alive = Instant::now();
-    let idle_since = |last_keep_alive| client.last_traffic().max(last_keep_alive);
-    let keep_alive_due = |last_keep_alive| {
-        let idle = idle_since(last_keep_alive);
-        idle.checked_add(KEEP_ALIVE).unwrap_or(idle)
-    };
 
     terminal.draw(|f| ui::draw(f, session, &mut view))?;
     while !should_quit {
-        let was_connected = disconnected.is_none();
         let mut happened = Bell::empty();
+        // The reason that the connection ended.
+        let mut ended: Option<Disconnect> = None;
         tokio::select! {
             // A file transfer that starts or ends.
             Some(line) = lines_rx.recv() => match line {
@@ -162,17 +170,34 @@ async fn run(
             // A moment while a task runs, to show its progress.
             _ = tick.tick(), if tasks.is_busy() || !view.tasks.is_empty() => {}
             // No traffic or keep-alive attempt for a while.
-            () = tokio::time::sleep_until(keep_alive_due(last_keep_alive).into()),
-                if disconnected.is_none() =>
+            () = tokio::time::sleep_until(keep_alive_due(&client, last_keep_alive).into()),
+                if !view.disconnected =>
             {
-                if idle_since(last_keep_alive).elapsed() >= KEEP_ALIVE {
-                    tasks.run(Task::unlisted(), session.keep_alive(client));
+                if idle_since(&client, last_keep_alive).elapsed() >= KEEP_ALIVE {
+                    tasks.run(Task::unlisted(), session.keep_alive(&client));
                     last_keep_alive = Instant::now();
                 }
             }
+            // A new connection that logged in, or failed.
+            Some(result) = OptionFuture::from(connecting.as_mut()) => {
+                connecting = None;
+                match result {
+                    Ok(connection) => {
+                        session.connected(connection.client.encoding(), connection.login.version);
+                        client = connection.client;
+                        events = connection.events;
+                        tasks = Tasks::new(&client);
+                        view.disconnected = false;
+                        last_keep_alive = Instant::now();
+                    }
+                    Err(e) => {
+                        session.show_error(format!("failed to connect to {}: {e:#}", target.address()));
+                    }
+                }
+            }
             // Server-initiated traffic: chat, user list changes, ...
-            tx = events.recv(), if disconnected.is_none() => match tx {
-                None => disconnected = Some(session.disconnect(Disconnect::Closed)),
+            tx = events.recv(), if !view.disconnected => match tx {
+                None => ended = Some(session.disconnect(Disconnect::Closed)),
                 Some(tx) => {
                     if let TransactionType::Push(opcode) = tx.r#type() {
                         happened = Bell::for_push(opcode);
@@ -182,9 +207,9 @@ async fn run(
                     }
                     match session.apply_server_event(&tx) {
                         EventOutcome::NeedsAgreementAccept => {
-                            tasks.run(Task::login("Logging in..."), session.accept_agreement(client));
+                            tasks.run(Task::login("Logging in..."), session.accept_agreement(&client));
                         }
-                        EventOutcome::Disconnected(reason) => disconnected = Some(reason),
+                        EventOutcome::Disconnected(reason) => ended = Some(reason),
                         EventOutcome::Applied => {}
                     }
                 }
@@ -200,7 +225,7 @@ async fn run(
                             match key.code {
                                 KeyCode::Esc => should_quit = true,
                                 KeyCode::Enter => {
-                                    let request = session.accept_agreement(client);
+                                    let request = session.accept_agreement(&client);
                                     tasks.run(Task::login("Logging in..."), request);
                                 }
                                 _ => {}
@@ -232,8 +257,26 @@ async fn run(
                 match perform(action, session, &mut view, &mut tasks, &lines_tx).await {
                     Flow::Go => {}
                     Flow::Quit => should_quit = true,
+                    Flow::Reconnect => {
+                        session.show_status(format!("connecting to {}...", target.address()));
+                        connecting = Some(Box::pin(connect::connect(target.clone())));
+                    }
+                    Flow::Disconnect if !view.disconnected => {
+                        if let Err(e) = client.close().await {
+                            session.show_error(format!("failed to disconnect: {e}"));
+                        }
+                        session.show_status("disconnected");
+                        end_connection(session, &mut view, &mut tasks);
+                    }
+                    Flow::Disconnect => {}
                 }
             }
+        }
+        if let Some(reason) = ended {
+            // The server may be gone already.
+            let _ = client.close().await;
+            end_connection(session, &mut view, &mut tasks);
+            view.modal = Some(Modal::Disconnected(reason));
         }
         view.set_tabs(ui::tab_labels(session));
         view.news_folder_count = session.news_folders.as_ref().map_or(0, Vec::len);
@@ -244,12 +287,8 @@ async fn run(
         view.set_tasks(tasks.rows(session));
         view.note_revisions(ui::tab_revisions(session));
         bell.ring(happened)?;
-        // The end of the connection shows over any other modal.
-        if view.modal.is_none() || was_connected && disconnected.is_some() {
-            view.modal = match &disconnected {
-                Some(reason) => Some(Modal::Disconnected(reason.clone())),
-                None => session.invites.pop_front().map(Modal::Invite),
-            };
+        if view.modal.is_none() {
+            view.modal = session.invites.pop_front().map(Modal::Invite);
         }
         // One frame follows a burst of input, such as a drag.
         stale = event::poll(Duration::ZERO).unwrap_or(false);
@@ -258,6 +297,26 @@ async fn run(
         }
     }
     Ok(())
+}
+
+/// The later of the last traffic on `client` and the last keep-alive
+/// attempt.
+fn idle_since(client: &HotlineClient, last_keep_alive: Instant) -> Instant {
+    client.last_traffic().max(last_keep_alive)
+}
+
+/// When the connection to `client` needs a keep-alive.
+fn keep_alive_due(client: &HotlineClient, last_keep_alive: Instant) -> Instant {
+    let idle = idle_since(client, last_keep_alive);
+    idle.checked_add(KEEP_ALIVE).unwrap_or(idle)
+}
+
+/// Drop the state of the connection that ended, and stop its tasks.
+fn end_connection(session: &mut ClientSession, view: &mut View, tasks: &mut Tasks) {
+    session.clear();
+    let client = tasks.client.clone();
+    *tasks = Tasks::new(&client);
+    view.disconnected = true;
 }
 
 /// Show `modal`, if any.
@@ -284,6 +343,10 @@ fn ask(conflict: Option<Conflict>, _: &mut ClientSession, view: &mut View, _: &m
 enum Flow {
     Go,
     Quit,
+    /// Log in again to the server of the last connection.
+    Reconnect,
+    /// End the connection, and stay open.
+    Disconnect,
 }
 
 /// Run `action`. A transfer sends its lines to `lines`.
@@ -298,6 +361,8 @@ async fn perform(
     match action {
         Action::None => {}
         Action::Quit => return Flow::Quit,
+        Action::Reconnect => return Flow::Reconnect,
+        Action::Disconnect => return Flow::Disconnect,
         Action::SendChat(text) => session.send_chat(client, &text).await,
         Action::SendRoomChat { chat_id, text } => {
             session.send_room_chat(client, chat_id, &text).await;
@@ -411,7 +476,7 @@ async fn perform(
             if let TaskId::Request(id) = id {
                 tasks.cancel(id);
             }
-            return Flow::Quit;
+            return Flow::Disconnect;
         }
         Action::StartTransfer(id) => session.start_transfer(id),
         Action::CancelTask(TaskId::Transfer(id)) => {

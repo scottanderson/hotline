@@ -152,6 +152,8 @@ pub struct View {
     pub account_count: usize,
     /// The privileges from [`crate::session::ClientSession::granted`].
     pub access: Access,
+    /// `true` after the connection ends.
+    pub disconnected: bool,
     /// The rows of the task list.
     pub tasks: Vec<TaskRow>,
     /// The selected row of the task list.
@@ -197,6 +199,7 @@ impl Default for View {
             accounts: ListState::default().with_selected(Some(0)),
             account_count: 0,
             access: Access::empty(),
+            disconnected: false,
             tasks: Vec::new(),
             task_selected: 0,
             tasks_offset: 0,
@@ -502,7 +505,11 @@ impl View {
                 Hint::new("Esc", "cancel"),
             ],
             (Some(Modal::Quit), ..) => vec![Hint::new("y", "quit"), Hint::new("Esc", "cancel")],
-            (Some(Modal::Disconnected(_)), ..) => vec![Hint::new("Enter", "quit")],
+            (Some(Modal::Disconnected(_)), ..) => vec![
+                Hint::new("r", "reconnect"),
+                Hint::new("q", "quit"),
+                Hint::new("Esc", "close"),
+            ],
             (Some(Modal::OpenAccount { .. }), ..) => {
                 vec![Hint::new("Enter", "open"), Hint::new("Esc", "cancel")]
             }
@@ -650,9 +657,17 @@ impl View {
         if self.focus == Focus::Users {
             commands.extend(self.user_commands(users));
         }
-        commands.extend([Command::Broadcast, Command::Options]);
-        commands.push(Command::Tasks);
-        commands.push(Command::Quit);
+        commands.extend([
+            Command::Broadcast,
+            Command::Options,
+            Command::Tasks,
+            if self.disconnected {
+                Command::Reconnect
+            } else {
+                Command::Disconnect
+            },
+            Command::Quit,
+        ]);
         commands
     }
 
@@ -736,6 +751,8 @@ impl View {
             Command::Invite(chat_id) => Action::PickInvitee(chat_id),
             Command::Subject(chat_id) => Action::EditChatSubject(chat_id),
             Command::Leave(chat_id) => Action::LeaveChat(chat_id),
+            Command::Reconnect => Action::Reconnect,
+            Command::Disconnect => Action::Disconnect,
             Command::Quit => {
                 self.modal = Some(Modal::Quit);
                 Action::None
@@ -812,8 +829,10 @@ impl View {
                     text: input.take(),
                 };
             }
-            (Modal::Quit, KeyCode::Char('y'))
-            | (Modal::Disconnected(_), KeyCode::Enter | KeyCode::Esc) => return Action::Quit,
+            (Modal::Quit, KeyCode::Char('y')) | (Modal::Disconnected(_), KeyCode::Char('q')) => {
+                return Action::Quit;
+            }
+            (Modal::Disconnected(_), KeyCode::Char('r')) => return Action::Reconnect,
             (Modal::DeleteNews { target, .. }, KeyCode::Char('y')) => {
                 return Action::DeleteNewsItem(*target);
             }
@@ -860,7 +879,10 @@ impl View {
                 input.insert('\n');
             }
             (_, KeyCode::Esc)
-            | (Modal::Info(_) | Modal::FileInfo(_) | Modal::Article(_), KeyCode::Enter) => {
+            | (
+                Modal::Info(_) | Modal::FileInfo(_) | Modal::Article(_) | Modal::Disconnected(_),
+                KeyCode::Enter,
+            ) => {
                 return Action::None;
             }
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
@@ -2938,23 +2960,40 @@ mod tests {
     }
 
     #[test]
-    fn enter_esc_or_ctrl_c_on_disconnected_quits() {
-        for key in [key(KeyCode::Enter), key(KeyCode::Esc), ctrl('c')] {
-            let mut view = View {
-                modal: Some(Modal::Disconnected(Disconnect::Closed)),
-                ..View::default()
-            };
-            assert_eq!(view.handle_key(key, &users(), &files()), Action::Quit);
-        }
-        let mut view = View {
+    fn disconnected_reconnects_quits_or_closes() {
+        let disconnected = || View {
             modal: Some(Modal::Disconnected(Disconnect::Closed)),
             ..View::default()
         };
+        for (key, action) in [
+            (key(KeyCode::Char('r')), Action::Reconnect),
+            (key(KeyCode::Char('q')), Action::Quit),
+            (ctrl('c'), Action::Quit),
+            (key(KeyCode::Enter), Action::None),
+            (key(KeyCode::Esc), Action::None),
+        ] {
+            let mut view = disconnected();
+            assert_eq!(view.handle_key(key, &users(), &files()), action);
+            if action != Action::Quit {
+                assert_eq!(view.modal, None);
+            }
+        }
+        let mut view = disconnected();
         assert_eq!(
             view.handle_key(key(KeyCode::Char('x')), &users(), &files()),
             Action::None
         );
         assert_eq!(view.modal, Some(Modal::Disconnected(Disconnect::Closed)));
+    }
+
+    #[test]
+    fn palette_offers_disconnect_or_reconnect() {
+        let mut view = View::default();
+        assert!(view.commands(&[]).contains(&Command::Disconnect));
+        assert!(!view.commands(&[]).contains(&Command::Reconnect));
+        view.disconnected = true;
+        assert!(view.commands(&[]).contains(&Command::Reconnect));
+        assert!(!view.commands(&[]).contains(&Command::Disconnect));
     }
 
     #[test]

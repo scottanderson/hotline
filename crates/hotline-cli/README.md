@@ -51,7 +51,12 @@ Chat and each room also have the user list, and Tab moves between it
 and the main pane. Esc goes back to Chat. On Chat, Esc asks whether to
 quit. Ctrl-C asks too, from anywhere, and a second Ctrl-C quits.
 When the server ends the connection, a box shows its message, or that
-the connection closed. Enter, Esc, or Ctrl-C closes the box and quits.
+the connection closed. `r` in the box logs in again to the same
+server, `q` or Ctrl-C quits, and Enter or Esc closes the box. hlc then
+stays open with the chat lines. It drops the users, the news, the
+files, the rooms, the accounts, and the tasks of the connection, and
+stops each transfer. "Disconnect" in the palette ends the connection
+in the same way, and "Reconnect" logs in again.
 
 A tab label turns yellow when the tab changes while another tab shows.
 The Chat tab and each room change with each new line, and the News

@@ -85,6 +85,9 @@ pub struct ClientSession {
 }
 
 impl ClientSession {
+    /// The chat line at the start of a connection.
+    const CONNECTED: &str = "connected - type a message and press Enter, Esc to quit";
+
     pub fn new(name: impl Into<Box<str>>, icon: u16, encoding: EncodingHandle) -> Self {
         Self {
             name: name.into(),
@@ -93,9 +96,7 @@ impl ClientSession {
             automatic_response: Box::default(),
             mode: Mode::Joining,
             users: Vec::new(),
-            lines: Scrollback::from(Line::system(
-                "connected - type a message and press Enter, Esc to quit",
-            )),
+            lines: Scrollback::from(Line::system(Self::CONNECTED)),
             news: None,
             news_revision: 0,
             files: None,
@@ -116,6 +117,33 @@ impl ClientSession {
             error_count: 0,
             encoding,
         }
+    }
+
+    /// Drop the state of the connection as it ends, and stop each transfer.
+    /// Keep the chat lines and this user's settings.
+    pub fn clear(&mut self) {
+        self.abort_transfers();
+        let mut cleared = Self::new(self.name.clone(), self.icon, self.encoding.clone());
+        cleared.options = self.options;
+        cleared.automatic_response = std::mem::take(&mut self.automatic_response);
+        cleared.lines = std::mem::take(&mut self.lines);
+        cleared.download_dir = std::mem::take(&mut self.download_dir);
+        cleared.next_transfer_id = self.next_transfer_id;
+        cleared.queue_transfers = self.queue_transfers;
+        cleared.error_count = self.error_count;
+        *self = cleared;
+    }
+
+    /// Start a new connection with `encoding` to a server of `version`.
+    pub fn connected(&mut self, encoding: EncodingHandle, version: Option<u16>) {
+        self.encoding = encoding;
+        self.server_version = version;
+        self.push(Self::CONNECTED, LineKind::System);
+    }
+
+    /// Show `text` as a status line in the chat.
+    pub fn show_status(&mut self, text: impl Into<Box<str>>) {
+        self.push(text, LineKind::System);
     }
 
     /// Show the server's agreement text and wait for the user to accept it.
@@ -152,6 +180,11 @@ impl ClientSession {
             self.error_count = self.error_count.wrapping_add(1);
         }
         self.lines.push(Line::new(text, kind));
+    }
+
+    /// Show `text` as an error line in the chat.
+    pub fn show_error(&mut self, text: impl Into<Box<str>>) {
+        self.push(text, LineKind::Error);
     }
 
     /// The error lines shown in the chat so far.
@@ -821,6 +854,29 @@ mod tests {
         let _ = session.apply_server_event(&chat);
         let texts: Vec<&str> = session.lines.iter().map(|l| &*l.text).collect();
         assert!(texts.ends_with(&["Alice: one", "two"]));
+    }
+
+    #[test]
+    fn clear_keeps_the_chat_lines_and_the_settings() {
+        let mut session = ClientSession::new("me", 7, EncodingHandle::default());
+        session.options = UserChangeOptions::REFUSE_PM;
+        session.queue_transfers = false;
+        session.access = Access::all();
+        session.server_version = Some(190);
+        session.show_status("hello");
+        let lines = session.lines.len();
+
+        session.clear();
+        assert_eq!((&*session.name, session.icon), ("me", 7));
+        assert_eq!(session.options, UserChangeOptions::REFUSE_PM);
+        assert!(!session.queue_transfers);
+        assert_eq!(session.lines.len(), lines);
+        assert_eq!(session.access, Access::empty());
+        assert_eq!(session.server_version, None);
+
+        session.connected(EncodingHandle::default(), Some(151));
+        assert_eq!(session.server_version, Some(151));
+        assert_eq!(session.lines.len(), lines + 1);
     }
 
     #[test]

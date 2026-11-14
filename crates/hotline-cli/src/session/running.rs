@@ -359,6 +359,11 @@ impl ClientSession {
         })
     }
 
+    /// Stop each transfer.
+    pub(super) fn abort_transfers(&mut self) {
+        self.transfers.drain(..).for_each(|t| t.task.abort());
+    }
+
     /// Stop the transfer `id`, and start the next one. A download that the
     /// server still holds in its queue also leaves the queue,
     /// [`myTran_KillDownload`] (214). The `.hpf` file of a download stays for

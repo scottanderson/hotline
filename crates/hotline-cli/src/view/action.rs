@@ -10,6 +10,10 @@ use crate::transfer::{Conflict, Start};
 pub enum Action {
     None,
     Quit,
+    /// Log in again to the server of the last connection.
+    Reconnect,
+    /// End the connection, and stay open.
+    Disconnect,
     /// Send public chat, sent unchanged even when it starts with `/`.
     SendChat(String),
     /// Send chat to the private chat room `chat_id`.

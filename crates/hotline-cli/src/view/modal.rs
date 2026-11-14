@@ -42,7 +42,7 @@ pub enum Modal {
     },
     /// A check before `hlc` closes the connection and quits.
     Quit,
-    /// The reason the server ended the connection. Closing it quits.
+    /// The reason the server ended the connection.
     Disconnected(Disconnect),
     /// A check before the file or folder `name` is deleted.
     DeleteFile { name: Box<str> },

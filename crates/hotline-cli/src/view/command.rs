@@ -17,6 +17,10 @@ pub enum Command {
     Subject(u32),
     /// Leave the room `chat_id`.
     Leave(u32),
+    /// Log in again to the server of the last connection.
+    Reconnect,
+    /// End the connection, and stay open.
+    Disconnect,
     Quit,
     /// Run `item` of the user menu on the user `user_id`.
     User(u16, MenuItem),
@@ -36,6 +40,8 @@ impl Command {
             Self::Invite(_) => "Invite to this room".into(),
             Self::Subject(_) => "Set the room subject".into(),
             Self::Leave(_) => "Leave this room".into(),
+            Self::Reconnect => "Reconnect".into(),
+            Self::Disconnect => "Disconnect".into(),
             Self::Quit => "Quit".into(),
             Self::User(_, item) => item.label().into(),
         }
@@ -61,7 +67,7 @@ impl Command {
             Self::User(_, MenuItem::SendMessage) => "Enter",
             Self::User(_, MenuItem::GetInfo) => "i",
             Self::User(_, MenuItem::Disconnect) => "k",
-            Self::User(_, MenuItem::PrivateChat) => "",
+            Self::Reconnect | Self::Disconnect | Self::User(_, MenuItem::PrivateChat) => "",
         }
     }
 
