@@ -2,7 +2,6 @@
 
 use std::time::{Duration, Instant};
 
-use hotline_client::HotlineClient;
 use tokio::task::{AbortHandle, JoinSet};
 
 use crate::session::{ClientSession, Next, Request};
@@ -155,11 +154,10 @@ pub struct Tasks {
     finished: Vec<(Instant, TaskRow)>,
     /// When the last task ended well.
     finished_at: Instant,
-    pub client: HotlineClient,
 }
 
-impl Tasks {
-    pub fn new(client: &HotlineClient) -> Self {
+impl Default for Tasks {
+    fn default() -> Self {
         Self {
             set: JoinSet::new(),
             running: Vec::new(),
@@ -167,10 +165,11 @@ impl Tasks {
             shown: Vec::new(),
             finished: Vec::new(),
             finished_at: Instant::now(),
-            client: client.clone(),
         }
     }
+}
 
+impl Tasks {
     /// Run `request` as `task`, then give its value to `then`. Each request
     /// after it in a chain runs as the same task, in the same row.
     pub fn start<T: Send + 'static>(
@@ -318,16 +317,17 @@ impl Tasks {
 
 #[cfg(test)]
 mod tests {
+    use hotline_client::HotlineClient;
     use hotline_proto::types::HlPath;
 
     use super::*;
     use crate::session::test_support;
 
-    async fn tasks() -> (Tasks, ClientSession) {
+    async fn tasks() -> (Tasks, ClientSession, HotlineClient) {
         let addr = test_support::start_server(hotline_server::Providers::default()).await;
         let (client, _events) = test_support::join_admin(addr, "me").await;
         let session = ClientSession::new("me", 0, client.encoding());
-        (Tasks::new(&client), session)
+        (Tasks::default(), session, client)
     }
 
     /// The rows after an `update`, as the event loop shows them.
@@ -338,8 +338,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_reply_runs_its_then_step() {
-        let (mut tasks, mut session) = tasks().await;
-        let request = ClientSession::get_file_name_list(&tasks.client, HlPath::default());
+        let (mut tasks, mut session, client) = tasks().await;
+        let request = ClientSession::get_file_name_list(&client, HlPath::default());
         tasks.start(
             Task::read("Listing root folder..."),
             request,
@@ -357,8 +357,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_cancelled_request_gives_no_step() {
-        let (mut tasks, mut session) = tasks().await;
-        let request = ClientSession::get_file_name_list(&tasks.client, HlPath::default());
+        let (mut tasks, mut session, client) = tasks().await;
+        let request = ClientSession::get_file_name_list(&client, HlPath::default());
         tasks.start(
             Task::read("Listing root folder..."),
             request,
@@ -372,8 +372,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_cancelled_after_its_reply_gives_no_step() {
-        let (mut tasks, _) = tasks().await;
-        let request = ClientSession::get_file_name_list(&tasks.client, HlPath::default());
+        let (mut tasks, _, client) = tasks().await;
+        let request = ClientSession::get_file_name_list(&client, HlPath::default());
         tasks.start(
             Task::read("Listing root folder..."),
             request,
@@ -393,10 +393,10 @@ mod tests {
 
     #[tokio::test]
     async fn rows_keep_a_finished_request_for_a_moment() {
-        let (mut tasks, mut session) = tasks().await;
+        let (mut tasks, mut session, client) = tasks().await;
         tasks.run(
             Task::read("Listing root folder..."),
-            ClientSession::get_msgs(&tasks.client),
+            ClientSession::get_msgs(&client),
         );
         assert_eq!(update(&mut tasks, &mut session).len(), 1);
         let step = tasks.next().await.unwrap();
@@ -413,17 +413,17 @@ mod tests {
 
     #[tokio::test]
     async fn rows_keep_the_order_the_user_started_them() {
-        let (mut tasks, mut session) = tasks().await;
+        let (mut tasks, mut session, client) = tasks().await;
         tasks.run(
             Task::read("Listing root folder..."),
-            ClientSession::get_msgs(&tasks.client),
+            ClientSession::get_msgs(&client),
         );
         update(&mut tasks, &mut session);
         let step = tasks.next().await.unwrap();
         step(&mut session, &mut View::default(), &mut tasks);
         tasks.run(
             Task::read("Transferring messages..."),
-            ClientSession::get_msgs(&tasks.client),
+            ClientSession::get_msgs(&client),
         );
         let rows = update(&mut tasks, &mut session);
         let labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();
@@ -436,8 +436,8 @@ mod tests {
 
     #[tokio::test]
     async fn rows_leave_out_an_unlisted_request() {
-        let (mut tasks, mut session) = tasks().await;
-        tasks.run(Task::unlisted(), ClientSession::get_msgs(&tasks.client));
+        let (mut tasks, mut session, client) = tasks().await;
+        tasks.run(Task::unlisted(), ClientSession::get_msgs(&client));
         assert!(tasks.is_busy());
         assert!(update(&mut tasks, &mut session).is_empty());
         let step = tasks.next().await.unwrap();
@@ -447,11 +447,11 @@ mod tests {
 
     #[tokio::test]
     async fn rows_drop_a_failed_request_at_once() {
-        let (mut tasks, mut session) = tasks().await;
+        let (mut tasks, mut session, client) = tasks().await;
         let missing = HlPath::new(["missing"]);
         tasks.start(
             Task::read("Listing folder “missing”"),
-            ClientSession::get_file_name_list(&tasks.client, missing),
+            ClientSession::get_file_name_list(&client, missing),
             |_, _, _, _| {},
         );
         assert_eq!(update(&mut tasks, &mut session).len(), 1);
@@ -462,10 +462,9 @@ mod tests {
 
     #[tokio::test]
     async fn rows_drop_a_chain_whose_first_request_failed() {
-        let (mut tasks, mut session) = tasks().await;
-        let client = tasks.client.clone();
+        let (mut tasks, mut session, client) = tasks().await;
         let missing = HlPath::new(["missing"]);
-        let request = ClientSession::get_file_name_list(&tasks.client, missing)
+        let request = ClientSession::get_file_name_list(&client, missing)
             .and_then(move |_, _| ClientSession::get_msgs(&client));
         tasks.run(Task::read("Listing folder “missing”"), request);
         assert_eq!(update(&mut tasks, &mut session).len(), 1);
@@ -479,10 +478,10 @@ mod tests {
 
     #[tokio::test]
     async fn rows_drop_the_start_of_a_transfer_at_once() {
-        let (mut tasks, mut session) = tasks().await;
+        let (mut tasks, mut session, client) = tasks().await;
         tasks.run(
             Task::transfer("Downloading “a”"),
-            ClientSession::get_msgs(&tasks.client),
+            ClientSession::get_msgs(&client),
         );
         assert_eq!(update(&mut tasks, &mut session).len(), 1);
         let step = tasks.next().await.unwrap();
@@ -492,10 +491,10 @@ mod tests {
 
     #[tokio::test]
     async fn rows_drop_a_cancelled_request_at_once() {
-        let (mut tasks, mut session) = tasks().await;
+        let (mut tasks, mut session, client) = tasks().await;
         tasks.run(
             Task::read("Listing root folder..."),
-            ClientSession::get_msgs(&tasks.client),
+            ClientSession::get_msgs(&client),
         );
         assert_eq!(update(&mut tasks, &mut session).len(), 1);
         tasks.cancel(1);
@@ -518,10 +517,10 @@ mod tests {
 
     #[tokio::test]
     async fn rows_show_a_request_at_once() {
-        let (mut tasks, mut session) = tasks().await;
+        let (mut tasks, mut session, client) = tasks().await;
         tasks.run(
             Task::login("Logging in..."),
-            ClientSession::get_msgs(&tasks.client),
+            ClientSession::get_msgs(&client),
         );
         assert_eq!(
             update(&mut tasks, &mut session),

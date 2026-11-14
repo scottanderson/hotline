@@ -3,17 +3,19 @@ use std::path::PathBuf;
 use clap::Parser;
 use hotline_proto::text_encoding::{self, Encoding};
 
+use crate::connect::{Target, DEFAULT_PORT};
+
 /// Terminal UI Hotline client.
 #[derive(Parser, Debug)]
 #[command(name = "hlc", version, about)]
 pub struct Args {
-    /// Server host.
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
+    /// Server host. Without it, `hlc` starts without a connection.
+    #[arg(long)]
+    pub host: Option<String>,
 
-    /// Server port.
-    #[arg(long, default_value_t = 5500)]
-    pub port: u16,
+    /// Server port, 5500 by default.
+    #[arg(long, requires = "host")]
+    pub port: Option<u16>,
 
     /// Account login (blank for guest).
     #[arg(long, default_value = "")]
@@ -48,4 +50,40 @@ pub struct Args {
     /// connecting. Takes `host[:port]`; the port defaults to 5498.
     #[arg(long, value_name = "HOST[:PORT]")]
     pub tracker: Option<String>,
+}
+
+impl Args {
+    /// The server to connect to at the start, if `--host` names one.
+    pub fn target(&self) -> Option<Target> {
+        self.host.as_ref().map(|host| Target {
+            host: host.clone(),
+            port: self.port.unwrap_or(DEFAULT_PORT),
+            login: self.login.clone(),
+            password: self.password.clone(),
+            encoding: self.encoding,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_takes_the_host_and_its_login() {
+        let args = Args::parse_from(["hlc", "--host", "example.com", "--login", "alice"]);
+        let target = args.target().unwrap();
+        assert_eq!(
+            (target.address(), target.login.as_str()),
+            ("example.com:5500".into(), "alice")
+        );
+        let args = Args::parse_from(["hlc", "--host", "example.com", "--port", "6000"]);
+        assert_eq!(args.target().unwrap().address(), "example.com:6000");
+        assert!(Args::parse_from(["hlc"]).target().is_none());
+    }
+
+    #[test]
+    fn port_needs_a_host() {
+        assert!(Args::try_parse_from(["hlc", "--port", "6000"]).is_err());
+    }
 }

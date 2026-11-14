@@ -23,8 +23,8 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --name Alice
 
 | Flag             | Default     | Effect                                         |
 |------------------|-------------|------------------------------------------------|
-| `--host`         | `127.0.0.1` | the server                                     |
-| `--port`         | 5500        | the server's port                              |
+| `--host`         |             | the server to connect to at the start          |
+| `--port`         | 5500        | the server's port, with `--host`               |
 | `--login`        | (guest)     | the account login                              |
 | `--password`     | (none)      | the password, also read from `HLC_PASSWORD`    |
 | `--name`         | `RustHL`    | the name in the user list                      |
@@ -36,6 +36,9 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --name Alice
 
 Use `HLC_PASSWORD` in place of `--password` when other users share the
 host, because they can read a command line.
+
+Without `--host`, hlc starts with no connection and shows the Connect
+to form.
 
 The line at the bottom of the screen shows the keys of the focused
 pane.

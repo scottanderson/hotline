@@ -15,6 +15,7 @@ mod transfer;
 mod ui;
 mod view;
 
+use anyhow::Context;
 use clap::Parser;
 use std::time::{Duration, Instant};
 
@@ -36,7 +37,9 @@ use file_edit::FileEdit;
 use futures::future::{BoxFuture, OptionFuture};
 use hotline_client::HotlineClient;
 use hotline_proto::opcode::TransactionType;
+use hotline_proto::text_encoding::{Encoding, EncodingHandle};
 use hotline_proto::types::HlPath;
+use hotline_proto::{Received, Transaction};
 use session::{
     ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, TransferLine, KEEP_ALIVE,
 };
@@ -59,17 +62,8 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let target = Target {
-        host: args.host,
-        port: args.port,
-        login: args.login,
-        password: args.password,
-        encoding: args.encoding,
-    };
-    let connection = connect::connect(target.clone()).await?;
-
-    let mut session = ClientSession::new(args.name, args.icon, connection.client.encoding());
-    session.server_version = connection.login.version;
+    let target = args.target();
+    let mut session = ClientSession::new(args.name, args.icon, EncodingHandle::default());
     session.download_dir = args.download_dir;
     let bell = if args.no_bell {
         Bell::empty()
@@ -78,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let (mut terminal, enhanced) = setup_terminal()?;
-    let result = run(&mut terminal, &mut session, connection, target, bell).await;
+    let result = run(&mut terminal, &mut session, target, args.encoding, bell).await;
     restore_terminal(enhanced)?;
     result
 }
@@ -127,8 +121,8 @@ fn restore_input(enhanced: bool) -> std::io::Result<()> {
 async fn run(
     terminal: &mut DefaultTerminal,
     session: &mut ClientSession,
-    connection: Connection,
-    mut target: Target,
+    start: Option<Target>,
+    encoding: &'static Encoding,
     bell: Bell,
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
@@ -139,21 +133,27 @@ async fn run(
     // `true` while the screen lags behind the state.
     let mut stale = false;
     let (lines_tx, mut lines_rx) = mpsc::unbounded_channel();
-    let Connection {
-        mut client,
-        mut events,
-        ..
-    } = connection;
-    let mut tasks = Tasks::new(&client);
+    // The connection that logged in, and its pushes.
+    let mut client: Option<HotlineClient> = None;
+    let mut events: Option<mpsc::UnboundedReceiver<Transaction<Received>>> = None;
+    let mut tasks = Tasks::default();
     // A new connection and its login, while they run.
     let mut connecting: Option<BoxFuture<'static, anyhow::Result<Connection>>> = None;
+    // The server of the last connection, or of the one that runs.
+    let mut target = start;
+    match &target {
+        Some(target) => connecting = Some(start_connect(target, session)),
+        None => view.modal = Some(Modal::Connect(connect_form(None))),
+    }
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_keep_alive = Instant::now();
 
+    view.disconnected = true;
     terminal.draw(|f| ui::draw(f, session, &mut view))?;
     while !should_quit {
         let mut happened = Bell::empty();
+        let keep_alive_at = keep_alive_due(client.as_ref(), last_keep_alive);
         // The reason that the connection ended.
         let mut ended: Option<Disconnect> = None;
         tokio::select! {
@@ -170,12 +170,12 @@ async fn run(
             // A moment while a task runs, to show its progress.
             _ = tick.tick(), if tasks.is_busy() || !view.tasks.is_empty() => {}
             // No traffic or keep-alive attempt for a while.
-            () = tokio::time::sleep_until(keep_alive_due(&client, last_keep_alive).into()),
-                if !view.disconnected =>
-            {
-                if idle_since(&client, last_keep_alive).elapsed() >= KEEP_ALIVE {
-                    tasks.run(Task::unlisted(), session.keep_alive(&client));
-                    last_keep_alive = Instant::now();
+            () = tokio::time::sleep_until(keep_alive_at.into()), if client.is_some() => {
+                if let Some(client) = &client {
+                    if idle_since(client, last_keep_alive).elapsed() >= KEEP_ALIVE {
+                        tasks.run(Task::unlisted(), session.keep_alive(client));
+                        last_keep_alive = Instant::now();
+                    }
                 }
             }
             // A new connection that logged in, or failed.
@@ -184,19 +184,18 @@ async fn run(
                 match result {
                     Ok(connection) => {
                         session.connected(connection.client.encoding(), connection.login.version);
-                        client = connection.client;
-                        events = connection.events;
-                        tasks = Tasks::new(&client);
-                        view.disconnected = false;
+                        client = Some(connection.client);
+                        events = Some(connection.events);
+                        tasks = Tasks::default();
                         last_keep_alive = Instant::now();
                     }
                     Err(e) => {
-                        session.show_error(format!("failed to connect to {}: {e:#}", target.address()));
+                        session.show_error(format!("{e:#}"));
                     }
                 }
             }
             // Server-initiated traffic: chat, user list changes, ...
-            tx = events.recv(), if !view.disconnected => match tx {
+            Some(tx) = OptionFuture::from(events.as_mut().map(|events| events.recv())) => match tx {
                 None => ended = Some(session.disconnect(Disconnect::Closed)),
                 Some(tx) => {
                     if let TransactionType::Push(opcode) = tx.r#type() {
@@ -207,7 +206,9 @@ async fn run(
                     }
                     match session.apply_server_event(&tx) {
                         EventOutcome::NeedsAgreementAccept => {
-                            tasks.run(Task::login("Logging in..."), session.accept_agreement(&client));
+                            if let Some(client) = &client {
+                                tasks.run(Task::login("Logging in..."), session.accept_agreement(client));
+                            }
                         }
                         EventOutcome::Disconnected(reason) => ended = Some(reason),
                         EventOutcome::Applied => {}
@@ -225,8 +226,10 @@ async fn run(
                             match key.code {
                                 KeyCode::Esc => should_quit = true,
                                 KeyCode::Enter => {
-                                    let request = session.accept_agreement(&client);
-                                    tasks.run(Task::login("Logging in..."), request);
+                                    if let Some(client) = &client {
+                                        let request = session.accept_agreement(client);
+                                        tasks.run(Task::login("Logging in..."), request);
+                                    }
                                 }
                                 _ => {}
                             }
@@ -254,13 +257,20 @@ async fn run(
                     }
                     _ => Action::None,
                 };
-                match perform(action, session, &mut view, &mut tasks, &lines_tx).await {
+                let flow = perform(
+                    action,
+                    client.as_ref(),
+                    session,
+                    &mut view,
+                    &mut tasks,
+                    &lines_tx,
+                )
+                .await;
+                match flow {
                     Flow::Go => {}
                     Flow::Quit => should_quit = true,
                     Flow::OpenConnect => {
-                        let address = target.address();
-                        let form = ConnectForm::new(&address, &target.login, &target.password);
-                        view.modal = Some(Modal::Connect(form));
+                        view.modal = Some(Modal::Connect(connect_form(target.as_ref())));
                     }
                     Flow::Connect {
                         host,
@@ -268,36 +278,43 @@ async fn run(
                         login,
                         password,
                     } => {
-                        if !view.disconnected {
-                            disconnect(&client, session, &mut view, &mut tasks).await;
+                        if let Some(client) = client.take() {
+                            events = None;
+                            disconnect(&client, session, &mut tasks).await;
                         }
-                        target = Target {
+                        let new = Target {
                             host,
                             port,
                             login,
                             password,
-                            encoding: target.encoding,
+                            encoding,
                         };
-                        session.show_status(format!("connecting to {}...", target.address()));
-                        connecting = Some(Box::pin(connect::connect(target.clone())));
+                        connecting = Some(start_connect(&new, session));
+                        target = Some(new);
                     }
-                    Flow::Reconnect => {
-                        session.show_status(format!("connecting to {}...", target.address()));
-                        connecting = Some(Box::pin(connect::connect(target.clone())));
+                    Flow::Reconnect => match &target {
+                        Some(target) => connecting = Some(start_connect(target, session)),
+                        None => view.modal = Some(Modal::Connect(connect_form(None))),
+                    },
+                    Flow::Disconnect => {
+                        if let Some(client) = client.take() {
+                            events = None;
+                            disconnect(&client, session, &mut tasks).await;
+                        }
                     }
-                    Flow::Disconnect if !view.disconnected => {
-                        disconnect(&client, session, &mut view, &mut tasks).await;
-                    }
-                    Flow::Disconnect => {}
                 }
             }
         }
         if let Some(reason) = ended {
-            // The server may be gone already.
-            let _ = client.close().await;
-            end_connection(session, &mut view, &mut tasks);
+            if let Some(client) = client.take() {
+                // The server may be gone already.
+                let _ = client.close().await;
+            }
+            events = None;
+            end_connection(session, &mut tasks);
             view.modal = Some(Modal::Disconnected(reason));
         }
+        view.disconnected = client.is_none();
         view.set_tabs(ui::tab_labels(session));
         view.news_folder_count = session.news_folders.as_ref().map_or(0, Vec::len);
         view.news_count = session.news_threads.len();
@@ -325,32 +342,51 @@ fn idle_since(client: &HotlineClient, last_keep_alive: Instant) -> Instant {
     client.last_traffic().max(last_keep_alive)
 }
 
-/// When the connection to `client` needs a keep-alive.
-fn keep_alive_due(client: &HotlineClient, last_keep_alive: Instant) -> Instant {
-    let idle = idle_since(client, last_keep_alive);
+/// Connect to `target` and log in, and show that it starts.
+fn start_connect(
+    target: &Target,
+    session: &mut ClientSession,
+) -> BoxFuture<'static, anyhow::Result<Connection>> {
+    let address = target.address();
+    session.show_status(format!("connecting to {address}..."));
+    let connecting = connect::connect(target.clone());
+    Box::pin(async move {
+        connecting
+            .await
+            .with_context(|| format!("failed to connect to {address}"))
+    })
+}
+
+/// The Connect to form, filled with `target` if there is one.
+fn connect_form(target: Option<&Target>) -> ConnectForm {
+    match target {
+        Some(target) => ConnectForm::new(&target.address(), &target.login, &target.password),
+        None => ConnectForm::new("", "", ""),
+    }
+}
+
+/// When the connection to `client` needs a keep-alive. With no connection,
+/// one keep-alive period after `last_keep_alive`.
+fn keep_alive_due(client: Option<&HotlineClient>, last_keep_alive: Instant) -> Instant {
+    let idle = client.map_or(last_keep_alive, |client| {
+        idle_since(client, last_keep_alive)
+    });
     idle.checked_add(KEEP_ALIVE).unwrap_or(idle)
 }
 
 /// End the connection to `client`, and drop its state.
-async fn disconnect(
-    client: &HotlineClient,
-    session: &mut ClientSession,
-    view: &mut View,
-    tasks: &mut Tasks,
-) {
+async fn disconnect(client: &HotlineClient, session: &mut ClientSession, tasks: &mut Tasks) {
     if let Err(e) = client.close().await {
         session.show_error(format!("failed to disconnect: {e}"));
     }
     session.show_status("disconnected");
-    end_connection(session, view, tasks);
+    end_connection(session, tasks);
 }
 
 /// Drop the state of the connection that ended, and stop its tasks.
-fn end_connection(session: &mut ClientSession, view: &mut View, tasks: &mut Tasks) {
+fn end_connection(session: &mut ClientSession, tasks: &mut Tasks) {
     session.clear();
-    let client = tasks.client.clone();
-    *tasks = Tasks::new(&client);
-    view.disconnected = true;
+    *tasks = Tasks::default();
 }
 
 /// Show `modal`, if any.
@@ -392,15 +428,16 @@ enum Flow {
     },
 }
 
-/// Run `action`. A transfer sends its lines to `lines`.
+/// Run `action`. An action that sends a request shows an error when
+/// there is no `client`. A transfer sends its lines to `lines`.
 async fn perform(
     action: Action,
+    client: Option<&HotlineClient>,
     session: &mut ClientSession,
     view: &mut View,
     tasks: &mut Tasks,
     lines: &mpsc::UnboundedSender<TransferLine>,
 ) -> Flow {
-    let client = &tasks.client.clone();
     match action {
         Action::None => {}
         Action::Quit => return Flow::Quit,
@@ -420,6 +457,45 @@ async fn perform(
                 password,
             };
         }
+        Action::EditOptions => {
+            let form = OptionsForm::edit(&session.user_info(), session.queue_transfers);
+            view.modal = Some(Modal::Options(form));
+        }
+        Action::SetOptions {
+            info,
+            queue_transfers,
+        } => {
+            session.queue_transfers = queue_transfers;
+            match client {
+                Some(client) => session.set_client_user_info(client, info).await,
+                None => session.set_user_info(info),
+            }
+        }
+        Action::StopLogin(id) => {
+            if let TaskId::Request(id) = id {
+                tasks.cancel(id);
+            }
+            return Flow::Disconnect;
+        }
+        action => match client {
+            Some(client) => request(action, client, session, view, tasks, lines).await,
+            None => session.show_error("not connected"),
+        },
+    }
+    Flow::Go
+}
+
+/// Run `action`, which sends a request to `client`. A transfer sends its
+/// lines to `lines`.
+async fn request(
+    action: Action,
+    client: &HotlineClient,
+    session: &mut ClientSession,
+    view: &mut View,
+    tasks: &mut Tasks,
+    lines: &mpsc::UnboundedSender<TransferLine>,
+) {
+    match action {
         Action::SendChat(text) => session.send_chat(client, &text).await,
         Action::SendRoomChat { chat_id, text } => {
             session.send_room_chat(client, chat_id, &text).await;
@@ -483,17 +559,6 @@ async fn perform(
             let request = ClientSession::user_broadcast(client, &text);
             tasks.run(Task::change("Broadcasting..."), request);
         }
-        Action::EditOptions => {
-            let form = OptionsForm::edit(&session.user_info(), session.queue_transfers);
-            view.modal = Some(Modal::Options(form));
-        }
-        Action::SetOptions {
-            info,
-            queue_transfers,
-        } => {
-            session.queue_transfers = queue_transfers;
-            session.set_client_user_info(client, info).await;
-        }
         Action::GetMsgs => {
             tasks.run(
                 Task::read("Transferring messages..."),
@@ -504,11 +569,11 @@ async fn perform(
             let request = ClientSession::old_post_news(client, &text);
             tasks.run(Task::change("Posting message..."), request);
         }
-        Action::ListFiles => list_files(tasks, session.file_path.clone()),
-        Action::OpenFolder(name) => list_files(tasks, session.child_folder(&name)),
+        Action::ListFiles => list_files(client, tasks, session.file_path.clone()),
+        Action::OpenFolder(name) => list_files(client, tasks, session.child_folder(&name)),
         Action::ParentFolder => {
             if let Some(path) = session.parent_folder() {
-                list_files(tasks, path);
+                list_files(client, tasks, path);
             }
         }
         Action::DownloadFile {
@@ -529,12 +594,6 @@ async fn perform(
             );
         }
         Action::CancelTask(TaskId::Request(id)) => tasks.cancel(id),
-        Action::StopLogin(id) => {
-            if let TaskId::Request(id) = id {
-                tasks.cancel(id);
-            }
-            return Flow::Disconnect;
-        }
         Action::StartTransfer(id) => session.start_transfer(id),
         Action::CancelTask(TaskId::Transfer(id)) => {
             tasks.forget(TaskId::Transfer(id));
@@ -611,15 +670,18 @@ async fn perform(
             tasks.start(
                 Task::read("Listing root news bundle..."),
                 session.list_threaded_news(client),
-                |(), session, view, tasks| {
-                    view.news_folders = TableState::default().with_selected(Some(0));
-                    reselect_news_folder(session, view, tasks);
+                {
+                    let client = client.clone();
+                    move |(), session, view, tasks| {
+                        view.news_folders = TableState::default().with_selected(Some(0));
+                        reselect_news_folder(&client, session, view, tasks);
+                    }
                 },
             );
         }
         Action::HighlightNewsFolder(index) => {
             view.news_folders.select(Some(index));
-            reselect_news_folder(session, view, tasks);
+            reselect_news_folder(client, session, view, tasks);
         }
         Action::OpenNewsFolder(index) => {
             match session.news_folders.as_ref().and_then(|f| f.get(index)) {
@@ -648,10 +710,10 @@ async fn perform(
                 session.collapse_news_folder(index);
             } else if let Some(parent) = session.news_folder_parent(index) {
                 view.news_folders.select(Some(parent));
-                reselect_news_folder(session, view, tasks);
+                reselect_news_folder(client, session, view, tasks);
             }
         }
-        Action::PreviewArticle(index) => preview_news_article(session, tasks, index),
+        Action::PreviewArticle(index) => preview_news_article(client, session, tasks, index),
         Action::OpenArticle(index) => {
             if let Some(summary) = session.news_threads.get(index).map(|t| t.summary.clone()) {
                 let task = Task::read(format!("Getting news article “{}”", summary.title));
@@ -679,13 +741,18 @@ async fn perform(
             tasks.start(
                 Task::change(format!("Posting article {title}")),
                 session.post_article(client, parent_id, &title, &text),
-                |(), session, view, tasks| reselect_news_thread(session, view, tasks),
+                {
+                    let client = client.clone();
+                    move |(), session, view, tasks| {
+                        reselect_news_thread(&client, session, view, tasks);
+                    }
+                },
             );
         }
         Action::AskDeleteNews(target) => {
             if let NewsTarget::Folder(index) = target {
                 if !session.may_delete_news_folder(index) {
-                    return Flow::Go;
+                    return;
                 }
             }
             view.modal = session.news_name(target).map(|name| Modal::DeleteNews {
@@ -708,9 +775,16 @@ async fn perform(
             tasks.start(
                 Task::change(label),
                 session.delete_news_item(client, target),
-                move |(), session, view, tasks| match target {
-                    NewsTarget::Folder(_) => reselect_news_folder(session, view, tasks),
-                    NewsTarget::Article(_) => reselect_news_thread(session, view, tasks),
+                {
+                    let client = client.clone();
+                    move |(), session, view, tasks| match target {
+                        NewsTarget::Folder(_) => {
+                            reselect_news_folder(&client, session, view, tasks)
+                        }
+                        NewsTarget::Article(_) => {
+                            reselect_news_thread(&client, session, view, tasks);
+                        }
+                    }
                 },
             );
         }
@@ -722,16 +796,15 @@ async fn perform(
                 NewsFolder::Bundle => format!("Create news bundle “{name}”"),
                 NewsFolder::Category => format!("Create news category “{name}”"),
             });
-            tasks.start(
-                task,
-                session.new_news_item(client, index, &name, kind),
+            tasks.start(task, session.new_news_item(client, index, &name, kind), {
+                let client = client.clone();
                 move |(), session, view, tasks| {
                     if let Some(row) = path.and_then(|path| session.news_folder_row(&path)) {
                         view.news_folders.select(Some(row));
                     }
-                    reselect_news_folder(session, view, tasks);
-                },
-            );
+                    reselect_news_folder(&client, session, view, tasks);
+                }
+            });
         }
         Action::ListAccounts => {
             let task = Task::read("Transferring list of accounts...");
@@ -767,17 +840,25 @@ async fn perform(
             let task = Task::change(format!("Deleting account “{login}”"));
             tasks.run(task, session.delete_account(client, &login));
         }
+        Action::None
+        | Action::Quit
+        | Action::Reconnect
+        | Action::Disconnect
+        | Action::OpenConnect
+        | Action::Connect { .. }
+        | Action::EditOptions
+        | Action::SetOptions { .. }
+        | Action::StopLogin(_) => {}
     }
-    Flow::Go
 }
 
 /// List the folder `path`, and select its first item.
-fn list_files(tasks: &mut Tasks, path: HlPath) {
+fn list_files(client: &HotlineClient, tasks: &mut Tasks, path: HlPath) {
     let task = Task::read(match path.components.last() {
         Some(name) => format!("Listing folder “{name}”"),
         None => "Listing root folder...".into(),
     });
-    let request = ClientSession::get_file_name_list(&tasks.client, path);
+    let request = ClientSession::get_file_name_list(client, path);
     tasks.start(task, request, |listed, _, view, _| {
         if listed {
             view.files = TableState::default().with_selected(Some(0));
@@ -787,7 +868,12 @@ fn list_files(tasks: &mut Tasks, path: HlPath) {
 
 /// Keep the tree selection in range, and show the threads of that row.
 /// A new category selects its first thread.
-fn reselect_news_folder(session: &mut ClientSession, view: &mut View, tasks: &mut Tasks) {
+fn reselect_news_folder(
+    client: &HotlineClient,
+    session: &mut ClientSession,
+    view: &mut View,
+    tasks: &mut Tasks,
+) {
     let count = session.news_folders.as_ref().map_or(0, Vec::len);
     let index = view
         .news_folders
@@ -800,29 +886,40 @@ fn reselect_news_folder(session: &mut ClientSession, view: &mut View, tasks: &mu
         .news_name(NewsTarget::Folder(index))
         .unwrap_or_default();
     let task = Task::read(format!("Listing news category “{name}”"));
-    let request = session.highlight_news_folder(&tasks.client, index);
+    let request = session.highlight_news_folder(client, index);
+    let client = client.clone();
     tasks.start(task, request, move |(), session, view, tasks| {
         if session.news_category != category || session.news_category.is_none() {
             view.news = TableState::default().with_selected(Some(0));
             view.preview_scroll = 0;
-            preview_news_article(session, tasks, 0);
+            preview_news_article(&client, session, tasks, 0);
         }
     });
 }
 
 /// Keep the thread selection in range, and show that article in the preview.
-fn reselect_news_thread(session: &mut ClientSession, view: &mut View, tasks: &mut Tasks) {
+fn reselect_news_thread(
+    client: &HotlineClient,
+    session: &mut ClientSession,
+    view: &mut View,
+    tasks: &mut Tasks,
+) {
     let index = view
         .news
         .selected()
         .unwrap_or(0)
         .min(session.news_threads.len().saturating_sub(1));
     view.news.select(Some(index));
-    preview_news_article(session, tasks, index);
+    preview_news_article(client, session, tasks, index);
 }
 
 /// Show thread `index` in the preview, and scroll to the top for a new article.
-fn preview_news_article(session: &mut ClientSession, tasks: &mut Tasks, index: usize) {
+fn preview_news_article(
+    client: &HotlineClient,
+    session: &mut ClientSession,
+    tasks: &mut Tasks,
+    index: usize,
+) {
     let shown = session.news_preview.as_ref().map(|article| article.id);
     let title = session
         .news_threads
@@ -832,7 +929,7 @@ fn preview_news_article(session: &mut ClientSession, tasks: &mut Tasks, index: u
         "Getting news article “{}”",
         title.unwrap_or_default()
     ));
-    let request = session.preview_article(&tasks.client, index);
+    let request = session.preview_article(client, index);
     tasks.start(task, request, move |(), session, view, _| {
         if session.news_preview.as_ref().map(|article| article.id) != shown {
             view.preview_scroll = 0;

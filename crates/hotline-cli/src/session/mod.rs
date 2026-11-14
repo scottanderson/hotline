@@ -96,7 +96,7 @@ impl ClientSession {
             automatic_response: Box::default(),
             mode: Mode::Joining,
             users: Vec::new(),
-            lines: Scrollback::from(Line::system(Self::CONNECTED)),
+            lines: Scrollback::default(),
             news: None,
             news_revision: 0,
             files: None,
@@ -565,6 +565,12 @@ impl ClientSession {
         if let Err(e) = client.set_client_user_info(&info).await {
             return self.push(format!("failed to change options: {e}"), LineKind::Error);
         }
+        self.set_user_info(info);
+    }
+
+    /// Keep `info` as this user's name, icon, and options for the next
+    /// login.
+    pub fn set_user_info(&mut self, info: ClientUserInfo) {
         self.name = info.name;
         self.icon = info.icon;
         self.options = info.options;
@@ -681,7 +687,7 @@ mod tests {
         let tx = test_support::push(Opcode::DisconnectMsg, vec![]);
         let outcome = session.apply_server_event(&tx);
         assert!(matches!(outcome, EventOutcome::Applied));
-        assert_eq!(session.lines.len(), 1);
+        assert!(session.lines.is_empty());
     }
 
     #[tokio::test]
@@ -821,6 +827,19 @@ mod tests {
             "All downloads slots are full. “doom.wad” is number 2 in the server queue. Please wait..."
         );
         task.abort();
+    }
+
+    #[test]
+    fn set_user_info_keeps_the_new_name_and_options() {
+        let mut session = ClientSession::new("me", 0, EncodingHandle::default());
+        let info = ClientUserInfo {
+            name: "you".into(),
+            icon: 3,
+            options: UserChangeOptions::REFUSE_CHAT,
+            automatic_response: "away".into(),
+        };
+        session.set_user_info(info.clone());
+        assert_eq!(session.user_info(), info);
     }
 
     #[tokio::test]
