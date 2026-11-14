@@ -46,6 +46,9 @@ pub enum Modal {
     Disconnected(Disconnect),
     /// A server to connect to.
     Connect(ConnectForm),
+    /// The name of the bookmark of `form`. An empty `input` gives the
+    /// default name.
+    BookmarkName { form: ConnectForm, input: TextBox },
     /// A check before the file or folder `name` is deleted.
     DeleteFile { name: Box<str> },
     /// The info of a file or folder.
@@ -103,6 +106,7 @@ impl Modal {
             Self::Quit => ModalKind::Quit,
             Self::Disconnected(_) => ModalKind::Disconnected,
             Self::Connect(_) => ModalKind::Connect,
+            Self::BookmarkName { .. } => ModalKind::BookmarkName,
             Self::DeleteFile { .. } => ModalKind::DeleteFile,
             Self::FileInfo(_) => ModalKind::FileInfo,
             Self::SaveAs { .. } => ModalKind::SaveAs,
@@ -136,7 +140,8 @@ impl Modal {
             | Self::Subject { input, .. }
             | Self::NewsName { input, .. }
             | Self::FileEdit { input, .. }
-            | Self::OpenAccount { input } => Some(input),
+            | Self::OpenAccount { input }
+            | Self::BookmarkName { input, .. } => Some(input),
             _ => None,
         }
     }
@@ -168,6 +173,7 @@ pub enum ModalKind {
     Quit,
     Disconnected,
     Connect,
+    BookmarkName,
     DeleteFile,
     FileInfo,
     SaveAs,

@@ -201,6 +201,16 @@ works this way.
   transfers run (`ConfirmDisconnect`), then disconnects. `hlc` ends the
   connection and its transfers when the user accepts the Connect to
   form.
+- **`hlc` keeps its bookmarks in the settings file.** The Save button
+  of openline's login window (`CMyApplication::DoShowConnect` in
+  `Hotline.cp`) asks for a file name, with the address as the default,
+  and saves the bookmark as a file in the `Bookmarks` folder
+  (`SaveServerFile`). A blank address gives the name `Untitled`. `hlc`
+  keeps each bookmark in the settings file, names it after its
+  address, and saves no bookmark for an address that it cannot use.
+  Both keep the password as the user typed it. On Unix, `hlc` writes
+  the settings file with mode 0600, so that only the owner can read
+  the passwords.
 
 ## Openline vs. mhxd divergences (resolved)
 

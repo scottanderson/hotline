@@ -521,6 +521,14 @@ async fn perform(
                 password,
             };
         }
+        Action::SaveBookmark(bookmark) => {
+            let name = bookmark.name().into_owned();
+            file.config.save_bookmark(bookmark);
+            match file.save() {
+                Ok(()) => session.show_status(format!("saved the bookmark {name}")),
+                Err(e) => session.show_error(format!("failed to save the settings: {e:#}")),
+            }
+        }
         Action::EditOptions => {
             let form = OptionsForm::edit(&session.user_info(), session.queue_transfers);
             view.modal = Some(Modal::Options(form));
@@ -919,6 +927,7 @@ async fn request(
         | Action::Disconnect
         | Action::OpenConnect
         | Action::Connect { .. }
+        | Action::SaveBookmark(_)
         | Action::EditOptions
         | Action::SetOptions { .. }
         | Action::StopLogin(_) => {}

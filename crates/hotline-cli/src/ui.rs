@@ -622,13 +622,28 @@ fn options_form_rows(form: &OptionsForm) -> Vec<String> {
 }
 
 /// The rows of `form`: the server, the login, and the password.
-fn connect_form_rows(form: &ConnectForm) -> Vec<String> {
+fn connect_form_rows(form: &ConnectForm) -> Vec<UiLine<'static>> {
     vec![
-        text_row("server:", form.address.as_str()),
-        text_row("login:", form.login.as_str()),
-        text_row("password:", &form.password_text()),
+        hint_row("server:", form.address.as_str(), "host:port"),
+        hint_row("login:", form.login.as_str(), "guest"),
+        text_row("password:", &form.password_text()).into(),
     ]
 }
+
+/// A form row with `label`, then `text`, or `hint` in gray when `text` is
+/// empty.
+fn hint_row(label: &str, text: &str, hint: &'static str) -> UiLine<'static> {
+    match text {
+        "" => UiLine::from(vec![
+            Span::raw(format!("{label:FORM_LABEL$}")),
+            Span::styled(hint, HINT),
+        ]),
+        text => text_row(label, text).into(),
+    }
+}
+
+/// The style of a hint in an empty text box.
+const HINT: Style = Style::new().fg(Color::DarkGray);
 
 /// The column of the cursor in the text of the selected row of `form`.
 fn connect_form_cursor(form: &ConnectForm) -> usize {
@@ -753,6 +768,27 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
         view.input().unwrap_or(&TextBox::new()),
         focused && view.modal.is_none(),
     );
+}
+
+/// Draw the modal box `title` with `input`, or with `hint` in gray when
+/// `input` is empty.
+fn draw_hint_input_modal(
+    frame: &mut Frame,
+    screen: Rect,
+    title: &str,
+    input: &TextBox,
+    hint: &str,
+) {
+    let area = screen.centered(Constraint::Length(60), Constraint::Length(3));
+    frame.render_widget(Clear, area);
+    let block = modal_block(title);
+    if input.is_empty() {
+        let inner = block.inner(area);
+        frame.render_widget(Paragraph::new(Span::styled(hint, HINT)).block(block), area);
+        frame.set_cursor_position(inner.as_position());
+    } else {
+        draw_text_box(frame, area, block, input, true);
+    }
 }
 
 /// Draw `text` scrolled to show its cursor, and put the terminal cursor
@@ -1086,6 +1122,10 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
             draw_list_modal(frame, area, modal_block("connect to"), rows, form.row);
             set_form_cursor(frame, area, form.row, connect_form_cursor(form));
         }
+        Modal::BookmarkName { form, input } => {
+            let hint = form.default_name().unwrap_or_default();
+            draw_hint_input_modal(frame, screen, "save bookmark as", input, &hint);
+        }
         Modal::OpenAccount { input } => {
             draw_input_modal(frame, screen, "open the account with login".into(), input);
         }
@@ -1338,6 +1378,49 @@ mod tests {
             .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
             .collect();
         assert_eq!(row, "abcd");
+    }
+
+    /// The text and the gray text of `modal`, drawn on an 80 by 24 screen.
+    fn draw_gray(modal: &Modal) -> (String, String) {
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_modal(frame, frame.area(), modal, Access::all()))
+            .unwrap();
+        let cells = &terminal.backend().buffer().content;
+        let text = cells.iter().map(|cell| cell.symbol()).collect();
+        let gray = cells
+            .iter()
+            .filter(|cell| cell.fg == Color::DarkGray)
+            .map(|cell| cell.symbol())
+            .collect();
+        (text, gray)
+    }
+
+    #[test]
+    fn connect_form_rows_show_a_gray_hint_in_an_empty_row() {
+        let (_, gray) = draw_gray(&Modal::Connect(ConnectForm::new("", "", "")));
+        assert_eq!(gray, "host:portguest");
+        let (text, gray) = draw_gray(&Modal::Connect(ConnectForm::new("a", "bob", "")));
+        assert_eq!(gray, "");
+        assert!(text.contains("bob"), "{text}");
+    }
+
+    #[test]
+    fn bookmark_name_shows_the_default_name_in_gray_when_empty() {
+        let form = ConnectForm::new("example.com:6000", "bob", "");
+        let modal = Modal::BookmarkName {
+            form: form.clone(),
+            input: "".into(),
+        };
+        assert_eq!(draw_gray(&modal).1, "bob@example.com:6000");
+        let modal = Modal::BookmarkName {
+            form,
+            input: "Home".into(),
+        };
+        let (text, gray) = draw_gray(&modal);
+        assert_eq!(gray, "");
+        assert!(text.contains("Home"), "{text}");
     }
 
     #[test]

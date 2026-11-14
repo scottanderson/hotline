@@ -1,7 +1,8 @@
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::TextBox;
-use crate::connect::DEFAULT_PORT;
+use crate::config::Bookmark;
+use crate::connect::{DEFAULT_PORT, short_address};
 
 /// A server to connect to, and the login on it: three text rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +13,9 @@ pub struct ConnectForm {
     pub password: TextBox,
     /// The selected row.
     pub row: usize,
+    /// The name that [`ConnectForm::bookmark`] gives. Empty for the
+    /// default name.
+    pub name: Box<str>,
 }
 
 impl ConnectForm {
@@ -25,6 +29,7 @@ impl ConnectForm {
             login: login.into(),
             password: password.into(),
             row: 0,
+            name: "".into(),
         }
     }
 
@@ -65,6 +70,34 @@ impl ConnectForm {
         };
         (!host.is_empty()).then(|| host.to_string()).zip(Some(port))
     }
+
+    /// The address of the bookmark: `host` or `host:port`, without the
+    /// port [`DEFAULT_PORT`]. `None` when [`ConnectForm::server`] refuses
+    /// the address.
+    fn bookmark_address(&self) -> Option<String> {
+        self.server().map(|(host, port)| short_address(&host, port))
+    }
+
+    /// The name of the bookmark when [`ConnectForm::name`] is empty:
+    /// `[login@]host[:port]`, without an empty login.
+    pub fn default_name(&self) -> Option<Box<str>> {
+        let address = self.bookmark_address()?;
+        Some(Bookmark::default_name(self.login.as_str(), &address).into())
+    }
+
+    /// The form as a bookmark. An empty name, or the default name, gives
+    /// the bookmark no name of its own. `None` when [`ConnectForm::server`]
+    /// refuses the address.
+    pub fn bookmark(&self) -> Option<Bookmark> {
+        let default = self.default_name()?;
+        let named = !self.name.is_empty() && self.name != default;
+        Some(Bookmark {
+            name: named.then(|| self.name.clone()),
+            address: self.bookmark_address()?.into(),
+            login: self.login.as_str().into(),
+            password: self.password.as_str().into(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -92,6 +125,48 @@ mod tests {
         assert_eq!(server(":6000"), None);
         assert_eq!(server("example.com:x"), None);
         assert_eq!(server("example.com:70000"), None);
+    }
+
+    #[test]
+    fn bookmark_takes_its_name_from_the_login_and_the_address() {
+        let form = ConnectForm::new(" example.com:6000 ", "alice", "secret");
+        assert_eq!(
+            form.bookmark(),
+            Some(Bookmark {
+                name: None,
+                address: "example.com:6000".into(),
+                login: "alice".into(),
+                password: "secret".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn bookmark_takes_the_name_of_the_form() {
+        let mut form = ConnectForm::new("example.com", "alice", "");
+        form.name = "Home".into();
+        assert_eq!(form.bookmark().unwrap().name.as_deref(), Some("Home"));
+        form.name = "alice@example.com".into();
+        assert_eq!(form.bookmark().unwrap().name, None);
+    }
+
+    #[test]
+    fn bookmark_leaves_out_an_empty_login_and_the_default_port() {
+        let form = ConnectForm::new("example.com:5500", "", "");
+        assert_eq!(
+            form.bookmark(),
+            Some(Bookmark {
+                name: None,
+                address: "example.com".into(),
+                login: "".into(),
+                password: "".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn bookmark_refuses_a_bad_address() {
+        assert_eq!(ConnectForm::new("example.com:x", "", "").bookmark(), None);
     }
 
     #[test]

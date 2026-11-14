@@ -40,6 +40,8 @@ pub enum Intent {
     Toggle,
     /// Connect to the server in the form.
     Connect,
+    /// Save the server in the form as a bookmark.
+    SaveBookmark,
     /// Resume a transfer.
     Resume,
     /// Replace a file or a folder.
@@ -218,6 +220,7 @@ impl Intent {
         Self::StopLogin,
         Self::StartTransfer,
         Self::Connect,
+        Self::SaveBookmark,
         Self::Resume,
         Self::Replace,
         Self::NewLine,
@@ -256,6 +259,7 @@ impl Intent {
             Self::PrevRow => "previous row",
             Self::Toggle => "toggle",
             Self::Connect => "connect",
+            Self::SaveBookmark => "bookmark",
             Self::Resume => "resume",
             Self::Replace => "replace",
             Self::DisconnectUser => "disconnect",
@@ -508,7 +512,7 @@ impl Default for Keymap {
             key(KeyCode::Up, Intent::RowUp),
             key(KeyCode::Down, Intent::RowDown),
         ];
-        let modals: [(ModalKind, &[(KeyChord, Intent)]); 26] = [
+        let modals: [(ModalKind, &[(KeyChord, Intent)]); 27] = [
             (
                 ModalKind::Account,
                 &[
@@ -532,6 +536,7 @@ impl Default for Keymap {
                     key(KeyCode::Tab, Intent::NextRow),
                     key(KeyCode::BackTab, Intent::PrevRow),
                     key(KeyCode::Enter, Intent::Connect),
+                    chord(KeyCode::Char('s'), KeyModifiers::ALT, Intent::SaveBookmark),
                     CANCEL,
                 ],
             ),
@@ -616,6 +621,7 @@ impl Default for Keymap {
                 &[key(KeyCode::Enter, Intent::Upload), CANCEL],
             ),
             (ModalKind::SaveAs, SAVE),
+            (ModalKind::BookmarkName, SAVE),
             (ModalKind::FileEdit, SAVE),
             (
                 ModalKind::Subject,

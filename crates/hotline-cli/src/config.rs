@@ -1,5 +1,6 @@
 //! The settings file of `hlc`, `$XDG_CONFIG_HOME/hlc/config.toml`.
 
+use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -33,6 +34,45 @@ pub struct Config {
     pub refuse_chat: bool,
     /// The events that ring the bell.
     pub bell: Bell,
+    /// The saved servers, in the order of the server list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bookmarks: Vec<Bookmark>,
+}
+
+/// A saved server, and the login on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bookmark {
+    /// The name, or `None` for [`Bookmark::default_name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Box<str>>,
+    /// `host` or `host:port`.
+    pub address: Box<str>,
+    #[serde(default, skip_serializing_if = "str::is_empty")]
+    pub login: Box<str>,
+    /// The password as the user typed it.
+    #[serde(default, skip_serializing_if = "str::is_empty")]
+    pub password: Box<str>,
+}
+
+impl Bookmark {
+    /// The name of a bookmark that has no name of its own: `login@address`,
+    /// or `address` for an empty login.
+    pub fn default_name<'a>(login: &'_ str, address: &'a str) -> Cow<'a, str> {
+        match login {
+            "" => address.into(),
+            login => format!("{login}@{address}").into(),
+        }
+    }
+
+    /// The name of the bookmark. An empty name gives
+    /// [`Bookmark::default_name`].
+    pub fn name(&self) -> Cow<'_, str> {
+        match self.name.as_deref() {
+            None | Some("") => Self::default_name(&self.login, &self.address),
+            Some(name) => name.into(),
+        }
+    }
 }
 
 impl Default for Config {
@@ -46,6 +86,19 @@ impl Default for Config {
             refuse_pm: false,
             refuse_chat: false,
             bell: Bell::DEFAULT,
+            bookmarks: Vec::new(),
+        }
+    }
+}
+
+impl Config {
+    /// Save `bookmark`, in place of the bookmark of the same name if there
+    /// is one.
+    pub fn save_bookmark(&mut self, bookmark: Bookmark) {
+        let name = bookmark.name();
+        match self.bookmarks.iter_mut().find(|b| b.name() == name) {
+            Some(old) => *old = bookmark,
+            None => self.bookmarks.push(bookmark),
         }
     }
 }
@@ -128,7 +181,7 @@ fn read(path: &Path) -> anyhow::Result<Config> {
 }
 
 /// Write `config` to `path`. Each setting that stays the same keeps its
-/// text and its comments.
+/// text and its comments. On Unix, only the owner can read the file.
 fn write(path: &Path, config: &Config) -> anyhow::Result<()> {
     let new = toml::to_string(config)?;
     let text = match std::fs::read_to_string(path) {
@@ -139,7 +192,29 @@ fn write(path: &Path, config: &Config) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
     }
-    std::fs::write(path, text).with_context(|| path.display().to_string())
+    write_private(path, text.as_bytes()).with_context(|| path.display().to_string())
+}
+
+/// Write `bytes` to `path` with mode 0600.
+#[cfg(unix)]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(bytes)
+}
+
+/// Write `bytes` to `path`.
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
 }
 
 #[cfg(test)]
@@ -197,6 +272,7 @@ mod tests {
             refuse_pm: true,
             refuse_chat: false,
             bell: Bell::empty(),
+            ..Config::default()
         };
         write(&file, &config).unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
@@ -244,5 +320,115 @@ mod tests {
             "{text}"
         );
         assert_eq!(read(&file).unwrap(), config);
+    }
+
+    #[test]
+    fn write_and_read_keep_each_bookmark() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        let config = Config {
+            bookmarks: vec![
+                Bookmark {
+                    name: Some("Home".into()),
+                    address: "example.com:5600".into(),
+                    login: "alice".into(),
+                    password: "secret".into(),
+                },
+                Bookmark {
+                    name: Some("Guest".into()),
+                    address: "example.org".into(),
+                    login: "".into(),
+                    password: "".into(),
+                },
+            ],
+            ..Config::default()
+        };
+        write(&file, &config).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("[[bookmarks]]\nname = \"Guest\"\naddress = \"example.org\"\n"),
+            "{text}"
+        );
+        assert_eq!(read(&file).unwrap(), config);
+    }
+
+    #[test]
+    fn write_leaves_out_the_default_name_of_a_bookmark() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        let bookmark = Bookmark {
+            name: None,
+            address: "example.com".into(),
+            login: "alice".into(),
+            password: "".into(),
+        };
+        let config = Config {
+            bookmarks: vec![bookmark.clone()],
+            ..Config::default()
+        };
+        write(&file, &config).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("name ="), "{text}");
+        assert_eq!(read(&file).unwrap(), config);
+        assert_eq!(&*bookmark.name(), "alice@example.com");
+    }
+
+    #[test]
+    fn read_gives_the_default_name_to_a_bookmark_with_an_empty_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            "[[bookmarks]]\nname = \"\"\naddress = \"example.com\"\nlogin = \"bob\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            &*read(&file).unwrap().bookmarks[0].name(),
+            "bob@example.com"
+        );
+    }
+
+    #[test]
+    fn read_refuses_an_unknown_bookmark_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            "[[bookmarks]]\nname = \"a\"\naddress = \"b\"\nport = 1\n",
+        )
+        .unwrap();
+        assert!(read(&file).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_lets_only_the_owner_read_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, "").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write(&file, &Config::default()).unwrap();
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn save_bookmark_replaces_the_bookmark_of_the_same_name() {
+        let bookmark = |name: &str, address: &str| Bookmark {
+            name: Some(name.into()),
+            address: address.into(),
+            login: "".into(),
+            password: "".into(),
+        };
+        let mut config = Config::default();
+        config.save_bookmark(bookmark("a", "one"));
+        config.save_bookmark(bookmark("b", "two"));
+        config.save_bookmark(bookmark("a", "three"));
+        assert_eq!(
+            config.bookmarks,
+            [bookmark("a", "three"), bookmark("b", "two")]
+        );
     }
 }

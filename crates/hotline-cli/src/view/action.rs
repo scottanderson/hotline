@@ -1,5 +1,6 @@
 use hotline_client::{Ban, ClientUserInfo, UserAccount};
 
+use crate::config::Bookmark;
 use crate::file_edit::FileEdit;
 use crate::session::{NewsFolder, NewsTarget};
 use crate::tasks::TaskId;
@@ -23,6 +24,8 @@ pub enum Action {
         login: String,
         password: String,
     },
+    /// Save a server in the settings file.
+    SaveBookmark(Bookmark),
     /// Send public chat, sent unchanged even when it starts with `/`.
     SendChat(String),
     /// Send chat to the private chat room `chat_id`.

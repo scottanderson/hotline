@@ -62,10 +62,17 @@ the users, the news, the files, the rooms, the accounts, and the tasks
 of the connection, and stops each transfer. "Disconnect" in the
 palette ends the connection in the same way, and "Reconnect" logs in
 again. "Connect to" in the palette asks for a server, as `host` or
-`host:port`, a login, and a password. It shows the last ones. Tab
+`host:port`, a login, and a password. It shows the last ones. An empty
+row shows a hint in gray. An empty login logs in as a guest. Tab
 moves to the next row, and Shift-Tab to the previous row. Enter ends
 the connection, if there is one, and connects to the new server.
-Reconnect then uses the new server.
+Reconnect then uses the new server. Alt-S in the form asks for a
+name, then Enter saves the server as a bookmark in the settings file,
+and Esc goes back to the form. An empty name shows the default name
+in gray: `login@host:port`, without `login@` for a guest and without
+`:port` for the port 5500. An empty name, or the default name, saves
+the bookmark without a `name`. A bookmark replaces a bookmark of the
+same name.
 
 A tab label turns yellow when the tab changes while another tab shows.
 The Chat tab and each room change with each new line, and the News
@@ -220,6 +227,12 @@ news = false
 message = true
 invite = true
 transfer = true
+
+[[bookmarks]]
+name = "Home"
+address = "example.com:5500"
+login = "alice"
+password = "secret"
 ```
 
 `queue_transfers` turns the transfer queue on and off.
@@ -228,7 +241,14 @@ the options of the options form (Alt-O). `automatic_response_text` is
 the reply to a private message. The file keeps it when the option is
 off, and leaves it out when it is blank. `[bell]` turns on and off
 each event that rings the bell. A
-missing event has the value in the example.
+missing event has the value in the example. Each `[[bookmarks]]` table
+is a saved server. Its `address` is `host` or `host:port`, and `login`
+and `password` can be left out for a guest login. Without a `name`,
+or with an empty one, the bookmark has the name `login@address`, or
+`address` for a guest. That name follows a change of the login or the
+address. The file holds each
+password as plain text. On Unix, hlc writes the file so that only you
+can read it.
 
 When the file has no name and you do not give `--name`, hlc asks for
 a name before it connects, and saves it. A blank name gives

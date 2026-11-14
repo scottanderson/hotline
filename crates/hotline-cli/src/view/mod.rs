@@ -756,6 +756,10 @@ impl View {
             return Action::None;
         }
         match (&mut modal, intent) {
+            (Modal::BookmarkName { form, .. }, Intent::Cancel) => {
+                self.modal = Some(Modal::Connect(form.clone()));
+                return Action::None;
+            }
             (_, Intent::Close | Intent::Cancel) => return Action::None,
             (_, Intent::Quit) => return Action::Quit,
             (Modal::Confirm(conflict), Intent::Resume) => {
@@ -816,6 +820,20 @@ impl View {
                         password: form.password.take(),
                     };
                 }
+            }
+            (Modal::Connect(form), Intent::SaveBookmark) if form.server().is_some() => {
+                let input = (*form.name).into();
+                self.modal = Some(Modal::BookmarkName {
+                    form: form.clone(),
+                    input,
+                });
+                return Action::None;
+            }
+            (Modal::BookmarkName { form, input }, Intent::Save) => {
+                form.name = input.take().into();
+                let action = form.bookmark().map_or(Action::None, Action::SaveBookmark);
+                self.modal = Some(Modal::Connect(form.clone()));
+                return action;
             }
             (Modal::Palette(palette), Intent::SelectUp) => palette.select_previous(),
             (Modal::Palette(palette), Intent::SelectDown) => palette.select_next(),
@@ -1258,6 +1276,7 @@ impl View {
                 | Modal::Quit
                 | Modal::Disconnected(_)
                 | Modal::Connect(_)
+                | Modal::BookmarkName { .. }
                 | Modal::Account(_)
                 | Modal::Options(_)
                 | Modal::OpenAccount { .. }
@@ -2536,6 +2555,7 @@ mod tests {
                 ("↑↓".into(), "row"),
                 ("Tab".into(), "next row"),
                 ("Enter".into(), "connect"),
+                ("Alt-S".into(), "bookmark"),
                 ("Esc".into(), "cancel"),
             ]
         );
@@ -3272,6 +3292,69 @@ mod tests {
         assert_eq!(row(KeyCode::Tab), 0);
         assert_eq!(row(KeyCode::BackTab), 2);
         assert_eq!(row(KeyCode::BackTab), 1);
+    }
+
+    #[test]
+    fn connect_form_asks_for_the_name_then_saves_a_bookmark_and_stays_open() {
+        let form = ConnectForm::new("example.com", "alice", "secret");
+        let mut view = View {
+            modal: Some(Modal::Connect(form.clone())),
+            ..View::default()
+        };
+        assert_eq!(view.handle_key(alt('s'), &users(), &files()), Action::None);
+        assert!(matches!(view.modal, Some(Modal::BookmarkName { .. })));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::SaveBookmark(form.bookmark().unwrap())
+        );
+        assert_eq!(view.modal, Some(Modal::Connect(form)));
+    }
+
+    #[test]
+    fn bookmark_name_saves_under_a_typed_name_and_keeps_it() {
+        let mut view = View {
+            modal: Some(Modal::Connect(ConnectForm::new("example.com", "", ""))),
+            ..View::default()
+        };
+        view.handle_key(alt('s'), &users(), &files());
+        view.handle_key(key(KeyCode::Char('H')), &users(), &files());
+        let Action::SaveBookmark(bookmark) =
+            view.handle_key(key(KeyCode::Enter), &users(), &files())
+        else {
+            panic!("no bookmark");
+        };
+        assert_eq!(bookmark.name.as_deref(), Some("H"));
+        view.handle_key(alt('s'), &users(), &files());
+        let Some(Modal::BookmarkName { input, .. }) = &view.modal else {
+            panic!("no name box");
+        };
+        assert_eq!(input.as_str(), "H");
+    }
+
+    #[test]
+    fn bookmark_name_cancel_goes_back_to_the_connect_form() {
+        let form = ConnectForm::new("example.com", "", "");
+        let mut view = View {
+            modal: Some(Modal::Connect(form.clone())),
+            ..View::default()
+        };
+        view.handle_key(alt('s'), &users(), &files());
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.modal, Some(Modal::Connect(form)));
+    }
+
+    #[test]
+    fn connect_form_saves_no_bookmark_for_a_bad_address() {
+        let form = ConnectForm::new("example.com:x", "", "");
+        let mut view = View {
+            modal: Some(Modal::Connect(form.clone())),
+            ..View::default()
+        };
+        assert_eq!(view.handle_key(alt('s'), &users(), &files()), Action::None);
+        assert_eq!(view.modal, Some(Modal::Connect(form)));
     }
 
     #[test]
