@@ -1,8 +1,10 @@
 use std::borrow::Cow;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::num::NonZero;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -39,6 +41,7 @@ use crate::news::{
 };
 use crate::policy::{ServerPolicy, Silent, TakenLogin, TimeZone};
 use crate::providers::Providers;
+use crate::random::random_u32;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
 use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::progress::RunningTransfers;
@@ -57,9 +60,30 @@ const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 /// The bytes an upload must leave free on the disk.
 const UPLOAD_SPACE_MARGIN: u64 = 512_000;
 
+/// A counter that gives out 1 up to `u16::MAX`, then 1 again, and never 0.
+struct NonZeroCounter(AtomicU16);
+
+impl NonZeroCounter {
+    /// A counter whose first value is 1.
+    const fn new() -> Self {
+        Self(AtomicU16::new(1))
+    }
+
+    /// The next value. A 0 from the counter goes to the next one.
+    fn next(&self) -> NonZero<u16> {
+        loop {
+            let value = self.0.fetch_add(1, Ordering::Relaxed);
+            if let Some(value) = NonZero::new(value) {
+                return value;
+            }
+        }
+    }
+}
+
 /// State shared by every [`crate::Session`], behind one `Arc`.
 pub struct SharedState {
-    next_user_id: AtomicU16,
+    /// Gives out the user IDs.
+    user_id_counter: NonZeroCounter,
     /// One inbound channel per currently connected recipient.
     recipients: RwLock<HashMap<u16, Recipient>>,
     /// The storage and the behavior choices.
@@ -71,7 +95,8 @@ pub struct SharedState {
     transfers: RwLock<HashMap<TransferRef, PendingTransfer>>,
     /// Transfers whose data connection is open.
     running: Arc<RunningTransfers>,
-    next_transfer_ref: AtomicU32,
+    /// The high 16 bits of the next transfer reference number.
+    transfer_counter: NonZeroCounter,
     /// Concurrent-download admission; see
     /// [`download_queue::DownloadQueue`](crate::state::download_queue::DownloadQueue).
     download_queue: DownloadQueue,
@@ -80,13 +105,13 @@ pub struct SharedState {
 impl Default for SharedState {
     fn default() -> Self {
         Self {
-            next_user_id: AtomicU16::new(1),
+            user_id_counter: NonZeroCounter::new(),
             recipients: RwLock::new(HashMap::new()),
             providers: Providers::default(),
             account_writes: Mutex::default(),
             transfers: RwLock::new(HashMap::new()),
             running: Arc::default(),
-            next_transfer_ref: AtomicU32::new(1),
+            transfer_counter: NonZeroCounter::new(),
             download_queue: DownloadQueue::default(),
         }
     }
@@ -186,15 +211,6 @@ impl SharedState {
 }
 
 impl SharedState {
-    /// The next user ID, or the one after it when the next one is 0.
-    fn bump_user_id(&self) -> u16 {
-        let next = || self.next_user_id.fetch_add(1, Ordering::Relaxed);
-        match next() {
-            0 => next(),
-            user_id => user_id,
-        }
-    }
-
     /// Register a newly logged-in (or info-changed) user.
     pub async fn insert_user(&self, entry: UserEntry) {
         let user_id = entry.user_id;
@@ -269,7 +285,7 @@ impl SharedState {
     pub(crate) async fn connect(&self) -> Option<Connection> {
         let mut recipients = self.recipients.write().await;
         let user_id = (0..u16::MAX)
-            .map(|_| self.bump_user_id())
+            .map(|_| self.user_id_counter.next().get())
             .find(|user_id| !recipients.contains_key(user_id))?;
         let (recipient, inbox) = recipient::channel();
         recipients.insert(user_id, recipient);
@@ -976,9 +992,9 @@ impl SharedState {
         let reference = {
             let mut transfers = self.transfers.write().await;
             loop {
-                let reference = TransferRef(self.next_transfer_ref.fetch_add(1, Ordering::Relaxed));
-                if reference.0 != 0 && !transfers.contains_key(&reference) {
-                    transfers.insert(reference, transfer);
+                let reference = self.new_transfer_ref(is_upload);
+                if let Entry::Vacant(entry) = transfers.entry(reference) {
+                    entry.insert(transfer);
                     break reference;
                 }
             }
@@ -987,6 +1003,18 @@ impl SharedState {
             self.spawn_upload_idle_timeout(reference);
         }
         reference
+    }
+
+    /// A new transfer reference number: a 16-bit counter that skips 0, over
+    /// 16 random bits. Bit 0 is clear for an upload and set for a download.
+    fn new_transfer_ref(&self, is_upload: bool) -> TransferRef {
+        let counter = self.transfer_counter.next().get();
+        let reference = u32::from(counter) << 16 | random_u32() & 0xFFFF;
+        TransferRef(if is_upload {
+            reference & !1
+        } else {
+            reference | 1
+        })
     }
 
     /// Drop upload `reference` if no `HTXF` connection arrives within
@@ -1873,7 +1901,7 @@ mod tests {
         let ids = |connection: Option<Connection>| connection.map(|c| c.user_id);
         assert_eq!(ids(state.connect().await), Some(1));
         state.remove_recipient(1).await;
-        state.next_user_id.store(u16::MAX, Ordering::Relaxed);
+        state.user_id_counter.0.store(u16::MAX, Ordering::Relaxed);
         assert_eq!(ids(state.connect().await), Some(u16::MAX));
         assert_eq!(ids(state.connect().await), Some(1));
     }
@@ -2410,6 +2438,19 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(info.file_type, crate::file::PARTIAL_TYPE);
+    }
+
+    #[test]
+    fn new_transfer_ref_counts_in_the_high_bits_and_marks_the_direction() {
+        let state = SharedState::default();
+        let download = state.new_transfer_ref(false).0;
+        let upload = state.new_transfer_ref(true).0;
+        assert_eq!((download >> 16, download & 1), (1, 1));
+        assert_eq!((upload >> 16, upload & 1), (2, 0));
+
+        state.transfer_counter.0.store(u16::MAX, Ordering::Relaxed);
+        assert_eq!(state.new_transfer_ref(false).0 >> 16, u32::from(u16::MAX));
+        assert_eq!(state.new_transfer_ref(false).0 >> 16, 1);
     }
 
     #[tokio::test]
