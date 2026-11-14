@@ -371,6 +371,13 @@ impl HotlineClient {
         Ok(())
     }
 
+    /// Close the connection. The server then ends it, and each later
+    /// request fails.
+    pub async fn close(&self) -> Result<()> {
+        self.writer.sink.lock().await.close().await?;
+        Ok(())
+    }
+
     /// When a transaction last went either way on the connection.
     pub fn last_traffic(&self) -> Instant {
         let nanos = self.shared.last_traffic.load(Ordering::Relaxed);

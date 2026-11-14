@@ -185,6 +185,17 @@ async fn disconnect_user_without_the_privilege_is_a_server_error() {
 }
 
 #[tokio::test]
+async fn close_ends_the_connection() {
+    let addr = start_server().await;
+    let (alice, mut alice_events) = join(addr, "alice").await;
+
+    alice.close().await.unwrap();
+    let end = timeout(WAIT, async { while alice_events.recv().await.is_some() {} }).await;
+    assert!(end.is_ok(), "the server ends the connection");
+    assert!(alice.get_user_name_list().await.is_err());
+}
+
+#[tokio::test]
 async fn keep_connection_alive_is_traffic() {
     let addr = start_server().await;
     let (alice, _alice_events) = join(addr, "alice").await;
