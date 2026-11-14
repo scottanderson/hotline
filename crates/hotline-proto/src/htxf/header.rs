@@ -4,7 +4,7 @@ use num_enum::{FromPrimitive, IntoPrimitive};
 
 use crate::error::{ProtoError, Result};
 use crate::htxf::MAGIC;
-use crate::wire::{PacketReader, PacketWriter, SliceReader};
+use crate::wire::{ArrayReader, ArrayWriter, SliceReader};
 
 /// Transfer type carried in [`HtxfHeader::transfer_type`].
 #[non_exhaustive]
@@ -55,7 +55,7 @@ impl HtxfHeader {
 
     /// Encode to the wire format.
     pub fn encode(&self) -> [u8; Self::LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .bytes(MAGIC)
             .u32(self.reference)
             .u32(self.len)
@@ -67,7 +67,7 @@ impl HtxfHeader {
     /// Decode a 16-byte header.
     pub fn decode(buf: &[u8]) -> Result<Self> {
         let buf: [u8; Self::LEN] = SliceReader::new(buf).array()?;
-        let mut r = PacketReader::new(buf);
+        let mut r = ArrayReader::new(buf);
         let magic = r.take();
         let reference = r.u32();
         let len = r.u32();

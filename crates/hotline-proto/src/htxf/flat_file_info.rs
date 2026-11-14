@@ -2,7 +2,7 @@
 
 use crate::text_encoding::{self, Encoding};
 use crate::types::HlDate;
-use crate::wire::{PacketReader, VecWriter};
+use crate::wire::{ArrayReader, VecWriter};
 
 /// The `INFO` fork's data: a file's Finder info, dates, name, and comment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +90,7 @@ impl FlatFileInfo {
         data.iter_mut().zip(buf).for_each(|(d, &b)| *d = b);
 
         let fixed = data.first_chunk().copied().unwrap_or([0; Self::FIXED_LEN]);
-        let mut r = PacketReader::new(fixed);
+        let mut r = ArrayReader::new(fixed);
         let platform = r.take();
         let file_type = r.take();
         let creator = r.take();

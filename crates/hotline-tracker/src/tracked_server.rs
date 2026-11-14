@@ -1,5 +1,5 @@
 use hotline_proto::text_encoding::{self, Encoding};
-use hotline_proto::wire::PacketReader;
+use hotline_proto::wire::ArrayReader;
 
 use crate::{Result, TrackerError};
 
@@ -49,7 +49,7 @@ impl TrackedServer {
                 needed: PREFIX_LEN,
                 available: buf.len(),
             })?;
-        let mut r = PacketReader::new(prefix);
+        let mut r = ArrayReader::new(prefix);
         let ip = r.take();
         let port = r.u16();
         let user_count = r.u16();

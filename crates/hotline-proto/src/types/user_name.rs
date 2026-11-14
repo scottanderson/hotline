@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::text_encoding::{self, Encoding};
 use crate::types::UserFlags;
-use crate::wire::{PacketReader, SliceReader, VecWriter};
+use crate::wire::{ArrayReader, SliceReader, VecWriter};
 
 /// The packed [`myField_UserNameWithInfo`] (300) record from userlist
 /// replies.
@@ -41,7 +41,7 @@ impl UserNameWithInfo {
     /// Decode from a field's raw data.
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
         let mut slice = SliceReader::new(buf);
-        let mut r = PacketReader::new(slice.array::<{ Self::LEN }>()?);
+        let mut r = ArrayReader::new(slice.array::<{ Self::LEN }>()?);
         let user_id = r.u16();
         let icon = r.u16();
         let flags = r.u16();

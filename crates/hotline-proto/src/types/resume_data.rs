@@ -1,5 +1,5 @@
 use crate::error::{ProtoError, Result};
-use crate::wire::{PacketReader, PacketWriter, SliceReader};
+use crate::wire::{ArrayReader, ArrayWriter, SliceReader};
 
 /// Byte length of the fixed prefix, before the fork entries:
 /// `format(4) | version(2) | reserved(34) | fork_count(2)`.
@@ -30,7 +30,7 @@ impl ResumeData {
     pub fn decode(buf: &[u8]) -> Result<Self> {
         let mut reader = SliceReader::new(buf);
         let prefix: [u8; PREFIX_LEN] = reader.array()?;
-        let mut r = PacketReader::new(prefix);
+        let mut r = ArrayReader::new(prefix);
         let magic = r.take();
         let version = r.u16();
         let _reserved = r.take::<34>();
@@ -52,7 +52,7 @@ impl ResumeData {
         let mut resource = 0;
         for _ in 0..fork_count {
             let entry: [u8; ENTRY_LEN] = reader.array()?;
-            let mut er = PacketReader::new(entry);
+            let mut er = ArrayReader::new(entry);
             let fork_type = er.take();
             let data_size = er.u32();
             let _reserved = er.take::<8>();
@@ -71,7 +71,7 @@ impl ResumeData {
 
     /// Encode the blob with a `DATA` entry and a `MACR` entry.
     pub fn encode(&self) -> [u8; Self::LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .bytes(b"RFLT")
             .u16(1) // version
             .bytes(&[0; 34]) // reserved

@@ -18,7 +18,7 @@ pub use fork_header::ForkHeader;
 pub use header::{HtxfHeader, HtxfType};
 
 use crate::error::Result;
-use crate::wire::{PacketReader, PacketWriter, SliceReader, VecWriter};
+use crate::wire::{ArrayReader, ArrayWriter, SliceReader, VecWriter};
 
 pub(crate) const MAGIC: &[u8; 4] = b"HTXF";
 
@@ -29,7 +29,7 @@ pub const INFO_DATA_LEN: usize = FlatFileInfo::FIXED_LEN + 2;
 /// The `INFO` fork data of [`FlatFileInfo::default`]: platform `AMAC`,
 /// with no type, creator, name, or comment.
 pub fn empty_info() -> [u8; INFO_DATA_LEN] {
-    PacketWriter::new()
+    ArrayWriter::new()
         .bytes(b"AMAC")
         .bytes(&[0; INFO_DATA_LEN - 4])
         .finish()
@@ -123,7 +123,7 @@ pub fn decode_flat_file_prefix(buf: &[u8]) -> Result<u16> {
     use crate::error::ProtoError;
 
     let prefix: [u8; FLAT_FILE_PREFIX_LEN] = SliceReader::new(buf).array()?;
-    let mut r = PacketReader::new(prefix);
+    let mut r = ArrayReader::new(prefix);
     let magic = r.take();
     let _version = r.u16();
     let _reserved = r.take::<16>();

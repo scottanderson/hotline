@@ -8,7 +8,7 @@ use crate::error::{ProtoError, Result};
 use crate::field::id::FieldId;
 use crate::field::{Built, Field, Received};
 use crate::text_encoding::Encoding;
-use crate::wire::{PacketReader, VecWriter};
+use crate::wire::{ArrayReader, VecWriter};
 
 /// A list of fields: a transaction's body, or the shape of one nested
 /// account record inside [`myTran_GetUserList`] (348) /
@@ -91,7 +91,7 @@ impl FieldList<Received> {
                 needed: Self::COUNT_LEN,
                 available: body.len(),
             })?;
-        let mut r = PacketReader::new(prefix);
+        let mut r = ArrayReader::new(prefix);
         let count = r.u16();
         r.finish();
 

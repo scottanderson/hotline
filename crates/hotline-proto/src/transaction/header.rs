@@ -8,7 +8,7 @@ use crate::field::{FieldList, Received};
 use crate::opcode::TransactionType;
 use crate::text_encoding::Encoding;
 use crate::transaction::Transaction;
-use crate::wire::PacketReader;
+use crate::wire::ArrayReader;
 
 /// A transaction's raw 20-byte wire prefix, decoded before its fields are
 /// readable. See the [module docs](crate::transaction) for why this is a
@@ -32,7 +32,7 @@ impl TransactionHeader {
     /// says how many more bytes to read, then
     /// [`TransactionHeader::finish_decode`] parses them.
     pub fn decode_from_client(buf: &[u8; Self::LEN]) -> Self {
-        let mut r = PacketReader::new(*buf);
+        let mut r = ArrayReader::new(*buf);
         let wire_type = r.u32();
         let trans = r.u32();
         let flag = r.u32();
@@ -52,7 +52,7 @@ impl TransactionHeader {
     /// to have been sent **by a server** (a client reading its own
     /// incoming traffic).
     pub fn decode_from_server(buf: &[u8; Self::LEN]) -> Self {
-        let mut r = PacketReader::new(*buf);
+        let mut r = ArrayReader::new(*buf);
         let wire_type = r.u32();
         let trans = r.u32();
         let flag = r.u32();

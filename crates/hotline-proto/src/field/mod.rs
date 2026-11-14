@@ -13,7 +13,7 @@
 use crate::error::{ProtoError, Result};
 use crate::numbers::decode as decode_number;
 use crate::text_encoding::{self, Encoding};
-use crate::wire::{PacketReader, VecWriter};
+use crate::wire::{ArrayReader, VecWriter};
 
 mod field_list;
 mod id;
@@ -216,7 +216,7 @@ impl Field<Received> {
                 needed: Self::PREFIX_LEN,
                 available: buf.len(),
             })?;
-        let mut r = PacketReader::new(prefix);
+        let mut r = ArrayReader::new(prefix);
         let id = r.u16();
         let size = r.u16() as usize;
         r.finish();

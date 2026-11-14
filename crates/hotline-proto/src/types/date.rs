@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
-use crate::wire::{PacketReader, PacketWriter};
+use crate::wire::{ArrayReader, ArrayWriter};
 
 /// A Hotline date: `year(2) | milliseconds(2) | seconds-since-midnight(4)`.
 /// Used by [`myField_FileCreateDate`] (208), [`myField_FileModifyDate`] (209),
@@ -89,7 +89,7 @@ impl HlDate {
 
     /// Encode as the 8-byte wire representation.
     pub fn encode(&self) -> [u8; Self::LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .u16(self.year)
             .u16(self.milliseconds)
             .u32(self.seconds)
@@ -98,7 +98,7 @@ impl HlDate {
 
     /// Decode from the 8-byte wire representation.
     pub const fn decode(buf: [u8; Self::LEN]) -> Self {
-        let mut r = PacketReader::new(buf);
+        let mut r = ArrayReader::new(buf);
         let date = Self {
             year: r.u16(),
             milliseconds: r.u16(),

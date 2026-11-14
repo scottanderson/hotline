@@ -1,5 +1,5 @@
 use hotline_proto::text_encoding::Encoding;
-use hotline_proto::wire::PacketReader;
+use hotline_proto::wire::ArrayReader;
 
 use crate::{decode_reply_header, Result, TrackedServer, TrackerError, REPLY_HEADER_LEN};
 
@@ -35,7 +35,7 @@ impl ChunkHeader {
                 available: buf.len(),
             })?;
 
-        let mut r = PacketReader::new(prefix);
+        let mut r = ArrayReader::new(prefix);
         let msg_type = r.u16();
         let data_size = r.u16();
         let total_servers = r.u16();

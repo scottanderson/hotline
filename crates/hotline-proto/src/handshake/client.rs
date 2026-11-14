@@ -2,7 +2,7 @@
 
 use crate::error::{ProtoError, Result};
 use crate::handshake::{MAGIC, SUB_PROTOCOL_HOTLINE};
-use crate::wire::{PacketReader, PacketWriter};
+use crate::wire::{ArrayReader, ArrayWriter};
 
 /// The 12-byte packet the client sends first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +33,7 @@ impl ClientHandshake {
 
     /// Encode to the wire format: `"TRTP" | sub_protocol | version | sub_version`.
     pub fn encode(&self) -> [u8; Self::LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .bytes(&MAGIC)
             .bytes(&self.sub_protocol)
             .u16(self.version)
@@ -51,7 +51,7 @@ impl ClientHandshake {
                 needed: Self::LEN,
                 available: buf.len(),
             })?;
-        let mut r = PacketReader::new(buf);
+        let mut r = ArrayReader::new(buf);
         let protocol = r.take();
         let sub_protocol = r.take();
         let version = r.u16();

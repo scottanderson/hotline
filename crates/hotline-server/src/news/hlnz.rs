@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use hotline_proto::text_encoding::{self, Encoding};
 use hotline_proto::types::HlDate;
-use hotline_proto::wire::{PacketReader, SliceReader};
+use hotline_proto::wire::{ArrayReader, SliceReader};
 use uuid::Uuid;
 
 use crate::news::category::MAX_REPLY_CHAIN_LEN;
@@ -35,7 +35,7 @@ impl Header {
     pub const LEN: usize = 380;
 
     fn decode(buf: [u8; Self::LEN]) -> Result<Self, &'static str> {
-        let mut r = PacketReader::new(buf);
+        let mut r = ArrayReader::new(buf);
         if &r.take() != HLNZ_MAGIC {
             return Err("not an HLNZ news file");
         }
@@ -86,7 +86,7 @@ impl ItemBlock {
     pub const LEN: usize = 228;
 
     const fn decode(buf: [u8; Self::LEN]) -> Self {
-        let mut r = PacketReader::new(buf);
+        let mut r = ArrayReader::new(buf);
         let first_flavor = r.u32();
         let _size = r.u32();
         let _type = r.take::<28>();
@@ -281,7 +281,7 @@ impl NewsCategory {
 #[cfg(test)]
 mod tests {
     use chrono::{FixedOffset, Utc};
-    use hotline_proto::wire::{PacketWriter, VecWriter};
+    use hotline_proto::wire::{ArrayWriter, VecWriter};
 
     use super::*;
     use crate::news::PostError;
@@ -344,7 +344,7 @@ mod tests {
         }
 
         fn article(&mut self, art: &Art) -> u32 {
-            let item = PacketWriter::<{ ItemBlock::LEN }>::new()
+            let item = ArrayWriter::<{ ItemBlock::LEN }>::new()
                 .u32(0)
                 .u32(0)
                 .bytes(b"\x18application/x-hlnewsitem\0\0\0")
@@ -391,7 +391,7 @@ mod tests {
     }
 
     fn header(count: u32, first: u32, next_id: u32) -> [u8; Header::LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .bytes(HLNZ_MAGIC)
             .u32(VERSION)
             .bytes(&[7; 16])

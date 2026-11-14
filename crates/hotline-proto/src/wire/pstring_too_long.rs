@@ -1,4 +1,4 @@
-//! [`PStringTooLong`]: the error [`crate::wire::PacketBuilder::pstring`] returns.
+//! [`PStringTooLong`]: the error [`crate::wire::Writer::pstring`] returns.
 
 /// A string was too long to fit a 1-byte Pascal-string length prefix
 /// (max 255 bytes).

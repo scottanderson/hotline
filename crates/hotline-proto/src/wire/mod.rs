@@ -1,37 +1,33 @@
-//! [`PacketBuilder`]: one generic, consuming-builder-style writer for
-//! wire buffers, over a pluggable [`Storage`] backing: [`Fixed`] (a
-//! stack-allocated `[u8; N]`, no heap allocation, panics on overflow)
-//! when the total size is known at compile time, [`Growable`] (a
-//! `Vec<u8>`) when it isn't (e.g. a variable number of strings).
-//! [`PacketWriter`]/[`VecWriter`] are the two instantiations most call
-//! sites actually name.
+//! Readers and writers of wire buffers.
 //!
-//! A second, typestate type parameter tracks whether a text encoding has
-//! been attached: [`PacketBuilder::pstring`] only exists once
-//! [`PacketBuilder::with_encoding`] has run. A chain that writes a
-//! `pstring` without ever choosing an encoding is a compile error, not a
-//! silent default.
+//! [`Writer`] writes a buffer in a chain of calls. Its [`Storage`] is
+//! [`Fixed`], a `[u8; N]` on the stack, when the size is known at compile
+//! time, or [`Growable`], a `Vec<u8>`, when it is not. Most call sites name
+//! [`ArrayWriter`] or [`VecWriter`].
 //!
-//! [`PacketReader`] is the read-side counterpart for a fixed size.
-//! [`SliceReader`] reads a borrowed buffer of unknown length, such as one
-//! that [`VecWriter`] wrote.
+//! A second type parameter records if the writer has a text encoding.
+//! [`Writer::pstring`] exists only after [`Writer::with_encoding`], so a
+//! `pstring` without an encoding does not compile.
+//!
+//! [`ArrayReader`] reads an `N`-byte array. [`SliceReader`] reads a
+//! borrowed buffer of unknown length, such as one that [`VecWriter`] wrote.
 
+mod array_reader;
 mod fixed;
 mod growable;
 mod no_encoding;
-mod packet_builder;
-mod packet_reader;
 mod pstring_too_long;
 mod slice_reader;
 mod storage;
 mod with_encoding;
+mod writer;
 
+pub use array_reader::ArrayReader;
 pub use fixed::Fixed;
 pub use growable::Growable;
 pub use no_encoding::NoEncoding;
-pub use packet_builder::{PacketBuilder, PacketWriter, VecWriter};
-pub use packet_reader::PacketReader;
 pub use pstring_too_long::PStringTooLong;
 pub use slice_reader::SliceReader;
 pub use storage::Storage;
 pub use with_encoding::WithEncoding;
+pub use writer::{ArrayWriter, VecWriter, Writer};

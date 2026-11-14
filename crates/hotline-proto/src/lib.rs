@@ -29,7 +29,7 @@ pub use htxf::{ForkHeader, HtxfHeader, HtxfType};
 pub use opcode::{Opcode, TransactionType};
 pub use text_encoding::Encoding;
 pub use transaction::{TransCounter, Transaction, TransactionHeader};
-pub use wire::{PStringTooLong, PacketWriter, VecWriter};
+pub use wire::{ArrayWriter, PStringTooLong, VecWriter};
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]

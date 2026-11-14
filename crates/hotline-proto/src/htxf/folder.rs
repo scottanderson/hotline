@@ -8,7 +8,7 @@
 use crate::error::Result;
 use crate::text_encoding::Encoding;
 use crate::types::HlPath;
-use crate::wire::{PacketReader, SliceReader, VecWriter};
+use crate::wire::{ArrayReader, SliceReader, VecWriter};
 use num_enum::{FromPrimitive, IntoPrimitive};
 
 /// Action a folder transfer's receiver sends to control what the sender
@@ -62,7 +62,7 @@ impl FolderItemHeader {
     /// past the wire form's own leading `size` field.
     pub fn decode_body(body: &[u8], encoding: &'static Encoding) -> Result<Self> {
         let mut slice = SliceReader::new(body);
-        let mut r = PacketReader::new(slice.array::<{ Self::LEN }>()?);
+        let mut r = ArrayReader::new(slice.array::<{ Self::LEN }>()?);
         let is_folder = r.u16() & 1 != 0;
         r.finish();
         let path = HlPath::decode(slice.rest(), encoding)?;

@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::text_encoding::{self, Encoding};
-use crate::wire::{PacketReader, SliceReader, VecWriter};
+use crate::wire::{ArrayReader, SliceReader, VecWriter};
 
 /// The type code of a file whose upload has not finished.
 pub const PARTIAL_TYPE: [u8; 4] = *b"HTft";
@@ -50,7 +50,7 @@ impl FileNameWithInfo {
     /// Decode from a field's raw data.
     pub fn decode(buf: &[u8], encoding: &'static Encoding) -> Result<Self> {
         let mut slice = SliceReader::new(buf);
-        let mut r = PacketReader::new(slice.array::<{ Self::LEN }>()?);
+        let mut r = ArrayReader::new(slice.array::<{ Self::LEN }>()?);
         let file_type = r.take();
         let creator = r.take();
         let size = r.u32();

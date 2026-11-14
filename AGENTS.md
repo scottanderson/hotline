@@ -76,7 +76,7 @@ voice. This applies to replies, comments, docs, and commit messages.
   target checks for `/access` and `/0wn` in `console/`. They use mhxd's
   message.
 - A fixed-size wire struct has a `pub const LEN`. Read it with
-  `PacketReader`. Write it with `PacketWriter`, or `VecWriter` for a
+  `ArrayReader`. Write it with `ArrayWriter`, or `VecWriter` for a
   variable size.
 - Convert opcodes with `Opcode::from(v)` and `u32::from(opcode)`.
 - Let the compiler infer a const generic when its use fixes the

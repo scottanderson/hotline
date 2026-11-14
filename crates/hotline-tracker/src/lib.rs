@@ -1,7 +1,7 @@
 //! The `HTRK` tracker protocol: how a client asks a tracker for a server
 //! list, and how a server periodically beacons itself over UDP. Kept
 //! separate from `hotline-proto`'s transaction framing, a different wire
-//! shape entirely, but reuses its `PacketWriter`/`PacketReader`/`VecWriter`.
+//! shape entirely, but reuses its `ArrayWriter`/`ArrayReader`/`VecWriter`.
 
 #![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
 
@@ -10,7 +10,7 @@ mod server_beacon;
 mod server_list;
 mod tracked_server;
 
-use hotline_proto::wire::{PacketReader, PacketWriter};
+use hotline_proto::wire::{ArrayReader, ArrayWriter};
 
 pub use error::{Result, TrackerError};
 pub use server_beacon::ServerBeacon;
@@ -40,7 +40,7 @@ pub fn with_default_port(address: &str, default_port: u16) -> String {
 /// The client's initial request to a tracker (version 1, "old protocol":
 /// just the magic + version, no login).
 pub fn encode_client_request_v1() -> [u8; 6] {
-    PacketWriter::new().bytes(MAGIC).u16(1).finish()
+    ArrayWriter::new().bytes(MAGIC).u16(1).finish()
 }
 
 /// Decode the fixed 6-byte header a tracker reply starts with, checking
@@ -55,7 +55,7 @@ pub fn decode_reply_header(buf: &[u8]) -> Result<u16> {
             available: buf.len(),
         })?;
 
-    let mut reader = PacketReader::new(prefix);
+    let mut reader = ArrayReader::new(prefix);
     let magic = reader.take();
     let version = reader.u16();
     reader.finish();

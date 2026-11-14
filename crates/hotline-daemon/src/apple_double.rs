@@ -25,7 +25,7 @@ use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
 use std::task::{ready, Context, Poll};
 
-use hotline_proto::wire::PacketWriter;
+use hotline_proto::wire::ArrayWriter;
 use hotline_server::{BoxedReader, FinderInfo};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
@@ -94,7 +94,7 @@ impl Entry {
     }
 
     fn encode(&self) -> [u8; ENTRY_LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .u32(self.id)
             .u32(self.offset)
             .u32(self.len)
@@ -119,7 +119,7 @@ impl AttrHeader {
     const LEN: usize = 36;
 
     fn encode(&self) -> [u8; Self::LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .u32(ATTR_MAGIC)
             .u32(self.debug_tag)
             .u32(self.total_size)
@@ -788,7 +788,7 @@ fn new_sidecar(debug_tag: u32) -> Vec<u8> {
         flags: 0,
         num_attrs: 0,
     };
-    let mut file = PacketWriter::<HEADER_LEN>::new()
+    let mut file = ArrayWriter::<HEADER_LEN>::new()
         .u32(MAGIC)
         .u32(VERSION)
         .bytes(FILLER)
@@ -810,7 +810,7 @@ fn empty_fork() -> [u8; EMPTY_FORK_LEN as usize] {
     const NULL_MAP_LEN: u16 = 30;
     let mut system_data = [0; 112];
     put(&mut system_data, 0, EMPTY_FORK_TAG).unwrap_or_default();
-    PacketWriter::new()
+    ArrayWriter::new()
         .u32(FIRST_RESOURCE)
         .u32(FIRST_RESOURCE)
         .u32(0)
@@ -1360,7 +1360,7 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
         } else {
             put(&mut info.buf, value_at as usize, value)?;
         }
-        let fixed = PacketWriter::<11>::new()
+        let fixed = ArrayWriter::<11>::new()
             .u32(value_at)
             .u32(value_len)
             .u16(0)

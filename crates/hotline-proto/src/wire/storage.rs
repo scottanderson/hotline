@@ -1,4 +1,4 @@
-/// Where a [`super::PacketBuilder`] writes its bytes.
+/// Where a [`super::Writer`] writes its bytes.
 pub trait Storage: Default {
     /// Append `bytes` to the end of what's been written so far.
     ///

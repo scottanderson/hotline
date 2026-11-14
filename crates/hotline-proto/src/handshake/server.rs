@@ -2,7 +2,7 @@
 
 use crate::error::{ProtoError, Result};
 use crate::handshake::MAGIC;
-use crate::wire::{PacketReader, PacketWriter};
+use crate::wire::{ArrayReader, ArrayWriter};
 
 /// The 8-byte packet the server replies with: `"TRTP"` plus a 4-byte
 /// error code.
@@ -22,7 +22,7 @@ impl ServerHandshake {
 
     /// Encode to the wire format: `"TRTP" | error_code`.
     pub fn encode(&self) -> [u8; Self::LEN] {
-        PacketWriter::new()
+        ArrayWriter::new()
             .bytes(&MAGIC)
             .u32(self.error_code)
             .finish()
@@ -39,7 +39,7 @@ impl ServerHandshake {
                 needed: Self::LEN,
                 available: buf.len(),
             })?;
-        let mut r = PacketReader::new(buf);
+        let mut r = ArrayReader::new(buf);
         let magic = r.take();
         let error_code = r.u32();
         r.finish();
