@@ -336,12 +336,13 @@ mod tests {
     }
 
     #[test]
-    fn post_article_rejects_an_unknown_parent() {
+    fn post_article_puts_a_reply_to_an_unknown_parent_at_the_top_level() {
         let mut root = NewsBundle::default();
         root.mkcategory(&[], "General").unwrap();
-        let err = root
+        let path = ["General".to_string()];
+        let id = root
             .post_article(
-                &["General".to_string()],
+                &path,
                 999,
                 "x".into(),
                 "alice".into(),
@@ -349,8 +350,11 @@ mod tests {
                 "text/plain".into(),
                 b"x".as_slice().into(),
             )
-            .unwrap_err();
-        assert_eq!(err, PostError::Invalid("no such parent article"));
+            .unwrap();
+        let listing = root.list_articles(&path).unwrap();
+        assert_eq!(listing.len(), 1);
+        let view = root.article(&path, id).unwrap();
+        assert_eq!(view.article.parent_id, 0);
     }
 
     /// Posts a reply to `parent_id` `count` times, each reply the parent

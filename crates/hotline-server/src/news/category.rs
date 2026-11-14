@@ -98,9 +98,11 @@ impl NewsCategory {
         }
     }
 
+    /// Add an article under `parent_id`, or at the top level when no
+    /// article has that ID.
     pub(crate) fn add_article(
         &mut self,
-        parent_id: u32,
+        mut parent_id: u32,
         title: Box<str>,
         poster: Box<str>,
         flags: u32,
@@ -111,9 +113,14 @@ impl NewsCategory {
         if id == 0 {
             return Err(PostError::NoArticleId);
         }
-        self.siblings_of_mut(parent_id)
-            .ok_or("no such parent article")?
-            .push(id);
+        let siblings = match self.articles.get_mut(&parent_id) {
+            Some(parent) => &mut parent.children,
+            None => {
+                parent_id = 0;
+                &mut self.roots
+            }
+        };
+        siblings.push(id);
         self.next_article_id = id.wrapping_add(1);
         self.articles.insert(
             id,
