@@ -9,7 +9,7 @@ pub enum Command {
     OpenTab(Tab),
     Broadcast,
     Options,
-    /// Focus the tasks box.
+    /// Go to the Tasks tab, or from it back to the tab before it.
     Tasks,
     /// Invite a user to the room `chat_id`.
     Invite(u32),
@@ -32,7 +32,7 @@ impl Command {
             }
             Self::Broadcast => "Broadcast".into(),
             Self::Options => "Options".into(),
-            Self::Tasks => "Show the tasks".into(),
+            Self::Tasks => "Show or hide the tasks".into(),
             Self::Invite(_) => "Invite to this room".into(),
             Self::Subject(_) => "Set the room subject".into(),
             Self::Leave(_) => "Leave this room".into(),
@@ -46,7 +46,7 @@ impl Command {
         match self {
             Self::Broadcast => "Alt-A",
             Self::Options => "Alt-O",
-            Self::Tasks => "Alt-J",
+            Self::Tasks => "Alt-T",
             Self::Invite(_) => "Alt-I",
             Self::Subject(_) => "Alt-S",
             Self::Leave(_) => "Alt-W",

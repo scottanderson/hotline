@@ -39,12 +39,12 @@ host, because they can read a command line.
 
 The line at the bottom of the screen shows the keys of the focused
 pane.
-The tabs are Chat, News, Files, and Threaded News, then Admin with the
-account privileges. Each tab has a number, which the tab bar shows. F1
-to F9, or Alt with 1 to 9, opens a tab. When you have joined a private
-chat room, a row under the tab bar of Chat and of each room shows
-Public, the public chat, then each room. Alt-, and Alt-. move to the
-previous and the next entry of that row. Each tab has a main pane.
+The tabs are Chat, News, Files, Threaded News, and Tasks, then Admin
+with the account privileges. Each tab has a number, which the tab bar
+shows. F1 to F9, or Alt with 1 to 9, opens a tab. When you have joined
+a private chat room, a row under the tab bar of Chat and of each room
+shows Public, the public chat, then each room. Alt-, and Alt-. move to
+the previous and the next entry of that row. Each tab has a main pane.
 Chat and each room also have the user list, and Tab moves between it
 and the main pane. Esc goes back to Chat. On Chat, Esc asks whether to
 quit. Ctrl-C asks too, from anywhere, and a second Ctrl-C quits.
@@ -81,7 +81,7 @@ or the folder privilege, for the kind of the selected item.
 | Ctrl-O | a room, user list    | the actions of the room or the selected user    |
 | Alt-A  | outside a dialog     | a broadcast                                     |
 | Alt-O  | outside a dialog     | your name, icon, and options                    |
-| Alt-J  | the tasks box shows  | move to the tasks box                           |
+| Alt-T  | outside a dialog     | the Tasks tab, or back to the tab before it     |
 | Alt-,  | Chat, a room         | the previous room, or Public                    |
 | Alt-.  | Chat, a room         | the next room, or Public                        |
 | Alt-I  | a room               | invite a user                                   |
@@ -135,7 +135,7 @@ size has its own column, in openline's form, such as `<1K`, `12K`, or
 `1.5M`. A folder shows its item count, such as `(3)`. An alias shows
 `-`, and its row is gray.
 
-A tasks box shows each transfer with its progress, and each request
+The Tasks tab shows each transfer with its progress, and each request
 that waits for its reply, in the order the user started them. A
 transfer shows its rate, its bytes, and the time left, such as
 `12K/sec 1.5M/2M 0:42`. A gauge under a transfer of known size shows
@@ -143,19 +143,16 @@ how much is done. A download that waits in the server's queue shows
 its place, and its gauge fills as the queue moves. A task that ends
 well stays in its place with a full gauge, and goes 500 ms after the
 last task ends. A task that fails or that the user cancels goes at
-once. The error line in the chat tells why a task failed. The box
-shows only while it has a task, on each tab. On Chat and the rooms, it
-is under the user list, and Tab moves from the user list to the box.
-On the other tabs, it fills the right column, and Tab moves from the
-main pane to the box. Alt-J moves to it from anywhere. A click selects
-a task. Enter cancels the selected download, upload, or request that
-only reads. Enter does nothing on a request that changes the server.
-Enter on the `Logging in...` step of the login ends the connection. A
-cancelled download that waits in the server's queue leaves the queue.
-A cancelled upload closes its connection.
+once. The error line in the chat tells why a task failed. A scroll
+bar on the right border shows when the tasks do not all fit. A click
+selects a task. Enter cancels the selected download, upload, or
+request that only reads. Enter does nothing on a request that changes
+the server. Enter on the `Logging in...` step of the login ends the
+connection. A cancelled download that waits in the server's queue
+leaves the queue. A cancelled upload closes its connection.
 
 Each transfer waits until each older transfer ends. A waiting transfer
-shows `(queued)`, and the box title counts these transfers. `s` starts
+shows `(queued)`, and the list title counts these transfers. `s` starts
 the selected transfer at once. The `queue transfers` row of the options
 form (Alt-O) turns the queue off, and then each transfer starts at
 once. The queue is on when `hlc` starts.

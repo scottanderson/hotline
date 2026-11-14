@@ -8,6 +8,8 @@ pub enum Tab {
     Files,
     /// Threaded news bundles, categories, and articles.
     Threaded,
+    /// Each transfer, and each request that waits for its reply.
+    Tasks,
     /// User accounts, for a user who may administer them.
     Admin,
     /// The private chat room with this ID.
@@ -16,11 +18,12 @@ pub enum Tab {
 
 impl Tab {
     /// The tabs before the rooms, with their labels.
-    pub const FIXED: [(Self, &'static str); 4] = [
+    pub const FIXED: [(Self, &'static str); 5] = [
         (Self::Chat, "Chat"),
         (Self::News, "News"),
         (Self::Files, "Files"),
         (Self::Threaded, "Threaded News"),
+        (Self::Tasks, "Tasks"),
     ];
 
     /// The label of [`Tab::Admin`].

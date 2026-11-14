@@ -92,7 +92,7 @@ pub enum Focus {
     NewsPreview,
     /// The account list on the Admin tab.
     Accounts,
-    /// The tasks box under the user list.
+    /// The task list on the Tasks tab.
     Tasks,
 }
 
@@ -103,6 +103,7 @@ impl Focus {
             Tab::Chat | Tab::News | Tab::Room(_) => Self::Input,
             Tab::Files => Self::Files,
             Tab::Threaded => Self::NewsFolders,
+            Tab::Tasks => Self::Tasks,
             Tab::Admin => Self::Accounts,
         }
     }
@@ -150,12 +151,14 @@ pub struct View {
     pub account_count: usize,
     /// The privileges from [`crate::session::ClientSession::granted`].
     pub access: Access,
-    /// The rows of the tasks box.
+    /// The rows of the task list.
     pub tasks: Vec<TaskRow>,
-    /// The selected row of the tasks box.
+    /// The selected row of the task list.
     task_selected: usize,
-    /// The first row that the tasks box shows.
+    /// The first row that the task list shows.
     pub tasks_offset: usize,
+    /// The tab that Alt-T goes back to from the Tasks tab.
+    tab_before_tasks: Tab,
     /// The tabs that changed since the user last showed them.
     pub updated: HashSet<Tab>,
     /// The revision of each tab when the user last showed it.
@@ -195,6 +198,7 @@ impl Default for View {
             tasks: Vec::new(),
             task_selected: 0,
             tasks_offset: 0,
+            tab_before_tasks: Tab::Chat,
             updated: HashSet::new(),
             seen: HashMap::new(),
             selected_user: None,
@@ -218,7 +222,7 @@ impl View {
         match self.tab {
             Tab::Chat => Some(&self.chat_input),
             Tab::News => Some(&self.post_input),
-            Tab::Files | Tab::Threaded | Tab::Admin => None,
+            Tab::Files | Tab::Threaded | Tab::Tasks | Tab::Admin => None,
             Tab::Room(id) => Some(self.room_inputs.get(&id).unwrap_or(&EMPTY)),
         }
     }
@@ -227,7 +231,7 @@ impl View {
         match self.tab {
             Tab::Chat => Some(&mut self.chat_input),
             Tab::News => Some(&mut self.post_input),
-            Tab::Files | Tab::Threaded | Tab::Admin => None,
+            Tab::Files | Tab::Threaded | Tab::Tasks | Tab::Admin => None,
             Tab::Room(id) => Some(self.room_inputs.entry(id).or_default()),
         }
     }
@@ -357,7 +361,6 @@ impl View {
             edit("c", "comment", FileEdit::Comment),
             edit("m", "move", FileEdit::Move),
             edit("a", "alias", FileEdit::Alias),
-            Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
             Hint::new("Esc", "chat"),
         ]
     }
@@ -373,21 +376,21 @@ impl View {
             Focus::Files => "files",
             Focus::NewsFolders | Focus::NewsThreads | Focus::NewsPreview => "news",
             Focus::Accounts => "accounts",
-            Focus::Input | Focus::Users | Focus::Tasks => "input",
+            Focus::Tasks => "tasks",
+            Focus::Input | Focus::Users => "input",
         }
     }
 
     /// The keys of the user list.
     fn users_hints(&self) -> Vec<Hint> {
         let main = self.main_name();
-        let tab = if self.shows_tasks() { "tasks" } else { main };
         vec![
             Hint::new("↑↓", "select"),
             Hint::new("^O", "actions"),
             Hint::new("Enter", "message").enabled_by(MenuItem::SendMessage.enabled_by()),
             Hint::new("i", "info").enabled_by(MenuItem::GetInfo.enabled_by()),
             Hint::new("k", "disconnect").enabled_by(MenuItem::Disconnect.enabled_by()),
-            Hint::new("Tab", tab),
+            Hint::new("Tab", main),
             Hint::new("Esc", main),
         ]
     }
@@ -504,7 +507,6 @@ impl View {
                 Hint::new("n", "new").enabled_by(Access::CREATE_USER),
                 Hint::new("o", "open").enabled_by(Access::OPEN_USER),
                 Hint::new("x", "delete").enabled_by(Access::DELETE_USER),
-                Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::NewsFolders, _) | (None, Focus::Input, Tab::Threaded) => vec![
@@ -530,8 +532,7 @@ impl View {
             (None, Focus::NewsPreview, _) => vec![
                 Hint::new("↑↓", "scroll"),
                 Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
-                Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
-                Hint::new("Tab", "folders").only_if(!self.shows_tasks()),
+                Hint::new("Tab", "folders"),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::Input, Tab::Chat) => [
@@ -559,11 +560,10 @@ impl View {
                 Hint::new("Enter", "post").enabled_by(Access::POST_NEWS_ART),
                 Hint::new("⇧Enter", "new line"),
                 Hint::new("↑↓", "scroll"),
-                Hint::new("Tab", "tasks").only_if(self.shows_tasks()),
                 Hint::new("Esc", "chat"),
             ],
             (None, Focus::Users | Focus::Files | Focus::Tasks, _)
-            | (None, Focus::Input, Tab::Files) => Vec::new(),
+            | (None, Focus::Input, Tab::Files | Tab::Tasks) => Vec::new(),
         }
     }
 
@@ -640,9 +640,7 @@ impl View {
             commands.extend(self.user_commands(users));
         }
         commands.extend([Command::Broadcast, Command::Options]);
-        if self.shows_tasks() {
-            commands.push(Command::Tasks);
-        }
+        commands.push(Command::Tasks);
         commands.push(Command::Quit);
         commands
     }
@@ -691,7 +689,7 @@ impl View {
         let command = match key.code {
             KeyCode::Char('a') => Command::Broadcast,
             KeyCode::Char('o') => Command::Options,
-            KeyCode::Char('j') => Command::Tasks,
+            KeyCode::Char('t') => Command::Tasks,
             KeyCode::Char('i') => Command::Invite(self.tab.chat_id()?),
             KeyCode::Char('s') => Command::Subject(self.tab.chat_id()?),
             KeyCode::Char('w') => Command::Leave(self.tab.chat_id()?),
@@ -714,10 +712,16 @@ impl View {
                 Action::None
             }
             Command::Options => Action::EditOptions,
-            Command::Tasks => {
-                self.focus = Focus::Tasks;
-                Action::None
+            Command::Tasks if self.tab == Tab::Tasks => {
+                let back = self.tab_before_tasks;
+                let back = if self.tabs.iter().any(|&(tab, _)| tab == back) {
+                    back
+                } else {
+                    Tab::Chat
+                };
+                self.set_tab(back)
             }
+            Command::Tasks => self.set_tab(Tab::Tasks),
             Command::Invite(chat_id) => Action::PickInvitee(chat_id),
             Command::Subject(chat_id) => Action::EditChatSubject(chat_id),
             Command::Leave(chat_id) => Action::LeaveChat(chat_id),
@@ -954,7 +958,6 @@ impl View {
 
     fn users_key(&mut self, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         match key.code {
-            KeyCode::Tab if self.shows_tasks() => self.focus = Focus::Tasks,
             KeyCode::Tab | KeyCode::Esc => self.focus = Focus::main(self.tab),
             KeyCode::Up => self.move_selection(users, false),
             KeyCode::Down => self.move_selection(users, true),
@@ -1291,7 +1294,7 @@ impl View {
                 if let Some(user_id) = self.user_at(areas.users, x, y, users) {
                     return self.click_user(user_id, users, now);
                 }
-                if let Some(index) = self.task_at(areas.tasks, x, y) {
+                if let Some(index) = self.task_at(areas.body, x, y) {
                     self.task_selected = index;
                     self.focus = Focus::Tasks;
                     return Action::None;
@@ -1468,20 +1471,18 @@ impl View {
         if self.tab == tab {
             return Action::None;
         }
+        if tab == Tab::Tasks {
+            self.tab_before_tasks = self.tab;
+        }
         self.tab = tab;
-        let side = match self.focus {
-            Focus::Users => self.shows_users(),
-            Focus::Tasks => self.shows_tasks(),
-            _ => false,
-        };
-        if !side {
+        if self.focus != Focus::Users || !self.shows_users() {
             self.focus = Focus::main(tab);
         }
         if !self.may(tab.enabled_by()) {
             return Action::None;
         }
         match tab {
-            Tab::Chat | Tab::Room(_) => Action::None,
+            Tab::Chat | Tab::Room(_) | Tab::Tasks => Action::None,
             Tab::News => {
                 self.news_scroll = 0;
                 Action::GetMsgs
@@ -1583,12 +1584,10 @@ impl View {
     }
 
     /// The focus that Tab gives from the main pane: the user list, else the
-    /// tasks box, else the main pane.
+    /// main pane.
     const fn side_focus(&self) -> Focus {
         if self.shows_users() {
             Focus::Users
-        } else if self.shows_tasks() {
-            Focus::Tasks
         } else {
             Focus::main(self.tab)
         }
@@ -1710,7 +1709,6 @@ mod tests {
             &[],
             Some(Side::USERS),
             false,
-            0,
         )
     }
 
@@ -2464,14 +2462,7 @@ mod tests {
         let mut view = View::default();
         let f3 = key(KeyCode::F(3));
         let _ = view.handle_key(f3, &users(), &files());
-        let areas = ui::areas(
-            Rect::new(0, 0, 80, 24),
-            None,
-            &[],
-            Some(Side::USERS),
-            false,
-            0,
-        );
+        let areas = ui::areas(Rect::new(0, 0, 80, 24), None, &[], Some(Side::USERS), false);
         let inner = ui::inner(areas.body);
         let left = click(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
         let now = Instant::now();
@@ -2603,7 +2594,9 @@ mod tests {
         let _ = view.handle_key(alt_3, &users(), &files());
         assert_eq!(view.tab, Tab::Files);
         let _ = view.handle_key(key(KeyCode::F(5)), &users(), &files());
-        assert_eq!(view.tab, Tab::Files);
+        assert_eq!(view.tab, Tab::Tasks);
+        let _ = view.handle_key(key(KeyCode::F(6)), &users(), &files());
+        assert_eq!(view.tab, Tab::Tasks);
         let _ = view.handle_key(key(KeyCode::F(1)), &users(), &files());
         assert_eq!(view.tab, Tab::Chat);
     }
@@ -2667,7 +2660,6 @@ mod tests {
             &[],
             Some(Side::USERS),
             true,
-            0,
         );
         let row = areas.rooms;
         let x = (row.x..row.right())
@@ -3075,10 +3067,10 @@ mod tests {
     }
 
     #[test]
-    fn f5_opens_the_admin_tab_only_when_it_is_shown() {
+    fn f6_opens_the_admin_tab_only_when_it_is_shown() {
         let mut view = granted();
         assert_eq!(
-            view.handle_key(key(KeyCode::F(5)), &users(), &files()),
+            view.handle_key(key(KeyCode::F(6)), &users(), &files()),
             Action::None
         );
         assert_eq!(view.tab, Tab::Chat);
@@ -3087,7 +3079,7 @@ mod tests {
         tabs.push((Tab::Admin, Tab::ADMIN_LABEL.to_string()));
         view.set_tabs(tabs);
         assert_eq!(
-            view.handle_key(key(KeyCode::F(5)), &users(), &files()),
+            view.handle_key(key(KeyCode::F(6)), &users(), &files()),
             Action::ListAccounts
         );
         assert_eq!((view.tab, view.focus), (Tab::Admin, Focus::Accounts));

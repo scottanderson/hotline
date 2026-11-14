@@ -42,7 +42,7 @@ use tokio::sync::mpsc;
 use transfer::Conflict;
 use view::{AccountForm, Action, Focus, Modal, OptionsForm, TextBox, View};
 
-/// How often the tasks box shows new progress.
+/// How often the task list shows new progress.
 const TICK: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[tokio::main]
@@ -220,7 +220,6 @@ async fn run(
                             &view.hints(files),
                             view.side(),
                             view.has_room_row(),
-                            view.task_lines(),
                         );
                         view.handle_mouse(mouse, &areas, users, files, Instant::now())
                     }

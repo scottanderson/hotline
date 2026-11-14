@@ -23,7 +23,7 @@ pub enum Divider {
 /// The pane sizes that the user sets with a drag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Splits {
-    /// The columns of the right column: the user list and the tasks box.
+    /// The columns of the right column, which holds the user list.
     pub side: u16,
     /// The columns of the folder tree, or `None` for 30% of the body.
     pub news_folders: Option<u16>,
@@ -49,9 +49,8 @@ fn bound(n: u16, min: u16, max: u16) -> u16 {
 impl View {
     /// The right column, or `None` while it hides.
     pub fn side(&self) -> Option<Side> {
-        (self.shows_users() || self.shows_tasks()).then_some(Side {
+        self.shows_users().then_some(Side {
             width: self.splits.side,
-            users: self.shows_users(),
         })
     }
 
@@ -62,8 +61,8 @@ impl View {
 
     /// The divider at `x`, `y`.
     pub(super) fn divider_at(&self, areas: &Areas, x: u16, y: u16) -> Option<Divider> {
-        let right = areas.users.union(areas.tasks);
-        if self.side().is_some() && x == right.x && (right.y..right.bottom()).contains(&y) {
+        let users = areas.users;
+        if self.side().is_some() && x == users.x && (users.y..users.bottom()).contains(&y) {
             return Some(Divider::Side);
         }
         if !self.shows_news_panes() {
@@ -117,7 +116,7 @@ mod tests {
     const SCREEN: Rect = Rect::new(0, 0, 80, 24);
 
     fn areas(view: &View) -> Areas {
-        ui::areas(SCREEN, view.input().map(|_| ""), &[], view.side(), false, 0)
+        ui::areas(SCREEN, view.input().map(|_| ""), &[], view.side(), false)
     }
 
     fn mouse(view: &mut View, kind: MouseEventKind, column: u16, row: u16) {

@@ -1,4 +1,4 @@
-//! The requests that run off the event loop, and the rows of the tasks box.
+//! The requests that run off the event loop, and the rows of the task list.
 
 use std::time::{Duration, Instant};
 
@@ -8,7 +8,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use crate::session::{ClientSession, Next, Request};
 use crate::view::View;
 
-/// How long the finished tasks stay in the tasks box after the last one
+/// How long the finished tasks stay in the task list after the last one
 /// ends.
 const KEEP_FINISHED: Duration = Duration::from_millis(500);
 
@@ -24,7 +24,7 @@ pub enum Stop {
     Disconnect,
 }
 
-/// A request as the tasks box shows it.
+/// A request as the task list shows it.
 #[derive(Debug, Clone)]
 pub struct Task {
     /// The text of the row, `None` for a request with no row.
@@ -81,14 +81,14 @@ impl Task {
     }
 }
 
-/// A task in the tasks box.
+/// A task in the task list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskId {
     Request(u64),
     Transfer(u64),
 }
 
-/// One row of the tasks box.
+/// One row of the task list.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskRow {
     pub id: TaskId,
@@ -215,7 +215,7 @@ impl Tasks {
         self.forget(TaskId::Request(id));
     }
 
-    /// Remove task `id` from the box when it ends, with no finished row.
+    /// Remove task `id` from the list when it ends, with no finished row.
     pub fn forget(&mut self, id: TaskId) {
         self.shown.retain(|(_, row)| row.id != id);
     }
@@ -242,7 +242,7 @@ impl Tasks {
         }
     }
 
-    /// The rows of the tasks box: each transfer of `session`, each request,
+    /// The rows of the task list: each transfer of `session`, each request,
     /// and each task that ended well, in the order the user started them.
     /// The finished rows go [`KEEP_FINISHED`] after the last task ends. A
     /// transfer that failed goes at once.

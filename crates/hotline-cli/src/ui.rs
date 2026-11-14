@@ -5,12 +5,13 @@ use hotline_proto::opcode::TransactionType;
 use hotline_proto::text_encoding;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use hotline_proto::{Access, Field, FieldId, Opcode, Received, Transaction};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::merge::MergeStrategy;
 use ratatui::text::{Line as UiLine, Span, Text};
 use ratatui::widgets::{
-    Block, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap,
+    Block, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, Table, Wrap,
 };
 use ratatui::Frame;
 use unicode_segmentation::UnicodeSegmentation;
@@ -33,8 +34,6 @@ pub struct Areas {
     pub body: Rect,
     pub input: Rect,
     pub users: Rect,
-    /// The tasks box under the user list.
-    pub tasks: Rect,
     pub hints: Rect,
 }
 
@@ -77,40 +76,29 @@ fn hint_rows(hints: &[Hint], width: u16) -> Vec<&[Hint]> {
     rows
 }
 
-/// The most lines the tasks box shows before it scrolls.
-const MAX_TASK_LINES: usize = 5;
-
-/// The right column of the screen.
+/// The right column of the screen, which holds the user list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Side {
     /// The columns of the right column.
     pub width: u16,
-    /// `true` if the user list is above the tasks box.
-    pub users: bool,
 }
 
 #[cfg(test)]
 impl Side {
-    /// The default right column with the user list.
-    pub const USERS: Self = Self {
-        width: 24,
-        users: true,
-    };
+    /// The default right column.
+    pub const USERS: Self = Self { width: 24 };
 }
 
 /// `input` is the text in the input line, which grows to fit it. With `None`,
 /// the input line has no rows. The hint line grows to fit `hints`. `side`
 /// is the right column, and `None` hides it. Without `rooms`, the room row
-/// has no rows. Under the user list, the tasks box grows to fit
-/// `task_lines`, and has none for `0`. Without the user list, it fills
-/// the column.
+/// has no rows.
 pub fn areas(
     screen: Rect,
     input: Option<&str>,
     hints: &[Hint],
     side: Option<Side>,
     rooms: bool,
-    task_lines: usize,
 ) -> Areas {
     let hint_rows = hint_rows(hints, screen.width).len() as u16;
     let [tabs, rooms, middle, hints] = screen.layout(&Layout::vertical([
@@ -119,28 +107,13 @@ pub fn areas(
         Constraint::Min(6),
         Constraint::Length(hint_rows),
     ]));
-    let [left, right] = middle.layout(
+    let [left, users] = middle.layout(
         &Layout::horizontal([
             Constraint::Min(20),
             Constraint::Length(side.map_or(0, |side| side.width)),
         ])
         .spacing(shared(side.is_some())),
     );
-    let task_rows = match task_lines {
-        0 => 0,
-        n => (n.min(MAX_TASK_LINES) as u16).saturating_add(2),
-    };
-    let [users, tasks] = if side.is_some_and(|side| side.users) {
-        right.layout(
-            &Layout::vertical([Constraint::Min(3), Constraint::Length(task_rows)])
-                .spacing(shared(task_rows > 0)),
-        )
-    } else {
-        right.layout(&Layout::vertical([
-            Constraint::Length(0),
-            Constraint::Fill(1),
-        ]))
-    };
     let [body, input] = left.layout(
         &Layout::vertical([
             Constraint::Min(3),
@@ -155,7 +128,6 @@ pub fn areas(
         body,
         input,
         users,
-        tasks,
         hints,
     }
 }
@@ -200,8 +172,7 @@ fn focus_area(view: &View, areas: &Areas) -> Option<Rect> {
     match view.focus {
         Focus::Input => Some(areas.input),
         Focus::Users => Some(areas.users),
-        Focus::Tasks => Some(areas.tasks),
-        Focus::Files | Focus::Accounts => Some(areas.body),
+        Focus::Files | Focus::Accounts | Focus::Tasks => Some(areas.body),
         Focus::NewsFolders => news.map(|[folders, _, _]| folders),
         Focus::NewsThreads => news.map(|[_, threads, _]| threads),
         Focus::NewsPreview => news.map(|[_, _, preview]| preview),
@@ -342,7 +313,6 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         &hints,
         view.side(),
         !room_row.is_empty(),
-        view.task_lines(),
     );
     draw_tabs(frame, areas.tabs, view, view.bar_tabs(), true);
     draw_tabs(frame, areas.rooms, view, &room_row, false);
@@ -356,6 +326,7 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
         Tab::News => draw_news(frame, areas.body, session, view.news_scroll),
         Tab::Files => draw_files(frame, areas.body, session, view),
         Tab::Threaded => draw_threaded_news(frame, areas.body, session, view),
+        Tab::Tasks => draw_tasks(frame, areas.body, view),
         Tab::Admin => draw_accounts(frame, areas.body, session, view),
         Tab::Room(id) => {
             if let Some(room) = session.room(id) {
@@ -367,12 +338,12 @@ pub fn draw(frame: &mut Frame, session: &ClientSession, view: &mut View) {
     if view.shows_users() {
         draw_users(frame, areas.users, session, view);
     }
-    if view.shows_tasks() {
-        draw_tasks(frame, areas.tasks, view);
-    }
     // The focused pane's border goes on top of the borders it shares.
     if let Some(area) = focus_area(view, &areas) {
         frame.render_widget(pane().border_style(border(true)), area);
+    }
+    if view.tab == Tab::Tasks {
+        draw_task_scrollbar(frame, areas.body, view);
     }
     draw_hints(frame, areas.hints, view, &hints);
     if let Some(modal) = &view.modal {
@@ -755,7 +726,7 @@ fn draw_input(frame: &mut Frame, area: Rect, view: &View) {
     let title = match view.tab {
         Tab::Chat | Tab::Room(_) => "message",
         Tab::News => "post",
-        Tab::Files | Tab::Threaded | Tab::Admin => return,
+        Tab::Files | Tab::Threaded | Tab::Tasks | Tab::Admin => return,
     };
     let focused = view.focus == Focus::Input;
     let block = pane().border_style(border(focused)).title(title);
@@ -834,7 +805,7 @@ fn draw_users(frame: &mut Frame, area: Rect, session: &ClientSession, view: &mut
     view.users_offset = state.offset();
 }
 
-/// Draw the tasks box. The title counts the tasks, and the transfers that
+/// Draw the task list. The title counts the tasks, and the transfers that
 /// wait in `hlc`'s queue.
 fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
     let items: Vec<ListItem> = view
@@ -878,6 +849,33 @@ fn draw_tasks(frame: &mut Frame, area: Rect, view: &mut View) {
         }
         y = y.saturating_add(row.height());
     }
+}
+
+/// Draw a scroll bar on the right border of the task list while its rows
+/// do not all fit.
+fn draw_task_scrollbar(frame: &mut Frame, area: Rect, view: &View) {
+    let shown = usize::from(inner(area).height);
+    let lines = view.task_lines();
+    if lines <= shown {
+        return;
+    }
+    let above = view
+        .tasks
+        .iter()
+        .take(view.tasks_offset)
+        .map(|row| usize::from(row.height()))
+        .sum();
+    let mut state = ScrollbarState::new(lines.saturating_sub(shown).saturating_add(1))
+        .viewport_content_length(shown)
+        .position(above);
+    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None);
+    let track = area.inner(Margin {
+        vertical: 1,
+        horizontal: 0,
+    });
+    frame.render_stateful_widget(bar, track, &mut state);
 }
 
 /// The progress bar of a task that is `ratio` done, in eighths of a cell.
@@ -1166,11 +1164,10 @@ mod tests {
             &[],
             Some(Side::USERS),
             false,
-            1,
         );
         assert_eq!(areas.users.x, areas.body.right() - 1);
         assert_eq!(areas.input.y, areas.body.bottom() - 1);
-        assert_eq!(areas.tasks.y, areas.users.bottom() - 1);
+        assert_eq!(areas.input.bottom(), areas.hints.y);
 
         let [folders, threads, preview] = news_areas(areas.body, Splits::default());
         assert_eq!(threads.x, folders.right() - 1);
@@ -1194,6 +1191,36 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         buffer.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    /// The right border of the task list after a draw of `count` tasks.
+    fn task_box_right_border(count: u64) -> String {
+        let mut view = View::default();
+        let rows = (1..=count).map(|id| TaskRow {
+            id: TaskId::Request(id),
+            label: format!("task {id}"),
+            stop: None,
+            queued: false,
+            ratio: None,
+        });
+        view.set_tasks(rows.collect());
+        let backend = ratatui::backend::TestBackend::new(20, 7);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_tasks(frame, frame.area(), &mut view);
+                draw_task_scrollbar(frame, frame.area(), &view);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (1..6).map(|y| buffer[(19, y)].symbol()).collect()
+    }
+
+    #[test]
+    fn draw_task_scrollbar_shows_only_while_the_rows_do_not_fit() {
+        assert_eq!(task_box_right_border(5), "│││││");
+        assert_ne!(task_box_right_border(8), "│││││");
+        assert!(task_box_right_border(8).starts_with('█'));
     }
 
     #[test]
