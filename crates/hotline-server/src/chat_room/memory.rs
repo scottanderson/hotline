@@ -1,33 +1,45 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::RwLock;
 
 use async_trait::async_trait;
 
 use crate::chat_room::{ChatRoom, ChatRoomProvider};
+use crate::random::random_u32;
 use crate::sync::{read, write};
 
 /// A [`ChatRoomProvider`] that keeps the chat rooms in memory.
 #[derive(Debug)]
 pub struct InMemoryChatRoomProvider {
     rooms: RwLock<BTreeMap<u32, ChatRoom>>,
-    next_chat_id: AtomicU32,
+    /// The low byte of the last chat ID.
+    counter: AtomicU8,
+    /// The source of the high 24 bits of each chat ID.
+    random: fn() -> u32,
 }
 
 impl Default for InMemoryChatRoomProvider {
     fn default() -> Self {
         Self {
             rooms: RwLock::new(BTreeMap::from([(0, ChatRoom::default())])),
-            next_chat_id: AtomicU32::new(1),
+            counter: AtomicU8::new(0),
+            random: random_u32,
         }
     }
 }
 
 #[async_trait]
 impl ChatRoomProvider for InMemoryChatRoomProvider {
+    /// A new chat ID has 24 random bits over an 8-bit counter. It is not 0,
+    /// and it moves up by 1 past each ID in use.
     async fn create(&self, room: ChatRoom) -> u32 {
-        let chat_id = self.next_chat_id.fetch_add(1, Ordering::Relaxed);
-        write(&self.rooms).insert(chat_id, room);
+        let low = self.counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        let mut chat_id = (self.random)() & 0xFFFF_FF00 | u32::from(low);
+        let mut rooms = write(&self.rooms);
+        while chat_id == 0 || rooms.contains_key(&chat_id) {
+            chat_id = chat_id.wrapping_add(1);
+        }
+        rooms.insert(chat_id, room);
         chat_id
     }
 
@@ -81,8 +93,35 @@ mod tests {
         let provider = InMemoryChatRoomProvider::default();
         let first = provider.create(room(vec![1])).await;
         let second = provider.create(room(vec![2])).await;
-        assert_eq!((first, second), (1, 2));
+        assert_eq!((first & 0xFF, second & 0xFF), (1, 2));
         assert_eq!(provider.room(second).await.unwrap().members, [2]);
+    }
+
+    fn provider_with(random: fn() -> u32, counter: u8) -> InMemoryChatRoomProvider {
+        InMemoryChatRoomProvider {
+            counter: AtomicU8::new(counter),
+            random,
+            ..InMemoryChatRoomProvider::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn create_puts_the_counter_under_the_random_bits() {
+        let provider = provider_with(|| 0xABCD_EF99, 0);
+        assert_eq!(provider.create(room(vec![1])).await, 0xABCD_EF01);
+    }
+
+    #[tokio::test]
+    async fn create_skips_0_and_each_chat_id_in_use() {
+        let provider = provider_with(|| 0, 255);
+        assert_eq!(provider.create(room(vec![1])).await, 1);
+        let provider = provider_with(|| 0x100, 0);
+        assert_eq!(provider.create(room(vec![1])).await, 0x101);
+        let provider = InMemoryChatRoomProvider {
+            counter: AtomicU8::new(0),
+            ..provider
+        };
+        assert_eq!(provider.create(room(vec![2])).await, 0x102);
     }
 
     #[tokio::test]

@@ -33,6 +33,7 @@ mod flood;
 mod news;
 mod policy;
 mod providers;
+mod random;
 mod server;
 mod session;
 mod state;
