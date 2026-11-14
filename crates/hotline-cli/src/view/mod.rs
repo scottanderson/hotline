@@ -432,7 +432,7 @@ impl View {
                     .keymap
                     .hint_key(chords.filter(move |chord| chord.modifiers == modifiers));
                 let does = intent.label();
-                Some(Hint::new(key, does))
+                Some(Hint::new(key, does).enabled_by(intent.enabled_by()))
             })
             .collect()
     }
@@ -461,16 +461,24 @@ impl View {
                     Hint::new("Esc", "close"),
                 ]
             }
-            (Some(Modal::Info(_) | Modal::FileInfo(_) | Modal::Quit), ..) => self.keymap_hints(),
+            (
+                Some(
+                    Modal::Info(_)
+                    | Modal::FileInfo(_)
+                    | Modal::Quit
+                    | Modal::Disconnect { .. }
+                    | Modal::DeleteFile { .. }
+                    | Modal::DeleteNews { .. }
+                    | Modal::DeleteAccount { .. }
+                    | Modal::Disconnected(_)
+                    | Modal::Invite(_)
+                    | Modal::Article(_),
+                ),
+                ..,
+            ) => self.keymap_hints(),
             (Some(Modal::FileEdit { .. }), ..) => {
                 vec![Hint::new("Enter", "save"), Hint::new("Esc", "cancel")]
             }
-            (Some(Modal::Disconnect { .. }), ..) => vec![
-                Hint::new("d", "disconnect"),
-                Hint::new("t", "ban for a while"),
-                Hint::new("p", "ban for good"),
-                Hint::new("Esc", "cancel"),
-            ],
             (Some(Modal::Upload { .. }), ..) => {
                 vec![Hint::new("Enter", "upload"), Hint::new("Esc", "cancel")]
             }
@@ -490,9 +498,6 @@ impl View {
             (Some(Modal::Confirm(_)), ..) => {
                 vec![Hint::new("r", "resume"), Hint::new("Esc", "cancel")]
             }
-            (Some(Modal::Invite(_)), ..) => {
-                vec![Hint::new("Enter", "join"), Hint::new("Esc", "decline")]
-            }
             (Some(Modal::Subject { .. }), ..) => {
                 vec![Hint::new("Enter", "set"), Hint::new("Esc", "cancel")]
             }
@@ -501,12 +506,6 @@ impl View {
                     Hint::new("↑↓", "choose"),
                     Hint::new("Enter", "invite"),
                     Hint::new("Esc", "cancel"),
-                ]
-            }
-            (Some(Modal::Article(_)), ..) => {
-                vec![
-                    Hint::new("r", "reply").enabled_by(Access::POST_NEWS_ART),
-                    Hint::new("Esc", "close"),
                 ]
             }
             (Some(Modal::Post { .. }), ..) => vec![
@@ -518,14 +517,6 @@ impl View {
             (Some(Modal::NewsName { .. }), ..) => {
                 vec![Hint::new("Enter", "create"), Hint::new("Esc", "cancel")]
             }
-            (
-                Some(
-                    Modal::DeleteNews { .. }
-                    | Modal::DeleteAccount { .. }
-                    | Modal::DeleteFile { .. },
-                ),
-                ..,
-            ) => vec![Hint::new("y", "delete"), Hint::new("Esc", "cancel")],
             (Some(Modal::Account(form)), ..) => vec![
                 Hint::new("↑↓", "row"),
                 Hint::new("Space", "toggle"),
@@ -543,12 +534,6 @@ impl View {
                 Hint::new("Space", "toggle"),
                 Hint::new("Enter", "save"),
                 Hint::new("Esc", "cancel"),
-            ],
-            (Some(Modal::Disconnected(_)), ..) => vec![
-                Hint::new("r", "reconnect"),
-                Hint::new("c", "connect to"),
-                Hint::new("q", "quit"),
-                Hint::new("Esc", "close"),
             ],
             (Some(Modal::OpenAccount { .. }), ..) => {
                 vec![Hint::new("Enter", "open"), Hint::new("Esc", "cancel")]
@@ -825,7 +810,7 @@ impl View {
 
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         if let Some(intent) = self.keymap.intent(&[Scope::Modal(modal.kind())], key) {
-            return Self::modal_intent(intent);
+            return self.modal_intent(modal, intent);
         }
         if let Modal::Palette(palette) = modal {
             return self.palette_key(palette, key, users);
@@ -843,48 +828,12 @@ impl View {
             return self.connect_form_key(form, key);
         }
         match (&mut modal, plain_code(key)) {
-            (Modal::Article(article), KeyCode::Char('r')) if self.may(Access::POST_NEWS_ART) => {
-                let title = match article.title.strip_prefix("Re: ") {
-                    Some(_) => article.title.to_string(),
-                    None => format!("Re: {}", article.title),
-                };
-                self.modal = Some(Modal::Post {
-                    parent_id: article.id,
-                    title: title.into(),
-                    body: TextBox::new(),
-                    on_body: true,
-                });
-                return Action::None;
-            }
-            (Modal::Disconnect { user_id, .. }, KeyCode::Char(c @ ('d' | 't' | 'p'))) => {
-                let ban = match c {
-                    't' => Ban::Temporary,
-                    'p' => Ban::Permanent,
-                    _ => Ban::None,
-                };
-                return Action::DisconnectUser {
-                    user_id: *user_id,
-                    ban,
-                };
-            }
-            (Modal::DeleteFile { name }, KeyCode::Char('y')) => {
-                return Action::DeleteFile(std::mem::take(name));
-            }
             (Modal::FileEdit { edit, name, input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::EditFile {
                     edit: *edit,
                     name: std::mem::take(name),
                     text: input.take(),
                 };
-            }
-            (Modal::Disconnected(_), KeyCode::Char('q')) => return Action::Quit,
-            (Modal::Disconnected(_), KeyCode::Char('r')) => return Action::Reconnect,
-            (Modal::Disconnected(_), KeyCode::Char('c')) => return Action::OpenConnect,
-            (Modal::DeleteNews { target, .. }, KeyCode::Char('y')) => {
-                return Action::DeleteNewsItem(*target);
-            }
-            (Modal::DeleteAccount { login }, KeyCode::Char('y')) => {
-                return Action::DeleteAccount(std::mem::take(login));
             }
             (Modal::OpenAccount { input }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::OpenAccount(input.take());
@@ -916,18 +865,12 @@ impl View {
                     kind: *kind,
                 };
             }
-            (Modal::Invite(invite), KeyCode::Enter) => return Action::JoinChat(invite.chat_id),
-            (Modal::Invite(invite), KeyCode::Esc) => {
-                return Action::RejectChatInvite(invite.chat_id);
-            }
             (Modal::InstantMsg { input, .. } | Modal::Broadcast { input }, _)
                 if is_new_line(key) =>
             {
                 input.insert('\n');
             }
-            (_, KeyCode::Esc) | (Modal::Article(_) | Modal::Disconnected(_), KeyCode::Enter) => {
-                return Action::None;
-            }
+            (_, KeyCode::Esc) => return Action::None,
             (Modal::InstantMsg { user_id, input, .. }, KeyCode::Enter) if !input.is_empty() => {
                 return Action::SendInstantMsg {
                     user_id: *user_id,
@@ -1020,12 +963,65 @@ impl View {
         Action::None
     }
 
-    /// Do `intent` in a modal. Each intent closes the modal.
-    const fn modal_intent(intent: Intent) -> Action {
-        match intent {
-            Intent::Close | Intent::Cancel => Action::None,
-            Intent::Quit => Action::Quit,
+    /// Do `intent` in `modal`, if the user has a privilege that it needs.
+    fn modal_intent(&mut self, mut modal: Modal, intent: Intent) -> Action {
+        if !self.may(intent.enabled_by()) {
+            self.modal = Some(modal);
+            return Action::None;
         }
+        match (&mut modal, intent) {
+            (_, Intent::Close | Intent::Cancel) => return Action::None,
+            (_, Intent::Quit) => return Action::Quit,
+            (Modal::Disconnect { user_id, .. }, Intent::DisconnectUser) => {
+                return Action::DisconnectUser {
+                    user_id: *user_id,
+                    ban: Ban::None,
+                };
+            }
+            (Modal::Disconnect { user_id, .. }, Intent::TemporaryBan) => {
+                return Action::DisconnectUser {
+                    user_id: *user_id,
+                    ban: Ban::Temporary,
+                };
+            }
+            (Modal::Disconnect { user_id, .. }, Intent::PermanentBan) => {
+                return Action::DisconnectUser {
+                    user_id: *user_id,
+                    ban: Ban::Permanent,
+                };
+            }
+            (Modal::DeleteFile { name }, Intent::Delete) => {
+                return Action::DeleteFile(std::mem::take(name));
+            }
+            (Modal::DeleteNews { target, .. }, Intent::Delete) => {
+                return Action::DeleteNewsItem(*target);
+            }
+            (Modal::DeleteAccount { login }, Intent::Delete) => {
+                return Action::DeleteAccount(std::mem::take(login));
+            }
+            (Modal::Article(article), Intent::Reply) => {
+                let title = match article.title.strip_prefix("Re: ") {
+                    Some(_) => article.title.to_string(),
+                    None => format!("Re: {}", article.title),
+                };
+                self.modal = Some(Modal::Post {
+                    parent_id: article.id,
+                    title: title.into(),
+                    body: TextBox::new(),
+                    on_body: true,
+                });
+                return Action::None;
+            }
+            (Modal::Invite(invite), Intent::Join) => return Action::JoinChat(invite.chat_id),
+            (Modal::Invite(invite), Intent::Decline) => {
+                return Action::RejectChatInvite(invite.chat_id);
+            }
+            (Modal::Disconnected(_), Intent::Reconnect) => return Action::Reconnect,
+            (Modal::Disconnected(_), Intent::ConnectTo) => return Action::OpenConnect,
+            _ => {}
+        }
+        self.modal = Some(modal);
+        Action::None
     }
 
     fn confirm_key(&mut self, conflict: Conflict, key: KeyEvent) -> Action {
@@ -2513,6 +2509,29 @@ mod tests {
             hints(&view),
             [("y".into(), "quit"), ("Esc".into(), "cancel")]
         );
+    }
+
+    #[test]
+    fn keymap_hints_gray_a_reply_without_the_privilege() {
+        let mut view = View {
+            modal: Some(Modal::Article(ArticleText {
+                id: 4,
+                title: "Hello".into(),
+                poster: "Alice".into(),
+                date: HlDate::default(),
+                text: "hi".into(),
+            })),
+            ..View::default()
+        };
+        assert_eq!(hint_enabled(&view, "r", "reply"), Some(false));
+        assert_eq!(hint_enabled(&view, "Esc/Enter", "close"), Some(true));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('r')), &users(), &files()),
+            Action::None
+        );
+        assert!(matches!(view.modal, Some(Modal::Article(_))));
+        view.access = Access::POST_NEWS_ART;
+        assert_eq!(hint_enabled(&view, "r", "reply"), Some(true));
     }
 
     #[test]

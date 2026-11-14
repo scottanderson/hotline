@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 
+use hotline_proto::Access;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -12,24 +13,73 @@ use super::modal::ModalKind;
 /// What a key does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
+    /// Disconnect a user without a ban.
+    DisconnectUser,
+    /// Disconnect a user, and ban the address for a while.
+    TemporaryBan,
+    /// Disconnect a user, and ban the address until an administrator lifts the ban.
+    PermanentBan,
+    /// Delete the item that the box names.
+    Delete,
+    /// Write a reply to an article.
+    Reply,
+    /// Join a private chat room.
+    Join,
+    /// Connect again to the last server.
+    Reconnect,
+    /// Open the Connect to form.
+    ConnectTo,
     /// Quit `hlc`.
     Quit,
     /// Close a box that only shows text.
     Close,
     /// Close a box, and do not do what it asks.
     Cancel,
+    /// Refuse an invitation to a private chat room.
+    Decline,
 }
 
 impl Intent {
     /// Each intent, in hint order.
-    pub const ALL: &[Self] = &[Self::Quit, Self::Close, Self::Cancel];
+    pub const ALL: &[Self] = &[
+        Self::DisconnectUser,
+        Self::TemporaryBan,
+        Self::PermanentBan,
+        Self::Delete,
+        Self::Reply,
+        Self::Join,
+        Self::Reconnect,
+        Self::ConnectTo,
+        Self::Quit,
+        Self::Close,
+        Self::Cancel,
+        Self::Decline,
+    ];
 
     /// The text of the hint.
     pub const fn label(self) -> &'static str {
         match self {
+            Self::DisconnectUser => "disconnect",
+            Self::TemporaryBan => "temporary ban",
+            Self::PermanentBan => "permanent ban",
+            Self::Delete => "delete",
+            Self::Reply => "reply",
+            Self::Join => "join",
+            Self::Reconnect => "reconnect",
+            Self::ConnectTo => "connect to",
             Self::Quit => "quit",
             Self::Close => "close",
             Self::Cancel => "cancel",
+            Self::Decline => "decline",
+        }
+    }
+
+    /// The privileges, any one of which turns the intent on. Empty for an
+    /// intent that needs none.
+    pub const fn enabled_by(self) -> Access {
+        match self {
+            Self::Reply => Access::POST_NEWS_ART,
+            _ => Access::empty(),
         }
     }
 }
@@ -109,22 +159,70 @@ pub struct Keymap {
 
 impl Default for Keymap {
     fn default() -> Self {
-        let modal = |kind, code, intent| (Scope::Modal(kind), KeyChord::plain(code), intent);
-        let text = |kind| {
-            [
-                modal(kind, KeyCode::Esc, Intent::Close),
-                modal(kind, KeyCode::Enter, Intent::Close),
-            ]
-        };
-        let quit = [
-            modal(ModalKind::Quit, KeyCode::Char('y'), Intent::Quit),
-            modal(ModalKind::Quit, KeyCode::Esc, Intent::Cancel),
+        const CLOSE: &[(KeyCode, Intent)] = &[
+            (KeyCode::Esc, Intent::Close),
+            (KeyCode::Enter, Intent::Close),
+        ];
+        const DELETE: &[(KeyCode, Intent)] = &[
+            (KeyCode::Char('y'), Intent::Delete),
+            (KeyCode::Esc, Intent::Cancel),
+        ];
+        let modals: [(ModalKind, &[(KeyCode, Intent)]); 10] = [
+            (ModalKind::Info, CLOSE),
+            (ModalKind::FileInfo, CLOSE),
+            (
+                ModalKind::Quit,
+                &[
+                    (KeyCode::Char('y'), Intent::Quit),
+                    (KeyCode::Esc, Intent::Cancel),
+                ],
+            ),
+            (
+                ModalKind::Disconnect,
+                &[
+                    (KeyCode::Char('d'), Intent::DisconnectUser),
+                    (KeyCode::Char('t'), Intent::TemporaryBan),
+                    (KeyCode::Char('p'), Intent::PermanentBan),
+                    (KeyCode::Esc, Intent::Cancel),
+                ],
+            ),
+            (ModalKind::DeleteFile, DELETE),
+            (ModalKind::DeleteNews, DELETE),
+            (ModalKind::DeleteAccount, DELETE),
+            (
+                ModalKind::Disconnected,
+                &[
+                    (KeyCode::Char('r'), Intent::Reconnect),
+                    (KeyCode::Char('c'), Intent::ConnectTo),
+                    (KeyCode::Char('q'), Intent::Quit),
+                    (KeyCode::Esc, Intent::Close),
+                    (KeyCode::Enter, Intent::Close),
+                ],
+            ),
+            (
+                ModalKind::Invite,
+                &[
+                    (KeyCode::Enter, Intent::Join),
+                    (KeyCode::Esc, Intent::Decline),
+                ],
+            ),
+            (
+                ModalKind::Article,
+                &[
+                    (KeyCode::Char('r'), Intent::Reply),
+                    (KeyCode::Esc, Intent::Close),
+                    (KeyCode::Enter, Intent::Close),
+                ],
+            ),
         ];
         Self::new(
-            text(ModalKind::Info)
+            modals
                 .into_iter()
-                .chain(text(ModalKind::FileInfo))
-                .chain(quit)
+                .flat_map(|(kind, keys)| {
+                    keys.iter().map(move |&(code, intent)| {
+                        (Scope::Modal(kind), KeyChord::plain(code), intent)
+                    })
+                })
                 .collect(),
         )
     }
