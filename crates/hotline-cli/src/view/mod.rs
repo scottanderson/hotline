@@ -14,6 +14,7 @@ mod tab;
 mod tasks_box;
 mod text_box;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -38,7 +39,7 @@ pub use command::{Command, Palette};
 pub use connect_form::ConnectForm;
 pub use divider::{Divider, Splits};
 pub use hint::Hint;
-pub use keymap::{Intent, Keymap, Pane, Scope};
+pub use keymap::{Intent, KeyChord, Keymap, Pane, Scope};
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OPTIONS, OptionsForm, QUEUE_TRANSFERS};
 pub use tab::Tab;
@@ -342,31 +343,7 @@ impl View {
 
     /// The keys of the modal or the focused pane.
     pub fn hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
-        let globals = match (&self.modal, self.pane()) {
-            (Some(_), _) => Vec::new(),
-            (None, Pane::Users) => vec![Hint::new("^O", "actions")],
-            (None, Pane::Chat) => self
-                .has_sub_row()
-                .then_some(Hint::new("Alt-,.", "room"))
-                .into_iter()
-                .chain([Hint::new("F1-F9", "tab"), Hint::new("^P", "commands")])
-                .collect(),
-            (None, Pane::Room) => vec![
-                Hint::new("Alt-,.", "room"),
-                Hint::new("^P", "commands"),
-                Hint::new("^O", "actions"),
-            ],
-            (None, Pane::News) => {
-                vec![Hint::new("Alt-,.", "news").only_if(self.has_sub_row())]
-            }
-            (None, Pane::NewsFolders) => vec![Hint::new("Alt-,.", "news")],
-            (None, Pane::Tasks) => vec![Hint::new("Alt-T", "back")],
-            (None, _) => Vec::new(),
-        };
         self.keymap_hints(files)
-            .into_iter()
-            .chain(globals)
-            .collect()
     }
 
     /// The selected item of the file list.
@@ -396,13 +373,14 @@ impl View {
         (next != self.focus).then_some(next)
     }
 
-    /// The scopes of the keys, from the most specific.
+    /// The scopes of the keys, in the order that the dispatch reads them:
+    /// the global keys first, then from the most specific.
     pub fn scopes(&self) -> Vec<Scope> {
         match &self.modal {
             Some(modal) => modal_scopes(modal),
-            None => self
-                .task_scopes()
-                .filter(|_| self.pane() == Pane::Tasks)
+            None => [Scope::Global]
+                .into_iter()
+                .chain(self.task_scopes().filter(|_| self.pane() == Pane::Tasks))
                 .chain([Scope::Pane(self.pane())])
                 .collect(),
         }
@@ -456,7 +434,23 @@ impl View {
     fn label(&self, intent: Intent) -> Option<&'static str> {
         match intent {
             Intent::NextPane => self.next_focus().map(Focus::name),
-            Intent::PrevRow => None,
+            Intent::PrevSub | Intent::NextSub => match self.pane() {
+                _ if !self.has_sub_row() => None,
+                Pane::Chat | Pane::Room => Some("room"),
+                Pane::News | Pane::NewsFolders => Some("news"),
+                _ => None,
+            },
+            Intent::GoToTab => (self.pane() == Pane::Chat).then_some("tab"),
+            Intent::Palette => matches!(self.pane(), Pane::Chat | Pane::Room).then_some("commands"),
+            Intent::Actions => matches!(self.pane(), Pane::Users | Pane::Room).then_some("actions"),
+            Intent::TasksTab => (self.pane() == Pane::Tasks).then_some("back"),
+            Intent::PrevRow
+            | Intent::Broadcast
+            | Intent::Options
+            | Intent::InviteToRoom
+            | Intent::RoomSubject
+            | Intent::LeaveRoom
+            | Intent::Interrupt => None,
             _ => Some(intent.label()),
         }
     }
@@ -465,7 +459,8 @@ impl View {
     /// [`Self::scopes`]. The keys of one intent with the same modifiers show as
     /// a range of three or more keys in a row, as in `F1-F9`, or with `/`
     /// between, as in `Esc/Enter`. Two hints in a row with one label and the
-    /// same privileges merge, as in `↑↓ scroll` and `PgUp/PgDn page`.
+    /// same privileges merge, as in `↑↓ scroll`, `PgUp/PgDn page`, and
+    /// `Alt-,. room`.
     fn keymap_hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
         let scopes = self.scopes();
         Intent::ALL
@@ -483,7 +478,12 @@ impl View {
             .fold(Vec::new(), |mut hints: Vec<Hint>, hint| {
                 match hints.last_mut() {
                     Some(last) if last.does == hint.does && last.enabled_by == hint.enabled_by => {
-                        join_key(last.key.to_mut(), &hint.key)
+                        let tail = ["Alt-", "^", "⇧"]
+                            .into_iter()
+                            .filter(|prefix| last.key.starts_with(prefix))
+                            .find_map(|prefix| hint.key.strip_prefix(prefix))
+                            .unwrap_or(&hint.key);
+                        join_key(last.key.to_mut(), tail);
                     }
                     _ => hints.push(hint),
                 }
@@ -497,8 +497,7 @@ impl View {
         users: &[UserNameWithInfo],
         files: &[FileNameWithInfo],
     ) -> Action {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl && key.code == KeyCode::Char('c') {
+        if self.keymap.intent(&[Scope::Always], key) == Some(Intent::Interrupt) {
             if matches!(self.modal, Some(Modal::Quit | Modal::Disconnected(_))) {
                 return Action::Quit;
             }
@@ -508,38 +507,8 @@ impl View {
         if let Some(modal) = self.modal.take() {
             return self.modal_key(modal, key, users);
         }
-        if let Some(number) = tab_number(key) {
-            return match self.bar_tabs().get(number.saturating_sub(1)) {
-                Some(&(tab, _)) => self.set_tab(tab),
-                None => Action::None,
-            };
-        }
-        if let Some(forward) = sub_step(key) {
-            return self
-                .step_sub(forward)
-                .map_or(Action::None, |tab| self.set_tab(tab));
-        }
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        if (ctrl && key.code == KeyCode::Char('p')) || (alt && key.code == KeyCode::Char('x')) {
-            let commands = self.commands(users);
-            let palette = Palette::new("commands", commands, &self.tabs, self.bar_tabs());
-            self.modal = Some(Modal::Palette(palette));
-            return Action::None;
-        }
-        if let Some(command) = self.alt_command(key, users) {
-            return self.run(command, users);
-        }
-        if is_menu_key(key) {
-            let commands = self.focus_commands(users);
-            if !commands.is_empty() {
-                self.modal = Some(Modal::Palette(Palette::new(
-                    "actions",
-                    commands,
-                    &self.tabs,
-                    self.bar_tabs(),
-                )));
-            }
-            return Action::None;
+        if let Some(intent) = self.keymap.intent(&[Scope::Global], key) {
+            return self.global_intent(intent, key, users);
         }
         if let Some(intent) = self.keymap.intent(&self.scopes(), key) {
             return self.pane_intent(intent, users, files);
@@ -612,21 +581,101 @@ impl View {
         }
     }
 
-    /// The command of Alt with a letter, if it works now.
-    fn alt_command(&self, key: KeyEvent, users: &[UserNameWithInfo]) -> Option<Command> {
-        if !key.modifiers.contains(KeyModifiers::ALT) {
-            return None;
-        }
-        let command = match key.code {
-            KeyCode::Char('a') => Command::Broadcast,
-            KeyCode::Char('o') => Command::Options,
-            KeyCode::Char('t') => Command::Tasks,
-            KeyCode::Char('i') => Command::Invite(self.tab.chat_id()?),
-            KeyCode::Char('s') => Command::Subject(self.tab.chat_id()?),
-            KeyCode::Char('w') => Command::Leave(self.tab.chat_id()?),
-            _ => return None,
+    /// Do the global `intent` of `key`.
+    fn global_intent(
+        &mut self,
+        intent: Intent,
+        key: KeyEvent,
+        users: &[UserNameWithInfo],
+    ) -> Action {
+        let chat_id = self.tab.chat_id();
+        let command = match intent {
+            Intent::GoToTab => {
+                let number = tab_number(key).unwrap_or_default();
+                return match self.bar_tabs().get(number.saturating_sub(1)) {
+                    Some(&(tab, _)) => self.set_tab(tab),
+                    None => Action::None,
+                };
+            }
+            Intent::PrevSub | Intent::NextSub => {
+                return self
+                    .step_sub(intent == Intent::NextSub)
+                    .map_or(Action::None, |tab| self.set_tab(tab));
+            }
+            Intent::Palette => {
+                let commands = self.commands(users);
+                self.modal = Some(Modal::Palette(self.palette("commands", commands)));
+                return Action::None;
+            }
+            Intent::Actions => {
+                let commands = self.focus_commands(users);
+                if !commands.is_empty() {
+                    self.modal = Some(Modal::Palette(self.palette("actions", commands)));
+                }
+                return Action::None;
+            }
+            Intent::TasksTab => Some(Command::Tasks),
+            Intent::Broadcast => Some(Command::Broadcast),
+            Intent::Options => Some(Command::Options),
+            Intent::InviteToRoom => chat_id.map(Command::Invite),
+            Intent::RoomSubject => chat_id.map(Command::Subject),
+            Intent::LeaveRoom => chat_id.map(Command::Leave),
+            _ => None,
         };
-        self.commands(users).contains(&command).then_some(command)
+        match command {
+            Some(command) if self.commands(users).contains(&command) => self.run(command, users),
+            _ => Action::None,
+        }
+    }
+
+    /// A palette of `commands`, each with its key from the key table.
+    fn palette(&self, title: &'static str, commands: Vec<Command>) -> Palette {
+        let entries = commands
+            .into_iter()
+            .map(|command| (command, self.command_key(command)))
+            .collect::<Vec<_>>();
+        Palette::new(title, entries, &self.tabs)
+    }
+
+    /// The key that runs `command` without the palette, or `""`.
+    fn command_key(&self, command: Command) -> Cow<'static, str> {
+        let (scope, intent) = match command {
+            Command::OpenTab(tab) => {
+                let Some(number) = self.bar_tabs().iter().position(|&(t, _)| t == tab) else {
+                    return "".into();
+                };
+                return self
+                    .keymap
+                    .chords(&[Scope::Global], Intent::GoToTab)
+                    .find(|chord| {
+                        tab_number(KeyEvent::new(chord.code, chord.modifiers))
+                            == Some(number.saturating_add(1))
+                    })
+                    .map(KeyChord::label)
+                    .unwrap_or_default();
+            }
+            Command::Broadcast => (Scope::Global, Intent::Broadcast),
+            Command::Options => (Scope::Global, Intent::Options),
+            Command::Tasks => (Scope::Global, Intent::TasksTab),
+            Command::Invite(_) => (Scope::Global, Intent::InviteToRoom),
+            Command::Subject(_) => (Scope::Global, Intent::RoomSubject),
+            Command::Leave(_) => (Scope::Global, Intent::LeaveRoom),
+            Command::Quit => (Scope::Always, Intent::Interrupt),
+            Command::User(_, MenuItem::SendMessage) => (Scope::Pane(Pane::Users), Intent::Message),
+            Command::User(_, MenuItem::GetInfo) => (Scope::Pane(Pane::Users), Intent::Info),
+            Command::User(_, MenuItem::Disconnect) => {
+                (Scope::Pane(Pane::Users), Intent::DisconnectUser)
+            }
+            Command::Reconnect
+            | Command::Disconnect
+            | Command::ConnectTo
+            | Command::User(_, MenuItem::PrivateChat) => return "".into(),
+        };
+        self.keymap
+            .chords(&[scope], intent)
+            .next()
+            .map(KeyChord::label)
+            .unwrap_or_default()
     }
 
     /// Run `command`, if the user may.
@@ -1591,29 +1640,6 @@ pub fn contains(rect: Rect, x: u16, y: u16) -> bool {
     (rect.left()..rect.right()).contains(&x) && (rect.top()..rect.bottom()).contains(&y)
 }
 
-/// Ctrl+O, Shift+F10, or the Menu key.
-const fn is_menu_key(key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Char('o') => key.modifiers.contains(KeyModifiers::CONTROL),
-        KeyCode::F(10) => key.modifiers.contains(KeyModifiers::SHIFT),
-        KeyCode::Menu => true,
-        _ => false,
-    }
-}
-
-/// `Some(true)` for Alt-`.`, the next entry of the row under the tab bar,
-/// and `Some(false)` for Alt-`,`.
-const fn sub_step(key: KeyEvent) -> Option<bool> {
-    if !key.modifiers.contains(KeyModifiers::ALT) || key.modifiers.contains(KeyModifiers::CONTROL) {
-        return None;
-    }
-    match key.code {
-        KeyCode::Char('.') => Some(true),
-        KeyCode::Char(',') => Some(false),
-        _ => None,
-    }
-}
-
 /// The tab number of F1 to F9, or of Alt with 1 to 9.
 fn tab_number(key: KeyEvent) -> Option<usize> {
     match key.code {
@@ -2008,7 +2034,7 @@ mod tests {
         let keys: Vec<_> = palette
             .matches()
             .filter_map(|entry| match entry.command {
-                Command::OpenTab(tab) => Some((tab, entry.key)),
+                Command::OpenTab(tab) => Some((tab, &*entry.key)),
                 _ => None,
             })
             .collect();
@@ -2018,6 +2044,23 @@ mod tests {
             let want = format!("F{}", i + 1);
             assert!(keys.contains(&(*tab, want.as_str())), "{tab:?}");
         }
+    }
+
+    #[test]
+    fn palette_key_comes_from_the_key_table() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        let Some(Modal::Palette(palette)) = &view.modal else {
+            panic!("no palette");
+        };
+        let key = |command| {
+            palette
+                .matches()
+                .find(|entry| entry.command == command)
+                .map(|entry| &*entry.key)
+        };
+        assert_eq!(key(Command::Tasks), Some("Alt-T"));
+        assert_eq!(key(Command::Quit), Some("^C"));
     }
 
     #[test]
@@ -2589,7 +2632,20 @@ mod tests {
                 "Esc chat",
             ]
         );
+        let _ = view.set_tab(Tab::Tasks);
+        assert_eq!(pairs(&view), ["↑↓ choose", "Alt-T back", "Esc chat"]);
         let _ = view.set_tab(Tab::Chat);
+        assert_eq!(
+            pairs(&view),
+            [
+                "Enter send",
+                "⇧Enter new line",
+                "Tab users",
+                "F1-F9 tab",
+                "^P commands",
+                "Esc quit",
+            ]
+        );
         let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
         assert_eq!(
             pairs(&view),

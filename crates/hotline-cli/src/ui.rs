@@ -908,7 +908,7 @@ fn draw_hints(frame: &mut Frame, area: Rect, view: &View, hints: &[Hint]) {
         .into_iter()
         .map(|row| {
             let spans = row.iter().flat_map(|hint| {
-                let style = enabled_style(hint.on && allows(view.access, hint.enabled_by));
+                let style = enabled_style(allows(view.access, hint.enabled_by));
                 [
                     Span::styled(&*hint.key, style.add_modifier(Modifier::BOLD)),
                     Span::styled(format!(" {}  ", hint.does), style),

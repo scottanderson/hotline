@@ -124,6 +124,30 @@ pub enum Intent {
     StartTransfer,
     /// Move to the next pane.
     NextPane,
+    /// Go back to the previous entry of the row under the tab bar.
+    PrevSub,
+    /// Go to the next entry of the row under the tab bar.
+    NextSub,
+    /// Go to the tab of the number of the key.
+    GoToTab,
+    /// Open the command palette.
+    Palette,
+    /// Open the actions of the focused pane.
+    Actions,
+    /// Go to the Tasks tab, or back from it.
+    TasksTab,
+    /// Send a broadcast.
+    Broadcast,
+    /// Open the options.
+    Options,
+    /// Invite a user to this room.
+    InviteToRoom,
+    /// Set the subject of this room.
+    RoomSubject,
+    /// Leave this room.
+    LeaveRoom,
+    /// Quit, or ask whether to quit.
+    Interrupt,
     /// Ask whether to quit `hlc`.
     AskQuit,
     /// Show the Chat tab.
@@ -198,6 +222,18 @@ impl Intent {
         Self::Replace,
         Self::NewLine,
         Self::NextPane,
+        Self::PrevSub,
+        Self::NextSub,
+        Self::GoToTab,
+        Self::Palette,
+        Self::Actions,
+        Self::TasksTab,
+        Self::Broadcast,
+        Self::Options,
+        Self::InviteToRoom,
+        Self::RoomSubject,
+        Self::LeaveRoom,
+        Self::Interrupt,
         Self::AskQuit,
         Self::ChatTab,
         Self::Quit,
@@ -261,6 +297,17 @@ impl Intent {
             Self::StopLogin => "disconnect",
             Self::StartTransfer => "start",
             Self::NextPane => "next pane",
+            Self::PrevSub | Self::NextSub => "switch",
+            Self::GoToTab => "tab",
+            Self::Palette => "commands",
+            Self::Actions => "actions",
+            Self::TasksTab => "tasks",
+            Self::Broadcast => "broadcast",
+            Self::Options => "options",
+            Self::InviteToRoom => "invite",
+            Self::RoomSubject => "subject",
+            Self::LeaveRoom => "leave",
+            Self::Interrupt => "quit",
             Self::AskQuit => "quit",
             Self::ChatTab => "chat",
             Self::Quit => "quit",
@@ -295,6 +342,10 @@ pub enum Scope {
     Login,
     /// A transfer that waits in `hlc`'s queue.
     Queued,
+    /// Each place with no modal.
+    Global,
+    /// Each place, with a modal too.
+    Always,
 }
 
 /// The pane that takes the keys when no modal is open.
@@ -334,13 +385,18 @@ impl KeyChord {
 
     /// `true` if `key` presses this chord. A chord with no modifier takes
     /// a character only without Ctrl and Alt, and any other key with any
-    /// modifier.
+    /// modifier. A chord with modifiers takes only Shift in addition.
     pub fn matches(self, key: KeyEvent) -> bool {
         key.code == self.code
             && if self.modifiers.is_empty() {
                 !is_modified_char(key)
             } else {
                 key.modifiers.contains(self.modifiers)
+                    && key
+                        .modifiers
+                        .difference(self.modifiers)
+                        .difference(KeyModifiers::SHIFT)
+                        .is_empty()
             }
     }
 
@@ -360,11 +416,15 @@ impl KeyChord {
         })
     }
 
-    /// The chord as a hint shows it, such as `Esc`, `↑`, `y`, `⇧Enter`, or
-    /// `^J`.
+    /// The chord as a hint shows it, such as `Esc`, `↑`, `y`, `⇧Enter`,
+    /// `^J`, or `Alt-T`.
     pub fn label(self) -> Cow<'static, str> {
         let key = match self.code {
-            KeyCode::Char(c) if self.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char(c)
+                if self
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 c.to_ascii_uppercase().to_string().into()
             }
             KeyCode::Char(' ') => "Space".into(),
@@ -709,6 +769,32 @@ impl Default for Keymap {
             ),
             (Pane::Tasks, &[SELECT[0], SELECT[1], CHAT]),
         ];
+        let alt = |c, intent| chord(KeyCode::Char(c), KeyModifiers::ALT, intent);
+        let ctrl = |c, intent| chord(KeyCode::Char(c), KeyModifiers::CONTROL, intent);
+        let global = (1..=9)
+            .map(|n| key(KeyCode::F(n), Intent::GoToTab))
+            .chain(('1'..='9').map(|c| alt(c, Intent::GoToTab)))
+            .chain([
+                alt(',', Intent::PrevSub),
+                alt('.', Intent::NextSub),
+                ctrl('p', Intent::Palette),
+                alt('x', Intent::Palette),
+                ctrl('o', Intent::Actions),
+                chord(KeyCode::F(10), KeyModifiers::SHIFT, Intent::Actions),
+                key(KeyCode::Menu, Intent::Actions),
+                alt('t', Intent::TasksTab),
+                alt('a', Intent::Broadcast),
+                alt('o', Intent::Options),
+                alt('i', Intent::InviteToRoom),
+                alt('s', Intent::RoomSubject),
+                alt('w', Intent::LeaveRoom),
+            ])
+            .map(|(chord, intent)| (Scope::Global, chord, intent));
+        let always = [(
+            Scope::Always,
+            KeyChord::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Intent::Interrupt,
+        )];
         let others: [(Scope, &[(KeyChord, Intent)]); 5] = [
             (Scope::Checkbox, &[key(KeyCode::Char(' '), Intent::Toggle)]),
             (Scope::Replace, &[key(KeyCode::Char('o'), Intent::Replace)]),
@@ -732,6 +818,8 @@ impl Default for Keymap {
                     keys.iter()
                         .map(move |&(chord, intent)| (scope, chord, intent))
                 })
+                .chain(global)
+                .chain(always)
                 .collect(),
         )
     }
@@ -899,7 +987,7 @@ mod tests {
         let label = |code, modifiers| KeyChord::new(code, modifiers).label();
         assert_eq!(label(KeyCode::Enter, KeyModifiers::SHIFT), "⇧Enter");
         assert_eq!(label(KeyCode::Char('j'), KeyModifiers::CONTROL), "^J");
-        assert_eq!(label(KeyCode::Char('t'), KeyModifiers::ALT), "Alt-t");
+        assert_eq!(label(KeyCode::Char('t'), KeyModifiers::ALT), "Alt-T");
         assert_eq!(label(KeyCode::Tab, KeyModifiers::NONE), "Tab");
     }
 
@@ -919,6 +1007,41 @@ mod tests {
                 KeyChord::plain(KeyCode::Enter)
             ]
         );
+    }
+
+    /// The Key column of the key table in the README.
+    fn readme_keys() -> Vec<Cow<'static, str>> {
+        include_str!("../../README.md")
+            .lines()
+            .skip_while(|line| !line.starts_with("| Key "))
+            .skip(2)
+            .take_while(|line| line.starts_with('|'))
+            .filter_map(|line| line.split('|').nth(1))
+            .map(|key| key.trim().trim_matches('`').replace("Ctrl-", "^"))
+            .map(Cow::from)
+            .collect()
+    }
+
+    #[test]
+    fn readme_key_table_names_the_first_key_of_each_global_and_user_list_intent() {
+        let keymap = Keymap::default();
+        let keys = readme_keys();
+        let scopes = [Scope::Global, Scope::Pane(Pane::Users)];
+        let missing: Vec<_> = Intent::ALL
+            .iter()
+            .copied()
+            .filter(|&intent| {
+                !matches!(
+                    intent,
+                    Intent::GoToTab | Intent::SelectUp | Intent::SelectDown | Intent::NextPane
+                )
+            })
+            .flat_map(|intent| scopes.map(|scope| keymap.chords(&[scope], intent).next()))
+            .flatten()
+            .map(KeyChord::label)
+            .filter(|label| !keys.contains(label))
+            .collect();
+        assert!(missing.is_empty(), "not in the README: {missing:?}");
     }
 
     #[test]

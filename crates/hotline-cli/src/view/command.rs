@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use hotline_proto::Access;
 
 use super::{MenuItem, Tab, TextBox};
@@ -50,33 +52,6 @@ impl Command {
         }
     }
 
-    /// The key that runs the command without the palette. A tab of the
-    /// tab bar `bar_tabs` has its function key.
-    pub fn key(self, bar_tabs: &[(Tab, String)]) -> &'static str {
-        match self {
-            Self::OpenTab(tab) => bar_tabs
-                .iter()
-                .position(|&(t, _)| t == tab)
-                .and_then(|i| TAB_KEYS.get(i))
-                .copied()
-                .unwrap_or_default(),
-            Self::Broadcast => "Alt-A",
-            Self::Options => "Alt-O",
-            Self::Tasks => "Alt-T",
-            Self::Invite(_) => "Alt-I",
-            Self::Subject(_) => "Alt-S",
-            Self::Leave(_) => "Alt-W",
-            Self::Quit => "^C",
-            Self::User(_, MenuItem::SendMessage) => "Enter",
-            Self::User(_, MenuItem::GetInfo) => "i",
-            Self::User(_, MenuItem::Disconnect) => "k",
-            Self::Reconnect
-            | Self::Disconnect
-            | Self::ConnectTo
-            | Self::User(_, MenuItem::PrivateChat) => "",
-        }
-    }
-
     /// The privileges that turn the command on. Any one of them is enough.
     pub const fn enabled_by(self) -> Access {
         match self {
@@ -87,9 +62,6 @@ impl Command {
     }
 }
 
-/// The keys of the tabs of the tab bar, in order.
-const TAB_KEYS: [&str; 9] = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9"];
-
 /// One row of the palette.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -97,7 +69,7 @@ pub struct Entry {
     /// The text the palette shows and matches.
     pub label: String,
     /// The key that runs the command, or `""`.
-    pub key: &'static str,
+    pub key: Cow<'static, str>,
 }
 
 /// The command palette, or the action menu: the commands that match `input`.
@@ -112,23 +84,22 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// A palette of `commands`. `tabs` names each tab, and `bar_tabs` are
-    /// the tabs of the tab bar.
+    /// A palette of `commands`, each with the key that runs it. `tabs`
+    /// names each tab.
     pub fn new(
         title: &'static str,
-        commands: impl IntoIterator<Item = Command>,
+        commands: impl IntoIterator<Item = (Command, Cow<'static, str>)>,
         tabs: &[(Tab, String)],
-        bar_tabs: &[(Tab, String)],
     ) -> Self {
         Self {
             title,
             input: TextBox::new(),
             entries: commands
                 .into_iter()
-                .map(|command| Entry {
+                .map(|(command, key)| Entry {
                     command,
                     label: command.label(tabs),
-                    key: command.key(bar_tabs),
+                    key,
                 })
                 .collect(),
             selected: 0,
