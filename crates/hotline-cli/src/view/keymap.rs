@@ -14,6 +14,8 @@ use super::modal::ModalKind;
 /// What a key does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
+    ScrollUp,
+    ScrollDown,
     PageUp,
     PageDown,
     /// Select the row above in a list.
@@ -76,6 +78,56 @@ pub enum Intent {
     OpenAccount,
     /// Start a new line in a message.
     NewLine,
+    /// Open the selected file, or download it.
+    OpenFile,
+    /// Open the selected news folder.
+    OpenFolder,
+    /// Read the selected article.
+    Read,
+    /// Edit the selected account.
+    EditAccount,
+    /// Send a message to the selected user.
+    Message,
+    /// Close the selected news folder.
+    Collapse,
+    /// Open the selected news folder in the tree.
+    Expand,
+    /// Go to the parent folder.
+    ParentFolder,
+    /// Move to the news folders.
+    FocusFolders,
+    /// Download the selected item.
+    Download,
+    /// Make a folder.
+    NewFolder,
+    /// Make an account.
+    NewAccount,
+    /// Get the information of the selected item.
+    Info,
+    /// Rename the selected file or folder.
+    Rename,
+    /// Set the comment of the selected file or folder.
+    Comment,
+    /// Move the selected file or folder.
+    MoveFile,
+    /// Make an alias of the selected file or folder.
+    Alias,
+    /// Make a news bundle.
+    NewBundle,
+    /// Make a news category.
+    NewCategory,
+    /// Stop the selected task.
+    CancelTask,
+    /// Stop the login of the selected task, and disconnect.
+    StopLogin,
+    /// Start the selected queued transfer.
+    StartTransfer,
+    /// Move to the next pane.
+    NextPane,
+    /// Ask whether to quit `hlc`.
+    AskQuit,
+    /// Show the Chat tab.
+    ChatTab,
     /// Quit `hlc`.
     Quit,
     /// Close a box that only shows text.
@@ -89,6 +141,8 @@ pub enum Intent {
 impl Intent {
     /// Each intent, in hint order.
     pub const ALL: &[Self] = &[
+        Self::ScrollUp,
+        Self::ScrollDown,
         Self::SelectUp,
         Self::SelectDown,
         Self::Run,
@@ -101,26 +155,51 @@ impl Intent {
         Self::NextRow,
         Self::PrevRow,
         Self::Toggle,
-        Self::DisconnectUser,
-        Self::TemporaryBan,
-        Self::PermanentBan,
-        Self::Delete,
+        Self::OpenFile,
+        Self::OpenFolder,
+        Self::Read,
+        Self::EditAccount,
+        Self::Message,
+        Self::Collapse,
+        Self::Expand,
+        Self::ParentFolder,
+        Self::FocusFolders,
+        Self::Download,
+        Self::Upload,
+        Self::NewFolder,
+        Self::NewAccount,
+        Self::OpenAccount,
         Self::Reply,
         Self::Join,
         Self::Reconnect,
         Self::ConnectTo,
         Self::SwitchField,
         Self::Send,
-        Self::Upload,
+        Self::Post,
         Self::Save,
         Self::SetSubject,
-        Self::Post,
         Self::Create,
-        Self::OpenAccount,
+        Self::Delete,
+        Self::Info,
+        Self::DisconnectUser,
+        Self::TemporaryBan,
+        Self::PermanentBan,
+        Self::Rename,
+        Self::Comment,
+        Self::MoveFile,
+        Self::Alias,
+        Self::NewBundle,
+        Self::NewCategory,
+        Self::CancelTask,
+        Self::StopLogin,
+        Self::StartTransfer,
         Self::Connect,
         Self::Resume,
         Self::Replace,
         Self::NewLine,
+        Self::NextPane,
+        Self::AskQuit,
+        Self::ChatTab,
         Self::Quit,
         Self::Close,
         Self::Cancel,
@@ -130,6 +209,7 @@ impl Intent {
     /// The text of the hint.
     pub const fn label(self) -> &'static str {
         match self {
+            Self::ScrollUp | Self::ScrollDown => "scroll",
             Self::PageUp | Self::PageDown => "page",
             Self::SelectUp | Self::SelectDown => "choose",
             Self::Run => "run",
@@ -159,6 +239,30 @@ impl Intent {
             Self::Create => "create",
             Self::OpenAccount => "open",
             Self::NewLine => "new line",
+            Self::OpenFile => "open or download",
+            Self::OpenFolder => "open",
+            Self::Read => "read",
+            Self::EditAccount => "edit",
+            Self::Message => "message",
+            Self::Collapse | Self::Expand => "close/open",
+            Self::ParentFolder => "up",
+            Self::FocusFolders => "folders",
+            Self::Download => "download",
+            Self::NewFolder => "new folder",
+            Self::NewAccount => "new",
+            Self::Info => "info",
+            Self::Rename => "rename",
+            Self::Comment => "comment",
+            Self::MoveFile => "move",
+            Self::Alias => "alias",
+            Self::NewBundle => "new bundle",
+            Self::NewCategory => "new category",
+            Self::CancelTask => "cancel",
+            Self::StopLogin => "disconnect",
+            Self::StartTransfer => "start",
+            Self::NextPane => "next pane",
+            Self::AskQuit => "quit",
+            Self::ChatTab => "chat",
             Self::Quit => "quit",
             Self::Close => "close",
             Self::Cancel => "cancel",
@@ -180,10 +284,35 @@ impl Intent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     Modal(ModalKind),
+    Pane(Pane),
     /// A checkbox row of a form.
     Checkbox,
     /// A box that asks whether to resume a transfer that can also replace.
     Replace,
+    /// A task that the user can cancel.
+    Cancellable,
+    /// A login that the user can stop.
+    Login,
+    /// A transfer that waits in `hlc`'s queue.
+    Queued,
+}
+
+/// The pane that takes the keys when no modal is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Pane {
+    Users,
+    /// The input line of the Chat tab.
+    Chat,
+    /// The input line of a room tab.
+    Room,
+    /// The input line of the message board.
+    News,
+    Files,
+    Accounts,
+    NewsFolders,
+    NewsThreads,
+    NewsPreview,
+    Tasks,
 }
 
 /// A key and the modifiers that it needs.
@@ -246,6 +375,9 @@ impl KeyChord {
             KeyCode::Down => "↓".into(),
             KeyCode::PageUp => "PgUp".into(),
             KeyCode::PageDown => "PgDn".into(),
+            KeyCode::Left => "←".into(),
+            KeyCode::Right => "→".into(),
+            KeyCode::Backspace => "⌫".into(),
             code => code.to_string().into(),
         };
         let mut label: String = [
@@ -449,14 +581,152 @@ impl Default for Keymap {
                 &[key(KeyCode::Enter, Intent::OpenAccount), CANCEL],
             ),
         ];
-        let others: [(Scope, &[(KeyChord, Intent)]); 2] = [
+        const CHAT: (KeyChord, Intent) = key(KeyCode::Esc, Intent::ChatTab);
+        const NEXT: (KeyChord, Intent) = key(KeyCode::Tab, Intent::NextPane);
+        const POST: (KeyChord, Intent) = key(KeyCode::Char('p'), Intent::Post);
+        const SCROLL: [(KeyChord, Intent); 4] = [
+            key(KeyCode::Up, Intent::ScrollUp),
+            key(KeyCode::Down, Intent::ScrollDown),
+            key(KeyCode::PageUp, Intent::PageUp),
+            key(KeyCode::PageDown, Intent::PageDown),
+        ];
+        let panes: [(Pane, &[(KeyChord, Intent)]); 10] = [
+            (
+                Pane::Users,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::Message),
+                    key(KeyCode::Char('i'), Intent::Info),
+                    key(KeyCode::Char('k'), Intent::DisconnectUser),
+                    NEXT,
+                    key(KeyCode::Esc, Intent::NextPane),
+                ],
+            ),
+            (
+                Pane::Chat,
+                &[
+                    key(KeyCode::Enter, Intent::Send),
+                    NEW_LINE[0],
+                    NEW_LINE[1],
+                    NEW_LINE[2],
+                    NEXT,
+                    key(KeyCode::Esc, Intent::AskQuit),
+                ],
+            ),
+            (
+                Pane::Room,
+                &[
+                    key(KeyCode::Enter, Intent::Send),
+                    NEW_LINE[0],
+                    NEW_LINE[1],
+                    NEW_LINE[2],
+                    NEXT,
+                    CHAT,
+                ],
+            ),
+            (
+                Pane::News,
+                &[
+                    SCROLL[0],
+                    SCROLL[1],
+                    SCROLL[2],
+                    SCROLL[3],
+                    key(KeyCode::Enter, Intent::Post),
+                    NEW_LINE[0],
+                    NEW_LINE[1],
+                    NEW_LINE[2],
+                    CHAT,
+                ],
+            ),
+            (
+                Pane::Files,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::OpenFile),
+                    key(KeyCode::Backspace, Intent::ParentFolder),
+                    key(KeyCode::Left, Intent::ParentFolder),
+                    key(KeyCode::Char('d'), Intent::Download),
+                    key(KeyCode::Char('u'), Intent::Upload),
+                    key(KeyCode::Char('n'), Intent::NewFolder),
+                    key(KeyCode::Char('x'), Intent::Delete),
+                    key(KeyCode::Char('i'), Intent::Info),
+                    key(KeyCode::Char('r'), Intent::Rename),
+                    key(KeyCode::Char('c'), Intent::Comment),
+                    key(KeyCode::Char('m'), Intent::MoveFile),
+                    key(KeyCode::Char('a'), Intent::Alias),
+                    NEXT,
+                    CHAT,
+                ],
+            ),
+            (
+                Pane::Accounts,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::EditAccount),
+                    key(KeyCode::Char('n'), Intent::NewAccount),
+                    key(KeyCode::Char('o'), Intent::OpenAccount),
+                    key(KeyCode::Char('x'), Intent::Delete),
+                    NEXT,
+                    CHAT,
+                ],
+            ),
+            (
+                Pane::NewsFolders,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::OpenFolder),
+                    key(KeyCode::Left, Intent::Collapse),
+                    key(KeyCode::Backspace, Intent::Collapse),
+                    key(KeyCode::Right, Intent::Expand),
+                    POST,
+                    key(KeyCode::Char('x'), Intent::Delete),
+                    key(KeyCode::Char('b'), Intent::NewBundle),
+                    key(KeyCode::Char('c'), Intent::NewCategory),
+                    NEXT,
+                    CHAT,
+                ],
+            ),
+            (
+                Pane::NewsThreads,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::Read),
+                    key(KeyCode::Left, Intent::FocusFolders),
+                    POST,
+                    key(KeyCode::Char('x'), Intent::Delete),
+                    NEXT,
+                    CHAT,
+                ],
+            ),
+            (
+                Pane::NewsPreview,
+                &[SCROLL[0], SCROLL[1], SCROLL[2], SCROLL[3], POST, NEXT, CHAT],
+            ),
+            (Pane::Tasks, &[SELECT[0], SELECT[1], CHAT]),
+        ];
+        let others: [(Scope, &[(KeyChord, Intent)]); 5] = [
             (Scope::Checkbox, &[key(KeyCode::Char(' '), Intent::Toggle)]),
             (Scope::Replace, &[key(KeyCode::Char('o'), Intent::Replace)]),
+            (
+                Scope::Cancellable,
+                &[key(KeyCode::Enter, Intent::CancelTask)],
+            ),
+            (Scope::Login, &[key(KeyCode::Enter, Intent::StopLogin)]),
+            (
+                Scope::Queued,
+                &[key(KeyCode::Char('s'), Intent::StartTransfer)],
+            ),
         ];
         Self::new(
             modals
                 .into_iter()
                 .map(|(kind, keys)| (Scope::Modal(kind), keys))
+                .chain(panes.map(|(pane, keys)| (Scope::Pane(pane), keys)))
                 .chain(others)
                 .flat_map(|(scope, keys)| {
                     keys.iter()

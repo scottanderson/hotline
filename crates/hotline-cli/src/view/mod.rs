@@ -38,7 +38,7 @@ pub use command::{Command, Palette};
 pub use connect_form::ConnectForm;
 pub use divider::{Divider, Splits};
 pub use hint::Hint;
-pub use keymap::{Intent, Keymap, Scope};
+pub use keymap::{Intent, Keymap, Pane, Scope};
 pub use modal::{MenuItem, Modal};
 pub use options_form::{OPTIONS, OptionsForm, QUEUE_TRANSFERS};
 pub use tab::Tab;
@@ -46,17 +46,6 @@ pub use text_box::TextBox;
 
 /// The longest gap between the two clicks of a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
-
-/// Shift+Enter, or Alt+Enter or Ctrl+J where the terminal cannot report Shift+Enter.
-fn is_new_line(key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Enter => key
-            .modifiers
-            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT),
-        KeyCode::Char('j') => key.modifiers.contains(KeyModifiers::CONTROL),
-        _ => false,
-    }
-}
 
 /// Whether `key` is a character with Ctrl or Alt.
 fn is_modified_char(key: KeyEvent) -> bool {
@@ -91,6 +80,34 @@ pub enum Focus {
 }
 
 impl Focus {
+    /// The name of the pane, for a hint.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Users => "users",
+            Self::Files => "files",
+            Self::NewsFolders => "folders",
+            Self::NewsThreads => "threads",
+            Self::NewsPreview => "preview",
+            Self::Accounts => "accounts",
+            Self::Tasks => "tasks",
+        }
+    }
+
+    /// The pane of the focus, for a list pane.
+    const fn pane(self) -> Pane {
+        match self {
+            Self::Input => Pane::Chat,
+            Self::Users => Pane::Users,
+            Self::Files => Pane::Files,
+            Self::NewsFolders => Pane::NewsFolders,
+            Self::NewsThreads => Pane::NewsThreads,
+            Self::NewsPreview => Pane::NewsPreview,
+            Self::Accounts => Pane::Accounts,
+            Self::Tasks => Pane::Tasks,
+        }
+    }
+
     /// The focus that leaves the user list on `tab`.
     const fn main(tab: Tab) -> Self {
         match tab {
@@ -325,49 +342,31 @@ impl View {
 
     /// The keys of the modal or the focused pane.
     pub fn hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
-        match (&self.modal, self.focus, self.tab) {
-            (None, Focus::Users, _) => self.users_hints(),
-            (None, Focus::Tasks, _) => self.tasks_hints(),
-            (None, Focus::Files, _) | (None, Focus::Input, Tab::Files) => self.files_hints(files),
-            _ => self.focus_hints(),
-        }
-    }
-
-    /// The keys of the file list, with the privileges for the selected item.
-    fn files_hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
-        let folder = self
-            .selected_file(files)
-            .is_some_and(FileNameWithInfo::is_folder);
-        let edit =
-            |key, does, edit: FileEdit| Hint::new(key, does).enabled_by(edit.enabled_by(folder));
-        let (open, download, delete) = if folder {
-            (
-                Access::empty(),
-                Access::DOWNLOAD_FOLDER,
-                Access::DELETE_FOLDER,
-            )
-        } else {
-            (
-                Access::DOWNLOAD_FILE,
-                Access::DOWNLOAD_FILE,
-                Access::DELETE_FILE,
-            )
+        let globals = match (&self.modal, self.pane()) {
+            (Some(_), _) => Vec::new(),
+            (None, Pane::Users) => vec![Hint::new("^O", "actions")],
+            (None, Pane::Chat) => self
+                .has_sub_row()
+                .then_some(Hint::new("Alt-,.", "room"))
+                .into_iter()
+                .chain([Hint::new("F1-F9", "tab"), Hint::new("^P", "commands")])
+                .collect(),
+            (None, Pane::Room) => vec![
+                Hint::new("Alt-,.", "room"),
+                Hint::new("^P", "commands"),
+                Hint::new("^O", "actions"),
+            ],
+            (None, Pane::News) => {
+                vec![Hint::new("Alt-,.", "news").only_if(self.has_sub_row())]
+            }
+            (None, Pane::NewsFolders) => vec![Hint::new("Alt-,.", "news")],
+            (None, Pane::Tasks) => vec![Hint::new("Alt-T", "back")],
+            (None, _) => Vec::new(),
         };
-        vec![
-            Hint::new("↑↓", "select"),
-            Hint::new("Enter", "open or download").enabled_by(open),
-            Hint::new("⌫", "up"),
-            Hint::new("d", "download").enabled_by(download),
-            Hint::new("u", "upload").enabled_by(Access::UPLOAD_FILE | Access::UPLOAD_FOLDER),
-            edit("n", "new folder", FileEdit::NewFolder),
-            Hint::new("x", "delete").enabled_by(delete),
-            Hint::new("i", "info"),
-            edit("r", "rename", FileEdit::Rename),
-            edit("c", "comment", FileEdit::Comment),
-            edit("m", "move", FileEdit::Move),
-            edit("a", "alias", FileEdit::Alias),
-            Hint::new("Esc", "chat"),
-        ]
+        self.keymap_hints(files)
+            .into_iter()
+            .chain(globals)
+            .collect()
     }
 
     /// The selected item of the file list.
@@ -375,46 +374,88 @@ impl View {
         files.get(selected(self.files.selected(), files.len()))
     }
 
-    /// The name of the main area of the tab, for a hint.
-    const fn main_name(&self) -> &'static str {
-        match Focus::main(self.tab) {
-            Focus::Files => "files",
-            Focus::NewsFolders | Focus::NewsThreads | Focus::NewsPreview => "news",
-            Focus::Accounts => "accounts",
-            Focus::Tasks => "tasks",
-            Focus::Input | Focus::Users => "input",
+    /// The pane that takes the keys when no modal is open.
+    const fn pane(&self) -> Pane {
+        match (self.focus, self.tab) {
+            (Focus::Input, Tab::Chat) => Pane::Chat,
+            (Focus::Input, Tab::Room(_)) => Pane::Room,
+            (Focus::Input, Tab::News) => Pane::News,
+            (Focus::Input, tab) => Focus::main(tab).pane(),
+            (focus, _) => focus.pane(),
         }
     }
 
-    /// The keys of the user list.
-    fn users_hints(&self) -> Vec<Hint<'_>> {
-        let main = self.main_name();
-        vec![
-            Hint::new("↑↓", "select"),
-            Hint::new("^O", "actions"),
-            Hint::new("Enter", "message").enabled_by(MenuItem::SendMessage.enabled_by()),
-            Hint::new("i", "info").enabled_by(MenuItem::GetInfo.enabled_by()),
-            Hint::new("k", "disconnect").enabled_by(MenuItem::Disconnect.enabled_by()),
-            Hint::new("Tab", main),
-            Hint::new("Esc", main),
-        ]
+    /// The focus that Tab gives, `None` where Tab keeps the focus.
+    fn next_focus(&self) -> Option<Focus> {
+        let next = match self.focus {
+            Focus::Users => Focus::main(self.tab),
+            Focus::NewsFolders => Focus::NewsThreads,
+            Focus::NewsThreads => Focus::NewsPreview,
+            _ => self.side_focus(),
+        };
+        (next != self.focus).then_some(next)
     }
 
     /// The scopes of the keys, from the most specific.
     pub fn scopes(&self) -> Vec<Scope> {
-        self.modal.as_ref().map(modal_scopes).unwrap_or_default()
+        match &self.modal {
+            Some(modal) => modal_scopes(modal),
+            None => self
+                .task_scopes()
+                .filter(|_| self.pane() == Pane::Tasks)
+                .chain([Scope::Pane(self.pane())])
+                .collect(),
+        }
     }
 
     /// The privileges, any one of which turns `intent` on now.
-    fn enabled_by(&self, intent: Intent) -> Access {
-        self.modal
-            .as_ref()
-            .map_or(intent.enabled_by(), |modal| modal_enabled_by(modal, intent))
+    fn enabled_by(&self, intent: Intent, files: &[FileNameWithInfo]) -> Access {
+        match &self.modal {
+            Some(modal) => modal_enabled_by(modal, intent),
+            None => self.pane_enabled_by(intent, files),
+        }
+    }
+
+    /// The privileges, any one of which turns `intent` on in the focused
+    /// pane.
+    fn pane_enabled_by(&self, intent: Intent, files: &[FileNameWithInfo]) -> Access {
+        let folder = self
+            .selected_file(files)
+            .is_some_and(FileNameWithInfo::is_folder);
+        let edit = |edit: FileEdit| edit.enabled_by(folder);
+        match (self.pane(), intent) {
+            (Pane::Users, Intent::Message) => MenuItem::SendMessage.enabled_by(),
+            (Pane::Users, Intent::Info) => MenuItem::GetInfo.enabled_by(),
+            (Pane::Users, Intent::DisconnectUser) => MenuItem::Disconnect.enabled_by(),
+            (_, Intent::Send) => Access::SEND_CHAT,
+            (_, Intent::Post) => Access::POST_NEWS_ART,
+            (Pane::Files, Intent::OpenFile) if !folder => Access::DOWNLOAD_FILE,
+            (Pane::Files, Intent::Download) if folder => Access::DOWNLOAD_FOLDER,
+            (Pane::Files, Intent::Download) => Access::DOWNLOAD_FILE,
+            (Pane::Files, Intent::Upload) => Access::UPLOAD_FILE | Access::UPLOAD_FOLDER,
+            (Pane::Files, Intent::NewFolder) => edit(FileEdit::NewFolder),
+            (Pane::Files, Intent::Delete) if folder => Access::DELETE_FOLDER,
+            (Pane::Files, Intent::Delete) => Access::DELETE_FILE,
+            (Pane::Files, Intent::Rename) => edit(FileEdit::Rename),
+            (Pane::Files, Intent::Comment) => edit(FileEdit::Comment),
+            (Pane::Files, Intent::MoveFile) => edit(FileEdit::Move),
+            (Pane::Files, Intent::Alias) => edit(FileEdit::Alias),
+            (Pane::Accounts, Intent::EditAccount) => Access::OPEN_USER | Access::CREATE_USER,
+            (Pane::Accounts, Intent::NewAccount) => Access::CREATE_USER,
+            (Pane::Accounts, Intent::OpenAccount) => Access::OPEN_USER,
+            (Pane::Accounts, Intent::Delete) => Access::DELETE_USER,
+            (Pane::NewsFolders, Intent::Delete) => Access::NEWS_DELETE_CAT,
+            (Pane::NewsFolders, Intent::NewBundle) => Access::NEWS_CREATE_FLDR,
+            (Pane::NewsFolders, Intent::NewCategory) => Access::NEWS_CREATE_CAT,
+            (Pane::NewsThreads, Intent::Delete) => Access::NEWS_DELETE_ART,
+            _ => intent.enabled_by(),
+        }
     }
 
     /// The text of the hint of `intent` now, `None` for no hint.
-    const fn label(&self, intent: Intent) -> Option<&'static str> {
+    fn label(&self, intent: Intent) -> Option<&'static str> {
         match intent {
+            Intent::NextPane => self.next_focus().map(Focus::name),
             Intent::PrevRow => None,
             _ => Some(intent.label()),
         }
@@ -424,8 +465,8 @@ impl View {
     /// [`Self::scopes`]. The keys of one intent with the same modifiers show as
     /// a range of three or more keys in a row, as in `F1-F9`, or with `/`
     /// between, as in `Esc/Enter`. Two hints in a row with one label and the
-    /// same privileges merge, as in `↑↓ choose` and `PgUp/PgDn page`.
-    fn keymap_hints(&self) -> Vec<Hint<'_>> {
+    /// same privileges merge, as in `↑↓ scroll` and `PgUp/PgDn page`.
+    fn keymap_hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
         let scopes = self.scopes();
         Intent::ALL
             .iter()
@@ -437,7 +478,7 @@ impl View {
                     .keymap
                     .hint_key(chords.filter(move |chord| chord.modifiers == modifiers));
                 let does = self.label(intent)?;
-                Some(Hint::new(key, does).enabled_by(self.enabled_by(intent)))
+                Some(Hint::new(key, does).enabled_by(self.enabled_by(intent, files)))
             })
             .fold(Vec::new(), |mut hints: Vec<Hint>, hint| {
                 match hints.last_mut() {
@@ -448,78 +489,6 @@ impl View {
                 }
                 hints
             })
-    }
-
-    /// The keys of the modal or the focused area, other than the user list.
-    fn focus_hints(&self) -> Vec<Hint<'_>> {
-        match (&self.modal, self.focus, self.tab) {
-            (Some(_), ..) => self.keymap_hints(),
-            (None, Focus::Accounts, _) | (None, Focus::Input, Tab::Admin) => vec![
-                Hint::new("↑↓", "select"),
-                Hint::new("Enter", "edit").enabled_by(Access::OPEN_USER | Access::CREATE_USER),
-                Hint::new("n", "new").enabled_by(Access::CREATE_USER),
-                Hint::new("o", "open").enabled_by(Access::OPEN_USER),
-                Hint::new("x", "delete").enabled_by(Access::DELETE_USER),
-                Hint::new("Esc", "chat"),
-            ],
-            (None, Focus::NewsFolders, _) | (None, Focus::Input, Tab::Threaded) => vec![
-                Hint::new("↑↓", "select"),
-                Hint::new("Enter", "open"),
-                Hint::new("←→", "close/open"),
-                Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
-                Hint::new("x", "delete").enabled_by(Access::NEWS_DELETE_CAT),
-                Hint::new("b", "new bundle").enabled_by(Access::NEWS_CREATE_FLDR),
-                Hint::new("c", "new category").enabled_by(Access::NEWS_CREATE_CAT),
-                Hint::new("Tab", "threads"),
-                Hint::new("Alt-,.", "news"),
-                Hint::new("Esc", "chat"),
-            ],
-            (None, Focus::NewsThreads, _) => vec![
-                Hint::new("↑↓", "select"),
-                Hint::new("Enter", "read"),
-                Hint::new("←", "folders"),
-                Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
-                Hint::new("x", "delete").enabled_by(Access::NEWS_DELETE_ART),
-                Hint::new("Tab", "preview"),
-                Hint::new("Esc", "chat"),
-            ],
-            (None, Focus::NewsPreview, _) => vec![
-                Hint::new("↑↓", "scroll"),
-                Hint::new("p", "post").enabled_by(Access::POST_NEWS_ART),
-                Hint::new("Tab", "folders"),
-                Hint::new("Esc", "chat"),
-            ],
-            (None, Focus::Input, Tab::Chat) => [
-                Hint::new("Enter", "send").enabled_by(Access::SEND_CHAT),
-                Hint::new("⇧Enter", "new line"),
-                Hint::new("Tab", "users"),
-            ]
-            .into_iter()
-            .chain(self.has_sub_row().then_some(Hint::new("Alt-,.", "room")))
-            .chain([
-                Hint::new("F1-F9", "tab"),
-                Hint::new("^P", "commands"),
-                Hint::new("Esc", "quit"),
-            ])
-            .collect(),
-            (None, Focus::Input, Tab::Room(_)) => vec![
-                Hint::new("Enter", "send").enabled_by(Access::SEND_CHAT),
-                Hint::new("Tab", "users"),
-                Hint::new("Alt-,.", "room"),
-                Hint::new("^P", "commands"),
-                Hint::new("^O", "actions"),
-                Hint::new("Esc", "chat"),
-            ],
-            (None, Focus::Input, Tab::News) => vec![
-                Hint::new("Enter", "post").enabled_by(Access::POST_NEWS_ART),
-                Hint::new("⇧Enter", "new line"),
-                Hint::new("↑↓", "scroll"),
-                Hint::new("Alt-,.", "news").only_if(self.has_sub_row()),
-                Hint::new("Esc", "chat"),
-            ],
-            (None, Focus::Users | Focus::Files | Focus::Tasks, _)
-            | (None, Focus::Input, Tab::Files | Tab::Tasks) => Vec::new(),
-        }
     }
 
     pub fn handle_key(
@@ -572,19 +541,13 @@ impl View {
             }
             return Action::None;
         }
-        if self.focus != Focus::Input && is_modified_char(key) {
-            return Action::None;
+        if let Some(intent) = self.keymap.intent(&self.scopes(), key) {
+            return self.pane_intent(intent, users, files);
         }
-        match self.focus {
-            Focus::Users => self.users_key(key, users),
-            Focus::Input => self.input_key(key),
-            Focus::Files => self.files_key(key, files),
-            Focus::NewsFolders => self.news_folders_key(key),
-            Focus::NewsThreads => self.news_threads_key(key),
-            Focus::NewsPreview => self.news_preview_key(key),
-            Focus::Accounts => self.accounts_key(key),
-            Focus::Tasks => self.tasks_key(key),
+        if self.focus == Focus::Input {
+            self.input_mut().map(|input| input.edit(key));
         }
+        Action::None
     }
 
     /// The commands that work now, in palette order.
@@ -986,228 +949,217 @@ impl View {
         Action::None
     }
 
-    fn users_key(&mut self, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
-        match key.code {
-            KeyCode::Tab | KeyCode::Esc => self.focus = Focus::main(self.tab),
-            KeyCode::Up => self.move_selection(users, false),
-            KeyCode::Down => self.move_selection(users, true),
-            KeyCode::Enter => {
-                if let Some(user_id) = self.selected_user(users) {
-                    return self.choose(user_id, MenuItem::SendMessage, users);
+    /// Do `intent` in the focused pane, if the user has a privilege that it
+    /// needs.
+    fn pane_intent(
+        &mut self,
+        intent: Intent,
+        users: &[UserNameWithInfo],
+        files: &[FileNameWithInfo],
+    ) -> Action {
+        if !self.may(self.pane_enabled_by(intent, files)) {
+            return Action::None;
+        }
+        let pane = self.pane();
+        match (pane, intent) {
+            (_, Intent::NextPane) => {
+                if let Some(focus) = self.next_focus() {
+                    self.focus = focus;
                 }
             }
-            KeyCode::Char('i') => {
+            (_, Intent::ChatTab) => return self.set_tab(Tab::Chat),
+            (_, Intent::AskQuit) => self.modal = Some(Modal::Quit),
+            (Pane::Users, Intent::SelectUp | Intent::SelectDown) => {
+                self.move_selection(users, intent == Intent::SelectDown);
+            }
+            (Pane::Users, Intent::Message | Intent::Info | Intent::DisconnectUser) => {
+                let item = match intent {
+                    Intent::Message => MenuItem::SendMessage,
+                    Intent::Info => MenuItem::GetInfo,
+                    _ => MenuItem::Disconnect,
+                };
                 if let Some(user_id) = self.selected_user(users) {
-                    return self.choose(user_id, MenuItem::GetInfo, users);
+                    return self.choose(user_id, item, users);
                 }
             }
-            KeyCode::Char('k') => {
-                if let Some(user_id) = self.selected_user(users) {
-                    return self.choose(user_id, MenuItem::Disconnect, users);
-                }
-            }
+            (Pane::Chat | Pane::Room | Pane::News, _) => return self.input_intent(intent),
+            (Pane::Files, _) => return self.files_intent(intent, files),
+            (Pane::Accounts, _) => return self.accounts_intent(intent),
+            (Pane::NewsFolders, _) => return self.news_folders_intent(intent),
+            (Pane::NewsThreads, _) => return self.news_threads_intent(intent),
+            (Pane::NewsPreview, Intent::ScrollUp) => self.scroll_preview(-1),
+            (Pane::NewsPreview, Intent::ScrollDown) => self.scroll_preview(1),
+            (Pane::NewsPreview, Intent::PageUp) => self.scroll_preview(-10),
+            (Pane::NewsPreview, Intent::PageDown) => self.scroll_preview(10),
+            (Pane::NewsPreview, Intent::Post) => return Action::NewPost,
+            (Pane::Tasks, _) => return self.tasks_intent(intent),
             _ => {}
         }
         Action::None
     }
 
-    fn input_key(&mut self, key: KeyEvent) -> Action {
+    /// Do `intent` in the input line of the tab.
+    fn input_intent(&mut self, intent: Intent) -> Action {
         let tab = self.tab;
-        let may_chat = self.may(Access::SEND_CHAT);
-        let may_post = self.may(Access::POST_NEWS_ART);
+        if let (
+            Tab::News,
+            Intent::ScrollUp | Intent::ScrollDown | Intent::PageUp | Intent::PageDown,
+        ) = (tab, intent)
+        {
+            self.scroll_news(match intent {
+                Intent::ScrollUp => -1,
+                Intent::ScrollDown => 1,
+                Intent::PageUp => -10,
+                _ => 10,
+            });
+            return Action::None;
+        }
         let Some(input) = self.input_mut() else {
             return Action::None;
         };
-        if is_new_line(key) {
-            input.insert('\n');
-            return Action::None;
-        }
-        match (key.code, tab) {
-            (KeyCode::Enter, Tab::Chat) if may_chat && !input.is_empty() => {
+        match (intent, tab) {
+            (Intent::NewLine, _) => input.insert('\n'),
+            (Intent::Send, Tab::Chat) if !input.is_empty() => {
                 return Action::SendChat(input.take());
             }
-            (KeyCode::Enter, Tab::News) if may_post && !input.is_empty() => {
-                return Action::OldPostNews(input.take());
-            }
-            (KeyCode::Enter, Tab::Room(chat_id)) if may_chat && !input.is_empty() => {
+            (Intent::Send, Tab::Room(chat_id)) if !input.is_empty() => {
                 return Action::SendRoomChat {
                     chat_id,
                     text: input.take(),
                 };
             }
-            _ if input.edit(key) => {}
-            (KeyCode::Tab, _) => self.focus = self.side_focus(),
-            (KeyCode::Esc, Tab::Chat) => self.modal = Some(Modal::Quit),
-            (KeyCode::Esc, _) => return self.set_tab(Tab::Chat),
-            (KeyCode::Up, Tab::News) => self.scroll_news(-1),
-            (KeyCode::Down, Tab::News) => self.scroll_news(1),
-            (KeyCode::PageUp, Tab::News) => self.scroll_news(-10),
-            (KeyCode::PageDown, Tab::News) => self.scroll_news(10),
+            (Intent::Post, Tab::News) if !input.is_empty() => {
+                return Action::OldPostNews(input.take());
+            }
             _ => {}
         }
         Action::None
     }
 
-    fn files_key(&mut self, key: KeyEvent, files: &[FileNameWithInfo]) -> Action {
-        match key.code {
-            KeyCode::Tab => self.focus = self.side_focus(),
-            KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.files.select_previous(),
-            KeyCode::Down => self.files.select_next(),
-            KeyCode::Enter => {
-                return self.open_file(selected(self.files.selected(), files.len()), files);
+    /// Do `intent` in the file list.
+    fn files_intent(&mut self, intent: Intent, files: &[FileNameWithInfo]) -> Action {
+        let index = selected(self.files.selected(), files.len());
+        let edit = match intent {
+            Intent::SelectUp => {
+                self.files.select_previous();
+                return Action::None;
             }
-            KeyCode::Backspace | KeyCode::Left => return Action::ParentFolder,
-            KeyCode::Char('d') => {
-                return self.download(selected(self.files.selected(), files.len()), files);
+            Intent::SelectDown => {
+                self.files.select_next();
+                return Action::None;
             }
-            KeyCode::Char('u') if self.may(Access::UPLOAD_FILE | Access::UPLOAD_FOLDER) => {
+            Intent::OpenFile => return self.open_file(index, files),
+            Intent::ParentFolder => return Action::ParentFolder,
+            Intent::Download => return self.download(index, files),
+            Intent::Upload => {
                 self.modal = Some(Modal::Upload {
                     input: TextBox::new(),
                 });
+                return Action::None;
             }
-            KeyCode::Char('n') if self.may(FileEdit::NewFolder.enabled_by(false)) => {
+            Intent::NewFolder => {
                 return Action::AskFileEdit {
                     edit: FileEdit::NewFolder,
                     name: Box::default(),
                 };
             }
-            KeyCode::Char(c @ ('x' | 'i' | 'r' | 'c' | 'm' | 'a')) => {
+            Intent::Rename => FileEdit::Rename,
+            Intent::Comment => FileEdit::Comment,
+            Intent::MoveFile => FileEdit::Move,
+            Intent::Alias => FileEdit::Alias,
+            Intent::Delete | Intent::Info => {
                 let Some(file) = self.selected_file(files) else {
                     return Action::None;
                 };
                 let name = file.name.clone();
-                let folder = file.is_folder();
-                let edit = match c {
-                    'x' => {
-                        let delete = if folder {
-                            Access::DELETE_FOLDER
-                        } else {
-                            Access::DELETE_FILE
-                        };
-                        if self.may(delete) {
-                            self.modal = Some(Modal::DeleteFile { name });
-                        }
-                        return Action::None;
-                    }
-                    'i' => return Action::GetFileInfo(name),
-                    'r' => FileEdit::Rename,
-                    'c' => FileEdit::Comment,
-                    'm' => FileEdit::Move,
-                    _ => FileEdit::Alias,
-                };
-                if !self.may(edit.enabled_by(folder)) {
-                    return Action::None;
+                if intent == Intent::Info {
+                    return Action::GetFileInfo(name);
                 }
-                return Action::AskFileEdit { edit, name };
+                self.modal = Some(Modal::DeleteFile { name });
+                return Action::None;
             }
-            _ => {}
-        }
-        Action::None
+            _ => return Action::None,
+        };
+        self.selected_file(files)
+            .map_or(Action::None, |file| Action::AskFileEdit {
+                edit,
+                name: file.name.clone(),
+            })
     }
 
-    fn accounts_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Tab => self.focus = self.side_focus(),
-            KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.accounts.select_previous(),
-            KeyCode::Down => self.accounts.select_next(),
-            KeyCode::Enter
-                if self.account_count > 0 && self.may(Access::OPEN_USER | Access::CREATE_USER) =>
-            {
-                return Action::EditAccount(selected(self.accounts.selected(), self.account_count));
-            }
-            KeyCode::Char('n') if self.may(Access::CREATE_USER) => {
-                self.modal = Some(Modal::Account(AccountForm::blank()));
-            }
-            KeyCode::Char('o') if self.may(Access::OPEN_USER) => {
+    /// Do `intent` in the account list.
+    fn accounts_intent(&mut self, intent: Intent) -> Action {
+        let count = self.account_count;
+        let index = selected(self.accounts.selected(), count);
+        match intent {
+            Intent::SelectUp => self.accounts.select_previous(),
+            Intent::SelectDown => self.accounts.select_next(),
+            Intent::EditAccount if count > 0 => return Action::EditAccount(index),
+            Intent::NewAccount => self.modal = Some(Modal::Account(AccountForm::blank())),
+            Intent::OpenAccount => {
                 self.modal = Some(Modal::OpenAccount {
                     input: TextBox::new(),
                 });
             }
-            KeyCode::Char('x') if self.account_count > 0 && self.may(Access::DELETE_USER) => {
-                return Action::AskDeleteAccount(selected(
-                    self.accounts.selected(),
-                    self.account_count,
-                ));
-            }
+            Intent::Delete if count > 0 => return Action::AskDeleteAccount(index),
             _ => {}
         }
         Action::None
     }
 
-    fn news_folders_key(&mut self, key: KeyEvent) -> Action {
+    /// Do `intent` in the news folder tree.
+    fn news_folders_intent(&mut self, intent: Intent) -> Action {
         let count = self.news_folder_count;
         let index = selected(self.news_folders.selected(), count);
-        match key.code {
-            KeyCode::Tab => self.focus = Focus::NewsThreads,
-            KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up | KeyCode::Down if count > 0 => {
-                let index = step(index, count, key.code == KeyCode::Down);
+        if count == 0
+            && !matches!(
+                intent,
+                Intent::Post | Intent::NewBundle | Intent::NewCategory
+            )
+        {
+            return Action::None;
+        }
+        match intent {
+            Intent::SelectUp | Intent::SelectDown => {
+                let index = step(index, count, intent == Intent::SelectDown);
                 self.news_folders.select(Some(index));
-                return Action::HighlightNewsFolder(index);
+                Action::HighlightNewsFolder(index)
             }
-            KeyCode::Enter if count > 0 => return Action::OpenNewsFolder(index),
-            KeyCode::Right if count > 0 => return Action::ExpandNewsFolder(index),
-            KeyCode::Left | KeyCode::Backspace if count > 0 => {
-                return Action::CollapseNewsFolder(index);
-            }
-            KeyCode::Char('p') if self.may(Access::POST_NEWS_ART) => return Action::NewPost,
-            KeyCode::Char('x') if count > 0 && self.may(Access::NEWS_DELETE_CAT) => {
-                return Action::AskDeleteNews(NewsTarget::Folder(index));
-            }
-            KeyCode::Char(c @ ('b' | 'c'))
-                if self.may(if c == 'c' {
-                    Access::NEWS_CREATE_CAT
-                } else {
-                    Access::NEWS_CREATE_FLDR
-                }) =>
-            {
+            Intent::OpenFolder => Action::OpenNewsFolder(index),
+            Intent::Expand => Action::ExpandNewsFolder(index),
+            Intent::Collapse => Action::CollapseNewsFolder(index),
+            Intent::Post => Action::NewPost,
+            Intent::Delete => Action::AskDeleteNews(NewsTarget::Folder(index)),
+            Intent::NewBundle | Intent::NewCategory => {
                 self.modal = Some(Modal::NewsName {
-                    kind: if c == 'c' {
+                    kind: if intent == Intent::NewCategory {
                         NewsFolder::Category
                     } else {
                         NewsFolder::Bundle
                     },
                     input: TextBox::new(),
                 });
+                Action::None
             }
-            _ => {}
+            _ => Action::None,
         }
-        Action::None
     }
 
-    fn news_threads_key(&mut self, key: KeyEvent) -> Action {
+    /// Do `intent` in the thread list.
+    fn news_threads_intent(&mut self, intent: Intent) -> Action {
         let count = self.news_count;
         let index = selected(self.news.selected(), count);
-        match key.code {
-            KeyCode::Tab => self.focus = Focus::NewsPreview,
-            KeyCode::Left => self.focus = Focus::NewsFolders,
-            KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up | KeyCode::Down if count > 0 => {
-                let index = step(index, count, key.code == KeyCode::Down);
+        match intent {
+            Intent::FocusFolders => self.focus = Focus::NewsFolders,
+            Intent::Post => return Action::NewPost,
+            _ if count == 0 => {}
+            Intent::SelectUp | Intent::SelectDown => {
+                let index = step(index, count, intent == Intent::SelectDown);
                 self.news.select(Some(index));
                 return Action::PreviewArticle(index);
             }
-            KeyCode::Enter if count > 0 => return Action::OpenArticle(index),
-            KeyCode::Char('p') if self.may(Access::POST_NEWS_ART) => return Action::NewPost,
-            KeyCode::Char('x') if count > 0 && self.may(Access::NEWS_DELETE_ART) => {
-                return Action::AskDeleteNews(NewsTarget::Article(index));
-            }
-            _ => {}
-        }
-        Action::None
-    }
-
-    fn news_preview_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Tab => self.focus = self.side_focus(),
-            KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.scroll_preview(-1),
-            KeyCode::Down => self.scroll_preview(1),
-            KeyCode::PageUp => self.scroll_preview(-10),
-            KeyCode::PageDown => self.scroll_preview(10),
-            KeyCode::Char('p') if self.may(Access::POST_NEWS_ART) => return Action::NewPost,
+            Intent::Read => return Action::OpenArticle(index),
+            Intent::Delete => return Action::AskDeleteNews(NewsTarget::Article(index)),
             _ => {}
         }
         Action::None
@@ -2593,6 +2545,63 @@ mod tests {
         assert!(matches!(view.modal, Some(Modal::Article(_))));
         view.access = Access::POST_NEWS_ART;
         assert_eq!(hint_enabled(&view, "r", "reply"), Some(true));
+    }
+
+    #[test]
+    fn keymap_hints_of_the_panes() {
+        let pairs = |view: &View| -> Vec<String> {
+            hint_pairs(view)
+                .into_iter()
+                .map(|(key, does)| format!("{key} {does}"))
+                .collect()
+        };
+        let mut view = granted();
+        let _ = view.set_tab(Tab::Files);
+        assert_eq!(
+            pairs(&view),
+            [
+                "↑↓ choose",
+                "Enter open or download",
+                "⌫/← up",
+                "d download",
+                "u upload",
+                "n new folder",
+                "x delete",
+                "i info",
+                "r rename",
+                "c comment",
+                "m move",
+                "a alias",
+                "Esc chat",
+            ]
+        );
+        let _ = view.set_tab(Tab::Threaded);
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert_eq!(
+            pairs(&view),
+            [
+                "↑↓ choose",
+                "Enter read",
+                "← folders",
+                "p post",
+                "x delete",
+                "Tab preview",
+                "Esc chat",
+            ]
+        );
+        let _ = view.set_tab(Tab::Chat);
+        let _ = view.handle_key(key(KeyCode::Tab), &users(), &files());
+        assert_eq!(
+            pairs(&view),
+            [
+                "↑↓ choose",
+                "Enter message",
+                "i info",
+                "k disconnect",
+                "Tab/Esc input",
+                "^O actions",
+            ]
+        );
     }
 
     #[test]

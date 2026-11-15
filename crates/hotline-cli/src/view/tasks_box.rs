@@ -1,9 +1,8 @@
 //! The task list on the Tasks tab.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
-use super::{Action, Hint, Tab, View, contains};
+use super::{Action, Intent, Scope, Tab, View, contains};
 use crate::tasks::{Stop, TaskId, TaskRow};
 use crate::ui;
 
@@ -50,22 +49,26 @@ impl View {
             })
     }
 
-    pub(super) fn tasks_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Esc => return self.set_tab(Tab::Chat),
-            KeyCode::Up => self.task_selected = self.task_selected.saturating_sub(1),
-            KeyCode::Down => {
+    /// Do `intent` in the task list.
+    pub(super) fn tasks_intent(&mut self, intent: Intent) -> Action {
+        match intent {
+            Intent::SelectUp => self.task_selected = self.task_selected.saturating_sub(1),
+            Intent::SelectDown => {
                 self.task_selected = self
                     .task_selected
                     .saturating_add(1)
                     .min(self.tasks.len().saturating_sub(1));
             }
-            KeyCode::Enter => match self.selected_task().map(|row| (row.id, row.stop)) {
-                Some((id, Some(Stop::Cancel))) => return Action::CancelTask(id),
-                Some((id, Some(Stop::Disconnect))) => return Action::StopLogin(id),
-                _ => {}
-            },
-            KeyCode::Char('s') => {
+            Intent::CancelTask | Intent::StopLogin => {
+                if let Some(row) = self.selected_task() {
+                    return if intent == Intent::CancelTask {
+                        Action::CancelTask(row.id)
+                    } else {
+                        Action::StopLogin(row.id)
+                    };
+                }
+            }
+            Intent::StartTransfer => {
                 if let Some(TaskId::Transfer(id)) = self.queued_task() {
                     return Action::StartTransfer(id);
                 }
@@ -82,20 +85,15 @@ impl View {
             .map(|row| row.id)
     }
 
-    /// The keys of the task list.
-    pub(super) fn tasks_hints(&self) -> Vec<Hint<'_>> {
-        let stop = self.selected_task().and_then(|row| row.stop);
-        let stop = match stop {
-            Some(Stop::Disconnect) => Hint::new("Enter", "disconnect"),
-            _ => Hint::new("Enter", "cancel").only_if(stop.is_some()),
+    /// The scopes of the keys of the selected task.
+    pub(super) fn task_scopes(&self) -> impl Iterator<Item = Scope> {
+        let stop = match self.selected_task().and_then(|row| row.stop) {
+            Some(Stop::Cancel) => Some(Scope::Cancellable),
+            Some(Stop::Disconnect) => Some(Scope::Login),
+            None => None,
         };
-        vec![
-            Hint::new("↑↓", "select"),
-            stop,
-            Hint::new("s", "start").only_if(self.queued_task().is_some()),
-            Hint::new("Alt-T", "back"),
-            Hint::new("Esc", "chat"),
-        ]
+        stop.into_iter()
+            .chain(self.queued_task().map(|_| Scope::Queued))
     }
 }
 
@@ -104,7 +102,9 @@ mod tests {
     use std::time::Instant;
 
     use hotline_proto::Access;
-    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     use super::*;
     use crate::tasks::TaskId;
@@ -118,6 +118,10 @@ mod tests {
             queued: false,
             ratio: None,
         }
+    }
+
+    fn shows(view: &View, does: &str) -> bool {
+        view.hints(&[]).iter().any(|hint| hint.does == does)
     }
 
     fn press(view: &mut View, code: KeyCode) -> Action {
@@ -187,8 +191,7 @@ mod tests {
         let _ = press(&mut view, KeyCode::Down);
         let _ = press(&mut view, KeyCode::Down);
         assert_eq!(view.selected_task().unwrap().id, TaskId::Request(4));
-        let hint = &view.tasks_hints()[1];
-        assert!(!hint.on);
+        assert!(!shows(&view, "cancel"));
         assert_eq!(press(&mut view, KeyCode::Enter), Action::None);
     }
 
@@ -199,7 +202,8 @@ mod tests {
         login.stop = Some(Stop::Disconnect);
         view.set_tasks(vec![login]);
         let _ = view.set_tab(Tab::Tasks);
-        assert_eq!(view.tasks_hints()[1].does, "disconnect");
+        assert!(shows(&view, "disconnect"));
+        assert!(!shows(&view, "cancel"));
         assert_eq!(
             press(&mut view, KeyCode::Enter),
             Action::StopLogin(TaskId::Request(1))
@@ -213,10 +217,10 @@ mod tests {
         queued.queued = true;
         view.set_tasks(vec![row(TaskId::Transfer(1), true), queued]);
         let _ = view.set_tab(Tab::Tasks);
-        assert!(!view.tasks_hints()[2].on);
+        assert!(!shows(&view, "start"));
         assert_eq!(press(&mut view, KeyCode::Char('s')), Action::None);
         let _ = press(&mut view, KeyCode::Down);
-        assert!(view.tasks_hints()[2].on);
+        assert!(shows(&view, "start"));
         assert_eq!(
             press(&mut view, KeyCode::Char('s')),
             Action::StartTransfer(2)
