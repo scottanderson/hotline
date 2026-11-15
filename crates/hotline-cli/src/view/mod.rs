@@ -418,7 +418,8 @@ impl View {
     /// The hints of the intents that [`Self::keymap`] binds in [`Self::scope`].
     /// The keys of one intent with the same modifiers show as a range of three
     /// or more keys in a row, as in `F1-F9`, or with `/` between, as in
-    /// `Esc/Enter`.
+    /// `Esc/Enter`. Two hints in a row with one label and the same privileges
+    /// merge, as in `↑↓ choose`.
     fn keymap_hints(&self) -> Vec<Hint<'_>> {
         let scope = self.scope();
         Intent::ALL
@@ -434,26 +435,20 @@ impl View {
                 let does = intent.label();
                 Some(Hint::new(key, does).enabled_by(intent.enabled_by()))
             })
-            .collect()
+            .fold(Vec::new(), |mut hints: Vec<Hint>, hint| {
+                match hints.last_mut() {
+                    Some(last) if last.does == hint.does && last.enabled_by == hint.enabled_by => {
+                        join_key(last.key.to_mut(), &hint.key)
+                    }
+                    _ => hints.push(hint),
+                }
+                hints
+            })
     }
 
     /// The keys of the modal or the focused area, other than the user list.
     fn focus_hints(&self) -> Vec<Hint<'_>> {
         match (&self.modal, self.focus, self.tab) {
-            (Some(Modal::Palette(_)), ..) => {
-                vec![
-                    Hint::new("↑↓", "choose"),
-                    Hint::new("Enter", "run"),
-                    Hint::new("Esc", "close"),
-                ]
-            }
-            (Some(Modal::UserMenu { .. }), ..) => {
-                vec![
-                    Hint::new("↑↓", "choose"),
-                    Hint::new("Enter", "select"),
-                    Hint::new("Esc", "close"),
-                ]
-            }
             (
                 Some(Modal::Confirm(
                     Conflict::PartialDownload { .. } | Conflict::LocalFolderExists { .. },
@@ -466,13 +461,6 @@ impl View {
             ],
             (Some(Modal::Confirm(_)), ..) => {
                 vec![Hint::new("r", "resume"), Hint::new("Esc", "cancel")]
-            }
-            (Some(Modal::PickUser { .. }), ..) => {
-                vec![
-                    Hint::new("↑↓", "choose"),
-                    Hint::new("Enter", "invite"),
-                    Hint::new("Esc", "cancel"),
-                ]
             }
             (Some(Modal::Account(form)), ..) => vec![
                 Hint::new("↑↓", "row"),
@@ -743,32 +731,14 @@ impl View {
         }
     }
 
-    fn palette_key(
-        &mut self,
-        mut palette: Palette,
-        key: KeyEvent,
-        users: &[UserNameWithInfo],
-    ) -> Action {
-        match key.code {
-            KeyCode::Esc => return Action::None,
-            KeyCode::Enter => match palette.chosen() {
-                Some(command) if self.may(command.enabled_by()) => return self.run(command, users),
-                _ => {}
-            },
-            KeyCode::Up => palette.select_previous(),
-            KeyCode::Down => palette.select_next(),
-            _ => palette.edit(|input| input.edit(key)),
-        }
-        self.modal = Some(Modal::Palette(palette));
-        Action::None
-    }
-
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         if let Some(intent) = self.keymap.intent(&[Scope::Modal(modal.kind())], key) {
-            return self.modal_intent(modal, intent);
+            return self.modal_intent(modal, intent, users);
         }
-        if let Modal::Palette(palette) = modal {
-            return self.palette_key(palette, key, users);
+        if let Modal::Palette(mut palette) = modal {
+            palette.edit(|input| input.edit(key));
+            self.modal = Some(Modal::Palette(palette));
+            return Action::None;
         }
         if let Modal::Confirm(conflict) = modal {
             return self.confirm_key(conflict, key);
@@ -782,48 +752,59 @@ impl View {
         if let Modal::Connect(form) = modal {
             return self.connect_form_key(form, key);
         }
-        match (&mut modal, plain_code(key)) {
-            (_, KeyCode::Esc) => return Action::None,
+        if plain_code(key) == KeyCode::Esc {
+            return Action::None;
+        }
+        if let Some(input) = modal.input_mut() {
+            input.edit(key);
+        }
+        self.modal = Some(modal);
+        Action::None
+    }
+
+    /// Do `intent` in `modal`, if the user has a privilege that it needs.
+    fn modal_intent(
+        &mut self,
+        mut modal: Modal,
+        intent: Intent,
+        users: &[UserNameWithInfo],
+    ) -> Action {
+        if !self.may(intent.enabled_by()) {
+            self.modal = Some(modal);
+            return Action::None;
+        }
+        match (&mut modal, intent) {
+            (_, Intent::Close | Intent::Cancel) => return Action::None,
+            (_, Intent::Quit) => return Action::Quit,
+            (Modal::Palette(palette), Intent::SelectUp) => palette.select_previous(),
+            (Modal::Palette(palette), Intent::SelectDown) => palette.select_next(),
+            (Modal::Palette(palette), Intent::Run) => match palette.chosen() {
+                Some(command) if self.may(command.enabled_by()) => return self.run(command, users),
+                _ => {}
+            },
             (
-                Modal::PickUser {
-                    chat_id,
-                    users,
-                    selected,
+                Modal::UserMenu { selected, .. } | Modal::PickUser { selected, .. },
+                Intent::SelectUp,
+            ) => *selected = selected.saturating_sub(1),
+            (
+                Modal::UserMenu {
+                    selected, items, ..
                 },
-                KeyCode::Enter,
+                Intent::SelectDown,
             ) => {
-                return users.get(*selected).map_or(Action::None, |&(user_id, _)| {
-                    Action::InviteToChat {
-                        chat_id: *chat_id,
-                        user_id,
-                    }
-                });
-            }
-            (Modal::PickUser { selected, .. }, KeyCode::Up) => {
-                *selected = selected.saturating_sub(1);
+                *selected = selected
+                    .saturating_add(1)
+                    .min(items.len().saturating_sub(1));
             }
             (
                 Modal::PickUser {
                     selected, users, ..
                 },
-                KeyCode::Down,
+                Intent::SelectDown,
             ) => {
                 *selected = selected
                     .saturating_add(1)
                     .min(users.len().saturating_sub(1));
-            }
-            (Modal::UserMenu { selected, .. }, KeyCode::Up) => {
-                *selected = selected.saturating_sub(1);
-            }
-            (
-                Modal::UserMenu {
-                    selected, items, ..
-                },
-                KeyCode::Down,
-            ) => {
-                *selected = selected
-                    .saturating_add(1)
-                    .min(items.len().saturating_sub(1));
             }
             (
                 Modal::UserMenu {
@@ -832,31 +813,27 @@ impl View {
                     items,
                     ..
                 },
-                KeyCode::Enter,
+                Intent::Choose,
             ) if let Some(&item) = items.get(*selected)
                 && self.may(item.enabled_by()) =>
             {
                 return self.choose(*user_id, item, users);
             }
-            (modal, _) => {
-                if let Some(input) = modal.input_mut() {
-                    input.edit(key);
-                }
+            (
+                Modal::PickUser {
+                    chat_id,
+                    users,
+                    selected,
+                },
+                Intent::Invite,
+            ) => {
+                return users.get(*selected).map_or(Action::None, |&(user_id, _)| {
+                    Action::InviteToChat {
+                        chat_id: *chat_id,
+                        user_id,
+                    }
+                });
             }
-        }
-        self.modal = Some(modal);
-        Action::None
-    }
-
-    /// Do `intent` in `modal`, if the user has a privilege that it needs.
-    fn modal_intent(&mut self, mut modal: Modal, intent: Intent) -> Action {
-        if !self.may(intent.enabled_by()) {
-            self.modal = Some(modal);
-            return Action::None;
-        }
-        match (&mut modal, intent) {
-            (_, Intent::Close | Intent::Cancel) => return Action::None,
-            (_, Intent::Quit) => return Action::Quit,
             (Modal::Disconnect { user_id, .. }, Intent::DisconnectUser) => {
                 return Action::DisconnectUser {
                     user_id: *user_id,
@@ -1727,6 +1704,18 @@ fn tab_number(key: KeyEvent) -> Option<usize> {
     }
 }
 
+/// Add the key `next` to `keys`, the keys of a merged hint. A `/` goes
+/// between them unless `next` and the last key are each one symbol, as
+/// in `↑↓` and `PgUp/PgDn`.
+fn join_key(keys: &mut String, next: &str) {
+    let symbols =
+        next.chars().count() == 1 && !keys.chars().rev().nth(1).is_some_and(char::is_alphanumeric);
+    if !symbols {
+        keys.push('/');
+    }
+    keys.push_str(next);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1794,6 +1783,19 @@ mod tests {
         for c in text.chars() {
             let _ = view.handle_key(key(KeyCode::Char(c)), &users(), &files());
         }
+    }
+
+    #[test]
+    fn join_key_puts_a_slash_between_two_words() {
+        let join = |keys: &str, next| {
+            let mut keys = keys.to_string();
+            join_key(&mut keys, next);
+            keys
+        };
+        assert_eq!(join("↑", "↓"), "↑↓");
+        assert_eq!(join("Alt-,", "."), "Alt-,.");
+        assert_eq!(join("PgUp", "PgDn"), "PgUp/PgDn");
+        assert_eq!(join("Esc", "Enter"), "Esc/Enter");
     }
 
     #[test]
@@ -2477,6 +2479,55 @@ mod tests {
                 ("Tab".into(), "title or text"),
                 ("Enter".into(), "post"),
                 ("⇧Enter".into(), "new line"),
+                ("Esc".into(), "cancel"),
+            ]
+        );
+    }
+
+    /// The key and the text of each hint of `view`.
+    fn hint_pairs(view: &View) -> Vec<(String, &'static str)> {
+        view.hints(&files())
+            .into_iter()
+            .map(|hint| (hint.key.into_owned(), hint.does))
+            .collect()
+    }
+
+    #[test]
+    fn keymap_hints_of_the_list_boxes() {
+        let mut view = View::default();
+        let _ = view.handle_key(ctrl('p'), &users(), &files());
+        assert_eq!(
+            hint_pairs(&view),
+            [
+                ("↑↓".into(), "choose"),
+                ("Enter".into(), "run"),
+                ("Esc".into(), "close"),
+            ]
+        );
+        view.modal = Some(Modal::UserMenu {
+            user_id: 1,
+            at: (0, 0),
+            items: &MenuItem::ALL,
+            selected: 0,
+        });
+        assert_eq!(
+            hint_pairs(&view),
+            [
+                ("↑↓".into(), "choose"),
+                ("Enter".into(), "select"),
+                ("Esc".into(), "close"),
+            ]
+        );
+        view.modal = Some(Modal::PickUser {
+            chat_id: 1,
+            users: Vec::new(),
+            selected: 0,
+        });
+        assert_eq!(
+            hint_pairs(&view),
+            [
+                ("↑↓".into(), "choose"),
+                ("Enter".into(), "invite"),
                 ("Esc".into(), "cancel"),
             ]
         );

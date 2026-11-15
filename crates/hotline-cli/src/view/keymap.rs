@@ -14,6 +14,16 @@ use super::modal::ModalKind;
 /// What a key does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
+    /// Select the row above in a list.
+    SelectUp,
+    /// Select the row below in a list.
+    SelectDown,
+    /// Run the selected command.
+    Run,
+    /// Choose the selected item of a menu.
+    Choose,
+    /// Invite the selected user.
+    Invite,
     /// Disconnect a user without a ban.
     DisconnectUser,
     /// Disconnect a user, and ban the address for a while.
@@ -61,6 +71,11 @@ pub enum Intent {
 impl Intent {
     /// Each intent, in hint order.
     pub const ALL: &[Self] = &[
+        Self::SelectUp,
+        Self::SelectDown,
+        Self::Run,
+        Self::Choose,
+        Self::Invite,
         Self::DisconnectUser,
         Self::TemporaryBan,
         Self::PermanentBan,
@@ -87,6 +102,10 @@ impl Intent {
     /// The text of the hint.
     pub const fn label(self) -> &'static str {
         match self {
+            Self::SelectUp | Self::SelectDown => "choose",
+            Self::Run => "run",
+            Self::Choose => "select",
+            Self::Invite => "invite",
             Self::DisconnectUser => "disconnect",
             Self::TemporaryBan => "temporary ban",
             Self::PermanentBan => "permanent ban",
@@ -172,7 +191,8 @@ impl KeyChord {
         })
     }
 
-    /// The chord as a hint shows it, such as `Esc`, `y`, `⇧Enter`, or `^J`.
+    /// The chord as a hint shows it, such as `Esc`, `↑`, `y`, `⇧Enter`, or
+    /// `^J`.
     pub fn label(self) -> Cow<'static, str> {
         let key = match self.code {
             KeyCode::Char(c) if self.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -181,6 +201,8 @@ impl KeyChord {
             KeyCode::Char(c) => c.to_string().into(),
             KeyCode::Esc => "Esc".into(),
             KeyCode::Enter => "Enter".into(),
+            KeyCode::Up => "↑".into(),
+            KeyCode::Down => "↓".into(),
             code => code.to_string().into(),
         };
         let mut label: String = [
@@ -243,7 +265,38 @@ impl Default for Keymap {
             CANCEL,
         ];
         const SAVE: &[(KeyChord, Intent)] = &[key(KeyCode::Enter, Intent::Save), CANCEL];
-        let modals: [(ModalKind, &[(KeyChord, Intent)]); 19] = [
+        const SELECT: [(KeyChord, Intent); 2] = [
+            key(KeyCode::Up, Intent::SelectUp),
+            key(KeyCode::Down, Intent::SelectDown),
+        ];
+        let modals: [(ModalKind, &[(KeyChord, Intent)]); 22] = [
+            (
+                ModalKind::Palette,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::Run),
+                    key(KeyCode::Esc, Intent::Close),
+                ],
+            ),
+            (
+                ModalKind::UserMenu,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::Choose),
+                    key(KeyCode::Esc, Intent::Close),
+                ],
+            ),
+            (
+                ModalKind::PickUser,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::Invite),
+                    CANCEL,
+                ],
+            ),
             (ModalKind::Info, CLOSE),
             (ModalKind::FileInfo, CLOSE),
             (
