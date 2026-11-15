@@ -102,36 +102,36 @@ To delete a news bundle, a user needs the delete bundle and the delete
 category privileges. On the Files tab, a key needs the file privilege
 or the folder privilege, for the kind of the selected item.
 
-| Key    | Where                | Effect                                          |
-|--------|----------------------|-------------------------------------------------|
-| Ctrl-P | outside a dialog     | the commands for this place; type to filter     |
-| Ctrl-O | a room, user list    | the actions of the room or the selected user    |
-| Alt-A  | outside a dialog     | a broadcast                                     |
-| Alt-O  | outside a dialog     | your name, icon, and options                    |
-| Alt-T  | outside a dialog     | the Tasks tab, or back to the tab before it     |
-| Alt-R  | outside a dialog     | the bookmarks                                   |
-| Alt-,  | Chat, a room, News   | the previous entry of the row under the tab bar |
-| Alt-.  | Chat, a room, News   | the next entry of the row under the tab bar     |
-| Alt-I  | a room               | invite a user                                   |
-| Alt-S  | a room               | set the subject                                 |
-| Alt-W  | a room               | leave the room                                  |
-| ⇧Enter | a text box           | a new line (also Alt-Enter or Ctrl-J)           |
-| ← →    | a text box           | move one character (also Ctrl-B and Ctrl-F)     |
-| Alt-B  | a text box           | move to the start of a word (also Ctrl-←)       |
-| Alt-F  | a text box           | move to the end of a word (also Ctrl-→)         |
-| Ctrl-A | a text box           | move to the start of the line (also Home)       |
-| Ctrl-E | a text box           | move to the end of the line (also End)          |
-| Ctrl-W | a text box           | cut back to a space                             |
-| Alt-⌫  | a text box           | cut back to the start of a word                 |
-| Alt-D  | a text box           | cut to the end of a word                        |
-| Ctrl-D | a text box           | delete the next character (also Delete)         |
-| Ctrl-U | a text box           | cut to the start of the line                    |
-| Ctrl-K | a text box           | cut to the end of the line                      |
-| Ctrl-Y | a text box           | paste the last cut                              |
-| Ctrl-_ | a text box           | undo                                            |
-| Enter  | user list            | send a private message                          |
-| `i`    | user list            | the user's info                                 |
-| `k`    | user list            | disconnect the user                             |
+| Key             | Where              | Effect                                          |
+|-----------------|--------------------|-------------------------------------------------|
+| Ctrl-P          | outside a dialog   | the commands for this place; type to filter     |
+| Ctrl-O          | a room, user list  | the actions of the room or the selected user    |
+| Alt-A           | outside a dialog   | a broadcast                                     |
+| Alt-O           | outside a dialog   | your name, icon, and options                    |
+| Alt-T           | outside a dialog   | the Tasks tab, or back to the tab before it     |
+| Alt-R           | outside a dialog   | the bookmarks                                   |
+| Alt-,           | Chat, a room, News | the previous entry of the row under the tab bar |
+| Alt-.           | Chat, a room, News | the next entry of the row under the tab bar     |
+| Alt-I           | a room             | invite a user                                   |
+| Alt-S           | a room             | set the subject                                 |
+| Alt-W           | a room             | leave the room                                  |
+| Alt-Shift-Enter | a text box         | a new line (also Alt-Enter or Shift-Enter)      |
+| ← →             | a text box         | move one character (also Ctrl-B and Ctrl-F)     |
+| Alt-B           | a text box         | move to the start of a word (also Ctrl-←)       |
+| Alt-F           | a text box         | move to the end of a word (also Ctrl-→)         |
+| Ctrl-A          | a text box         | move to the start of the line (also Home)       |
+| Ctrl-E          | a text box         | move to the end of the line (also End)          |
+| Ctrl-W          | a text box         | cut back to a space                             |
+| Alt-⌫           | a text box         | cut back to the start of a word                 |
+| Alt-D           | a text box         | cut to the end of a word                        |
+| Ctrl-D          | a text box         | delete the next character (also Delete)         |
+| Ctrl-U          | a text box         | cut to the start of the line                    |
+| Ctrl-K          | a text box         | cut to the end of the line                      |
+| Ctrl-Y          | a text box         | paste the last cut                              |
+| Ctrl-_          | a text box         | undo                                            |
+| Enter           | user list          | send a private message                          |
+| `i`             | user list          | the user's info                                 |
+| `k`             | user list          | disconnect the user                             |
 
 A text box moves and deletes by grapheme cluster. An accented letter
 or an emoji sequence is one character. Cuts in a row join into one

@@ -1834,8 +1834,8 @@ mod tests {
             Action::None
         );
         type_text(&mut view, "two");
-        let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
-        assert_eq!(view.handle_key(ctrl_j, &users(), &files()), Action::None);
+        let alt_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
+        assert_eq!(view.handle_key(alt_enter, &users(), &files()), Action::None);
         type_text(&mut view, "three");
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
@@ -2511,7 +2511,7 @@ mod tests {
             [
                 ("Tab".into(), "title or text"),
                 ("Enter".into(), "post"),
-                ("⇧Enter".into(), "new line"),
+                ("Alt-⇧Enter".into(), "new line"),
                 ("Esc".into(), "cancel"),
             ]
         );
@@ -2708,7 +2708,7 @@ mod tests {
             pairs(&view),
             [
                 "Enter send",
-                "⇧Enter new line",
+                "Alt-⇧Enter new line",
                 "Tab users",
                 "F1-F9 tab",
                 "^P commands",

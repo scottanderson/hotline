@@ -504,9 +504,13 @@ impl Default for Keymap {
         ];
         const DELETE: &[(KeyChord, Intent)] = &[key(KeyCode::Char('y'), Intent::Delete), CANCEL];
         const NEW_LINE: [(KeyChord, Intent); 3] = [
-            chord(KeyCode::Enter, KeyModifiers::SHIFT, Intent::NewLine),
+            chord(
+                KeyCode::Enter,
+                KeyModifiers::ALT.union(KeyModifiers::SHIFT),
+                Intent::NewLine,
+            ),
             chord(KeyCode::Enter, KeyModifiers::ALT, Intent::NewLine),
-            chord(KeyCode::Char('j'), KeyModifiers::CONTROL, Intent::NewLine),
+            chord(KeyCode::Enter, KeyModifiers::SHIFT, Intent::NewLine),
         ];
         const MESSAGE: &[(KeyChord, Intent)] = &[
             key(KeyCode::Enter, Intent::Send),
@@ -1008,10 +1012,10 @@ mod tests {
             Some(Intent::NewLine)
         );
         assert_eq!(
-            intent(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            intent(KeyCode::Enter, KeyModifiers::ALT | KeyModifiers::SHIFT),
             Some(Intent::NewLine)
         );
-        assert_eq!(intent(KeyCode::Char('j'), KeyModifiers::NONE), None);
+        assert_eq!(intent(KeyCode::Char('j'), KeyModifiers::CONTROL), None);
     }
 
     #[test]
