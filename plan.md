@@ -259,7 +259,7 @@ works this way.
 Where openline and mhxd disagree, this server matched mhxd in every case
 found so far: chat room password/invite gating, chat subject checks, chat
 invite reply behavior, dropbox path substring matching, login case
-folding, agreement push branching, the `USER_GETLIST` access check,
+folding, the `USER_GETLIST` access check,
 `AccessExtra::CHAT_PRIVATE` gating chat-room membership opcodes, and
 `AccessExtra::MSG_OVERRIDE` as an alternative to `Access::SEND_MESSAGE`.
 One exception: `on_invite_new_chat`'s invite-target handling matched neither and

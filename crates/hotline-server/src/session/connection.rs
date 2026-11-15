@@ -643,20 +643,14 @@ impl Session {
             replies.push(selfinfo);
         }
 
-        // DONT_SHOW_AGREEMENT skips the real text, not just its display.
-        let show_agreement = !self.access.contains(Access::NO_AGREEMENT);
-        let have_agreement = !config.agreement.is_empty();
-        if show_agreement && have_agreement {
-            replies.push(Transaction::push(
-                Opcode::ShowAgreement,
-                vec![Field::string(FieldId::Data, config.agreement.to_string())],
-            ));
-        } else if modern {
-            replies.push(Transaction::push(
-                Opcode::ShowAgreement,
-                vec![Field::bytes(FieldId::NoServerAgreement, vec![0, 1])],
-            ));
-        }
+        let fields = if self.access.contains(Access::NO_AGREEMENT) {
+            vec![Field::u16(FieldId::NoServerAgreement, 1)]
+        } else if config.agreement.is_empty() {
+            Vec::new()
+        } else {
+            vec![Field::string(FieldId::Data, config.agreement.to_string())]
+        };
+        replies.push(Transaction::push(Opcode::ShowAgreement, fields));
 
         replies
     }
@@ -1923,120 +1917,62 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn modern_client_gets_no_agreement_push_without_configured_text() {
-        let mut session = test_session("guest1", Access::default());
-        let state = Arc::<SharedState>::default();
-        let config = ServerConfig {
-            agreement: Box::default(),
-            ..ServerConfig::default()
-        };
-
-        let login = request(Opcode::Login, 1, vec![Field::u16(FieldId::Vers, 151)]);
-        let replies = session.on_login(&login, &state, &config).await;
-
-        let agreement = replies
-            .iter()
-            .find(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement))
-            .expect("modern client should get a Noagreement marker");
-        assert!(agreement.field(FieldId::NoServerAgreement).is_some());
-    }
-
-    #[tokio::test]
-    async fn pre_150_client_gets_no_agreement_push_without_configured_text() {
-        let mut session = test_session("guest1", Access::default());
-        let state = Arc::<SharedState>::default();
-        let config = ServerConfig {
-            agreement: Box::default(),
-            ..ServerConfig::default()
-        };
-
-        let login = request(Opcode::Login, 1, vec![]);
-        let replies = session.on_login(&login, &state, &config).await;
-
-        assert!(
-            !replies
-                .iter()
-                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement)),
-            "pre-150 clients don't understand the agreement handshake at all"
-        );
-    }
-
-    #[tokio::test]
-    async fn dont_show_agreement_skips_the_configured_text_but_still_marks_modern_clients_done() {
+    /// The [`myField_NoServerAgreement`] (154) and [`myField_Data`] (101)
+    /// fields of the agreement push to a login with `vers` to an account
+    /// with `access`, or `None` with no push.
+    ///
+    /// [`myField_NoServerAgreement`]: hotline_proto::FieldId::NoServerAgreement
+    /// [`myField_Data`]: hotline_proto::FieldId::Data
+    async fn login_agreement(
+        state: &Arc<SharedState>,
+        access: Access,
+        vers: Option<u16>,
+        agreement: &str,
+    ) -> Option<(Option<Field>, Option<Field>)> {
         let mut session = test_session("guest1", Access::empty());
-        let state = Arc::<SharedState>::default();
-        state
-            .put_account(
-                "skipper",
-                Account {
-                    access_extra: AccessExtra::default(),
-                    password: Box::default(),
-                    name: "Skipper".into(),
-                    access: Access::NO_AGREEMENT,
-                },
-            )
-            .await
-            .unwrap();
+        let account = Account {
+            access_extra: AccessExtra::default(),
+            password: Box::default(),
+            name: "Skipper".into(),
+            access,
+        };
+        state.put_account("skipper", account).await.unwrap();
         let config = ServerConfig {
-            agreement: "please behave".into(),
+            agreement: agreement.into(),
             ..ServerConfig::default()
         };
-
         let login = request(
             Opcode::Login,
             1,
-            vec![
-                Field::obfuscated_string(FieldId::UserLogin, "skipper"),
-                Field::u16(FieldId::Vers, 151),
-            ],
+            std::iter::once(Field::obfuscated_string(FieldId::UserLogin, "skipper"))
+                .chain(vers.map(|vers| Field::u16(FieldId::Vers, vers)))
+                .collect(),
         );
-        let replies = session.on_login(&login, &state, &config).await;
-
-        let agreement = replies
+        let replies = session.on_login(&login, state, &config).await;
+        replies
             .iter()
             .find(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement))
-            .expect("modern client still gets a no-agreement marker");
-        assert!(
-            agreement.field(FieldId::NoServerAgreement).is_some(),
-            "DONT_SHOW_AGREEMENT must skip the real text, not just its display"
-        );
-        assert!(agreement.field(FieldId::Data).is_none());
+            .map(|tx| {
+                let no_agreement = tx.field(FieldId::NoServerAgreement).cloned();
+                (no_agreement, tx.field(FieldId::Data).cloned())
+            })
     }
 
     #[tokio::test]
-    async fn dont_show_agreement_sends_nothing_to_a_pre_150_client() {
-        let mut session = test_session("guest1", Access::empty());
+    async fn login_always_sends_the_agreement_push() {
         let state = Arc::<SharedState>::default();
-        state
-            .put_account(
-                "skipper",
-                Account {
-                    access_extra: AccessExtra::default(),
-                    password: Box::default(),
-                    name: "Skipper".into(),
-                    access: Access::NO_AGREEMENT,
-                },
-            )
-            .await
-            .unwrap();
-        let config = ServerConfig {
-            agreement: "please behave".into(),
-            ..ServerConfig::default()
-        };
-
-        let login = request(
-            Opcode::Login,
-            1,
-            vec![Field::obfuscated_string(FieldId::UserLogin, "skipper")],
-        );
-        let replies = session.on_login(&login, &state, &config).await;
-
-        assert!(
-            !replies
-                .iter()
-                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement)),
-        );
+        let text = Some((None, Some(Field::string(FieldId::Data, "please behave"))));
+        for vers in [None, Some(151)] {
+            let skip = login_agreement(&state, Access::NO_AGREEMENT, vers, "please behave").await;
+            assert_eq!(
+                skip,
+                Some((Some(Field::u16(FieldId::NoServerAgreement, 1)), None))
+            );
+            let shown = login_agreement(&state, Access::empty(), vers, "please behave").await;
+            assert_eq!(shown, text);
+            let empty = login_agreement(&state, Access::empty(), vers, "").await;
+            assert_eq!(empty, Some((None, None)));
+        }
     }
 
     #[tokio::test]
