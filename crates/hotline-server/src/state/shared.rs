@@ -5,7 +5,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::num::NonZero;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::{Duration, SystemTime};
 
 use tokio::sync::{Mutex, RwLock};
@@ -104,6 +104,8 @@ pub struct SharedState {
     /// Concurrent-download admission; see
     /// [`download_queue::DownloadQueue`](crate::state::download_queue::DownloadQueue).
     download_queue: DownloadQueue,
+    /// Set by [`SharedState::start_quit`].
+    quitting: AtomicBool,
 }
 
 impl Default for SharedState {
@@ -117,6 +119,7 @@ impl Default for SharedState {
             running: Arc::default(),
             transfer_counter: NonZeroCounter::new(),
             download_queue: DownloadQueue::default(),
+            quitting: AtomicBool::new(false),
         }
     }
 }
@@ -330,6 +333,16 @@ impl SharedState {
         let data = vec![Field::string(FieldId::Data, message)];
         self.publish(Transaction::push(Opcode::DisconnectMsg, data))
             .await;
+    }
+
+    /// Make each listener close a new connection at once.
+    pub fn start_quit(&self) {
+        self.quitting.store(true, Ordering::Relaxed);
+    }
+
+    /// `true` after [`SharedState::start_quit`].
+    pub fn is_quitting(&self) -> bool {
+        self.quitting.load(Ordering::Relaxed)
     }
 
     /// Resolves once each connection that is open now has closed.

@@ -44,9 +44,6 @@ works this way.
   Without the drain, unread client data makes the close a reset, and
   the client can lose the notice. A full queue drops the notice. A
   disconnect with no notice drops the queue at once, as openline does.
-- **A polite quit still accepts file transfers.** openline's polite
-  quit refuses each new transfer connection while it waits for the
-  users to leave. A polite quit of `hls` stops only the main listener.
 - **Folder transfer drops one of openline's safeguards.** No skip for
   an item whose path is too long for openline's fixed 1024-byte buffer.
 - **Any received byte restarts a folder upload's idle timer.** openline's

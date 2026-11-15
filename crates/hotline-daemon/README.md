@@ -164,12 +164,13 @@ for more than one tracker. `--banner` takes an image file, or an
 ## Stopping
 
 Ctrl-C or SIGTERM stops `hls`. When a user is connected and stdin is
-a terminal, `hls` first stops the main listener and asks for a quit
-message, as openline's quit window does. An empty message stops `hls`
-at once. `hls` sends a message to each user, and a client shows it and
-disconnects. `hls` then waits for each connection to close. A second
-Ctrl-C or SIGTERM, at the prompt or during the wait, stops it at once.
-When each user leaves while `hls` asks, it stops at once too.
+a terminal, `hls` asks for a quit message, as openline's quit window
+does. An empty message stops `hls` at once. `hls` sends a message to
+each user, and a client shows it and disconnects. From then on, `hls`
+closes each new connection on each of its ports. `hls` then waits for
+each connection to close. A second Ctrl-C or SIGTERM, at the prompt
+or during the wait, stops it at once. When each user leaves while
+`hls` asks, it stops at once too.
 A user whose queue is full does not get the message, and `hls` waits
 for that connection too. Without a terminal, `hls` stops at once.
 

@@ -223,8 +223,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = server.state().clone();
+    // The listeners run until the exit and close each new connection during a polite quit.
+    let run = tokio::spawn(server.run());
     let result = tokio::select! {
-        result = server.run() => result.map_err(anyhow::Error::from),
+        result = async { anyhow::Ok(run.await??) } => result,
         result = shutdown_signal() => result.map(|()| tracing::info!("shutting down")),
     };
     if result.is_ok() {
@@ -259,6 +261,7 @@ async fn quit_politely(state: &SharedState) -> anyhow::Result<()> {
     let Some(message) = message.filter(|message| !message.is_empty()) else {
         return Ok(());
     };
+    state.start_quit();
     state.announce_quit(&message).await;
     tracing::info!(
         connections = state.connection_count().await,

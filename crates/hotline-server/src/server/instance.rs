@@ -66,6 +66,10 @@ impl Server {
 
         loop {
             let (stream, peer) = listener.accept().await?;
+            if self.state.is_quitting() {
+                tracing::debug!(%peer, "rejected connection while quitting");
+                continue;
+            }
             let Some(permit) = self.connections.try_acquire(peer.ip()) else {
                 tracing::debug!(%peer, "rejected connection over the connection limit");
                 continue;
@@ -108,6 +112,28 @@ fn port_above(addr: SocketAddr, n: u16) -> Result<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn run_on_closes_a_connection_while_quitting() {
+        use tokio::io::AsyncReadExt;
+
+        let server = Server::new(ServerConfig::default(), Providers::default());
+        server.state().start_quit();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let htxf_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(server.run_on(listener, htxf_listener));
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut buf = Vec::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut buf),
+        )
+        .await
+        .expect("the server should close the socket");
+        assert_eq!(read.unwrap(), 0);
+    }
 
     #[test]
     fn port_above_adds_to_the_port() {
