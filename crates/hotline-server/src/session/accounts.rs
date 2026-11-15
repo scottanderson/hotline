@@ -142,14 +142,8 @@ impl Session {
         };
         let login: Box<str> = login.to_lowercase().into();
         let password = Self::new_password(tx.field(FieldId::UserPassword));
-        let name = tx.name();
-        let access = tx.access();
-        let edit = |existing: Account| Account {
-            password: password.unwrap_or(existing.password),
-            name: name.map_or(existing.name, Into::into),
-            access: access.unwrap_or(existing.access),
-            access_extra: existing.access_extra,
-        };
+        let policy = state.policy();
+        let edit = |existing| policy.edit_account(existing, password, tx.name(), tx.access());
         let account = match state.replace_account(&login, login.clone(), edit).await {
             Ok(ReplacedAccount { account, .. }) => account,
             Err(NotReplaced { reason, .. }) => return vec![tx.reply_error(reason)],
@@ -673,10 +667,58 @@ mod tests {
         assert!(state.account("").await.is_none());
     }
 
+    /// A policy where a missing field of an account edit keeps its value.
+    struct MergeAccountEdit;
+
+    impl crate::ServerPolicy for MergeAccountEdit {
+        fn edit_account(
+            &self,
+            existing: Account,
+            password: Option<Box<str>>,
+            name: Option<String>,
+            access: Option<Access>,
+        ) -> Account {
+            Account {
+                password: password.unwrap_or(existing.password),
+                name: name.map_or(existing.name, Into::into),
+                access: access.unwrap_or(existing.access),
+                access_extra: existing.access_extra,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn set_user_clears_the_name_and_the_access_that_the_request_leaves_out() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let bob = Account {
+            access_extra: AccessExtra::default(),
+            password: "secret".into(),
+            name: "Bob".into(),
+            access: Access::SEND_CHAT,
+        };
+        state.put_account("bob", bob).await.unwrap();
+
+        let modify = request(
+            Opcode::SetUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::bytes(FieldId::UserPassword, vec![0]),
+            ],
+        );
+        session.on_set_user(&modify, &state).await;
+
+        let account = state.account("bob").await.unwrap();
+        assert_eq!(&*account.name, "");
+        assert_eq!(&*account.password, "secret");
+        assert_eq!(account.access, Access::empty());
+    }
+
     #[tokio::test]
     async fn set_user_only_overwrites_fields_present() {
         let session = test_session("Admin", Access::all());
-        let state = Arc::<SharedState>::default();
+        let state = state_with_policy(MergeAccountEdit);
         state
             .put_account(
                 "bob",
@@ -939,6 +981,7 @@ mod tests {
             1,
             vec![
                 Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::string(FieldId::UserName, "Bob"),
                 Field::u64(FieldId::UserAccess, Access::empty().bits()),
             ],
         );
@@ -952,6 +995,7 @@ mod tests {
             1,
             vec![
                 Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::string(FieldId::UserName, "Bob"),
                 Field::u64(
                     FieldId::UserAccess,
                     (Access::ANY_NAME | Access::SEND_CHAT).bits(),

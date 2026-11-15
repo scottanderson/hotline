@@ -128,11 +128,6 @@ works this way.
   `ProcessTran_SetUserList` cut each field to fit.
   `ProcessTran_SetUserList` also keeps 31 bytes of a record's old
   login. `hls` keeps any length.
-- **`myTran_SetUser` (353) keeps a field that the request leaves
-  out.** openline's `ProcessTran_SetUser` clears the record, so a
-  missing `myField_UserName` (102) or `myField_UserAccess` (110) gives
-  an empty name or no access. `hls` keeps the old value. openline's
-  client always sends both fields.
 - **A post with no article ID left is an error.** openline gives out
   article ID 4294967295 and stores 0 as the next ID. Its next
   `ProcessTran_PostNewsArt` throws in `_NZ_AddIDToHash`, so the client

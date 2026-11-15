@@ -2,14 +2,16 @@
 
 use std::borrow::Cow;
 
+use hotline_proto::consts::Access;
 use hotline_server::{
-    ChatRooms, ServerPolicy, Silent, TakenLogin, TimeZone, TransferReport, UserEntry,
+    Account, ChatRooms, ServerPolicy, Silent, TakenLogin, TimeZone, TransferReport, UserEntry,
 };
 
 /// `hls` replies with an error in each case where openline sends none,
 /// sends dates in [`TimeZone::Utc`], refuses a rename onto a taken login,
-/// lets a user into a private chat room by invite or password, and sends
-/// more lines in the client info text.
+/// lets a user into a private chat room by invite or password, sends more
+/// lines in the client info text, and keeps an account field that an edit
+/// leaves out.
 pub struct HlsPolicy;
 
 impl ServerPolicy for HlsPolicy {
@@ -63,6 +65,21 @@ impl ServerPolicy for HlsPolicy {
             transfers = transfers.text(),
         )
     }
+
+    fn edit_account(
+        &self,
+        existing: Account,
+        password: Option<Box<str>>,
+        name: Option<String>,
+        access: Option<Access>,
+    ) -> Account {
+        Account {
+            password: password.unwrap_or(existing.password),
+            name: name.map_or(existing.name, Into::into),
+            access: access.unwrap_or(existing.access),
+            access_extra: existing.access_extra,
+        }
+    }
 }
 
 /// `text`, or `default` when `text` is empty.
@@ -75,7 +92,6 @@ mod tests {
     use std::io;
     use std::time::Instant;
 
-    use hotline_proto::consts::Access;
     use hotline_server::AccessExtra;
 
     use super::*;
@@ -97,6 +113,24 @@ mod tests {
             refuses_chat: false,
             automatic_response: None,
         }
+    }
+
+    #[test]
+    fn edit_account_keeps_a_field_that_the_request_leaves_out() {
+        let existing = Account {
+            password: "secret".into(),
+            name: "Bob".into(),
+            access: Access::SEND_CHAT,
+            access_extra: AccessExtra::default(),
+        };
+        let kept = HlsPolicy.edit_account(existing.clone(), None, None, None);
+        assert_eq!(*kept.name, *"Bob");
+        assert_eq!(kept.access, Access::SEND_CHAT);
+        let edited =
+            HlsPolicy.edit_account(existing, None, Some("Robert".into()), Some(Access::empty()));
+        assert_eq!(*edited.name, *"Robert");
+        assert_eq!(edited.access, Access::empty());
+        assert_eq!(*edited.password, *"secret");
     }
 
     #[test]

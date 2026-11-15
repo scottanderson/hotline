@@ -1,8 +1,11 @@
 use std::borrow::Cow;
 use std::io;
 
+use hotline_proto::consts::Access;
+
 use super::TimeZone;
 
+use crate::account::Account;
 use crate::state::{TransferReport, UserEntry};
 
 /// A case where openline sends no error and goes on.
@@ -126,5 +129,26 @@ pub trait ServerPolicy: Send + Sync {
             user.remote_addr.ip(),
             transfers.text(),
         )
+    }
+
+    /// The account that [`myTran_SetUser`] (353) makes from `existing`.
+    /// `password`, `name`, and `access` are the fields of the request, or
+    /// `None` when it leaves one out. The default keeps the old password,
+    /// and gives an empty name or no access for a missing field.
+    ///
+    /// [`myTran_SetUser`]: hotline_proto::Opcode::SetUser
+    fn edit_account(
+        &self,
+        existing: Account,
+        password: Option<Box<str>>,
+        name: Option<String>,
+        access: Option<Access>,
+    ) -> Account {
+        Account {
+            password: password.unwrap_or(existing.password),
+            name: name.map_or_else(Box::default, Into::into),
+            access: access.unwrap_or_else(Access::empty),
+            access_extra: existing.access_extra,
+        }
     }
 }
