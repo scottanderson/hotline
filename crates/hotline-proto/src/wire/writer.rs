@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn writes_fields_in_order() {
-        let bytes = ArrayWriter::<8>::new()
+        let bytes = ArrayWriter::new()
             .u16(0x1234)
             .u16(0x5678)
             .u32(0x9abc_def0)

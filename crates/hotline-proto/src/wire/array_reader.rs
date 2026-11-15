@@ -85,7 +85,7 @@ mod tests {
             .u32(0x9abc_def0)
             .finish();
 
-        let mut r = ArrayReader::<8>::new(bytes);
+        let mut r = ArrayReader::new(bytes);
         let a = r.u16();
         let b = r.u16();
         let c = r.u32();
@@ -97,14 +97,14 @@ mod tests {
     #[test]
     #[should_panic]
     fn finishing_early_panics_in_debug_builds_on_read_too() {
-        let r = ArrayReader::<4>::new([0, 0, 0, 0]);
+        let r = ArrayReader::new([0, 0, 0, 0]);
         r.finish();
     }
 
     #[test]
     #[should_panic]
     fn reading_past_the_end_panics() {
-        let mut r = ArrayReader::<2>::new([0, 0]);
+        let mut r = ArrayReader::new([0, 0]);
         r.u16();
         r.u16(); // nothing left
     }
