@@ -156,15 +156,10 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_CHAT) {
             return vec![tx.reply_error(reason)];
         }
-        let target_ids: Vec<u16> = tx.fields(FieldId::UserID).map(Field::as_u16).collect();
-        if target_ids.is_empty() {
-            return vec![tx.reply_error("missing user id")];
-        }
-
         let chat_id = state.create_chat_room(self.user_id).await;
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
         let mut replies = Vec::new();
-        for target_id in target_ids {
+        for target_id in tx.fields(FieldId::UserID).map(Field::as_u16) {
             if target_id == self.user_id {
                 continue;
             }
@@ -1809,6 +1804,28 @@ mod tests {
             bob_rx.try_recv().is_err(),
             "a refusing target must not receive the invite"
         );
+    }
+
+    #[tokio::test]
+    async fn invite_new_chat_with_no_user_creates_a_room_for_the_creator() {
+        let alice = test_session("Alice", Access::all());
+        let state = Arc::<SharedState>::default();
+
+        let invite = request(Opcode::InviteNewChat, 1, vec![]);
+        let [reply] = alice
+            .on_invite_new_chat(&invite, &state)
+            .await
+            .try_into()
+            .unwrap();
+
+        assert!(!reply.is_error());
+        let chat_id = reply
+            .received(text_encoding::DEFAULT)
+            .field(FieldId::ChatID)
+            .map(Field::as_u32)
+            .unwrap();
+        let room = state.chat_room(chat_id).await.unwrap();
+        assert_eq!(room.members, [alice.user_id]);
     }
 
     #[tokio::test]
