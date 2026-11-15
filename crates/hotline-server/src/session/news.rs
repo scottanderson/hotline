@@ -50,9 +50,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
             return vec![tx.reply_error(reason)];
         }
-        let Some((text, len)) = tx.string_len(FieldId::Data) else {
-            return vec![tx.reply_error("missing post text")];
-        };
+        let (text, len) = tx.string_len(FieldId::Data).unwrap_or_default();
         if len > 8192 {
             return vec![tx.reply_error("Your news post was not accepted because it was too big.")];
         }
@@ -177,11 +175,9 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_FLDR) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(name) = tx.string(FieldId::FileName) else {
-            return vec![tx.reply_error("missing name")];
-        };
-        let path = match self.news_path(tx) {
-            Ok(path) => path,
+        let name = tx.string(FieldId::FileName).unwrap_or_default();
+        let (path, name) = match self.news_path(tx) {
+            Ok(path) => news_target(path, name),
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         if let Err(reason) = state.news_mkdir(&self.login, &path, &name).await {
@@ -201,11 +197,9 @@ impl Session {
         if let Err(reason) = self.access.require(Access::NEWS_CREATE_CAT) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(name) = tx.news_category_name() else {
-            return vec![tx.reply_error("missing name")];
-        };
-        let path = match self.news_path(tx) {
-            Ok(path) => path,
+        let name = tx.news_category_name().unwrap_or_default();
+        let (path, name) = match self.news_path(tx) {
+            Ok(path) => news_target(path, name),
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         if let Err(reason) = state.news_mkcategory(&self.login, &path, &name).await {
@@ -229,9 +223,7 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let Some(id) = tx.news_article_id() else {
-            return vec![tx.reply_error("missing article id")];
-        };
+        let id = tx.news_article_id().unwrap_or(0);
         let detail = match state.news_article(&self.login, &path, id).await {
             Ok(detail) => detail,
             Err(reason) => return vec![tx.reply_error(reason)],
@@ -282,9 +274,7 @@ impl Session {
         };
         let encoding = self.encoding();
         let title = tx.news_article_title().unwrap_or_default();
-        let Some(data) = tx.news_article_data().filter(|data| !data.is_empty()) else {
-            return vec![tx.reply_error("missing article data")];
-        };
+        let data = tx.news_article_data().unwrap_or_default();
         let parent_id = tx.news_article_id().unwrap_or(0);
         let flags = tx.news_article_flags().unwrap_or(0);
         let mime_type = tx.news_article_flavor().unwrap_or_default();
@@ -329,9 +319,7 @@ impl Session {
             Ok(path) => path,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let Some(id) = tx.news_article_id() else {
-            return vec![tx.reply_error("missing article id")];
-        };
+        let id = tx.news_article_id().unwrap_or(0);
         let recursive = tx.news_article_recurse_delete();
         if let Err(reason) = state
             .news_delete_article(&self.login, &path, id, recursive)
@@ -341,6 +329,15 @@ impl Session {
         }
         vec![tx.reply(vec![])]
     }
+}
+
+/// A new item's folder and name. With no name, they are the parent of
+/// `path` and its last name.
+fn news_target(path: HlPath, name: String) -> (HlPath, String) {
+    if !name.is_empty() {
+        return (path, name);
+    }
+    path.split_last()
 }
 
 #[cfg(test)]
@@ -804,6 +801,186 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn old_post_news_without_text_posts_an_empty_entry() {
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+
+        let post = request(Opcode::OldPostNews, 1, vec![]);
+        let [reply] = session
+            .on_old_post_news(&post, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(state.news().await.contains("Alice"));
+    }
+
+    #[tokio::test]
+    async fn new_news_fldr_names_an_existing_item() {
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+        state
+            .news_mkcategory("", &HlPath::default(), "General")
+            .await
+            .unwrap();
+
+        let mkdir = request(
+            Opcode::NewNewsFldr,
+            1,
+            vec![Field::string(FieldId::FileName, "General")],
+        );
+        let [reply] = session
+            .on_new_news_fldr(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot create news bundle “General” because there is already an item or bundle with that name."
+        );
+    }
+
+    #[tokio::test]
+    async fn new_news_fldr_without_a_name_or_a_path_names_the_root() {
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+
+        let mkdir = request(Opcode::NewNewsFldr, 1, vec![]);
+        let [reply] = session
+            .on_new_news_fldr(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot create news bundle “” because there is already an item or bundle with that name."
+        );
+    }
+
+    #[tokio::test]
+    async fn new_news_cat_without_a_name_or_a_path_names_the_root() {
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+
+        let mkcategory = request(Opcode::NewNewsCat, 1, vec![]);
+        let [reply] = session
+            .on_new_news_cat(&mkcategory, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot create news category “” because there is already an item or bundle with that name."
+        );
+    }
+
+    #[tokio::test]
+    async fn new_news_cat_without_a_name_creates_the_last_name_of_the_path() {
+        let encoding = text_encoding::DEFAULT;
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+
+        let mkcategory = request(
+            Opcode::NewNewsCat,
+            1,
+            vec![Field::bytes(
+                FieldId::NewsPath,
+                HlPath::new(["General"]).encode(encoding).unwrap(),
+            )],
+        );
+        let [reply] = session
+            .on_new_news_cat(&mkcategory, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        assert!(
+            state
+                .news_list_articles("", &HlPath::new(["General"]), encoding)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn new_news_cat_in_a_missing_bundle_is_an_error() {
+        let encoding = text_encoding::DEFAULT;
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+
+        let mkcategory = request(
+            Opcode::NewNewsCat,
+            1,
+            vec![
+                Field::string(FieldId::NewsCatName, "General"),
+                Field::bytes(
+                    FieldId::NewsPath,
+                    HlPath::new(["Nope"]).encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_new_news_cat(&mkcategory, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot create news category “General” because the enclosing bundle could not be found."
+        );
+    }
+
+    #[tokio::test]
+    async fn del_news_art_without_an_article_id_finds_no_article() {
+        let encoding = text_encoding::DEFAULT;
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+        state
+            .news_mkcategory("", &HlPath::default(), "General")
+            .await
+            .unwrap();
+
+        let delete = request(
+            Opcode::DelNewsArt,
+            1,
+            vec![Field::bytes(
+                FieldId::NewsPath,
+                HlPath::new(["General"]).encode(encoding).unwrap(),
+            )],
+        );
+        let [reply] = session
+            .on_del_news_art(&delete, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot delete article because an invalid category or item was specified."
+        );
+    }
+
+    #[tokio::test]
+    async fn get_news_art_data_in_a_missing_category_is_an_error() {
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+
+        let get = request(
+            Opcode::GetNewsArtData,
+            1,
+            vec![Field::u32(FieldId::NewsArtID, 1)],
+        );
+        let [reply] = session
+            .on_get_news_art_data(&get, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot get article data because the specified category could not be found."
+        );
+    }
+
+    #[tokio::test]
     async fn post_news_art_with_an_empty_body_is_an_error() {
         let encoding = text_encoding::DEFAULT;
         let state = Arc::<SharedState>::default();
@@ -830,7 +1007,10 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "Cannot post article because invalid data was specified."
+        );
         let list = state
             .news_list_articles("", &HlPath::new(["General"]), encoding)
             .await

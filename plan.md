@@ -17,8 +17,11 @@ works this way.
 - **Some error texts are hls's own.** hls sends openline's text for
   each error that openline sends, with these exceptions:
   - A path field that does not decode gets "malformed file path",
-    except in `myTran_GetFileNameList` (200). It is unclear what
-    openline's `UFS::New` does with such data.
+    except in `myTran_GetFileNameList` (200). A news path gets "bad
+    path". It is unclear what openline's `UFS::New` does with such
+    data.
+  - A news listing that does not fit its field gets "news listing too
+    large to encode". openline has no such error.
   - An upload or a `myTran_NewFolder` (205) with no name gets "invalid
     file name.". openline names the destination folder itself, and
     refuses it as an item that exists.

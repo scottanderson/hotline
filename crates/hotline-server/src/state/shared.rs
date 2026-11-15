@@ -62,6 +62,12 @@ const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 /// The bytes an upload must leave free on the disk.
 const UPLOAD_SPACE_MARGIN: u64 = 512_000;
 
+/// The error for a news post that makes no article.
+const INVALID_POST: &str = "Cannot post article because invalid data was specified.";
+
+/// The error for a news item to delete that does not exist.
+const NEWS_ITEM_NOT_FOUND: &str = "Cannot delete news item because it could not be found.";
+
 /// The error for a join of a chat room that is not open.
 const CLOSED_CHAT: &str = "Cannot join private chat because it has been closed already.";
 
@@ -1395,7 +1401,7 @@ impl SharedState {
             .await?
             .list_dir(&path.components)
             .await
-            .ok_or("news bundle not found")?;
+            .ok_or("Cannot get news list because the specified folder could not be found.")?;
         Ok(entries
             .into_iter()
             .map(|(name, kind)| match kind {
@@ -1427,7 +1433,7 @@ impl SharedState {
             .await?
             .list_articles(&path.components)
             .await
-            .ok_or("news category not found")?;
+            .ok_or("Cannot get article list because the specified category could not be found.")?;
         Ok(NewsArticleListData {
             articles: articles
                 .into_iter()
@@ -1460,11 +1466,13 @@ impl SharedState {
         path: &HlPath,
         id: u32,
     ) -> Result<NewsArticleDetail, &'static str> {
-        self.threaded_news_for(login)
-            .await?
-            .article(&path.components, id)
+        let news = self.threaded_news_for(login).await?;
+        if news.item_kind(&path.components).await != Some(NewsItemKind::Category) {
+            Err("Cannot get article data because the specified category could not be found.")?;
+        }
+        news.article(&path.components, id)
             .await
-            .ok_or("news article not found")
+            .ok_or("Cannot get article data because an invalid category was specified.")
     }
 
     /// Create a news bundle (folder) named `name` under `path`.
@@ -1473,11 +1481,14 @@ impl SharedState {
         login: &str,
         path: &HlPath,
         name: &str,
-    ) -> Result<(), &'static str> {
-        self.threaded_news_for(login)
-            .await?
-            .mkdir(&path.components, name)
+    ) -> Result<(), Cow<'static, str>> {
+        let news = self.threaded_news_for(login).await?;
+        self.check_new_news_item(&*news, path, "news bundle", name)
+            .await?;
+        news.mkdir(&path.components, name)
             .await
+            .map_err(|e| format!("Cannot create bundle “{name}”:\r{e}"))?;
+        Ok(())
     }
 
     /// Create a news category named `name` under `path`.
@@ -1486,11 +1497,42 @@ impl SharedState {
         login: &str,
         path: &HlPath,
         name: &str,
-    ) -> Result<(), &'static str> {
-        self.threaded_news_for(login)
-            .await?
-            .mkcategory(&path.components, name)
+    ) -> Result<(), Cow<'static, str>> {
+        let news = self.threaded_news_for(login).await?;
+        self.check_new_news_item(&*news, path, "news category", name)
+            .await?;
+        news.mkcategory(&path.components, name)
             .await
+            .map_err(|e| format!("Cannot create news category “{name}”:\r{e}"))?;
+        Ok(())
+    }
+
+    /// `Err` if `path` is not a news bundle, or if `name` is empty or names
+    /// an item there, for a new `kind` there.
+    async fn check_new_news_item(
+        &self,
+        news: &dyn ThreadedNewsProvider,
+        path: &HlPath,
+        kind: &str,
+        name: &str,
+    ) -> Result<(), String> {
+        if news.list_dir(&path.components).await.is_none() {
+            Err(format!(
+                "Cannot create {kind} “{name}” because the enclosing bundle could not be found."
+            ))?;
+        }
+        let item: Vec<String> = path
+            .components
+            .iter()
+            .cloned()
+            .chain([name.into()])
+            .collect();
+        if name.is_empty() || news.item_kind(&item).await.is_some() {
+            Err(format!(
+                "Cannot create {kind} “{name}” because there is already an item or bundle with that name."
+            ))?;
+        }
+        Ok(())
     }
 
     /// Delete the news bundle or category named by `path` (its last
@@ -1505,18 +1547,20 @@ impl SharedState {
     ) -> Result<(), Cow<'static, str>> {
         let news = self.threaded_news_for(login).await?;
         if path.components.is_empty() {
-            Err("news item not found")?;
+            Err(NEWS_ITEM_NOT_FOUND)?;
         }
         let kind = news
             .item_kind(&path.components)
             .await
-            .ok_or("news item not found")?;
+            .ok_or(NEWS_ITEM_NOT_FOUND)?;
         let required = match kind {
             NewsItemKind::Bundle => Access::NEWS_DELETE_FLDR,
             NewsItemKind::Category => Access::NEWS_DELETE_CAT,
         };
         access.require(required)?;
-        news.delete(&path.components).await?;
+        news.delete(&path.components)
+            .await
+            .map_err(|_| "News item could not be deleted.")?;
         Ok(())
     }
 
@@ -1533,18 +1577,27 @@ impl SharedState {
         mime_type: Box<str>,
         data: Box<[u8]>,
     ) -> Result<u32, PostError> {
-        self.threaded_news_for(login)
-            .await?
-            .post_article(
-                &path.components,
-                parent_id,
-                title,
-                poster,
-                flags,
-                mime_type,
-                data,
-            )
-            .await
+        let news = self.threaded_news_for(login).await?;
+        if news.item_kind(&path.components).await != Some(NewsItemKind::Category) {
+            Err("Cannot post article because the specified category could not be found.")?;
+        }
+        if data.is_empty() {
+            Err(INVALID_POST)?;
+        }
+        news.post_article(
+            &path.components,
+            parent_id,
+            title,
+            poster,
+            flags,
+            mime_type,
+            data,
+        )
+        .await
+        .map_err(|e| match e {
+            PostError::Invalid(_) => PostError::Invalid(INVALID_POST),
+            e => e,
+        })
     }
 
     /// Delete an article from the news category at `path`. If
@@ -1557,10 +1610,13 @@ impl SharedState {
         id: u32,
         recursive: bool,
     ) -> Result<(), &'static str> {
-        self.threaded_news_for(login)
-            .await?
-            .delete_article(&path.components, id, recursive)
+        let news = self.threaded_news_for(login).await?;
+        if news.item_kind(&path.components).await != Some(NewsItemKind::Category) {
+            Err("Cannot delete article because the specified category could not be found.")?;
+        }
+        news.delete_article(&path.components, id, recursive)
             .await
+            .map_err(|_| "Cannot delete article because an invalid category or item was specified.")
     }
 
     /// Create a new private chat room with `creator` as its only member,
@@ -2162,7 +2218,7 @@ mod tests {
         assert_eq!(state.files_for("alice").await.err(), Some("broken files"));
         assert_eq!(
             state.news_mkcategory("alice", &root, "Own").await,
-            Err("broken news")
+            Err("broken news".into())
         );
 
         let bob = FileRequester { login: "bob" };
