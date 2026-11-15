@@ -29,7 +29,7 @@ use ratatui::widgets::{ListState, TableState};
 use crate::file_edit::FileEdit;
 use crate::session::{NewsFolder, NewsTarget};
 use crate::tasks::TaskRow;
-use crate::transfer::{Conflict, Start};
+use crate::transfer::Start;
 use crate::ui::{self, Areas};
 
 pub use account_form::{AccountForm, privileges};
@@ -64,16 +64,6 @@ fn is_modified_char(key: KeyEvent) -> bool {
         && key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-}
-
-/// The code of `key`, or [`KeyCode::Null`] for a character with Ctrl or
-/// Alt.
-fn plain_code(key: KeyEvent) -> KeyCode {
-    if is_modified_char(key) {
-        KeyCode::Null
-    } else {
-        key.code
-    }
 }
 
 /// `true` if `enabled_by` is empty, or `access` has one of its privileges.
@@ -410,30 +400,44 @@ impl View {
         ]
     }
 
-    /// The scope of the keys: the scope of the modal, if one shows.
-    pub fn scope(&self) -> Option<Scope> {
-        self.modal.as_ref().map(|modal| Scope::Modal(modal.kind()))
+    /// The scopes of the keys, from the most specific.
+    pub fn scopes(&self) -> Vec<Scope> {
+        self.modal.as_ref().map(modal_scopes).unwrap_or_default()
     }
 
-    /// The hints of the intents that [`Self::keymap`] binds in [`Self::scope`].
-    /// The keys of one intent with the same modifiers show as a range of three
-    /// or more keys in a row, as in `F1-F9`, or with `/` between, as in
-    /// `Esc/Enter`. Two hints in a row with one label and the same privileges
-    /// merge, as in `↑↓ choose`.
+    /// The privileges, any one of which turns `intent` on now.
+    fn enabled_by(&self, intent: Intent) -> Access {
+        self.modal
+            .as_ref()
+            .map_or(intent.enabled_by(), |modal| modal_enabled_by(modal, intent))
+    }
+
+    /// The text of the hint of `intent` now, `None` for no hint.
+    const fn label(&self, intent: Intent) -> Option<&'static str> {
+        match intent {
+            Intent::PrevRow => None,
+            _ => Some(intent.label()),
+        }
+    }
+
+    /// The hints of the intents that [`Self::keymap`] binds in
+    /// [`Self::scopes`]. The keys of one intent with the same modifiers show as
+    /// a range of three or more keys in a row, as in `F1-F9`, or with `/`
+    /// between, as in `Esc/Enter`. Two hints in a row with one label and the
+    /// same privileges merge, as in `↑↓ choose` and `PgUp/PgDn page`.
     fn keymap_hints(&self) -> Vec<Hint<'_>> {
-        let scope = self.scope();
+        let scopes = self.scopes();
         Intent::ALL
             .iter()
             .copied()
             .filter_map(|intent| {
-                let scopes = scope.as_slice();
-                let chords = self.keymap.chords(scopes, intent);
+                let chords = self.keymap.chords(&scopes, intent);
                 let modifiers = chords.clone().next()?.modifiers;
                 let key = self
                     .keymap
                     .hint_key(chords.filter(move |chord| chord.modifiers == modifiers));
-                let does = intent.label();
-                Some(Hint::new(key, does).enabled_by(intent.enabled_by()))
+                let does = self.label(intent)?;
+                Some(Hint::new(key, does).enabled_by(self.enabled_by(intent)))
             })
             .fold(Vec::new(), |mut hints: Vec<Hint>, hint| {
                 match hints.last_mut() {
@@ -449,37 +453,6 @@ impl View {
     /// The keys of the modal or the focused area, other than the user list.
     fn focus_hints(&self) -> Vec<Hint<'_>> {
         match (&self.modal, self.focus, self.tab) {
-            (
-                Some(Modal::Confirm(
-                    Conflict::PartialDownload { .. } | Conflict::LocalFolderExists { .. },
-                )),
-                ..,
-            ) => vec![
-                Hint::new("r", "resume"),
-                Hint::new("o", "replace"),
-                Hint::new("Esc", "cancel"),
-            ],
-            (Some(Modal::Confirm(_)), ..) => {
-                vec![Hint::new("r", "resume"), Hint::new("Esc", "cancel")]
-            }
-            (Some(Modal::Account(form)), ..) => vec![
-                Hint::new("↑↓", "row"),
-                Hint::new("Space", "toggle"),
-                Hint::new("Enter", "save").enabled_by(form.saved_by()),
-                Hint::new("Esc", "cancel"),
-            ],
-            (Some(Modal::Connect(_)), ..) => vec![
-                Hint::new("↑↓", "row"),
-                Hint::new("Tab", "next row"),
-                Hint::new("Enter", "connect"),
-                Hint::new("Esc", "cancel"),
-            ],
-            (Some(Modal::Options(_)), ..) => vec![
-                Hint::new("↑↓", "row"),
-                Hint::new("Space", "toggle"),
-                Hint::new("Enter", "save"),
-                Hint::new("Esc", "cancel"),
-            ],
             (Some(_), ..) => self.keymap_hints(),
             (None, Focus::Accounts, _) | (None, Focus::Input, Tab::Admin) => vec![
                 Hint::new("↑↓", "select"),
@@ -732,7 +705,7 @@ impl View {
     }
 
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
-        if let Some(intent) = self.keymap.intent(&[Scope::Modal(modal.kind())], key) {
+        if let Some(intent) = self.keymap.intent(&modal_scopes(&modal), key) {
             return self.modal_intent(modal, intent, users);
         }
         if let Modal::Palette(mut palette) = modal {
@@ -740,20 +713,17 @@ impl View {
             self.modal = Some(Modal::Palette(palette));
             return Action::None;
         }
-        if let Modal::Confirm(conflict) = modal {
-            return self.confirm_key(conflict, key);
-        }
-        if let Modal::Account(form) = modal {
-            return self.account_form_key(form, key);
-        }
-        if let Modal::Options(form) = modal {
-            return self.options_form_key(form, key);
-        }
-        if let Modal::Connect(form) = modal {
-            return self.connect_form_key(form, key);
-        }
-        if plain_code(key) == KeyCode::Esc {
-            return Action::None;
+        match &mut modal {
+            Modal::Account(form) => {
+                form.text_mut().map(|text| text.edit(key));
+            }
+            Modal::Options(form) => {
+                form.text_mut().map(|text| text.edit(key));
+            }
+            Modal::Connect(form) => {
+                form.text_mut().edit(key);
+            }
+            _ => {}
         }
         if let Some(input) = modal.input_mut() {
             input.edit(key);
@@ -769,13 +739,72 @@ impl View {
         intent: Intent,
         users: &[UserNameWithInfo],
     ) -> Action {
-        if !self.may(intent.enabled_by()) {
+        if !self.may(modal_enabled_by(&modal, intent)) {
             self.modal = Some(modal);
             return Action::None;
         }
         match (&mut modal, intent) {
             (_, Intent::Close | Intent::Cancel) => return Action::None,
             (_, Intent::Quit) => return Action::Quit,
+            (Modal::Confirm(conflict), Intent::Resume) => {
+                return Action::retry(conflict.clone(), Start::Resume);
+            }
+            (Modal::Confirm(conflict), Intent::Replace) => {
+                return Action::retry(conflict.clone(), Start::Replace);
+            }
+            (Modal::Account(form), Intent::RowUp) => form.row = form.row.saturating_sub(1),
+            (Modal::Account(form), Intent::RowDown) => {
+                form.row = form
+                    .row
+                    .saturating_add(1)
+                    .min(AccountForm::rows().saturating_sub(1));
+            }
+            (Modal::Account(form), Intent::PageUp) => form.row = form.row.saturating_sub(10),
+            (Modal::Account(form), Intent::PageDown) => {
+                form.row = form
+                    .row
+                    .saturating_add(10)
+                    .min(AccountForm::rows().saturating_sub(1));
+            }
+            (Modal::Account(form), Intent::Toggle) => form.toggle(),
+            (Modal::Account(form), Intent::Save) if !form.login.is_empty() => {
+                return Action::SaveAccount {
+                    old_login: form.old_login.clone(),
+                    account: form.account(),
+                };
+            }
+            (Modal::Options(form), Intent::RowUp) => form.row = form.row.saturating_sub(1),
+            (Modal::Options(form), Intent::RowDown) => {
+                form.row = form
+                    .row
+                    .saturating_add(1)
+                    .min(OptionsForm::rows().saturating_sub(1));
+            }
+            (Modal::Options(form), Intent::Toggle) => form.toggle(),
+            (Modal::Options(form), Intent::Save) => {
+                if let Some(info) = form.info() {
+                    return Action::SetOptions {
+                        info,
+                        queue_transfers: form.queue_transfers,
+                    };
+                }
+            }
+            (Modal::Connect(form), Intent::RowUp) => form.row = form.row.saturating_sub(1),
+            (Modal::Connect(form), Intent::RowDown) => {
+                form.row = form.row.saturating_add(1).min(ConnectForm::ROWS - 1);
+            }
+            (Modal::Connect(form), Intent::NextRow) => form.next_row(),
+            (Modal::Connect(form), Intent::PrevRow) => form.previous_row(),
+            (Modal::Connect(form), Intent::Connect) => {
+                if let Some((host, port)) = form.server() {
+                    return Action::Connect {
+                        host,
+                        port,
+                        login: form.login.take(),
+                        password: form.password.take(),
+                    };
+                }
+            }
             (Modal::Palette(palette), Intent::SelectUp) => palette.select_previous(),
             (Modal::Palette(palette), Intent::SelectDown) => palette.select_next(),
             (Modal::Palette(palette), Intent::Run) => match palette.chosen() {
@@ -957,18 +986,6 @@ impl View {
         Action::None
     }
 
-    fn confirm_key(&mut self, conflict: Conflict, key: KeyEvent) -> Action {
-        match plain_code(key) {
-            KeyCode::Char('r') => Action::retry(conflict, Start::Resume),
-            KeyCode::Char('o') if conflict.can_replace() => Action::retry(conflict, Start::Replace),
-            KeyCode::Esc => Action::None,
-            _ => {
-                self.modal = Some(Modal::Confirm(conflict));
-                Action::None
-            }
-        }
-    }
-
     fn users_key(&mut self, key: KeyEvent, users: &[UserNameWithInfo]) -> Action {
         match key.code {
             KeyCode::Tab | KeyCode::Esc => self.focus = Focus::main(self.tab),
@@ -1086,76 +1103,6 @@ impl View {
             }
             _ => {}
         }
-        Action::None
-    }
-
-    fn account_form_key(&mut self, mut form: AccountForm, key: KeyEvent) -> Action {
-        let last = AccountForm::rows().saturating_sub(1);
-        match key.code {
-            KeyCode::Esc => return Action::None,
-            KeyCode::Enter if !form.login.is_empty() && self.may(form.saved_by()) => {
-                return Action::SaveAccount {
-                    old_login: form.old_login.clone(),
-                    account: form.account(),
-                };
-            }
-            KeyCode::Up => form.row = form.row.saturating_sub(1),
-            KeyCode::Down => form.row = form.row.saturating_add(1).min(last),
-            KeyCode::PageUp => form.row = form.row.saturating_sub(10),
-            KeyCode::PageDown => form.row = form.row.saturating_add(10).min(last),
-            KeyCode::Char(' ') if form.row >= account_form::TEXT_ROWS => form.toggle(),
-            _ if form.text_mut().is_some_and(|text| text.edit(key)) => {}
-            _ => {}
-        }
-        self.modal = Some(Modal::Account(form));
-        Action::None
-    }
-
-    fn options_form_key(&mut self, mut form: OptionsForm, key: KeyEvent) -> Action {
-        let last = OptionsForm::rows().saturating_sub(1);
-        match key.code {
-            KeyCode::Esc => return Action::None,
-            KeyCode::Enter => {
-                if let Some(info) = form.info() {
-                    let queue_transfers = form.queue_transfers;
-                    return Action::SetOptions {
-                        info,
-                        queue_transfers,
-                    };
-                }
-            }
-            KeyCode::Up => form.row = form.row.saturating_sub(1),
-            KeyCode::Down => form.row = form.row.saturating_add(1).min(last),
-            KeyCode::Char(' ') if form.row >= options_form::TEXT_ROWS => form.toggle(),
-            _ if form.text_mut().is_some_and(|text| text.edit(key)) => {}
-            _ => {}
-        }
-        self.modal = Some(Modal::Options(form));
-        Action::None
-    }
-
-    fn connect_form_key(&mut self, mut form: ConnectForm, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Esc => return Action::None,
-            KeyCode::Enter => {
-                if let Some((host, port)) = form.server() {
-                    return Action::Connect {
-                        host,
-                        port,
-                        login: form.login.take(),
-                        password: form.password.take(),
-                    };
-                }
-            }
-            KeyCode::Up => form.row = form.row.saturating_sub(1),
-            KeyCode::Down => form.row = form.row.saturating_add(1).min(ConnectForm::ROWS - 1),
-            KeyCode::Tab => form.next_row(),
-            KeyCode::BackTab => form.previous_row(),
-            _ => {
-                form.text_mut().edit(key);
-            }
-        }
-        self.modal = Some(Modal::Connect(form));
         Action::None
     }
 
@@ -1634,6 +1581,28 @@ impl View {
 }
 
 /// The selected row of a list of `len` rows, kept in range.
+/// The privileges, any one of which turns `intent` on in `modal`.
+const fn modal_enabled_by(modal: &Modal, intent: Intent) -> Access {
+    match (modal, intent) {
+        (Modal::Account(form), Intent::Save) => form.saved_by(),
+        _ => intent.enabled_by(),
+    }
+}
+
+/// The scopes of the keys in `modal`, from the most specific.
+fn modal_scopes(modal: &Modal) -> Vec<Scope> {
+    let extra = match modal {
+        Modal::Account(form) if form.row >= account_form::TEXT_ROWS => Some(Scope::Checkbox),
+        Modal::Options(form) if form.row >= options_form::TEXT_ROWS => Some(Scope::Checkbox),
+        Modal::Confirm(conflict) if conflict.can_replace() => Some(Scope::Replace),
+        _ => None,
+    };
+    extra
+        .into_iter()
+        .chain([Scope::Modal(modal.kind())])
+        .collect()
+}
+
 fn selected(selected: Option<usize>, len: usize) -> usize {
     selected.unwrap_or(0).min(len.saturating_sub(1))
 }
@@ -1723,6 +1692,7 @@ mod tests {
     use hotline_proto::types::{HlDate, UserChangeOptions, UserFlags};
 
     use crate::session::{ArticleText, ChatInvite, Disconnect};
+    use crate::transfer::Conflict;
     use crate::ui::Side;
 
     fn users() -> Vec<UserNameWithInfo> {
@@ -2528,6 +2498,75 @@ mod tests {
             [
                 ("↑↓".into(), "choose"),
                 ("Enter".into(), "invite"),
+                ("Esc".into(), "cancel"),
+            ]
+        );
+    }
+
+    #[test]
+    fn keymap_hints_of_the_forms_show_toggle_on_a_checkbox_row() {
+        let mut form = AccountForm::blank();
+        let mut view = View {
+            modal: Some(Modal::Account(form.clone())),
+            ..View::default()
+        };
+        assert_eq!(
+            hint_pairs(&view),
+            [
+                ("↑↓".into(), "row"),
+                ("PgUp/PgDn".into(), "page"),
+                ("Enter".into(), "save"),
+                ("Esc".into(), "cancel"),
+            ]
+        );
+        assert_eq!(hint_enabled(&view, "Enter", "save"), Some(false));
+        form.row = account_form::TEXT_ROWS;
+        view.modal = Some(Modal::Account(form));
+        view.access = Access::CREATE_USER;
+        assert_eq!(
+            hint_pairs(&view),
+            [
+                ("↑↓".into(), "row"),
+                ("PgUp/PgDn".into(), "page"),
+                ("Space".into(), "toggle"),
+                ("Enter".into(), "save"),
+                ("Esc".into(), "cancel"),
+            ]
+        );
+        assert_eq!(hint_enabled(&view, "Enter", "save"), Some(true));
+        view.modal = Some(Modal::Connect(ConnectForm::new("", "", "")));
+        assert_eq!(
+            hint_pairs(&view),
+            [
+                ("↑↓".into(), "row"),
+                ("Tab".into(), "next row"),
+                ("Enter".into(), "connect"),
+                ("Esc".into(), "cancel"),
+            ]
+        );
+    }
+
+    #[test]
+    fn keymap_hints_of_a_confirm_offer_replace_only_where_it_works() {
+        let mut view = View {
+            modal: Some(Modal::Confirm(Conflict::PartialUpload {
+                local: "/tmp/a.txt".into(),
+            })),
+            ..View::default()
+        };
+        assert_eq!(
+            hint_pairs(&view),
+            [("r".into(), "resume"), ("Esc".into(), "cancel")]
+        );
+        view.modal = Some(Modal::Confirm(Conflict::PartialDownload {
+            name: "a.txt".into(),
+            save_as: "a.txt".into(),
+        }));
+        assert_eq!(
+            hint_pairs(&view),
+            [
+                ("r".into(), "resume"),
+                ("o".into(), "replace"),
                 ("Esc".into(), "cancel"),
             ]
         );

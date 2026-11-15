@@ -14,6 +14,8 @@ use super::modal::ModalKind;
 /// What a key does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
+    PageUp,
+    PageDown,
     /// Select the row above in a list.
     SelectUp,
     /// Select the row below in a list.
@@ -24,6 +26,22 @@ pub enum Intent {
     Choose,
     /// Invite the selected user.
     Invite,
+    /// Move to the row above in a form.
+    RowUp,
+    /// Move to the row below in a form.
+    RowDown,
+    /// Move to the next row in a form, or to the first after the last.
+    NextRow,
+    /// Move to the previous row in a form, or to the last before the first.
+    PrevRow,
+    /// Turn the checkbox of the row on or off.
+    Toggle,
+    /// Connect to the server in the form.
+    Connect,
+    /// Resume a transfer.
+    Resume,
+    /// Replace a file or a folder.
+    Replace,
     /// Disconnect a user without a ban.
     DisconnectUser,
     /// Disconnect a user, and ban the address for a while.
@@ -76,6 +94,13 @@ impl Intent {
         Self::Run,
         Self::Choose,
         Self::Invite,
+        Self::RowUp,
+        Self::RowDown,
+        Self::PageUp,
+        Self::PageDown,
+        Self::NextRow,
+        Self::PrevRow,
+        Self::Toggle,
         Self::DisconnectUser,
         Self::TemporaryBan,
         Self::PermanentBan,
@@ -92,6 +117,9 @@ impl Intent {
         Self::Post,
         Self::Create,
         Self::OpenAccount,
+        Self::Connect,
+        Self::Resume,
+        Self::Replace,
         Self::NewLine,
         Self::Quit,
         Self::Close,
@@ -102,10 +130,18 @@ impl Intent {
     /// The text of the hint.
     pub const fn label(self) -> &'static str {
         match self {
+            Self::PageUp | Self::PageDown => "page",
             Self::SelectUp | Self::SelectDown => "choose",
             Self::Run => "run",
             Self::Choose => "select",
             Self::Invite => "invite",
+            Self::RowUp | Self::RowDown => "row",
+            Self::NextRow => "next row",
+            Self::PrevRow => "previous row",
+            Self::Toggle => "toggle",
+            Self::Connect => "connect",
+            Self::Resume => "resume",
+            Self::Replace => "replace",
             Self::DisconnectUser => "disconnect",
             Self::TemporaryBan => "temporary ban",
             Self::PermanentBan => "permanent ban",
@@ -144,6 +180,10 @@ impl Intent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     Modal(ModalKind),
+    /// A checkbox row of a form.
+    Checkbox,
+    /// A box that asks whether to resume a transfer that can also replace.
+    Replace,
 }
 
 /// A key and the modifiers that it needs.
@@ -198,11 +238,14 @@ impl KeyChord {
             KeyCode::Char(c) if self.modifiers.contains(KeyModifiers::CONTROL) => {
                 c.to_ascii_uppercase().to_string().into()
             }
+            KeyCode::Char(' ') => "Space".into(),
             KeyCode::Char(c) => c.to_string().into(),
             KeyCode::Esc => "Esc".into(),
             KeyCode::Enter => "Enter".into(),
             KeyCode::Up => "↑".into(),
             KeyCode::Down => "↓".into(),
+            KeyCode::PageUp => "PgUp".into(),
+            KeyCode::PageDown => "PgDn".into(),
             code => code.to_string().into(),
         };
         let mut label: String = [
@@ -269,7 +312,41 @@ impl Default for Keymap {
             key(KeyCode::Up, Intent::SelectUp),
             key(KeyCode::Down, Intent::SelectDown),
         ];
-        let modals: [(ModalKind, &[(KeyChord, Intent)]); 22] = [
+        const ROWS: [(KeyChord, Intent); 2] = [
+            key(KeyCode::Up, Intent::RowUp),
+            key(KeyCode::Down, Intent::RowDown),
+        ];
+        let modals: [(ModalKind, &[(KeyChord, Intent)]); 26] = [
+            (
+                ModalKind::Account,
+                &[
+                    ROWS[0],
+                    ROWS[1],
+                    key(KeyCode::PageUp, Intent::PageUp),
+                    key(KeyCode::PageDown, Intent::PageDown),
+                    key(KeyCode::Enter, Intent::Save),
+                    CANCEL,
+                ],
+            ),
+            (
+                ModalKind::Options,
+                &[ROWS[0], ROWS[1], key(KeyCode::Enter, Intent::Save), CANCEL],
+            ),
+            (
+                ModalKind::Connect,
+                &[
+                    ROWS[0],
+                    ROWS[1],
+                    key(KeyCode::Tab, Intent::NextRow),
+                    key(KeyCode::BackTab, Intent::PrevRow),
+                    key(KeyCode::Enter, Intent::Connect),
+                    CANCEL,
+                ],
+            ),
+            (
+                ModalKind::Confirm,
+                &[key(KeyCode::Char('r'), Intent::Resume), CANCEL],
+            ),
             (
                 ModalKind::Palette,
                 &[
@@ -372,12 +449,18 @@ impl Default for Keymap {
                 &[key(KeyCode::Enter, Intent::OpenAccount), CANCEL],
             ),
         ];
+        let others: [(Scope, &[(KeyChord, Intent)]); 2] = [
+            (Scope::Checkbox, &[key(KeyCode::Char(' '), Intent::Toggle)]),
+            (Scope::Replace, &[key(KeyCode::Char('o'), Intent::Replace)]),
+        ];
         Self::new(
             modals
                 .into_iter()
-                .flat_map(|(kind, keys)| {
+                .map(|(kind, keys)| (Scope::Modal(kind), keys))
+                .chain(others)
+                .flat_map(|(scope, keys)| {
                     keys.iter()
-                        .map(move |&(chord, intent)| (Scope::Modal(kind), chord, intent))
+                        .map(move |&(chord, intent)| (scope, chord, intent))
                 })
                 .collect(),
         )
