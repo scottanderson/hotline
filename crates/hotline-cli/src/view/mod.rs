@@ -1373,7 +1373,7 @@ impl View {
                     self.modal = Some(Modal::UserMenu {
                         user_id,
                         at: (x, y),
-                        items: &MenuItem::ALL,
+                        items: MenuItem::ALL,
                         selected: 0,
                     });
                 }
@@ -1935,7 +1935,7 @@ mod tests {
         let right = click(MouseEventKind::Down(MouseButton::Right), x, y);
         let _ = view.handle_mouse(right, &areas(), &users(), &files(), Instant::now());
 
-        let menu = ui::menu_rect((x, y), &MenuItem::ALL, areas().screen);
+        let menu = ui::menu_rect((x, y), MenuItem::ALL, areas().screen);
         let inner = ui::inner(menu);
         let left = click(
             MouseEventKind::Down(MouseButton::Left),
@@ -2540,7 +2540,7 @@ mod tests {
         view.modal = Some(Modal::UserMenu {
             user_id: 1,
             at: (0, 0),
-            items: &MenuItem::ALL,
+            items: MenuItem::ALL,
             selected: 0,
         });
         assert_eq!(
@@ -3126,7 +3126,7 @@ mod tests {
             modal: Some(Modal::UserMenu {
                 user_id: 2,
                 at: (0, 0),
-                items: &MenuItem::ALL,
+                items: MenuItem::ALL,
                 selected: 0,
             }),
             ..granted()

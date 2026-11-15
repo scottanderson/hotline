@@ -248,7 +248,7 @@ pub enum MenuItem {
 }
 
 impl MenuItem {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: &[Self] = &[
         Self::SendMessage,
         Self::GetInfo,
         Self::PrivateChat,
