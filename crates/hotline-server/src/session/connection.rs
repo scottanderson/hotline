@@ -1479,7 +1479,7 @@ mod tests {
                 replies[0]
                     .received(text_encoding::DEFAULT)
                     .string(FieldId::ErrorText),
-                Some(format!("Cannot read account \u{201c}{login}\u{201d}."))
+                Some(format!("Cannot read account “{login}”."))
             );
             assert!(matches!(session.state, SessionState::LoginFailed));
             assert!(bystander.try_recv().is_err());

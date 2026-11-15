@@ -27,9 +27,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
         let limits = state.policy().text_limits();
-        let Some(login) = tx.login() else {
-            return vec![tx.reply_error("missing login")];
-        };
+        let login = tx.login().unwrap_or_default();
         let login: Box<str> = self.cut_text(limits.login, &login).to_lowercase().into();
         let password = tx.password().unwrap_or_default();
         let password = self.cut_text(limits.password, &password).into();
@@ -67,9 +65,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::DELETE_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(login) = tx.login() else {
-            return vec![tx.reply_error("missing login")];
-        };
+        let login = tx.login().unwrap_or_default();
         let login: Box<str> = login.to_lowercase().into();
         if let Err(reason) = state.delete_account(&login).await {
             return vec![tx.reply_error(reason)];
@@ -116,12 +112,10 @@ impl Session {
         if let Err(reason) = self.access.require(Access::OPEN_USER) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(login) = tx.string(FieldId::UserLogin) else {
-            return vec![tx.reply_error("missing login")];
-        };
-        let login = login.to_lowercase();
+        let sent = tx.string(FieldId::UserLogin).unwrap_or_default();
+        let login = sent.to_lowercase();
         let Some(account) = state.account(&login).await else {
-            return vec![tx.reply_error("no such account")];
+            return vec![tx.reply_error(format!("No account with login “{sent}”."))];
         };
         vec![tx.reply(vec![
             Field::string(FieldId::UserName, account.name),
@@ -144,9 +138,7 @@ impl Session {
         }
         let policy = state.policy();
         let limits = policy.text_limits();
-        let Some(login) = tx.login() else {
-            return vec![tx.reply_error("missing login")];
-        };
+        let login = tx.login().unwrap_or_default();
         let login: Box<str> = self.cut_text(limits.login, &login).to_lowercase().into();
         let password = Self::new_password(tx.field(FieldId::UserPassword))
             .map(|password| Box::from(self.cut_text(limits.password, &password)));
@@ -358,7 +350,7 @@ impl Session {
             {
                 self.notify_login_taken(
                     format!(
-                        "Cannot rename account \"{old_login}\" to \"{login}\" because there is already an account with that login."
+                        "Cannot rename account “{old_login}” to “{login}” because there is already an account with that login."
                     ),
                     state,
                 )
@@ -409,7 +401,7 @@ impl Session {
         if login.is_empty() || state.account(&login).await.is_some() {
             self.notify_login_taken(
                 format!(
-                    "Cannot create account \"{login}\" because there is already an account with that login."
+                    "Cannot create account “{login}” because there is already an account with that login."
                 ),
                 state,
             )
@@ -612,7 +604,7 @@ mod tests {
                 .received(encoding)
                 .string(FieldId::ErrorText)
                 .unwrap(),
-            "Cannot create account \"bob\" because there is already an account with that login."
+            "Cannot create account “bob” because there is already an account with that login."
         );
         assert_eq!(state.account("bob").await.unwrap(), Account::guest());
     }
@@ -691,7 +683,7 @@ mod tests {
                 .received(encoding)
                 .string(FieldId::ErrorText)
                 .unwrap(),
-            "No account with login \"bob\"."
+            "No account with login “bob”."
         );
         assert!(state.account("bob").await.is_none());
     }
@@ -742,7 +734,7 @@ mod tests {
                 .received(text_encoding::DEFAULT)
                 .string(FieldId::ErrorText)
                 .unwrap(),
-            "No account with login \"\"."
+            "No account with login “”."
         );
         assert!(state.account("").await.is_none());
     }
@@ -889,6 +881,21 @@ mod tests {
 
         let account = state.account("bob").await.unwrap();
         assert_eq!(&*account.password, "");
+    }
+
+    #[tokio::test]
+    async fn get_user_of_a_missing_account_quotes_the_login_as_sent() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+
+        let read = request(
+            Opcode::GetUser,
+            1,
+            vec![Field::string(FieldId::UserLogin, "Bob")],
+        );
+        let replies = session.on_get_user(&read, &state).await;
+
+        assert_eq!(error_text(&replies[0]), "No account with login “Bob”.");
     }
 
     #[tokio::test]
@@ -1161,7 +1168,7 @@ mod tests {
                 .received(encoding)
                 .string(FieldId::ErrorText)
                 .unwrap(),
-            "No account with login \"bob\"."
+            "No account with login “bob”."
         );
     }
 
@@ -1640,7 +1647,7 @@ mod tests {
                 .received(encoding)
                 .string(FieldId::ErrorText)
                 .unwrap(),
-            "Cannot delete account \"bob\":\rdisk full"
+            "Cannot delete account “bob”:\rdisk full"
         );
     }
 
@@ -1926,7 +1933,7 @@ mod tests {
         assert_eq!(notice.r#type(), TransactionType::Push(Opcode::ServerMsg));
         assert_eq!(
             notice.string(FieldId::Data).unwrap(),
-            "Cannot rename account \"bob\" to \"alice\" because there is already an account with that login."
+            "Cannot rename account “bob” to “alice” because there is already an account with that login."
         );
         assert_eq!(&*state.account("bob").await.unwrap().password, "bob's");
         let alice = state.account("alice").await.unwrap();
@@ -1959,7 +1966,7 @@ mod tests {
                 .received(text_encoding::DEFAULT)
                 .string(FieldId::ErrorText)
                 .unwrap(),
-            "Cannot create account \"\" because there is already an account with that login."
+            "Cannot create account “” because there is already an account with that login."
         );
         assert!(state.account("").await.is_none());
     }
@@ -2014,7 +2021,7 @@ mod tests {
             .received(text_encoding::DEFAULT);
         assert_eq!(
             notice.string(FieldId::Data).unwrap(),
-            "Cannot create account \"\" because there is already an account with that login."
+            "Cannot create account “” because there is already an account with that login."
         );
         assert!(state.account("").await.is_none());
     }

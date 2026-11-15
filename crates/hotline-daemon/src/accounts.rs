@@ -227,7 +227,7 @@ impl AccountProvider for FileAccountProvider {
                 .await
                 .map_err(|e| match e.kind() {
                     std::io::ErrorKind::AlreadyExists => format!(
-                        "Cannot create account \"{login}\" because there is already an account with that login."
+                        "Cannot create account “{login}” because there is already an account with that login."
                     ),
                     _ => e.to_string(),
                 })?;
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(
             provider.put("alice".into(), alice()).await,
             Err(
-                "Cannot create account \"alice\" because there is already an account with that login."
+                "Cannot create account “alice” because there is already an account with that login."
                     .into()
             )
         );

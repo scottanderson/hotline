@@ -1684,7 +1684,7 @@ impl SharedState {
     /// The stored account for `login`, which `Err` names.
     pub async fn require_account(&self, login: &str) -> Result<Account, Cow<'static, str>> {
         let account = self.account(login).await;
-        Ok(account.ok_or_else(|| format!("Cannot read account \u{201c}{login}\u{201d}."))?)
+        Ok(account.ok_or_else(|| format!("Cannot read account “{login}”."))?)
     }
 
     /// Create or overwrite an account.
@@ -1709,7 +1709,7 @@ impl SharedState {
         let _writes = self.account_writes.lock().await;
         if login.is_empty() || self.accounts().get(&login).await.is_some() {
             Err(format!(
-                "Cannot create account \"{login}\" because there is already an account with that login."
+                "Cannot create account “{login}” because there is already an account with that login."
             ))?;
         }
         self.accounts().put(login, account).await
@@ -1731,7 +1731,7 @@ impl SharedState {
         let login = login.into();
         let _writes = self.account_writes.lock().await;
         let Some(existing) = self.accounts().get(old_login).await else {
-            Err(format!("No account with login \"{old_login}\"."))?
+            Err(format!("No account with login “{old_login}”."))?
         };
         if login.is_empty() {
             Err("Error saving list of accounts.")?;
@@ -1829,8 +1829,8 @@ impl SharedState {
         let _writes = self.account_writes.lock().await;
         match self.accounts().delete(login).await {
             Ok(true) => Ok(()),
-            Ok(false) => Err(format!("No account with login \"{login}\"."))?,
-            Err(error) => Err(format!("Cannot delete account \"{login}\":\r{error}"))?,
+            Ok(false) => Err(format!("No account with login “{login}”."))?,
+            Err(error) => Err(format!("Cannot delete account “{login}”:\r{error}"))?,
         }
     }
 
