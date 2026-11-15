@@ -13,7 +13,7 @@ use crate::account::AccessExtra;
 use crate::ban::BanRecord;
 use crate::flood::FloodEvent;
 use crate::policy::Silent;
-use crate::state::{SharedState, TransferProgress, TransferSection, UserEntry};
+use crate::state::{SharedState, UserEntry};
 
 use super::connection::{KickBan, MsgOption, Session};
 
@@ -22,15 +22,6 @@ const MAX_BAN_NOTE: usize = 63;
 
 /// The most bytes of a private message, its quote, or a broadcast.
 const MAX_MESSAGE: usize = 4096;
-
-/// `lines`, or `None.` when there are none.
-fn or_none(lines: String) -> String {
-    if lines.is_empty() {
-        "None.\r".to_string()
-    } else {
-        lines
-    }
-}
 
 impl Session {
     /// [`myTran_GetUserNameList`] (300): every user with a name.
@@ -82,56 +73,8 @@ impl Session {
             return vec![tx.reply_error("no such user")];
         };
 
-        let report = state.transfer_report(target_id).await;
-        let section = |section| {
-            let lines = report.active.iter().filter(|p| p.section == section);
-            or_none(lines.map(TransferProgress::line).collect())
-        };
-        let waiting = or_none(
-            report
-                .waiting
-                .iter()
-                .map(TransferProgress::waiting_line)
-                .collect(),
-        );
-        let online = target.connected_at.elapsed();
-        let version_line = target
-            .client_version
-            .map(|version| format!("Version:    {version}\r"))
-            .unwrap_or_default();
-        let text = format!(
-            "Nickname:   {name}\r\
-             Name:       {account_name}\r\
-             Account:    {login}\r\
-             Icon:       {icon}\r\
-             {version_line}\
-             Address:    {addr}\r\
-             Online:     {mins}m {secs}s\r\r\
-             -------- File Downloads ---------\r\r{file_downloads}\r\
-             ------- Folder Downloads --------\r\r{folder_downloads}\r\
-             --------- File Uploads ----------\r\r{file_uploads}\r\
-             -------- Folder Uploads ---------\r\r{folder_uploads}\r\
-             ------- Waiting Downloads -------\r\r{waiting}",
-            name = target.name,
-            account_name = if target.account_name.is_empty() {
-                "(none)"
-            } else {
-                &target.account_name
-            },
-            login = if target.login.is_empty() {
-                "(guest)"
-            } else {
-                &target.login
-            },
-            addr = target.remote_addr,
-            icon = target.icon,
-            mins = online.as_secs() / 60,
-            secs = online.as_secs() % 60,
-            file_downloads = section(TransferSection::FileDownload),
-            folder_downloads = section(TransferSection::FolderDownload),
-            file_uploads = section(TransferSection::FileUpload),
-            folder_uploads = section(TransferSection::FolderUpload),
-        );
+        let transfers = state.transfer_report(target_id).await;
+        let text = state.policy().client_info_text(&target, &transfers);
 
         vec![tx.reply(vec![
             Field::string(FieldId::Data, text),
@@ -462,7 +405,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_client_info_text_reports_the_reference_shaped_text_block() {
+    async fn get_client_info_text_sends_the_basic_lines_by_default() {
+        let encoding = text_encoding::DEFAULT;
+        let session = test_session("Alice", Access::all());
+        let state = Arc::<SharedState>::default();
+        state
+            .insert_user(UserEntry {
+                user_id: 2,
+                login: Box::default(),
+                account_name: Box::default(),
+                name: "Bob".into(),
+                icon: 42,
+                client_version: Some(185),
+                access: Access::empty(),
+                access_extra: AccessExtra::default(),
+                remote_addr: "192.0.2.1:5500".parse().unwrap(),
+                connected_at: Instant::now(),
+                last_active: Instant::now(),
+                refuses_pm: false,
+                refuses_chat: false,
+                automatic_response: None,
+            })
+            .await;
+        let request = request(
+            Opcode::GetClientInfoText,
+            1,
+            vec![Field::u16(FieldId::UserID, 2)],
+        );
+
+        let reply = &session.on_get_client_info_text(&request, &state).await[0];
+        let text = reply.received(encoding).string(FieldId::Data).unwrap();
+        assert!(text.starts_with(
+            "Nickname:   Bob\r\
+             Name:       \r\
+             Account:    \r\
+             Address:    192.0.2.1\r\r\
+             -------- File Downloads ---------\r"
+        ));
+    }
+
+    #[tokio::test]
+    async fn get_client_info_text_names_the_user_and_lists_no_transfers() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
         let state = Arc::<SharedState>::default();
@@ -497,12 +480,6 @@ mod tests {
         );
         assert!(reply.field(FieldId::UserID).is_none());
         let text = reply.received(encoding).string(FieldId::Data).unwrap();
-        assert!(text.contains("Nickname:   Bob"));
-        assert!(text.contains("Name:       Bobby"));
-        assert!(text.contains("Account:    bob"));
-        assert!(text.contains("Address:    192.0.2.1:5500"));
-        assert!(text.contains("Icon:       42"));
-        assert!(text.contains("Version:    185"));
         assert!(text.contains(
             "-------- File Downloads ---------\r\rNone.\r\r\
              ------- Folder Downloads --------\r\rNone.\r\r\
@@ -588,42 +565,6 @@ mod tests {
              -------- Folder Uploads ---------\r\rNone.\r\r\
              ------- Waiting Downloads -------\r\rsecond.txt            (File)\r"
         ));
-    }
-
-    #[tokio::test]
-    async fn get_client_info_text_defaults_login_and_account_name_when_empty() {
-        let encoding = text_encoding::DEFAULT;
-        let session = test_session("Alice", Access::all());
-        let state = Arc::<SharedState>::default();
-        state
-            .insert_user(UserEntry {
-                user_id: 2,
-                login: Box::default(),
-                account_name: Box::default(),
-                name: "Bob".into(),
-                icon: 0,
-                client_version: None,
-                access: Access::empty(),
-                access_extra: AccessExtra::default(),
-                remote_addr: "192.0.2.1:5500".parse().unwrap(),
-                connected_at: Instant::now(),
-                last_active: Instant::now(),
-                refuses_pm: false,
-                refuses_chat: false,
-                automatic_response: None,
-            })
-            .await;
-        let request = request(
-            Opcode::GetClientInfoText,
-            1,
-            vec![Field::u16(FieldId::UserID, 2)],
-        );
-
-        let reply = &session.on_get_client_info_text(&request, &state).await[0];
-        let text = reply.received(encoding).string(FieldId::Data).unwrap();
-        assert!(text.contains("Account:    (guest)"));
-        assert!(text.contains("Name:       (none)"));
-        assert!(!text.contains("Version:"));
     }
 
     #[tokio::test]

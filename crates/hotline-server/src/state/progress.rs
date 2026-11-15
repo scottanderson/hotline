@@ -80,14 +80,14 @@ impl TransferProgress {
     }
 
     /// openline's `%#-21.21s %#-4.4s %#s` transfer line.
-    pub(crate) fn line(&self) -> String {
+    pub fn line(&self) -> String {
         let name = name_column(&self.name);
         let percent = format!("{}%", self.percent());
         format!("{name} {percent:<4} {}\r", size_text(self.size))
     }
 
     /// openline's `%#-21.21s (File)` or `(Folder)` waiting line.
-    pub(crate) fn waiting_line(&self) -> String {
+    pub fn waiting_line(&self) -> String {
         format!("{} ({})\r", name_column(&self.name), self.section.noun())
     }
 
@@ -127,6 +127,42 @@ pub struct TransferReport {
     pub active: Vec<TransferProgress>,
     /// Downloads waiting for a slot.
     pub waiting: Vec<TransferProgress>,
+}
+
+impl TransferReport {
+    /// openline's transfer sections of the client info text.
+    pub fn text(&self) -> String {
+        let section = |section| {
+            let lines = self.active.iter().filter(|p| p.section == section);
+            or_none(lines.map(TransferProgress::line).collect())
+        };
+        let waiting = or_none(
+            self.waiting
+                .iter()
+                .map(TransferProgress::waiting_line)
+                .collect(),
+        );
+        format!(
+            "-------- File Downloads ---------\r\r{file_downloads}\r\
+             ------- Folder Downloads --------\r\r{folder_downloads}\r\
+             --------- File Uploads ----------\r\r{file_uploads}\r\
+             -------- Folder Uploads ---------\r\r{folder_uploads}\r\
+             ------- Waiting Downloads -------\r\r{waiting}",
+            file_downloads = section(TransferSection::FileDownload),
+            folder_downloads = section(TransferSection::FolderDownload),
+            file_uploads = section(TransferSection::FileUpload),
+            folder_uploads = section(TransferSection::FolderUpload),
+        )
+    }
+}
+
+/// `lines`, or `None.` when there are none.
+fn or_none(lines: String) -> String {
+    if lines.is_empty() {
+        "None.\r".to_string()
+    } else {
+        lines
+    }
 }
 
 struct Running {

@@ -3,6 +3,8 @@ use std::io;
 
 use super::TimeZone;
 
+use crate::state::{TransferReport, UserEntry};
+
 /// A case where openline sends no error and goes on.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -106,5 +108,23 @@ pub trait ServerPolicy: Send + Sync {
     /// Who joins a private chat room, and who sets its subject.
     fn chat_rooms(&self) -> ChatRooms {
         ChatRooms::default()
+    }
+
+    /// The [`myTran_GetClientInfoText`] (303) text about `user`, who has
+    /// `transfers`. The default has openline's lines.
+    ///
+    /// [`myTran_GetClientInfoText`]: hotline_proto::Opcode::GetClientInfoText
+    fn client_info_text(&self, user: &UserEntry, transfers: &TransferReport) -> String {
+        format!(
+            "Nickname:   {}\r\
+             Name:       {}\r\
+             Account:    {}\r\
+             Address:    {}\r\r{}",
+            user.name,
+            user.account_name,
+            user.login,
+            user.remote_addr.ip(),
+            transfers.text(),
+        )
     }
 }

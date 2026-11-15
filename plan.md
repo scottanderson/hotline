@@ -111,13 +111,12 @@ works this way.
   `-`. `hls` cuts a name at 255 UTF-8 bytes, at a character boundary.
   It also maps the name of a new alias, which openline's
   `ProcessTran_MakeFileAlias` does not.
-- **`myTran_GetClientInfoText` (303) shows more.** openline's
-  `ProcessTran_GetClientInfoText` sends `Nickname:`, `Name:`,
-  `Account:`, and `Address:` with the IP address only. `hls` also sends
-  `Icon:`, `Version:` when the client sent `myField_Vers` (160), and
-  `Online:` with the minutes and seconds since login. It adds the port
-  to `Address:`. It shows an empty account name as `(none)` and an
-  empty login as `(guest)`, where openline shows an empty value.
+- **The client info text lists each transfer.** openline's
+  `ProcessTran_GetClientInfoText` stops a section of the transfer list
+  when less than 40 of its 512 bytes are free, and keeps at most 1024
+  bytes of the whole text. `TransferReport::text`, which the default
+  `ServerPolicy::client_info_text` and `HlsPolicy` use, lists each
+  transfer with no limit.
 - **An empty news article adds nothing.** openline's
   `ProcessTran_PostNewsArt` adds the article before it checks the
   `myField_NewsArtData` (333) body, so it keeps an article with no
