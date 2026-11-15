@@ -25,7 +25,7 @@ use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
 use std::task::{ready, Context, Poll};
 
-use hotline_proto::wire::ArrayWriter;
+use hotline_proto::wire::{ArrayWriter, VecWriter};
 use hotline_server::{BoxedReader, FinderInfo};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
@@ -768,7 +768,7 @@ const fn file_id(_metadata: &Metadata) -> u32 {
 
 /// A new sidecar of [`ATTR_BUF_SIZE`] bytes: a Finder info entry at 50 with
 /// an [`AttrHeader`] and no attributes, then an empty resource fork.
-fn new_sidecar(debug_tag: u32) -> Vec<u8> {
+fn new_sidecar(debug_tag: u32) -> [u8; ATTR_BUF_SIZE as usize] {
     let fork_at = ATTR_BUF_SIZE - EMPTY_FORK_LEN;
     let finder_info = Entry {
         id: FINDER_INFO_ID,
@@ -788,20 +788,18 @@ fn new_sidecar(debug_tag: u32) -> Vec<u8> {
         flags: 0,
         num_attrs: 0,
     };
-    let mut file = ArrayWriter::<HEADER_LEN>::new()
+    ArrayWriter::new()
         .u32(MAGIC)
         .u32(VERSION)
         .bytes(FILLER)
         .u16(2)
+        .bytes(&finder_info.encode())
+        .bytes(&fork.encode())
+        .pad_to(AD_HEADER_END)
+        .bytes(&attrs.encode())
+        .pad_to(fork_at as usize)
+        .bytes(&empty_fork())
         .finish()
-        .to_vec();
-    file.extend_from_slice(&finder_info.encode());
-    file.extend_from_slice(&fork.encode());
-    file.resize(AD_HEADER_END, 0);
-    file.extend_from_slice(&attrs.encode());
-    file.resize(fork_at as usize, 0);
-    file.extend_from_slice(&empty_fork());
-    file
 }
 
 /// An empty resource fork: a header and a map with no resources.
@@ -1360,13 +1358,14 @@ async fn set_attr_in_sidecar(item: &Path, name: &str, value: &[u8]) -> io::Resul
         } else {
             put(&mut info.buf, value_at as usize, value)?;
         }
-        let fixed = ArrayWriter::<11>::new()
+        let entry = VecWriter::new()
             .u32(value_at)
             .u32(value_len)
             .u16(0)
             .u8(name_len)
+            .bytes(&name)
             .finish();
-        put(&mut info.buf, slot, &[fixed.as_slice(), &name].concat())?;
+        put(&mut info.buf, slot, &entry)?;
         header.num_attrs = header.num_attrs.saturating_add(1);
         header.data_length = header.data_length.saturating_add(value_len);
         info.attrs = Some(header);
