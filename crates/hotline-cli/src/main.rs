@@ -43,7 +43,7 @@ use hotline_proto::{Received, Transaction};
 use session::{
     ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, TransferLine, KEEP_ALIVE,
 };
-use tasks::{Task, TaskId, Tasks};
+use tasks::{Step, Task, TaskId, Tasks};
 use tokio::sync::mpsc;
 use transfer::Conflict;
 use view::{AccountForm, Action, ConnectForm, Focus, Modal, OptionsForm, TextBox, View};
@@ -156,21 +156,26 @@ async fn run(
         let keep_alive_at = keep_alive_due(client.as_ref(), last_keep_alive);
         // The reason that the connection ended.
         let mut ended: Option<Disconnect> = None;
-        tokio::select! {
-            // A file transfer that starts or ends.
-            Some(line) = lines_rx.recv() => match line {
-                TransferLine::Started(line) => session.lines.push(line),
-                TransferLine::Ended(line) => {
-                    session.lines.push(line);
-                    happened = Bell::TRANSFER;
-                }
-            },
-            // A reply to a request.
-            Some(step) = tasks.next() => step(session, &mut view, &mut tasks),
-            // A moment while a task runs, to show its progress.
-            _ = tick.tick(), if tasks.is_busy() || !view.tasks.is_empty() => {}
-            // No traffic or keep-alive attempt for a while.
-            () = tokio::time::sleep_until(keep_alive_at.into()), if client.is_some() => {
+        let keep_alive = tokio::time::sleep_until(keep_alive_at.into());
+        let push = OptionFuture::from(events.as_mut().map(|events| events.recv()));
+        let wake = tokio::select! {
+            Some(line) = lines_rx.recv() => Wake::Transfer(line),
+            Some(step) = tasks.next() => Wake::Reply(step),
+            _ = tick.tick(), if tasks.is_busy() || !view.tasks.is_empty() => Wake::Tick,
+            () = keep_alive, if client.is_some() => Wake::KeepAlive,
+            Some(result) = OptionFuture::from(connecting.as_mut()) => Wake::Connected(result),
+            Some(tx) = push => Wake::Push(tx),
+            ev = term_events.next() => Wake::Terminal(ev),
+        };
+        match wake {
+            Wake::Transfer(TransferLine::Started(line)) => session.lines.push(line),
+            Wake::Transfer(TransferLine::Ended(line)) => {
+                session.lines.push(line);
+                happened = Bell::TRANSFER;
+            }
+            Wake::Reply(step) => step(session, &mut view, &mut tasks),
+            Wake::Tick => {}
+            Wake::KeepAlive => {
                 if let Some(client) = &client {
                     if idle_since(client, last_keep_alive).elapsed() >= KEEP_ALIVE {
                         tasks.run(Task::unlisted(), session.keep_alive(client));
@@ -178,8 +183,7 @@ async fn run(
                     }
                 }
             }
-            // A new connection that logged in, or failed.
-            Some(result) = OptionFuture::from(connecting.as_mut()) => {
+            Wake::Connected(result) => {
                 connecting = None;
                 match result {
                     Ok(connection) => {
@@ -194,33 +198,33 @@ async fn run(
                     }
                 }
             }
-            // Server-initiated traffic: chat, user list changes, ...
-            Some(tx) = OptionFuture::from(events.as_mut().map(|events| events.recv())) => match tx {
-                None => ended = Some(session.disconnect(Disconnect::Closed)),
-                Some(tx) => {
-                    if let TransactionType::Push(opcode) = tx.r#type() {
-                        happened = Bell::for_push(opcode);
-                    }
-                    if let Some(tab) = ui::push_tab(session, &tx) {
-                        happened |= Bell::for_tab(tab, view.tab, focused);
-                    }
-                    match session.apply_server_event(&tx) {
-                        EventOutcome::NeedsAgreementAccept => {
-                            if let Some(client) = &client {
-                                tasks.run(Task::login("Logging in..."), session.accept_agreement(client));
-                            }
-                        }
-                        EventOutcome::Disconnected(reason) => ended = Some(reason),
-                        EventOutcome::Applied => {}
-                    }
+            Wake::Push(None) => ended = Some(session.disconnect(Disconnect::Closed)),
+            Wake::Push(Some(tx)) => {
+                if let TransactionType::Push(opcode) = tx.r#type() {
+                    happened = Bell::for_push(opcode);
                 }
-            },
-            // Terminal input.
-            ev = term_events.next() => {
-                let Some(Ok(ev)) = ev else { break };
+                if let Some(tab) = ui::push_tab(session, &tx) {
+                    happened |= Bell::for_tab(tab, view.tab, focused);
+                }
+                match session.apply_server_event(&tx) {
+                    EventOutcome::NeedsAgreementAccept => {
+                        if let Some(client) = &client {
+                            tasks.run(
+                                Task::login("Logging in..."),
+                                session.accept_agreement(client),
+                            );
+                        }
+                    }
+                    EventOutcome::Disconnected(reason) => ended = Some(reason),
+                    EventOutcome::Applied => {}
+                }
+            }
+            Wake::Terminal(Some(Ok(ev))) => {
                 let action = match ev {
                     // A mouse move changes nothing.
-                    Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved && !stale => continue,
+                    Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved && !stale => {
+                        continue
+                    }
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if matches!(session.mode, Mode::Agreement(_)) {
                             match key.code {
@@ -304,6 +308,7 @@ async fn run(
                     }
                 }
             }
+            Wake::Terminal(_) => break,
         }
         if let Some(reason) = ended {
             if let Some(client) = client.take() {
@@ -334,6 +339,25 @@ async fn run(
         }
     }
     Ok(())
+}
+
+/// What wakes the main loop.
+enum Wake {
+    /// A file transfer that starts or ends.
+    Transfer(TransferLine),
+    /// A reply to a request.
+    Reply(Step),
+    /// A moment while a task runs, to show its progress.
+    Tick,
+    /// No traffic or keep-alive attempt for a while.
+    KeepAlive,
+    /// A new connection that logged in, or failed.
+    Connected(anyhow::Result<Connection>),
+    /// Server-initiated traffic, such as chat and user list changes. `None`
+    /// when the server closes the connection.
+    Push(Option<Transaction<Received>>),
+    /// Terminal input. `None` or an error when the input ends.
+    Terminal(Option<std::io::Result<Event>>),
 }
 
 /// The later of the last traffic on `client` and the last keep-alive
