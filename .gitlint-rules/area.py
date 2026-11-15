@@ -14,13 +14,14 @@ SHARED = {
     "Cargo.toml",
     "Cargo.lock",
     "clippy.toml",
+    "rustfmt.toml",
     ".gitignore",
     "LICENSE-APACHE",
     "LICENSE-MIT",
 }
 
 # Files that the workspace area changes.
-WORKSPACE = {"Cargo.toml", "Cargo.lock", "clippy.toml"}
+WORKSPACE = {"Cargo.toml", "Cargo.lock", "clippy.toml", "rustfmt.toml"}
 
 
 def is_gitlint(path):
