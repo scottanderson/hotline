@@ -258,22 +258,23 @@ impl SharedState {
             .collect()
     }
 
-    /// The connected user `user_id`, or `Err("no such user")`.
+    /// The connected user `user_id` that a private message goes to.
     pub async fn require_connected_user(&self, user_id: u16) -> Result<UserEntry, &'static str> {
-        self.user(user_id).await.ok_or("no such user")
+        self.user(user_id)
+            .await
+            .ok_or("Couldn't send your message because the client is not connected to this server.")
     }
 
-    /// Whether `target_id` may be kicked: `Err` if that user holds
-    /// `CANT_BE_DISCONNECTED`. A target that isn't connected at all is
-    /// allowed through, since kicking one is already a no-op (`send_to`
-    /// silently drops a push to nobody).
-    pub async fn authorize_kick(&self, target_id: u16) -> Result<(), &'static str> {
-        if self
-            .user(target_id)
-            .await
-            .is_some_and(|u| u.access.contains(Access::CANNOT_BE_DISCON))
+    /// Whether `target_id` may be kicked. The `Err` text names a connected
+    /// target that has [`Access::CANNOT_BE_DISCON`].
+    pub async fn authorize_kick(&self, target_id: u16) -> Result<(), Cow<'static, str>> {
+        if let Some(user) = self.user(target_id).await
+            && user.access.contains(Access::CANNOT_BE_DISCON)
         {
-            return Err("that user can't be disconnected");
+            Err(format!(
+                "You are not allowed to disconnect user “{}” (user is protected).",
+                user.name
+            ))?;
         }
         Ok(())
     }

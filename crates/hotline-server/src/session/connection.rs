@@ -91,6 +91,9 @@ const KICK_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a kicked session reads and discards after its notice.
 const KICK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The error reply to a request that the session does not take.
+const UNKNOWN_TRANSACTION: &str = "Unknown transaction type!";
+
 /// How long a session waits for the client to close after a failed login.
 const LOGIN_FAILED_WAIT: Duration = Duration::from_secs(30);
 
@@ -451,7 +454,7 @@ impl Session {
         }
         let TransactionType::Request(opcode) = tx.r#type() else {
             tracing::debug!(opcode = ?tx.r#type(), "not a recognized client request");
-            return vec![tx.reply_error("not implemented")];
+            return vec![tx.reply_error(UNKNOWN_TRANSACTION)];
         };
 
         match self.state {
@@ -518,7 +521,7 @@ impl Session {
             /* 101 */ Opcode::GetMsgs => self.on_get_msgs(tx, state).await,
             /* 103 */ Opcode::OldPostNews => self.on_old_post_news(tx, state).await,
             /* 105 */ Opcode::ChatSend => self.on_chat_send(tx, state, config).await,
-            /* 107 */ Opcode::Login => vec![tx.reply_error("already logged in")],
+            /* 107 */ Opcode::Login => vec![tx.reply_error(UNKNOWN_TRANSACTION)],
             /* 108 */ Opcode::SendInstantMsg => self.on_send_instant_msg(tx, state).await,
             /* 110 */ Opcode::DisconnectUser => self.on_disconnect_user(tx, state).await,
             /* 112 */ Opcode::InviteNewChat => self.on_invite_new_chat(tx, state).await,
@@ -527,7 +530,7 @@ impl Session {
             /* 115 */ Opcode::JoinChat => vec![self.on_join_chat(tx, state).await],
             /* 116 */ Opcode::LeaveChat => self.on_leave_chat(tx, state).await,
             /* 120 */ Opcode::SetChatSubject => self.on_set_chat_subject(tx, state).await,
-            /* 121 */ Opcode::Agreed => vec![tx.reply_error("already logged in")],
+            /* 121 */ Opcode::Agreed => vec![tx.reply_error(UNKNOWN_TRANSACTION)],
             /* 200 */ Opcode::GetFileNameList => self.on_get_file_name_list(tx, state).await,
             /* 202 */ Opcode::DownloadFile => self.on_download_file(tx, state).await,
             /* 203 */ Opcode::UploadFile => self.on_upload_file(tx, state).await,
@@ -569,7 +572,7 @@ impl Session {
             /* 500 */ Opcode::KeepConnectionAlive => vec![tx.reply(vec![])],
             other => {
                 tracing::debug!(?other, "unhandled opcode");
-                vec![tx.reply_error("not implemented")]
+                vec![tx.reply_error(UNKNOWN_TRANSACTION)]
             }
         }
     }
@@ -1611,6 +1614,19 @@ mod tests {
         for request in &requests {
             assert!(session.handle(request, &state, &config).await[0].is_error());
         }
+    }
+
+    #[tokio::test]
+    async fn handle_joined_replies_to_a_second_login_with_unknown_transaction() {
+        let mut session = test_session("Alice", Access::default());
+        let state = Arc::<SharedState>::default();
+        let config = ServerConfig::default();
+
+        let replies = session
+            .handle(&request(Opcode::Login, 1, vec![]), &state, &config)
+            .await;
+
+        assert_eq!(error_text(&replies[0]), "Unknown transaction type!");
     }
 
     #[tokio::test]

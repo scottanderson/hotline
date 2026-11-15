@@ -60,11 +60,11 @@ impl Session {
         if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(target_id) = tx.field(FieldId::UserID).map(Field::as_u16) else {
-            return vec![tx.reply_error("missing user id")];
-        };
+        let target_id = tx.field(FieldId::UserID).map(Field::as_u16).unwrap_or(0);
         let Some(target) = state.user(target_id).await else {
-            return vec![tx.reply_error("no such user")];
+            return vec![tx.reply_error(
+                "Cannot get info for the specified client because it does not exist.",
+            )];
         };
 
         let transfers = state.transfer_report(target_id).await;
@@ -175,9 +175,7 @@ impl Session {
         {
             return vec![tx.reply_error(reason)];
         }
-        let Some(target_id) = tx.field(FieldId::UserID).map(Field::as_u16) else {
-            return vec![tx.reply_error("missing user id")];
-        };
+        let target_id = tx.field(FieldId::UserID).map(Field::as_u16).unwrap_or(0);
         let message = match Self::message_data(tx, state) {
             Ok(message) => message,
             Err(reason) => return vec![tx.reply_error(reason)],
@@ -406,6 +404,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_client_info_text_without_a_user_id_finds_no_client() {
+        let session = test_session("Alice", Access::all());
+        let state = Arc::<SharedState>::default();
+
+        let request = request(Opcode::GetClientInfoText, 1, vec![]);
+        let replies = session.on_get_client_info_text(&request, &state).await;
+
+        assert_eq!(
+            error_text(&replies[0]),
+            "Cannot get info for the specified client because it does not exist."
+        );
+    }
+
+    #[tokio::test]
     async fn get_client_info_text_sends_the_basic_lines_by_default() {
         let encoding = text_encoding::DEFAULT;
         let session = test_session("Alice", Access::all());
@@ -600,6 +612,25 @@ mod tests {
         assert!(
             target_rx.try_recv().is_err(),
             "plain kick must send no wire notice"
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_user_names_a_protected_user() {
+        let session = test_session("Alice", Access::all());
+        let state = Arc::<SharedState>::default();
+        state.insert_user(test_user(2, "Bob")).await;
+
+        let request = request(
+            Opcode::DisconnectUser,
+            1,
+            vec![Field::u16(FieldId::UserID, 2)],
+        );
+        let replies = session.on_disconnect_user(&request, &state).await;
+
+        assert_eq!(
+            error_text(&replies[0]),
+            "You are not allowed to disconnect user “Bob” (user is protected)."
         );
     }
 
@@ -1170,7 +1201,10 @@ mod tests {
         let replies = session.on_send_instant_msg(&request, &state).await;
 
         assert_eq!(replies.len(), 1);
-        assert!(replies[0].is_error());
+        assert_eq!(
+            error_text(&replies[0]),
+            "Couldn't send your message because the client is not connected to this server."
+        );
     }
 
     #[tokio::test]

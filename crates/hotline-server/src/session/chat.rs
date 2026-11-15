@@ -288,9 +288,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return tx.reply_error(reason);
         }
-        let Some(chat_id) = tx.field(FieldId::ChatID).map(Field::as_u32) else {
-            return tx.reply_error("missing chat id");
-        };
+        let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32).unwrap_or(0);
         let encoding = self.encoding();
         let password = tx.string(FieldId::UserPassword).unwrap_or_default();
         let new = match state.join_chat_room(chat_id, self.user_id, &password).await {
@@ -351,9 +349,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
             return vec![tx.reply_error(reason)];
         }
-        let Some(chat_id) = tx.field(FieldId::ChatID).map(Field::as_u32) else {
-            return vec![tx.reply_error("missing chat id")];
-        };
+        let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32).unwrap_or(0);
         if chat_id == 0 {
             return vec![];
         }

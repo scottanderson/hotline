@@ -43,6 +43,14 @@ pub(super) fn request(opcode: Opcode, trans: u32, fields: Vec<Field>) -> Transac
     Transaction::request(opcode, trans, fields).received(text_encoding::DEFAULT)
 }
 
+/// The error text of `reply`.
+pub(super) fn error_text(reply: &Transaction) -> String {
+    reply
+        .received(text_encoding::DEFAULT)
+        .string(hotline_proto::FieldId::ErrorText)
+        .unwrap()
+}
+
 /// Shared state with openline's flood limits.
 pub(super) fn state_with_flood() -> Arc<SharedState> {
     SharedState::new(Providers {
