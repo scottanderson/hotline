@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::future::Future;
+use std::io;
 use std::net::IpAddr;
 use std::num::NonZero;
 use std::sync::Arc;
@@ -556,7 +557,7 @@ impl SharedState {
             .await?
             .list(requester, dir)
             .await
-            .ok_or("file or folder not found.")?;
+            .ok_or("Cannot get file list because the specified folder could not be found.")?;
         if dropbox_blocked(dir, None, access) {
             files.retain(|file| file.file_type == PARTIAL_TYPE);
         }
@@ -575,12 +576,16 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<u64, Cow<'static, str>> {
-        dropbox_access(dir, Some(name), access)?;
+    ) -> Result<u64, String> {
         let size = files
             .size(requester, dir, name)
             .await
-            .ok_or("file or folder not found.")?;
+            .ok_or_else(|| format!("Cannot download because there is no file named “{name}”."))?;
+        if dropbox_blocked(dir, Some(name), access) {
+            Err(format!(
+                "Cannot download “{name}” because it is in a drop box."
+            ))?;
+        }
         Ok(size)
     }
 
@@ -596,12 +601,16 @@ impl SharedState {
         dir: &HlPath,
         name: &str,
         access: Access,
-    ) -> Result<Vec<FolderItem>, Cow<'static, str>> {
-        dropbox_access(dir, Some(name), access)?;
+    ) -> Result<Vec<FolderItem>, String> {
         let items = files
             .walk(requester, dir, name)
             .await
-            .ok_or("file or folder not found.")?;
+            .ok_or_else(|| format!("Cannot download because there is no folder named “{name}”."))?;
+        if dropbox_blocked(dir, Some(name), access) {
+            Err(format!(
+                "Cannot download “{name}” because you are not permitted to access drop boxes."
+            ))?;
+        }
         Ok(items
             .into_iter()
             .filter(|item| !dropbox_blocked(&item.path, None, access))
@@ -641,19 +650,28 @@ impl SharedState {
         access: Access,
         resume: bool,
         size: u64,
-    ) -> Result<u64, Cow<'static, str>> {
+    ) -> Result<u64, String> {
         if !self.folder_exists(files, requester, dir).await {
-            Err("file or folder not found.")?;
+            Err(format!(
+                "Cannot accept upload of the file “{name}” because the specified folder could not be found."
+            ))?;
         }
-        upload_destination_access(dir, access)?;
-        if files.exists(requester, dir, name).await {
-            Err("file already exists.")?;
-        }
+        upload_destination_access(dir, access, "file", name)?;
+        let exists = files.exists(requester, dir, name).await;
         let partial = files.partial_upload_size(requester, dir, name).await;
         if resume {
-            Ok(partial.ok_or("file or folder not found.")?)
-        } else if partial.is_some() {
-            Err("file already exists.")?
+            if exists {
+                Err(format!(
+                    "Cannot resume upload of the file “{name}” because it is already fully transfered."
+                ))?;
+            }
+            Ok(partial.ok_or_else(|| {
+                format!("Cannot resume upload of the file “{name}” because it does not exist.")
+            })?)
+        } else if exists || partial.is_some() {
+            Err(format!(
+                "Cannot accept upload because there is already a file named “{name}”. Try choosing a different name."
+            ))?
         } else {
             self.require_free_space(files, requester, dir, "file", name, size)
                 .await?;
@@ -675,7 +693,7 @@ impl SharedState {
     ) -> Result<(), String> {
         match files.free_space(requester, dir).await {
             Some(free) if size.saturating_add(UPLOAD_SPACE_MARGIN) > free => Err(format!(
-                "Cannot accept upload of the {kind} \"{name}\" because there is not enough free disk space."
+                "Cannot accept upload of the {kind} “{name}” because there is not enough free disk space."
             )),
             _ => Ok(()),
         }
@@ -715,19 +733,25 @@ impl SharedState {
         access: Access,
         resume: bool,
         size: u64,
-    ) -> Result<(), Cow<'static, str>> {
+    ) -> Result<(), String> {
         if !self.folder_exists(files, requester, dir).await {
-            Err("file or folder not found.")?;
+            Err(format!(
+                "Cannot accept upload of the folder “{name}” because the specified folder could not be found."
+            ))?;
         }
-        upload_destination_access(dir, access)?;
+        upload_destination_access(dir, access, "folder", name)?;
         let existing = files.info(requester, dir, name).await;
         if resume {
-            let info = existing.ok_or("file or folder not found.")?;
+            let info = existing.ok_or_else(|| {
+                format!("Cannot resume upload of the folder “{name}” because it does not exist.")
+            })?;
             if !info.is_folder() {
-                Err("file already exists.")?;
+                Err(format!("Cannot resume upload because “{name}” is a file."))?;
             }
         } else if existing.is_some() {
-            Err("file already exists.")?;
+            Err(format!(
+                "Cannot accept upload because there is already a folder named “{name}”. Try choosing a different name."
+            ))?;
         }
         self.require_free_space(files, requester, dir, "folder", name, size)
             .await?;
@@ -737,8 +761,7 @@ impl SharedState {
         files
             .mkdir(requester, dir, name)
             .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
+            .map_err(|e| format!("Cannot accept upload of “{name}”:\r{e}"))
     }
 
     /// Prepare one item of a [`myTran_UploadFldr`] (213) upload at
@@ -804,10 +827,9 @@ impl SharedState {
         access: Access,
     ) -> Result<FileNameWithInfo, Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        let info = files
-            .info(requester, dir, name)
-            .await
-            .ok_or("file or folder not found.")?;
+        let info = files.info(requester, dir, name).await.ok_or_else(|| {
+            format!("Cannot get info because there is no file/folder named “{name}”.")
+        })?;
         Ok(info)
     }
 
@@ -821,10 +843,9 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         let files = self.files_for(requester.login).await?;
-        let info = files
-            .info(requester, dir, name)
-            .await
-            .ok_or("file or folder not found.")?;
+        let info = files.info(requester, dir, name).await.ok_or_else(|| {
+            format!("Cannot delete “{name}” because it does not exist or cannot be found.")
+        })?;
         let is_dir = info.is_folder();
         let required = if is_dir {
             Access::DELETE_FOLDER
@@ -835,7 +856,7 @@ impl SharedState {
         files
             .delete(requester, dir, name, is_dir)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Cannot delete “{name}”:\r{e}"))?;
         Ok(())
     }
 
@@ -849,10 +870,20 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
+        if !self.folder_exists(files, requester, dir).await {
+            Err(format!(
+                "Cannot create folder “{name}” because the enclosing folder could not be found."
+            ))?;
+        }
+        if files.exists(requester, dir, name).await {
+            Err(format!(
+                "Cannot create folder “{name}” because there is already a file or folder with that name."
+            ))?;
+        }
         files
             .mkdir(requester, dir, name)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Cannot create folder “{name}”:\r{e}"))?;
         Ok(())
     }
 
@@ -868,10 +899,9 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        let info = files
-            .info(requester, dir, name)
-            .await
-            .ok_or("file or folder not found.")?;
+        let info = files.info(requester, dir, name).await.ok_or_else(|| {
+            format!("Cannot set info because there is no file/folder named “{name}”.")
+        })?;
         let is_folder = info.is_folder();
         access.require(if is_folder {
             Access::RENAME_FOLDER
@@ -881,7 +911,7 @@ impl SharedState {
         files
             .rename(requester, dir, name, new_name)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Cannot set info for “{name}”:\r{e}"))?;
         Ok(())
     }
 
@@ -898,20 +928,35 @@ impl SharedState {
     ) -> Result<(), Cow<'static, str>> {
         let files = self.files_for(requester.login).await?;
         self.drop_box_source(dir, name, access)?;
-        let info = files
-            .info(requester, dir, name)
-            .await
-            .ok_or("file or folder not found.")?;
+        let info = files.info(requester, dir, name).await.ok_or_else(|| {
+            format!("Cannot move because there is no file/folder named “{name}”.")
+        })?;
         let required = if info.is_folder() {
             Access::MOVE_FOLDER
         } else {
             Access::MOVE_FILE
         };
         access.require(required)?;
+        if !self.folder_exists(&*files, requester, to_dir).await {
+            Err(format!(
+                "Cannot move “{name}” because the destination folder could not be found."
+            ))?;
+        }
         files
             .r#move(requester, dir, name, to_dir)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| match e.kind() {
+                io::ErrorKind::AlreadyExists => format!(
+                    "Cannot move “{name}” because there is already a file/folder in the destination folder with the same name."
+                ),
+                io::ErrorKind::CrossesDevices => {
+                    format!("Cannot move “{name}” between different disks.")
+                }
+                io::ErrorKind::InvalidInput => {
+                    format!("Cannot move “{name}” into itself or into a subfolder of itself.")
+                }
+                _ => format!("Cannot move “{name}”:\r{e}"),
+            })?;
         Ok(())
     }
 
@@ -929,10 +974,25 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         self.drop_box_source(target_dir, target_name, access)?;
+        if !files.exists(requester, target_dir, target_name).await {
+            Err(format!(
+                "Cannot make alias because there is no file/folder named “{target_name}”."
+            ))?;
+        }
+        if !self.folder_exists(files, requester, link_dir).await {
+            Err(format!(
+                "Cannot make alias of “{target_name}” because the destination folder could not be found."
+            ))?;
+        }
         files
             .symlink(requester, target_dir, target_name, link_dir, link_name)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| match e.kind() {
+                io::ErrorKind::AlreadyExists => format!(
+                    "Cannot make alias of “{target_name}” because there is already a file/folder in the destination folder with the same name."
+                ),
+                _ => format!("Cannot make alias of “{target_name}”:\r{e}"),
+            })?;
         Ok(())
     }
 
@@ -963,10 +1023,9 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         dropbox_access(dir, Some(name), access)?;
-        let info = files
-            .info(requester, dir, name)
-            .await
-            .ok_or("file or folder not found.")?;
+        let info = files.info(requester, dir, name).await.ok_or_else(|| {
+            format!("Cannot set info because there is no file/folder named “{name}”.")
+        })?;
         let required = if info.is_folder() {
             Access::SET_FOLDER_COMMENT
         } else {

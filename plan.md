@@ -14,10 +14,21 @@ works this way.
   visible to `GETLIST` immediately at accept, before `Login` even arrives
   (blank name/icon until set). This server only becomes visible at `Login`
   time. Low priority.
-- **`reply_error()` text doesn't match openline's error strings.** Openline
-  uses short, sometimes cryptic strings (`"who?!?"`, `"Uh, no."`);
-  this server uses friendlier text. Not changed yet — decide with the user
-  whether exact-string parity matters for any known client first.
+- **Some error texts are hls's own.** hls sends openline's text for
+  each error that openline sends, with these exceptions:
+  - A path field that does not decode gets "malformed file path",
+    except in `myTran_GetFileNameList` (200). It is unclear what
+    openline's `UFS::New` does with such data.
+  - An upload or a `myTran_NewFolder` (205) with no name gets "invalid
+    file name.". openline names the destination folder itself, and
+    refuses it as an item that exists.
+  - Resume data that does not decode gets "Resume data is invalid.".
+    openline's `UFileSys::ResumeFlatten` throws, and
+    `ProcessTran_DownloadFile` throws the error again.
+  - When a request names its target only by the path, an error names
+    that target. openline shows an empty name, `“”`.
+  - `myTran_DownloadFldr` (210) names the folder as sent. openline makes
+    the name lowercase before its drop box error.
 - **Posted news article title/poster/flavor length cap.** Openline caps
   these at a small fixed buffer and truncates silently past it; this
   server accepts up to the wire format's real 255-byte `pstring` limit

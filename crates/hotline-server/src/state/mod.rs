@@ -46,10 +46,18 @@ fn is_upload_folder(dir: &HlPath) -> bool {
     })
 }
 
-/// `Err` if `dir` is not an upload folder and `access` lacks `UPLOAD_ANYWHERE`.
-fn upload_destination_access(dir: &HlPath, access: Access) -> Result<(), Cow<'static, str>> {
-    if !is_upload_folder(dir) {
-        access.require(Access::UPLOAD_ANYWHERE)?;
+/// `Err` if `dir` is not an upload folder and `access` lacks
+/// `UPLOAD_ANYWHERE`, for an upload of the `kind` `name`.
+fn upload_destination_access(
+    dir: &HlPath,
+    access: Access,
+    kind: &str,
+    name: &str,
+) -> Result<(), String> {
+    if !is_upload_folder(dir) && !access.contains(Access::UPLOAD_ANYWHERE) {
+        Err(format!(
+            "Cannot accept upload of the {kind} “{name}” because you are only allowed to upload to the “Uploads” folder."
+        ))?;
     }
     Ok(())
 }

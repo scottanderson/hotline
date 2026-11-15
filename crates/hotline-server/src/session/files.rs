@@ -37,7 +37,11 @@ impl Session {
         let encoding = self.encoding();
         let dir = match tx.file_path(FieldId::FilePath) {
             Some(Ok(dir)) => dir,
-            Some(Err(_)) => return vec![tx.reply_error("bad path")],
+            Some(Err(_)) => {
+                return vec![tx.reply_error(
+                    "Cannot get file list because the specified folder could not be found.",
+                )];
+            }
             None => HlPath::default(),
         };
 
@@ -75,8 +79,9 @@ impl Session {
         }
     }
 
-    /// A request's [`myField_FileName`] (201) and [`myField_FilePath`] (202)
-    /// fields.
+    /// A request's target: [`myField_FileName`] (201) in the folder
+    /// [`myField_FilePath`] (202). With no name, the target is the last name
+    /// of the path.
     ///
     /// [`myField_FileName`]: hotline_proto::FieldId::FileName
     /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
@@ -84,30 +89,25 @@ impl Session {
         &self,
         tx: &Transaction<Received>,
     ) -> std::result::Result<(String, HlPath), &'static str> {
-        let name = tx.string(FieldId::FileName).ok_or("missing file name")?;
-        let dir = self.path_field(tx, FieldId::FilePath)?;
+        let path = self.path_field(tx, FieldId::FilePath)?;
+        if let Some(name) = tx.string(FieldId::FileName).filter(|name| !name.is_empty()) {
+            return Ok((name, path));
+        }
+        let (dir, name) = path.split_last();
         Ok((name, dir))
     }
 
-    /// Like `file_name_and_dir`, but when [`myField_FileName`] (201) is
-    /// absent, derives the target name and containing directory from
-    /// [`myField_FilePath`] (202)'s last component instead of erroring.
+    /// An upload's [`myField_FileName`] (201) and its folder,
+    /// [`myField_FilePath`] (202).
     ///
     /// [`myField_FileName`]: hotline_proto::FieldId::FileName
     /// [`myField_FilePath`]: hotline_proto::FieldId::FilePath
-    pub(super) fn file_name_and_dir_from_path_tail(
+    fn upload_name_and_dir(
         &self,
         tx: &Transaction<Received>,
     ) -> std::result::Result<(String, HlPath), &'static str> {
-        if tx.field(FieldId::FileName).is_some() {
-            return self.file_name_and_dir(tx);
-        }
-        let path = self.path_field(tx, FieldId::FilePath)?;
-        let (name, dir) = path
-            .components
-            .split_last()
-            .ok_or("missing file name or path")?;
-        Ok((name.clone(), HlPath::new(dir.to_vec())))
+        let name = tx.string(FieldId::FileName).unwrap_or_default();
+        Ok((name, self.path_field(tx, FieldId::FilePath)?))
     }
 
     /// [`myTran_DownloadFile`] (202): start a download. Allocates a transfer
@@ -290,7 +290,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
 
-        let (name, dir) = match self.file_name_and_dir(tx) {
+        let (name, dir) = match self.upload_name_and_dir(tx) {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -447,7 +447,7 @@ impl Session {
             return vec![tx.reply_error(reason)];
         }
 
-        let (name, dir) = match self.file_name_and_dir(tx) {
+        let (name, dir) = match self.upload_name_and_dir(tx) {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -564,7 +564,7 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_FOLDER) {
             return vec![tx.reply_error(reason)];
         }
-        let (name, dir) = match self.file_name_and_dir_from_path_tail(tx) {
+        let (name, dir) = match self.file_name_and_dir(tx) {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -601,7 +601,7 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
             return vec![tx.reply_error(reason)];
         }
-        let (name, dir) = match self.file_name_and_dir_from_path_tail(tx) {
+        let (name, dir) = match self.file_name_and_dir(tx) {
             Ok(result) => result,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
@@ -2122,7 +2122,10 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "Cannot accept upload of the file “a.txt” because you are only allowed to upload to the “Uploads” folder."
+        );
     }
 
     #[tokio::test]
@@ -2185,7 +2188,7 @@ mod tests {
                 .string(FieldId::ErrorText)
                 .as_deref(),
             Some(
-                "Cannot accept upload of the file \"a.txt\" because there is not enough free disk space."
+                "Cannot accept upload of the file “a.txt” because there is not enough free disk space."
             )
         );
         let [reply] = session
@@ -2249,7 +2252,10 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "Cannot accept upload because there is already a file named “a.txt”. Try choosing a different name."
+        );
     }
 
     #[tokio::test]
@@ -2337,7 +2343,10 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "Cannot resume upload of the file “a.txt” because it is already fully transfered."
+        );
     }
 
     #[tokio::test]
@@ -2499,7 +2508,10 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "Cannot resume upload of the file “a.txt” because it does not exist."
+        );
     }
 
     #[tokio::test]
@@ -2525,7 +2537,10 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "Cannot accept upload of the file “a.txt” because the specified folder could not be found."
+        );
     }
 
     #[tokio::test]
@@ -2617,7 +2632,148 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "Cannot delete “missing.txt” because it does not exist or cannot be found."
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_file_without_a_file_name_deletes_the_last_name_of_the_path() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Sub"]), "a.txt", *b"bye");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let delete = request(
+            Opcode::DeleteFile,
+            1,
+            vec![Field::bytes(
+                FieldId::FilePath,
+                HlPath::new(["Sub", "a.txt"]).encode(encoding).unwrap(),
+            )],
+        );
+        let [reply] = session
+            .on_delete_file(&delete, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::new(["Sub"]), "a.txt")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn new_folder_in_a_missing_folder_is_an_error() {
+        let encoding = text_encoding::DEFAULT;
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+
+        let mkdir = request(
+            Opcode::NewFolder,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "New"),
+                Field::bytes(
+                    FieldId::FilePath,
+                    HlPath::new(["Nope"]).encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_new_folder(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot create folder “New” because the enclosing folder could not be found."
+        );
+    }
+
+    #[tokio::test]
+    async fn new_folder_over_a_file_is_an_error() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let mkdir = request(
+            Opcode::NewFolder,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_new_folder(&mkdir, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot create folder “a.txt” because there is already a file or folder with that name."
+        );
+    }
+
+    #[tokio::test]
+    async fn move_file_to_a_missing_folder_is_an_error() {
+        let encoding = text_encoding::DEFAULT;
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let move_tx = request(
+            Opcode::MoveFile,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::bytes(
+                    FieldId::FileNewPath,
+                    HlPath::new(["Nope"]).encode(encoding).unwrap(),
+                ),
+            ],
+        );
+        let [reply] = session
+            .on_move_file(&move_tx, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot move “a.txt” because the destination folder could not be found."
+        );
+    }
+
+    #[tokio::test]
+    async fn make_file_alias_of_a_missing_file_is_an_error() {
+        let state = state_with_files(crate::file::InMemoryFileProvider::default());
+        let session = test_session("Alice", Access::all());
+
+        let alias = request(
+            Opcode::MakeFileAlias,
+            1,
+            vec![Field::string(FieldId::FileName, "a.txt")],
+        );
+        let [reply] = session
+            .on_make_file_alias(&alias, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "Cannot make alias because there is no file/folder named “a.txt”."
+        );
+        let requester = FileRequester { login: "" };
+        assert!(
+            !state
+                .file_exists(requester, &HlPath::default(), "a.txt")
+                .await
+        );
     }
 
     #[tokio::test]

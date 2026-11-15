@@ -23,7 +23,7 @@ impl ServerPolicy for HlsPolicy {
                 Some("Cannot post article because the category has no article ID left.".into())
             }
             Silent::CommentWrite { name, error } => {
-                Some(format!("Cannot set info for \"{name}\":\r{error}").into())
+                Some(format!("Cannot set info for “{name}”:\r{error}").into())
             }
             _ => None,
         }
@@ -168,7 +168,7 @@ mod tests {
         };
         assert_eq!(
             HlsPolicy.error(case).as_deref(),
-            Some("Cannot set info for \"a.txt\":\rdisk full")
+            Some("Cannot set info for “a.txt”:\rdisk full")
         );
     }
 }

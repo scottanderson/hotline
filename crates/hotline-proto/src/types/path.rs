@@ -29,6 +29,13 @@ impl HlPath {
         }
     }
 
+    /// The parent path and the last name. An empty path gives itself and
+    /// an empty name.
+    pub fn split_last(mut self) -> (Self, String) {
+        let name = self.components.pop().unwrap_or_default();
+        (self, name)
+    }
+
     /// Encode to bytes suitable for a [`myField_FilePath`] (202) or [`myField_NewsPath`] (325)
     /// field.
     ///
@@ -77,6 +84,16 @@ mod tests {
         let path = HlPath::new(["Games", "Emulators"]);
         let bytes = path.encode(encoding).unwrap();
         assert_eq!(HlPath::decode(&bytes, encoding).unwrap(), path);
+    }
+
+    #[test]
+    fn split_last_gives_the_parent_and_the_last_name() {
+        let path = HlPath::new(["a", "b"]);
+        assert_eq!(path.split_last(), (HlPath::new(["a"]), "b".into()));
+        assert_eq!(
+            HlPath::default().split_last(),
+            (HlPath::default(), String::new())
+        );
     }
 
     #[test]
