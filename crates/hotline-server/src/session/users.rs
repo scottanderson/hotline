@@ -7,7 +7,7 @@ use hotline_proto::FieldId;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::UserNameWithInfo;
-use hotline_proto::{Field, Received, Transaction, text_encoding};
+use hotline_proto::{Field, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::ban::BanRecord;
@@ -16,12 +16,6 @@ use crate::policy::Silent;
 use crate::state::{SharedState, UserEntry};
 
 use super::connection::{KickBan, MsgOption, Session};
-
-/// The most bytes of a permanent ban's note.
-const MAX_BAN_NOTE: usize = 63;
-
-/// The most bytes of a private message, its quote, or a broadcast.
-const MAX_MESSAGE: usize = 4096;
 
 impl Session {
     /// [`myTran_GetUserNameList`] (300): every user with a name.
@@ -84,13 +78,15 @@ impl Session {
 
     /// [`myTran_DisconnectUser`] (110): disconnect another user, and if the
     /// [`myField_Options`] (113) kick-to-ban bit is set, ban their address and
-    /// notify them why before disconnecting them. A permanent ban keeps the
-    /// first 63 bytes of [`myField_Data`] (101) as its note. A missing target
-    /// id defaults to 0, which no session holds, so the kick is just a no-op.
+    /// notify them why before disconnecting them. A permanent ban keeps
+    /// [`myField_Data`] (101), cut to [`TextLimits::ban_note`], as its
+    /// note. A missing target id defaults to 0, which no session holds, so
+    /// the kick is just a no-op.
     ///
     /// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
     /// [`myField_Options`]: hotline_proto::FieldId::Options
     /// [`myField_Data`]: hotline_proto::FieldId::Data
+    /// [`TextLimits::ban_note`]: crate::TextLimits::ban_note
     pub(super) async fn on_disconnect_user(
         &self,
         tx: &Transaction<Received>,
@@ -114,7 +110,9 @@ impl Session {
             (KickBan::Permanent, Some(ip)) => {
                 let note = tx.string(FieldId::Data).unwrap_or_default();
                 let record = BanRecord {
-                    note: text_encoding::cut(self.encoding(), &note, MAX_BAN_NOTE).to_owned(),
+                    note: self
+                        .cut_text(state.policy().text_limits().ban_note, &note)
+                        .to_owned(),
                     ..BanRecord::new(ip, None)
                 };
                 if let Err(error) = state.ban(record).await {
@@ -159,10 +157,11 @@ impl Session {
 
     /// [`myTran_SendInstantMsg`] (108): a private instant message to one other
     /// user. Options 2 and 3 send the sender's refusal text in place of the
-    /// message. The message and its quote are cut to `MAX_MESSAGE` bytes,
-    /// and an empty message is not sent.
+    /// message. The policy cuts the message and its quote to
+    /// [`TextLimits::message`], and an empty message is not sent.
     ///
     /// [`myTran_SendInstantMsg`]: hotline_proto::Opcode::SendInstantMsg
+    /// [`TextLimits::message`]: crate::TextLimits::message
     pub(super) async fn on_send_instant_msg(
         &self,
         tx: &Transaction<Received>,
@@ -191,8 +190,8 @@ impl Session {
             MsgOption::RefuseChat => format!("{} does not accept private chats.", self.name),
             _ => message,
         };
-        let encoding = self.encoding();
-        let message = text_encoding::cut(encoding, &message, MAX_MESSAGE);
+        let limits = state.policy().text_limits();
+        let message = self.cut_text(limits.message, &message);
 
         let target = match state.require_connected_user(target_id).await {
             Ok(target) => target,
@@ -213,7 +212,7 @@ impl Session {
                 .string(FieldId::QuotingMsg)
                 .filter(|quote| !quote.is_empty())
             {
-                let quote = text_encoding::cut(encoding, &quote, MAX_MESSAGE);
+                let quote = self.cut_text(limits.message, &quote);
                 fields.push(Field::string(FieldId::QuotingMsg, quote));
             }
             state
@@ -267,9 +266,10 @@ impl Session {
     }
 
     /// [`myTran_UserBroadcast`] (355): a message broadcast to every connected
-    /// user, cut to `MAX_MESSAGE` bytes. An empty message is not sent.
+    /// user, cut to [`TextLimits::message`]. An empty message is not sent.
     ///
     /// [`myTran_UserBroadcast`]: hotline_proto::Opcode::UserBroadcast
+    /// [`TextLimits::message`]: crate::TextLimits::message
     pub(super) async fn on_user_broadcast(
         &self,
         tx: &Transaction<Received>,
@@ -285,7 +285,7 @@ impl Session {
             Ok(message) => message,
             Err(reason) => return vec![tx.reply_error(reason)],
         };
-        let message = text_encoding::cut(self.encoding(), &message, MAX_MESSAGE);
+        let message = self.cut_text(state.policy().text_limits().message, &message);
         if message.is_empty() {
             return vec![tx.reply(vec![])];
         }
@@ -316,6 +316,7 @@ mod tests {
     use crate::session::test_support::*;
     use crate::state::RecipientMessage;
     use hotline_proto::opcode::TransactionType;
+    use hotline_proto::text_encoding;
     use std::time::Instant;
 
     #[tokio::test]
@@ -628,7 +629,10 @@ mod tests {
             .is_banned("192.0.2.9".parse().unwrap())
             .await
             .expect("expected a permanent ban");
-        assert_eq!(ban.note, "x".repeat(MAX_BAN_NOTE));
+        assert_eq!(
+            ban.note,
+            "x".repeat(state.policy().text_limits().ban_note.unwrap())
+        );
 
         let kick = target_rx
             .try_recv()
@@ -1103,10 +1107,14 @@ mod tests {
             .and_then(RecipientMessage::into_push)
             .expect("expected a ServerMsg push")
             .received(encoding);
-        assert_eq!(delivered.string(FieldId::Data).unwrap().len(), MAX_MESSAGE);
+        let limits = state.policy().text_limits();
+        assert_eq!(
+            delivered.string(FieldId::Data).unwrap().len(),
+            limits.message.unwrap()
+        );
         assert_eq!(
             delivered.string(FieldId::QuotingMsg).unwrap().len(),
-            MAX_MESSAGE
+            limits.message.unwrap()
         );
 
         let replies = session
@@ -1228,7 +1236,7 @@ mod tests {
             .expect("expected a UserBroadcast push");
         assert_eq!(
             sent.received(encoding).string(FieldId::Data).unwrap().len(),
-            MAX_MESSAGE
+            state.policy().text_limits().message.unwrap()
         );
 
         let replies = session

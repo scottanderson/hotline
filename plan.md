@@ -89,7 +89,8 @@ works this way.
   `hls` stores threaded news text bodies, like its other text, as
   UTF-8, and converts each one to the connection's encoding on the
   wire. A `myTran_GetMsgs` (101) reply that is too long is cut at a
-  whole character; openline cuts at a byte.
+  whole character; openline cuts at a byte. Each cut to a `TextLimits`
+  length is also at a whole character.
 - **The file name rule maps more.** openline's
   `UFileSys::ValidateFileName` differs by platform, and so does
   `validate_file_name`. On Mac OS X, openline only cuts the length.
@@ -115,12 +116,6 @@ works this way.
   `myField_NewsArtData` (333) body, so it keeps an article with no
   text and then replies with an error. `hls` checks the body first and
   adds nothing.
-- **Account fields have no length limit.** openline's
-  `SMyUserDataFile` keeps 64 bytes of a name and 32 bytes of a login
-  and a password, and `ProcessTran_NewUser`, `ProcessTran_SetUser`, and
-  `ProcessTran_SetUserList` cut each field to fit.
-  `ProcessTran_SetUserList` also keeps 31 bytes of a record's old
-  login. `hls` keeps any length.
 - **A post with no article ID left is an error.** openline gives out
   article ID 4294967295 and stores 0 as the next ID. Its next
   `ProcessTran_PostNewsArt` throws in `_NZ_AddIDToHash`, so the client

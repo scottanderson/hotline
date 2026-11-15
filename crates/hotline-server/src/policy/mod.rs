@@ -6,6 +6,6 @@ mod server_policy;
 mod time_zone;
 
 pub use openline::OpenlinePolicy;
-pub use server_policy::{ChatRooms, ServerPolicy, Silent, TakenLogin};
+pub use server_policy::{ChatRooms, ServerPolicy, Silent, TakenLogin, TextLimits};
 pub use time_zone::TimeZone;
 pub(crate) use time_zone::to_utc;

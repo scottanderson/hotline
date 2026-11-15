@@ -18,11 +18,6 @@ use crate::state::SharedState;
 
 use super::connection::Session;
 
-/// The longest [`myField_ChatSubject`] (115) kept, in bytes.
-///
-/// [`myField_ChatSubject`]: hotline_proto::FieldId::ChatSubject
-const MAX_CHAT_SUBJECT: usize = 255;
-
 impl Session {
     /// [`myTran_ChatSend`] (105): public or (if [`myField_ChatID`] (114) is
     /// present) private-room chat, gated on `SEND_CHAT`. A message that
@@ -68,9 +63,10 @@ impl Session {
             true => format!("\r *** {} ", self.name),
             false => format!("\r{:>13.13}:  ", self.name),
         };
-        let message = text_encoding::cut(encoding, &message, MAX_CHAT_LINE);
+        let limits = state.policy().text_limits();
+        let message = self.cut_text(limits.chat_line, &message);
         let text = format!("\r{message}").replace('\r', &prefix);
-        let text = text_encoding::cut(encoding, &text, MAX_CHAT_LINE).to_string();
+        let text = self.cut_text(limits.chat_line, &text).to_owned();
         let mut sent = self.data_bytes(tx).to_vec();
         sent.truncate(MAX_CHAT_LINE);
         let relayed = text_encoding::encode(encoding, &text).len();
@@ -412,9 +408,10 @@ impl Session {
 
     /// [`myTran_SetChatSubject`] (120): set a chat room's subject and/or its join
     /// password, as the policy's [`ChatRooms`] lets it. The subject is cut
-    /// to 255 bytes.
+    /// to [`TextLimits::chat_subject`].
     ///
     /// [`myTran_SetChatSubject`]: hotline_proto::Opcode::SetChatSubject
+    /// [`TextLimits::chat_subject`]: crate::TextLimits::chat_subject
     pub(super) async fn on_set_chat_subject(
         &self,
         tx: &Transaction<Received>,
@@ -435,7 +432,8 @@ impl Session {
             .map(Field::as_u32)
             .ok_or("missing chat id")?;
         let mut subject = tx.string(FieldId::ChatSubject).map(|subject| {
-            text_encoding::cut(self.encoding(), &subject, MAX_CHAT_SUBJECT).to_string()
+            self.cut_text(state.policy().text_limits().chat_subject, &subject)
+                .to_owned()
         });
         let mut password = tx.string(FieldId::UserPassword);
         if state.policy().chat_rooms() == ChatRooms::Open {
@@ -1543,7 +1541,7 @@ mod tests {
         assert!(replies.is_ok());
         assert_eq!(
             state.chat_room(chat_id).await.unwrap().subject.len(),
-            MAX_CHAT_SUBJECT
+            state.policy().text_limits().chat_subject.unwrap()
         );
     }
 

@@ -5,8 +5,7 @@ use std::time::SystemTime;
 
 use hotline_proto::FieldId;
 use hotline_proto::consts::{Access, RequireFlags};
-use hotline_proto::htxf::{self, FlatFileInfo, ResumedFork};
-use hotline_proto::text_encoding;
+use hotline_proto::htxf::{self, ResumedFork};
 use hotline_proto::types::{self, HlPath};
 use hotline_proto::{Field, ForkHeader, Received, Transaction};
 
@@ -590,9 +589,10 @@ impl Session {
     /// [`myTran_GetFileInfo`] (206): fetch a file or folder's metadata. A
     /// type or creator code with a display name sends the name, and any
     /// other sends the code. Only a file sends its size. Comment is sent
-    /// when one is stored, cut to its first 255 bytes.
+    /// when one is stored, cut to [`TextLimits::file_comment`].
     ///
     /// [`myTran_GetFileInfo`]: hotline_proto::Opcode::GetFileInfo
+    /// [`TextLimits::file_comment`]: crate::TextLimits::file_comment
     pub(super) async fn on_get_file_info(
         &self,
         tx: &Transaction<Received>,
@@ -646,8 +646,7 @@ impl Session {
         }
         fields.push(Field::bytes(FieldId::FileModifyDate, date(times.modified)));
         if let Some(comment) = comment {
-            let comment =
-                text_encoding::cut(self.encoding(), &comment, FlatFileInfo::MAX_COMMENT_LEN);
+            let comment = self.cut_text(state.policy().text_limits().file_comment, &comment);
             fields.push(Field::string(FieldId::FileComment, comment));
         }
         vec![tx.reply(fields)]
@@ -655,10 +654,12 @@ impl Session {
 
     /// [`myTran_SetFileInfo`] (207): set a file or folder's
     /// [`myField_FileComment`] (210), then rename it. A comment sent with a
-    /// refused rename is still set. A comment keeps its first 255 bytes.
+    /// refused rename is still set. A comment is cut to
+    /// [`TextLimits::file_comment`].
     ///
     /// [`myTran_SetFileInfo`]: hotline_proto::Opcode::SetFileInfo
     /// [`myField_FileComment`]: hotline_proto::FieldId::FileComment
+    /// [`TextLimits::file_comment`]: crate::TextLimits::file_comment
     pub(super) async fn on_set_file_info(
         &self,
         tx: &Transaction<Received>,
@@ -685,7 +686,7 @@ impl Session {
         };
         // A comment of one zero byte clears the comment.
         let comment = tx.string(FieldId::FileComment).map(|comment| {
-            match text_encoding::cut(self.encoding(), &comment, FlatFileInfo::MAX_COMMENT_LEN) {
+            match self.cut_text(state.policy().text_limits().file_comment, &comment) {
                 "\0" => String::new(),
                 comment => comment.to_owned(),
             }
@@ -797,6 +798,7 @@ mod tests {
     use crate::providers::Providers;
     use crate::session::test_support::*;
     use hotline_proto::opcode::Opcode;
+    use hotline_proto::text_encoding;
 
     #[tokio::test]
     async fn download_banner_denied_without_access_extra_banner_get() {

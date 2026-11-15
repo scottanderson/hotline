@@ -3,8 +3,7 @@ use std::io;
 
 use hotline_proto::consts::Access;
 
-use super::TimeZone;
-
+use super::{OpenlinePolicy, TimeZone};
 use crate::account::Account;
 use crate::state::{TransferReport, UserEntry};
 
@@ -90,6 +89,42 @@ pub enum ChatRooms {
     Invited,
 }
 
+/// The most bytes that each kind of text keeps. `None` keeps it whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextLimits {
+    /// The name of a new or edited account.
+    pub account_name: Option<usize>,
+    /// The login of [`myTran_Login`] (107), or of a new or edited account.
+    ///
+    /// [`myTran_Login`]: hotline_proto::Opcode::Login
+    pub login: Option<usize>,
+    /// The password of [`myTran_Login`] (107), or the new password of an
+    /// account.
+    ///
+    /// [`myTran_Login`]: hotline_proto::Opcode::Login
+    pub password: Option<usize>,
+    /// The stored password that an account edit keeps.
+    pub kept_password: Option<usize>,
+    /// The old login of a [`myTran_SetUserList`] (349) record.
+    ///
+    /// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
+    pub old_login: Option<usize>,
+    /// The name of a user, from the client or from the account.
+    pub user_name: Option<usize>,
+    /// A line of chat, before and after the sender's name goes in front.
+    pub chat_line: Option<usize>,
+    /// The subject of a chat room.
+    pub chat_subject: Option<usize>,
+    /// The automatic response to a private message.
+    pub automatic_response: Option<usize>,
+    /// The note of a permanent ban.
+    pub ban_note: Option<usize>,
+    /// A private message, its quote, or a broadcast.
+    pub message: Option<usize>,
+    /// The comment of a file or a folder.
+    pub file_comment: Option<usize>,
+}
+
 /// The choices where a server differs from openline.
 pub trait ServerPolicy: Send + Sync {
     /// The error reply for `case`, which stops the request. `None` sends no
@@ -150,5 +185,11 @@ pub trait ServerPolicy: Send + Sync {
             access: access.unwrap_or_else(Access::empty),
             access_extra: existing.access_extra,
         }
+    }
+
+    /// The most bytes that each kind of text keeps. The default gives
+    /// openline's lengths, from [`OpenlinePolicy`].
+    fn text_limits(&self) -> TextLimits {
+        OpenlinePolicy.text_limits()
     }
 }

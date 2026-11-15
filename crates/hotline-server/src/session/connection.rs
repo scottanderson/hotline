@@ -94,11 +94,6 @@ const KICK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a session waits for the client to close after a failed login.
 const LOGIN_FAILED_WAIT: Duration = Duration::from_secs(30);
 
-/// The longest [`myField_AutomaticResponse`] (215) kept, in bytes.
-///
-/// [`myField_AutomaticResponse`]: hotline_proto::FieldId::AutomaticResponse
-const MAX_AUTOMATIC_RESPONSE: usize = 127;
-
 /// Reads and discards `stream` until it ends or `timeout` elapses.
 async fn drain_with_timeout<S: Stream + Unpin>(mut stream: S, timeout: Duration) {
     let _ = tokio::time::timeout(timeout, async { while stream.next().await.is_some() {} }).await;
@@ -591,12 +586,16 @@ impl Session {
         let login = tx.login();
         let password = tx.password();
 
+        let limits = state.policy().text_limits();
         // An empty login field means "guest", same as the client omitting it.
         let login = login
             .as_deref()
+            .map(|login| self.cut_text(limits.login, login))
             .filter(|s| !s.is_empty())
             .unwrap_or("guest");
-        let password = password.as_deref().unwrap_or_default();
+        let password = password
+            .as_deref()
+            .map_or("", |password| self.cut_text(limits.password, password));
 
         // A `\r` becomes `-`, so a store does not read it as a path.
         let login = login.to_lowercase().replace('\r', "-");
@@ -632,7 +631,7 @@ impl Session {
         let joined = named || !modern;
         if joined {
             if named {
-                self.take_user_name(name.as_deref(), true);
+                self.take_user_name(name.as_deref(), true, state);
             }
             let selfinfo = self.complete_join(icon, state).await;
             if named {
@@ -686,8 +685,8 @@ impl Session {
         self.access = account.access;
         self.access_extra = account.access_extra;
         let icon = tx.icon().unwrap_or(0);
-        self.take_user_name(tx.name().as_deref(), true);
-        self.take_options(tx);
+        self.take_user_name(tx.name().as_deref(), true, state);
+        self.take_options(tx, state);
         let selfinfo = self.complete_join(icon, state).await;
         self.record_activity(Activity::Connect, state).await;
         let mut replies = vec![tx.reply(vec![]), selfinfo];
@@ -771,39 +770,48 @@ impl Session {
         if self.flood_banned(FloodEvent::NameChange, state).await {
             return vec![];
         }
-        self.take_user_name(tx.name().as_deref(), false);
+        self.take_user_name(tx.name().as_deref(), false, state);
         let icon = tx.icon().unwrap_or(0);
-        self.take_options(tx);
+        self.take_options(tx, state);
         // Later changes are self-inclusive, unlike the join announcement.
         self.announce_user_change(icon, state, false).await;
         Vec::new()
+    }
+
+    /// `name` cut as a user name, or `***` if it is empty.
+    fn user_name(&self, name: &str, state: &SharedState) -> Box<str> {
+        match self.cut_text(state.policy().text_limits().user_name, name) {
+            "" => "***".into(),
+            name => name.into(),
+        }
     }
 
     /// Sets the user name from the name the client `sent`, with `*` for
     /// each code point that does not print. With `ANY_NAME` the user gets
     /// the sent name. Without it, the user gets the account's name
     /// `at_login`, and keeps the name after login.
-    fn take_user_name(&mut self, sent: Option<&str>, at_login: bool) {
+    fn take_user_name(&mut self, sent: Option<&str>, at_login: bool, state: &SharedState) {
         let sent: String = sent
             .unwrap_or_default()
             .chars()
             .map(|c| if prints(c) { c } else { '*' })
             .collect();
-        self.real_name = user_name(&sent, self.encoding());
+        self.real_name = self.user_name(&sent, state);
         if self.access.contains(Access::ANY_NAME) {
             self.name = self.real_name.clone();
         } else if at_login {
-            self.name = user_name(&self.account_name, self.encoding());
+            self.name = self.user_name(&self.account_name, state);
         }
     }
 
     /// Sets the refusal options and the automatic response from
     /// [`myField_Options`] (113) and [`myField_AutomaticResponse`] (215),
-    /// cut to 127 bytes.
+    /// cut to [`TextLimits::automatic_response`].
     ///
     /// [`myField_Options`]: hotline_proto::FieldId::Options
     /// [`myField_AutomaticResponse`]: hotline_proto::FieldId::AutomaticResponse
-    fn take_options(&mut self, tx: &Transaction<Received>) {
+    /// [`TextLimits::automatic_response`]: crate::TextLimits::automatic_response
+    fn take_options(&mut self, tx: &Transaction<Received>, state: &SharedState) {
         let options = UserChangeOptions::from_bits_truncate(
             tx.field(FieldId::Options).map(Field::as_u16).unwrap_or(0),
         );
@@ -817,7 +825,7 @@ impl Session {
                     .map_or_else(
                         || "I'm not able to respond right now. Please try later!".into(),
                         |text| {
-                            text_encoding::cut(self.encoding(), &text, MAX_AUTOMATIC_RESPONSE)
+                            self.cut_text(state.policy().text_limits().automatic_response, &text)
                                 .into()
                         },
                     )
@@ -864,10 +872,11 @@ impl Session {
 
     /// Applies a live account-modify change for this session's login. A
     /// new access gets a [`myTran_UserAccess`] (354) push. The name becomes
-    /// the client's own with `ANY_NAME`, or the account's cut to 31 bytes
-    /// without it. Either one can be empty.
+    /// the client's own with `ANY_NAME`, or the account's cut to
+    /// [`TextLimits::user_name`] without it. Either one can be empty.
     ///
     /// [`myTran_UserAccess`]: hotline_proto::Opcode::UserAccess
+    /// [`TextLimits::user_name`]: crate::TextLimits::user_name
     pub(super) async fn apply_access_update(&mut self, update: AccessUpdate, state: &SharedState) {
         if self.login.is_empty() || update.login != self.login {
             return;
@@ -892,7 +901,8 @@ impl Session {
         let name = if self.access.contains(Access::ANY_NAME) {
             self.real_name.clone()
         } else {
-            text_encoding::cut(self.encoding(), &self.account_name, 31).into()
+            self.cut_text(state.policy().text_limits().user_name, &self.account_name)
+                .into()
         };
         let name_changed = name != self.name;
         self.name = name;
@@ -955,6 +965,11 @@ impl Session {
         self.encoding.get()
     }
 
+    /// `text` cut to `max_len` bytes at a whole character, or whole for `None`.
+    pub(super) fn cut_text<'a>(&self, max_len: Option<usize>, text: &'a str) -> &'a str {
+        max_len.map_or(text, |len| text_encoding::cut(self.encoding(), text, len))
+    }
+
     /// This session's own admin and away flags, for [`myTran_NotifyChangeUser`]
     /// (301) and [`myTran_UserAccess`] (354).
     ///
@@ -988,14 +1003,6 @@ fn prints(c: char) -> bool {
             | GeneralCategory::ParagraphSeparator
             | GeneralCategory::Unassigned
     )
-}
-
-/// `name` cut to 31 bytes in `encoding`, or `***` if it is empty.
-fn user_name(name: &str, encoding: &'static Encoding) -> Box<str> {
-    match text_encoding::cut(encoding, name, 31) {
-        "" => "***".into(),
-        name => name.into(),
-    }
 }
 
 #[cfg(test)]
@@ -1348,6 +1355,32 @@ mod tests {
 
         assert_eq!(session.access, Access::BROADCAST);
         assert_eq!(&*session.login, "alice");
+    }
+
+    #[tokio::test]
+    async fn login_cuts_the_login_and_the_password_at_32_bytes() {
+        let mut session = test_session("guest1", Access::empty());
+        let state = Arc::<SharedState>::default();
+        let config = ServerConfig::default();
+        let account = Account {
+            access_extra: AccessExtra::default(),
+            password: "p".repeat(32).into(),
+            name: "Alice".into(),
+            access: Access::BROADCAST,
+        };
+        state.put_account("l".repeat(32), account).await.unwrap();
+
+        let login = request(
+            Opcode::Login,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "l".repeat(40)),
+                Field::obfuscated_string(FieldId::UserPassword, "p".repeat(40)),
+            ],
+        );
+        session.on_login(&login, &state, &config).await;
+
+        assert_eq!(session.access, Access::BROADCAST);
     }
 
     #[tokio::test]
@@ -2347,7 +2380,7 @@ mod tests {
 
         assert_eq!(
             session.automatic_response.as_deref().map(str::len),
-            Some(MAX_AUTOMATIC_RESPONSE)
+            state.policy().text_limits().automatic_response
         );
     }
 

@@ -26,10 +26,15 @@ impl Session {
         if let Err(reason) = self.access.require(Access::CREATE_USER) {
             return vec![tx.reply_error(reason)];
         }
+        let limits = state.policy().text_limits();
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
-        let login: Box<str> = login.to_lowercase().into();
+        let login: Box<str> = self.cut_text(limits.login, &login).to_lowercase().into();
+        let password = tx.password().unwrap_or_default();
+        let password = self.cut_text(limits.password, &password).into();
+        let name = tx.name().unwrap_or_default();
+        let name = self.cut_text(limits.account_name, &name).into();
         let access = tx.access().unwrap_or_else(Access::empty);
         if !self
             .access
@@ -38,8 +43,8 @@ impl Session {
             return vec![tx.reply_error("Cannot create account with more access than yourself.")];
         }
         let account = Account {
-            password: tx.password().unwrap_or_default().into(),
-            name: tx.name().unwrap_or_default().into(),
+            password,
+            name,
             access,
             access_extra: AccessExtra::default(),
         };
@@ -137,13 +142,25 @@ impl Session {
         if let Err(reason) = self.access.require(Access::MODIFY_USER) {
             return vec![tx.reply_error(reason)];
         }
+        let policy = state.policy();
+        let limits = policy.text_limits();
         let Some(login) = tx.login() else {
             return vec![tx.reply_error("missing login")];
         };
-        let login: Box<str> = login.to_lowercase().into();
-        let password = Self::new_password(tx.field(FieldId::UserPassword));
-        let policy = state.policy();
-        let edit = |existing| policy.edit_account(existing, password, tx.name(), tx.access());
+        let login: Box<str> = self.cut_text(limits.login, &login).to_lowercase().into();
+        let password = Self::new_password(tx.field(FieldId::UserPassword))
+            .map(|password| Box::from(self.cut_text(limits.password, &password)));
+        let name = tx
+            .name()
+            .map(|name| self.cut_text(limits.account_name, &name).to_owned());
+        let edit = |mut existing: Account| {
+            if password.is_none() {
+                existing.password = self
+                    .cut_text(limits.kept_password, &existing.password)
+                    .into();
+            }
+            policy.edit_account(existing, password, name, tx.access())
+        };
         let account = match state.replace_account(&login, login.clone(), edit).await {
             Ok(ReplacedAccount { account, .. }) => account,
             Err(NotReplaced { reason, .. }) => return vec![tx.reply_error(reason)],
@@ -292,18 +309,20 @@ impl Session {
         state: &SharedState,
     ) -> std::result::Result<bool, Cow<'static, str>> {
         let as_deobfuscated_string = |f: &Field<Received>| f.as_deobfuscated_string();
+        let limits = state.policy().text_limits();
         let old_login = record
             .field(FieldId::Data)
             .map(as_deobfuscated_string)
             .filter(|s| !s.is_empty())
-            .map(|s| Box::<str>::from(s.to_lowercase()));
+            .map(|s| self.cut_text(limits.old_login, &s).to_lowercase())
+            .map(String::into_boxed_str);
         let name = record.string(FieldId::UserName).unwrap_or_default();
+        let name = self.cut_text(limits.account_name, &name);
         let login = record
             .field(FieldId::UserLogin)
             .map(as_deobfuscated_string)
-            .unwrap_or_default()
-            .to_lowercase()
-            .into_boxed_str();
+            .unwrap_or_default();
+        let login: Box<str> = self.cut_text(limits.login, &login).to_lowercase().into();
 
         if name.is_empty() && login.is_empty() {
             let Some(old_login) = old_login else {
@@ -321,7 +340,8 @@ impl Session {
             };
         }
 
-        let password = Self::new_password(record.field(FieldId::UserPassword));
+        let password = Self::new_password(record.field(FieldId::UserPassword))
+            .map(|password| Box::from(self.cut_text(limits.password, &password)));
         let access = record
             .field(FieldId::UserAccess)
             .and_then(Field::as_u64)
@@ -346,8 +366,11 @@ impl Session {
                 return Ok(false);
             }
             let edit = |existing: Account| Account {
-                password: password.unwrap_or(existing.password),
-                name: name.as_str().into(),
+                password: password.unwrap_or_else(|| {
+                    self.cut_text(limits.kept_password, &existing.password)
+                        .into()
+                }),
+                name: name.into(),
                 access,
                 access_extra: existing.access_extra,
             };
@@ -441,6 +464,7 @@ mod tests {
 
     use super::*;
     use crate::account::AccountProvider;
+    use crate::policy::{OpenlinePolicy, ServerPolicy, TextLimits};
     use crate::state::{Inbox, RecipientMessage, UserEntry};
     use hotline_proto::opcode::TransactionType;
     use std::time::Instant;
@@ -488,6 +512,62 @@ mod tests {
                 .and_then(Field::as_u64),
             Some(Access::SEND_CHAT.bits())
         );
+    }
+
+    #[tokio::test]
+    async fn new_user_cuts_each_field_to_fit() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+
+        let create = request(
+            Opcode::NewUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "l".repeat(40)),
+                Field::obfuscated_string(FieldId::UserPassword, "p".repeat(40)),
+                Field::string(FieldId::UserName, "n".repeat(70)),
+            ],
+        );
+        assert!(!session.on_new_user(&create, &state).await[0].is_error());
+
+        let account = state.account(&"l".repeat(32)).await.unwrap();
+        assert_eq!(*account.password, "p".repeat(32));
+        assert_eq!(*account.name, "n".repeat(64));
+    }
+
+    /// A policy that keeps each account field whole.
+    struct WholeAccountFields;
+
+    impl ServerPolicy for WholeAccountFields {
+        fn text_limits(&self) -> TextLimits {
+            TextLimits {
+                account_name: None,
+                login: None,
+                password: None,
+                ..OpenlinePolicy.text_limits()
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn new_user_keeps_each_field_whole_when_the_policy_says_so() {
+        let session = test_session("Admin", Access::all());
+        let state = state_with_policy(WholeAccountFields);
+
+        let create = request(
+            Opcode::NewUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "l".repeat(40)),
+                Field::obfuscated_string(FieldId::UserPassword, "p".repeat(40)),
+                Field::string(FieldId::UserName, "n".repeat(70)),
+            ],
+        );
+        assert!(!session.on_new_user(&create, &state).await[0].is_error());
+
+        let account = state.account(&"l".repeat(40)).await.unwrap();
+        assert_eq!(*account.password, "p".repeat(40));
+        assert_eq!(*account.name, "n".repeat(70));
     }
 
     #[tokio::test]
@@ -713,6 +793,34 @@ mod tests {
         assert_eq!(&*account.name, "");
         assert_eq!(&*account.password, "secret");
         assert_eq!(account.access, Access::empty());
+    }
+
+    #[tokio::test]
+    async fn set_user_cuts_a_kept_password_at_31_bytes() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let bob = Account {
+            access_extra: AccessExtra::default(),
+            password: "p".repeat(32).into(),
+            name: "Bob".into(),
+            access: Access::SEND_CHAT,
+        };
+        state.put_account("bob", bob).await.unwrap();
+
+        let modify = request(
+            Opcode::SetUser,
+            1,
+            vec![
+                Field::obfuscated_string(FieldId::UserLogin, "bob"),
+                Field::bytes(FieldId::UserPassword, vec![0]),
+            ],
+        );
+        session.on_set_user(&modify, &state).await;
+
+        assert_eq!(
+            *state.account("bob").await.unwrap().password,
+            "p".repeat(31)
+        );
     }
 
     #[tokio::test]
@@ -1210,6 +1318,32 @@ mod tests {
         assert_eq!(&*account.name, "Bob");
         assert_eq!(&*account.password, "secret");
         assert_eq!(account.access, Access::SEND_CHAT);
+    }
+
+    #[tokio::test]
+    async fn set_user_list_cuts_the_old_login_at_31_bytes() {
+        let session = test_session("Admin", Access::all());
+        let state = Arc::<SharedState>::default();
+        let old = Account {
+            access_extra: AccessExtra::default(),
+            password: "secret".into(),
+            name: "Old".into(),
+            access: Access::SEND_CHAT,
+        };
+        state.put_account("a".repeat(31), old).await.unwrap();
+
+        let record = user_list_record(
+            Some("a".repeat(40).as_str()),
+            "Bob",
+            "bob",
+            Field::bytes(FieldId::UserPassword, vec![0]),
+            Access::SEND_CHAT,
+        );
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        assert!(!session.on_set_user_list(&request, &state).await[0].is_error());
+
+        assert!(state.account(&"a".repeat(31)).await.is_none());
+        assert_eq!(&*state.account("bob").await.unwrap().password, "secret");
     }
 
     #[tokio::test]
