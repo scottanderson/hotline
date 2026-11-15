@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 /// Gives out 1 up to `u32::MAX`, then 1 again, and never 0.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct TransCounter(NonZeroU32);
 
 impl TransCounter {
