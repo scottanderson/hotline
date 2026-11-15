@@ -88,10 +88,6 @@ works this way.
   add a column or a line. openline writes each line before it replies;
   `hls` queues the line for a writer task, and writes the queue before
   it exits on Ctrl-C or SIGTERM.
-- **Posted news article flavor default.** Openline stores an empty
-  string when a post omits `myField_NewsArtDataFlav`; this server
-  defaults to `"text/plain"`. A real client always sends this field, so
-  this only affects a hand-crafted request; not changed.
 - **Stored text is UTF-8.** openline stores text in the wire encoding.
   `hls` stores threaded news text bodies, like its other text, as
   UTF-8, and converts each one to the connection's encoding on the

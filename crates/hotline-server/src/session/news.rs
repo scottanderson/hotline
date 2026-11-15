@@ -281,20 +281,13 @@ impl Session {
             Err(reason) => return vec![tx.reply_error(reason)],
         };
         let encoding = self.encoding();
-        let Some(title) = tx.news_article_title() else {
-            return vec![tx.reply_error("missing title")];
-        };
+        let title = tx.news_article_title().unwrap_or_default();
         let Some(data) = tx.news_article_data().filter(|data| !data.is_empty()) else {
             return vec![tx.reply_error("missing article data")];
         };
         let parent_id = tx.news_article_id().unwrap_or(0);
         let flags = tx.news_article_flags().unwrap_or(0);
-        // Openline stores an empty-string flavor when the client omits
-        // this field; a real client always sends it, so defaulting to a
-        // real MIME type here instead is a deliberate divergence.
-        let mime_type = tx
-            .news_article_flavor()
-            .unwrap_or_else(|| "text/plain".to_string());
+        let mime_type = tx.news_article_flavor().unwrap_or_default();
         let data = body_from_wire(&mime_type, data, encoding);
 
         let posted = state
@@ -778,6 +771,36 @@ mod tests {
         let data = reply.field(FieldId::Data).unwrap().as_bytes();
         assert!(data.len() <= MAX_FLAT_NEWS_LEN);
         assert!(std::str::from_utf8(data).is_ok());
+    }
+
+    #[tokio::test]
+    async fn post_news_art_without_a_title_or_a_flavor_stores_them_empty() {
+        let encoding = text_encoding::DEFAULT;
+        let state = Arc::<SharedState>::default();
+        let session = test_session("Alice", Access::all());
+        state
+            .news_mkcategory("", &HlPath::default(), "General")
+            .await
+            .unwrap();
+        let path = HlPath::new(["General"]);
+
+        let post = request(
+            Opcode::PostNewsArt,
+            1,
+            vec![
+                Field::bytes(FieldId::NewsPath, path.encode(encoding).unwrap()),
+                Field::bytes(FieldId::NewsArtData, b"body".to_vec()),
+            ],
+        );
+        let [reply] = session
+            .on_post_news_art(&post, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert!(!reply.is_error());
+        let stored = state.news_article("", &path, 1).await.unwrap();
+        assert_eq!(&*stored.title, "");
+        assert_eq!(&*stored.data[""], b"body");
     }
 
     #[tokio::test]
