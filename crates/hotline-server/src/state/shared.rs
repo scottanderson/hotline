@@ -1048,12 +1048,12 @@ impl SharedState {
         let (required, denied) = if info.is_folder() {
             (
                 Access::SET_FOLDER_COMMENT,
-                "You are not allowed to set comments for folders.",
+                "You are not allowed set comments for folders.",
             )
         } else {
             (
                 Access::SET_FILE_COMMENT,
-                "You are not allowed to set comments for files.",
+                "You are not allowed set comments for files.",
             )
         };
         if !access.contains(required) {

@@ -1,7 +1,5 @@
 //! Account CRUD and the bulk user-list admin opcodes.
 
-use std::borrow::Cow;
-
 use hotline_proto::FieldId;
 use hotline_proto::consts::Access;
 use hotline_proto::opcode::Opcode;
@@ -218,7 +216,7 @@ impl Session {
         state: &SharedState,
     ) -> Vec<Transaction> {
         if !self.access.contains(Access::OPEN_USER) {
-            let reason = "You are not allowed to get account information.";
+            let reason = "You are not allowed to administer accounts.";
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
@@ -247,9 +245,6 @@ impl Session {
     /// Each [`myField_Data`] (101) field is one nested account record in the same
     /// shape [`myTran_GetUserList`] (348) sent; see
     /// [`Session::apply_user_list_record`] for the per-record rules.
-    /// Processes every record even after a soft (storage) failure, but
-    /// stops and reports immediately on a hard (permission) failure,
-    /// matching openline.
     ///
     /// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
     /// [`myField_Data`]: hotline_proto::FieldId::Data
@@ -259,30 +254,43 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
+        match self.save_user_list(tx, state).await {
+            Ok(()) => vec![tx.reply(vec![])],
+            Err(reason) => vec![tx.reply_error(reason)],
+        }
+    }
+
+    /// Save each record of `tx`. A record that does not save does not stop
+    /// the next records. A missing privilege stops the request.
+    async fn save_user_list(
+        &self,
+        tx: &Transaction<Received>,
+        state: &SharedState,
+    ) -> Result<(), &'static str> {
         let account_access = Access::CREATE_USER | Access::MODIFY_USER | Access::DELETE_USER;
         if !self.access.intersects(account_access) {
-            let reason = "You are not allowed to create new accounts, delete accounts, modify account information.";
-            return vec![tx.reply_error(reason)];
+            Err("You are not allowed to modify account information.")?;
         }
-        if tx.field(FieldId::Data).is_none() {
-            return vec![tx.reply_error("Error saving list of accounts.")];
+        let mut fields = tx.fields(FieldId::Data).peekable();
+        // A list with no records does not save.
+        let mut saved = fields.peek().is_some();
+        for field in fields {
+            saved &= self.save_user_list_field(field, state).await?;
         }
-        let mut save_error = false;
-        for field in tx.fields(FieldId::Data) {
-            let Ok(record) = field.as_field_list() else {
-                save_error = true;
-                continue;
-            };
-            match self.apply_user_list_record(&record, state).await {
-                Ok(true) => {}
-                Ok(false) => save_error = true,
-                Err(reason) => return vec![tx.reply_error(reason)],
-            }
+        saved.then_some(()).ok_or("Error saving list of accounts.")
+    }
+
+    /// Save the record in `field`. `Ok(false)` is a record that does not
+    /// save, and `Err` is a missing privilege.
+    async fn save_user_list_field(
+        &self,
+        field: &Field<Received>,
+        state: &SharedState,
+    ) -> Result<bool, &'static str> {
+        match field.as_field_list() {
+            Ok(record) => self.apply_user_list_record(&record, state).await,
+            Err(_) => Ok(false),
         }
-        if save_error {
-            return vec![tx.reply_error("Error saving list of accounts.")];
-        }
-        vec![tx.reply(vec![])]
     }
 
     /// Apply one [`myTran_SetUserList`] (349) record: [`myField_Data`] (101), if
@@ -305,7 +313,7 @@ impl Session {
         &self,
         record: &FieldList<Received>,
         state: &SharedState,
-    ) -> std::result::Result<bool, Cow<'static, str>> {
+    ) -> Result<bool, &'static str> {
         let as_deobfuscated_string = |f: &Field<Received>| f.as_deobfuscated_string();
         let limits = state.policy().text_limits();
         let old_login = record
@@ -464,6 +472,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::sync::Arc;
 
     use super::*;
@@ -1249,7 +1258,7 @@ mod tests {
         let request = request(Opcode::GetUserList, 1, vec![]);
         assert_eq!(
             error_text(&session.on_get_user_list(&request, &state).await[0]),
-            "You are not allowed to get account information."
+            "You are not allowed to administer accounts."
         );
     }
 
@@ -1317,7 +1326,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             error_text(&reply),
-            "You are not allowed to create new accounts, delete accounts, modify account information."
+            "You are not allowed to modify account information."
         );
     }
 

@@ -29,7 +29,7 @@ impl Session {
         state: &SharedState,
     ) -> Vec<Transaction> {
         if !self.access.contains(Access::NEWS_READ_ART) {
-            let reason = "You are not allowed to read articles.";
+            let reason = "You are not allowed to read news from the message board.";
             return vec![tx.reply_error(reason)];
         }
         let news = text_encoding::encode_truncated(
@@ -49,7 +49,7 @@ impl Session {
         state: &SharedState,
     ) -> Vec<Transaction> {
         if !self.access.contains(Access::POST_NEWS_ART) {
-            let reason = "You are not allowed to post articles.";
+            let reason = "You are not allowed to post news to the message board.";
             return vec![tx.reply_error(reason)];
         }
         let (text, len) = tx.string_len(FieldId::Data).unwrap_or_default();
@@ -376,6 +376,23 @@ mod tests {
         let news = reply.received(encoding).string(FieldId::Data).unwrap();
         assert!(news.contains("hello news"));
         assert!(news.contains("From Alice"));
+    }
+
+    #[tokio::test]
+    async fn get_msgs_without_news_read_art_names_the_message_board() {
+        let mut access = Access::all();
+        access.remove(Access::NEWS_READ_ART);
+        let session = test_session("Alice", access);
+        let get = request(Opcode::GetMsgs, 1, vec![]);
+        let [reply] = session
+            .on_get_msgs(&get, &SharedState::default())
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "You are not allowed to read news from the message board."
+        );
     }
 
     /// A board past a field's `u16` length sends its newest 65535 bytes.
