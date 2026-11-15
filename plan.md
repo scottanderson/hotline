@@ -80,14 +80,6 @@ works this way.
   scrambles each password byte with bitwise NOT in its data file
   (`HotlineServTrans.cp`). This hides a password only from a casual
   reader, so `hls` does not scramble them.
-- **`hls` refuses a rename onto a taken login.** openline's
-  `ProcessTran_SetUserList` fails the folder rename, then still writes
-  the record over the other account with `SetUser`. The `ServerPolicy`
-  default `TakenLogin::Overwrite` does the same. `HlsPolicy` picks
-  `TakenLogin::Refuse`, which leaves both accounts as they were, so
-  a typo in a login change cannot destroy another account. It also
-  sends a `myTran_ServerMsg` (104) notice that names the taken login.
-  Both reply "Error saving list of accounts."
 - **Activity logs use a different date and line format.** openline
   writes the Mac short date and `\r` line endings in the classic Mac
   text encoding. `hls` writes `YYYY-MM-DD HH:MM:SS` in local time with
@@ -96,11 +88,6 @@ works this way.
   add a column or a line. openline writes each line before it replies;
   `hls` queues the line for a writer task, and writes the queue before
   it exits on Ctrl-C or SIGTERM.
-- **`hls` sends dates in UTC.** openline's
-  `UDateTime::GetDateTimeStamp` sends the server's local time, and the
-  `ServerPolicy` default `TimeZone::Local` does the same. `HlsPolicy`
-  picks `TimeZone::Utc`, so a client sees the same times from every
-  `hls`, in any zone.
 - **Posted news article flavor default.** Openline stores an empty
   string when a post omits `myField_NewsArtDataFlav`; this server
   defaults to `"text/plain"`. A real client always sends this field, so
@@ -110,12 +97,6 @@ works this way.
   UTF-8, and converts each one to the connection's encoding on the
   wire. A `myTran_GetMsgs` (101) reply that is too long is cut at a
   whole character; openline cuts at a byte.
-- **`hls` replies with an error to a failed `myTran_InviteToChat` (113)
-  or `myTran_SetChatSubject` (120).** openline's
-  `ProcessTran_InviteToChat` and `ProcessTran_SetChatSubject` send no
-  reply, and its client does not wait for one. `hls` sends no reply on
-  success. On a failure, it sends the error (`Silent::ChatRequest`).
-  `hlc` sends both without waiting and shows an error reply.
 - **The file name rule maps more.** openline's
   `UFileSys::ValidateFileName` differs by platform, and so does
   `validate_file_name`. On Mac OS X, openline only cuts the length.
@@ -130,12 +111,6 @@ works this way.
   `-`. `hls` cuts a name at 255 UTF-8 bytes, at a character boundary.
   It also maps the name of a new alias, which openline's
   `ProcessTran_MakeFileAlias` does not.
-- **Move and alias check drop boxes.** openline's `ProcessTran_MoveFile`
-  and `ProcessTran_MakeFileAlias` check no drop box. A user who guessed
-  a name could move a file out of a drop box, or alias it, and then
-  download it. `hls` refuses both without `VIEW_DROP_BOXES` when the
-  source is in a drop box (`Silent::DropBoxSource`).
-  Delete matches openline: it shows nothing.
 - **`myTran_GetClientInfoText` (303) shows more.** openline's
   `ProcessTran_GetClientInfoText` sends `Nickname:`, `Name:`,
   `Account:`, and `Address:` with the IP address only. `hls` also sends
@@ -159,14 +134,6 @@ works this way.
   missing `myField_UserName` (102) or `myField_UserAccess` (110) gives
   an empty name or no access. `hls` keeps the old value. openline's
   client always sends both fields.
-- **A failed comment write stops a rename.** openline's
-  `ProcessTran_SetFileInfo` ignores a failed comment write and still
-  renames. `hls` replies with the error and does not rename
-  (`Silent::CommentWrite`).
-- **A message with no `myField_Data` (101) is an error.** openline's
-  `ProcessTran_SendInstantMsg` and `ProcessTran_UserBroadcast` handle
-  it as an empty message and reply with success. `hls` replies with an
-  error (`Silent::MessageWithoutData`).
 - **A post with no article ID left is an error.** openline gives out
   article ID 4294967295 and stores 0 as the next ID. Its next
   `ProcessTran_PostNewsArt` throws in `_NZ_AddIDToHash`, so the client
