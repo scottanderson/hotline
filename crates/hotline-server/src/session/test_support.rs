@@ -106,6 +106,16 @@ pub(super) fn state_with_policy(policy: impl crate::ServerPolicy + 'static) -> A
     })
 }
 
+/// A policy where a user joins a private chat room by invite or
+/// password.
+pub(super) struct InvitedChatRooms;
+
+impl crate::ServerPolicy for InvitedChatRooms {
+    fn chat_rooms(&self) -> crate::ChatRooms {
+        crate::ChatRooms::Invited
+    }
+}
+
 pub(super) fn state_with_banner(
     banner: Arc<dyn crate::banner::BannerProvider>,
 ) -> Arc<SharedState> {

@@ -60,7 +60,7 @@ pub use news::{
     FlatNewsProvider, HLNZ_MAGIC, InMemoryNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle,
     NewsCategory, NewsItemKind, NewsListKind, PostError, ThreadedNewsProvider,
 };
-pub use policy::{OpenlinePolicy, ServerPolicy, Silent, TakenLogin, TimeZone};
+pub use policy::{ChatRooms, OpenlinePolicy, ServerPolicy, Silent, TakenLogin, TimeZone};
 pub use providers::Providers;
 pub use server::{
     DEFAULT_LOGIN_TIMEOUT, DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS_PER_ADDRESS,

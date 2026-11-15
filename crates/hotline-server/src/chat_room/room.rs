@@ -32,12 +32,14 @@ impl ChatRoom {
     }
 
     /// Add `user_id` with no invite or password check, and clear its
-    /// invite.
-    pub(crate) fn add_member(&mut self, user_id: u16) {
-        if !self.members.contains(&user_id) {
+    /// invite. `false` when it is a member already.
+    pub(crate) fn add_member(&mut self, user_id: u16) -> bool {
+        self.invited.remove(&user_id);
+        let new = !self.members.contains(&user_id);
+        if new {
             self.members.push(user_id);
         }
-        self.invited.remove(&user_id);
+        new
     }
 
     /// Invite `target_id` on behalf of the member `inviter`.

@@ -2,11 +2,11 @@
 
 use std::borrow::Cow;
 
-use hotline_server::{ServerPolicy, Silent, TakenLogin, TimeZone};
+use hotline_server::{ChatRooms, ServerPolicy, Silent, TakenLogin, TimeZone};
 
 /// `hls` replies with an error in each case where openline sends none,
-/// sends dates in [`TimeZone::Utc`], and refuses a rename onto a taken
-/// login.
+/// sends dates in [`TimeZone::Utc`], refuses a rename onto a taken login,
+/// and lets a user into a private chat room by invite or password.
 pub struct HlsPolicy;
 
 impl ServerPolicy for HlsPolicy {
@@ -30,6 +30,10 @@ impl ServerPolicy for HlsPolicy {
 
     fn taken_login(&self) -> TakenLogin {
         TakenLogin::Refuse
+    }
+
+    fn chat_rooms(&self) -> ChatRooms {
+        ChatRooms::Invited
     }
 }
 

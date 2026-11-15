@@ -39,7 +39,7 @@ use crate::news::{
     FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind, PostError,
     ThreadedNewsProvider, body_to_wire,
 };
-use crate::policy::{ServerPolicy, Silent, TakenLogin, TimeZone};
+use crate::policy::{ChatRooms, ServerPolicy, Silent, TakenLogin, TimeZone};
 use crate::providers::Providers;
 use crate::random::random_u32;
 use crate::server::{DEFAULT_MAX_DOWNLOADS, DEFAULT_MAX_DOWNLOADS_PER_CLIENT};
@@ -60,6 +60,9 @@ const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 
 /// The bytes an upload must leave free on the disk.
 const UPLOAD_SPACE_MARGIN: u64 = 512_000;
+
+/// The error for a join of a chat room that is not open.
+const CLOSED_CHAT: &str = "Cannot join private chat because it has been closed already.";
 
 /// A counter that gives out 1 up to `u16::MAX`, then 1 again, and never 0.
 struct NonZeroCounter(AtomicU16);
@@ -1507,18 +1510,28 @@ impl SharedState {
         self.chat_rooms().room(chat_id).await
     }
 
-    /// Add `user_id` to a chat room. Requires a pending invite, or the
-    /// room's password if one is set.
+    /// Add `user_id` to a private chat room, as the policy's [`ChatRooms`]
+    /// lets it. `true` when it is a new member.
     pub async fn join_chat_room(
         &self,
         chat_id: u32,
         user_id: u16,
         password: &str,
-    ) -> Result<(), &'static str> {
+    ) -> Result<bool, &'static str> {
+        let rooms = self.policy().chat_rooms();
+        if rooms == ChatRooms::Open && chat_id == 0 {
+            return Err(CLOSED_CHAT);
+        }
         self.chat_rooms()
-            .with_room(chat_id, |room| room.join(user_id, password))
+            .with_room(chat_id, |room| match rooms {
+                ChatRooms::Open => Ok(room.add_member(user_id)),
+                ChatRooms::Invited => room.join(user_id, password).map(|()| true),
+            })
             .await
-            .unwrap_or(Err("no such chat room"))
+            .unwrap_or(Err(match rooms {
+                ChatRooms::Open => CLOSED_CHAT,
+                ChatRooms::Invited => "no such chat room",
+            }))
     }
 
     /// Add `user_id` to a chat room directly, no invite or password
@@ -1622,9 +1635,8 @@ impl SharedState {
             .is_some()
     }
 
-    /// Whether `user_id` may change a chat room's subject/password: the
-    /// global room (`chat_id == 0`) needs `AccessExtra::SET_SUBJECT`; any
-    /// other room just needs `user_id` to already be a member.
+    /// Whether `user_id` may change a chat room's subject/password, as the
+    /// policy's [`ChatRooms`] lets it.
     pub async fn authorize_chat_subject_change(
         &self,
         chat_id: u32,
@@ -1632,11 +1644,18 @@ impl SharedState {
         is_global: bool,
         access_extra: AccessExtra,
     ) -> Result<(), Cow<'static, str>> {
+        let members = self.chat_room_members(chat_id).await;
+        if self.policy().chat_rooms() == ChatRooms::Open {
+            return match members {
+                Some(_) if !is_global => Ok(()),
+                _ => Err("no such chat room")?,
+            };
+        }
         if is_global {
             access_extra.require(AccessExtra::SET_SUBJECT)?;
             return Ok(());
         }
-        match self.chat_room_members(chat_id).await {
+        match members {
             Some(members) if members.contains(&user_id) => Ok(()),
             Some(_) => Err("you are not in that chat room")?,
             None => Err("no such chat room")?,

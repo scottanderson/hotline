@@ -70,6 +70,21 @@ pub enum TakenLogin {
     Refuse,
 }
 
+/// Who joins a private chat room, and who sets its subject.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRooms {
+    /// Each user joins each open private room, and sets its subject. A
+    /// request with no subject clears it. A request on the public chat
+    /// fails. A room password has no effect.
+    #[default]
+    Open,
+    /// A user joins with a pending invite, or with the room's password.
+    /// Only a member sets the subject or the password of a room. A user
+    /// with `AccessExtra::SET_SUBJECT` sets the subject of the public
+    /// chat.
+    Invited,
+}
+
 /// The choices where a server differs from openline.
 pub trait ServerPolicy: Send + Sync {
     /// The error reply for `case`, which stops the request. `None` sends no
@@ -86,5 +101,10 @@ pub trait ServerPolicy: Send + Sync {
     /// What a rename onto a taken login does.
     fn taken_login(&self) -> TakenLogin {
         TakenLogin::default()
+    }
+
+    /// Who joins a private chat room, and who sets its subject.
+    fn chat_rooms(&self) -> ChatRooms {
+        ChatRooms::default()
     }
 }

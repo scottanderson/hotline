@@ -12,7 +12,7 @@ use hotline_proto::{Field, Received, Transaction};
 use crate::account::AccessExtra;
 use crate::console::{ChatCommandActor, ConsoleReply};
 use crate::flood::{FloodEvent, MAX_CHAT_LINE};
-use crate::policy::Silent;
+use crate::policy::{ChatRooms, Silent};
 use crate::server::ServerConfig;
 use crate::state::SharedState;
 
@@ -276,9 +276,12 @@ impl Session {
         Ok(replies)
     }
 
-    /// [`myTran_JoinChat`] (115): join a room, accepting an invitation or
-    /// supplying its password. The reply has the room's subject, if it has
-    /// one, then each member with a name.
+    /// [`myTran_JoinChat`] (115): join a room, as the policy's
+    /// [`ChatRooms`] lets it. The reply has the room's subject, if it has
+    /// one, then each member with a name. The other members get a
+    /// [`myTran_NotifyChatChangeUser`] (117) push for a new member.
+    ///
+    /// [`myTran_NotifyChatChangeUser`]: hotline_proto::Opcode::NotifyChatChangeUser
     ///
     /// [`myTran_JoinChat`]: hotline_proto::Opcode::JoinChat
     pub(super) async fn on_join_chat(
@@ -294,9 +297,10 @@ impl Session {
         };
         let encoding = self.encoding();
         let password = tx.string(FieldId::UserPassword).unwrap_or_default();
-        if let Err(reason) = state.join_chat_room(chat_id, self.user_id, &password).await {
-            return tx.reply_error(reason);
-        }
+        let new = match state.join_chat_room(chat_id, self.user_id, &password).await {
+            Ok(new) => new,
+            Err(reason) => return tx.reply_error(reason),
+        };
         let icon = state.user(self.user_id).await.map_or(0, |u| u.icon);
 
         let notify = Transaction::push(
@@ -316,7 +320,7 @@ impl Session {
             fields.push(Field::string(FieldId::ChatSubject, room.subject));
         }
         for member_id in room.members {
-            if member_id != self.user_id {
+            if new && member_id != self.user_id {
                 state.send_to(member_id, notify.clone()).await;
             }
             if let Some(entry) = state
@@ -407,7 +411,8 @@ impl Session {
     }
 
     /// [`myTran_SetChatSubject`] (120): set a chat room's subject and/or its join
-    /// password. The subject is cut to 255 bytes.
+    /// password, as the policy's [`ChatRooms`] lets it. The subject is cut
+    /// to 255 bytes.
     ///
     /// [`myTran_SetChatSubject`]: hotline_proto::Opcode::SetChatSubject
     pub(super) async fn on_set_chat_subject(
@@ -429,10 +434,14 @@ impl Session {
             .field(FieldId::ChatID)
             .map(Field::as_u32)
             .ok_or("missing chat id")?;
-        let subject = tx.string(FieldId::ChatSubject).map(|subject| {
+        let mut subject = tx.string(FieldId::ChatSubject).map(|subject| {
             text_encoding::cut(self.encoding(), &subject, MAX_CHAT_SUBJECT).to_string()
         });
-        let password = tx.string(FieldId::UserPassword);
+        let mut password = tx.string(FieldId::UserPassword);
+        if state.policy().chat_rooms() == ChatRooms::Open {
+            subject = Some(subject.unwrap_or_default());
+            password = None;
+        }
         if subject.is_none() && password.is_none() {
             Err("missing subject or password")?;
         }
@@ -1248,9 +1257,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn joining_an_unprotected_room_without_an_invite_is_an_error() {
+    async fn join_chat_lets_each_user_into_an_open_room_and_notifies_once() {
+        let bob = Session {
+            user_id: 2,
+            ..test_session("Bob", Access::all())
+        };
+        let state = Arc::<SharedState>::default();
+        let chat_id = state.create_chat_room(1).await;
+        state.set_chat_password(chat_id, "hunter2").await;
+        let mut creator_rx = state.register_recipient(1).await;
+        let join = request(
+            Opcode::JoinChat,
+            1,
+            vec![Field::u32(FieldId::ChatID, chat_id)],
+        );
+
+        assert!(!bob.on_join_chat(&join, &state).await.is_error());
+        assert!(creator_rx.try_recv().is_ok());
+        assert!(!bob.on_join_chat(&join, &state).await.is_error());
+        assert!(creator_rx.try_recv().is_err());
+        let members = state.chat_room_members(chat_id).await.unwrap();
+        assert_eq!(members, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn join_chat_of_the_public_chat_or_a_closed_room_fails_when_open() {
         let bob = test_session("Bob", Access::all());
         let state = Arc::<SharedState>::default();
+        for chat_id in [0, 999] {
+            let join = request(
+                Opcode::JoinChat,
+                1,
+                vec![Field::u32(FieldId::ChatID, chat_id)],
+            );
+            let reply = bob.on_join_chat(&join, &state).await;
+            assert_eq!(
+                reply
+                    .received(text_encoding::DEFAULT)
+                    .string(FieldId::ErrorText)
+                    .as_deref(),
+                Some("Cannot join private chat because it has been closed already.")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn joining_an_unprotected_room_without_an_invite_is_an_error() {
+        let bob = test_session("Bob", Access::all());
+        let state = state_with_policy(InvitedChatRooms);
         let chat_id = state.create_chat_room(1).await;
 
         let join = request(
@@ -1322,7 +1376,7 @@ mod tests {
     #[tokio::test]
     async fn joining_a_password_protected_room_requires_the_right_password() {
         let bob = test_session("Bob", Access::all());
-        let state = Arc::<SharedState>::default();
+        let state = state_with_policy(InvitedChatRooms);
         let chat_id = state.create_chat_room(1).await;
         state.set_chat_password(chat_id, "hunter2").await;
 
@@ -1357,7 +1411,7 @@ mod tests {
     #[tokio::test]
     async fn a_pending_invite_bypasses_a_rooms_password() {
         let bob = test_session("Bob", Access::all());
-        let state = Arc::<SharedState>::default();
+        let state = state_with_policy(InvitedChatRooms);
         let chat_id = state.create_chat_room(1).await;
         state.set_chat_password(chat_id, "hunter2").await;
         state.invite(chat_id, bob.user_id).await;
@@ -1371,13 +1425,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_chat_subject_lets_each_user_set_or_clear_an_open_rooms_subject() {
+        let outsider = Session {
+            user_id: 2,
+            ..test_session("Eve", Access::all())
+        };
+        let state = Arc::<SharedState>::default();
+        let chat_id = state.create_chat_room(1).await;
+        let subject = |fields| request(Opcode::SetChatSubject, 1, fields);
+
+        let set = subject(vec![
+            Field::u32(FieldId::ChatID, chat_id),
+            Field::string(FieldId::ChatSubject, "Topic"),
+        ]);
+        assert!(outsider.try_set_chat_subject(&set, &state).await.is_ok());
+        assert_eq!(&*state.chat_room(chat_id).await.unwrap().subject, "Topic");
+
+        let clear = subject(vec![
+            Field::u32(FieldId::ChatID, chat_id),
+            Field::string(FieldId::UserPassword, "hunter2"),
+        ]);
+        assert!(outsider.try_set_chat_subject(&clear, &state).await.is_ok());
+        let room = state.chat_room(chat_id).await.unwrap();
+        assert_eq!((&*room.subject, &*room.password), ("", ""));
+    }
+
+    #[tokio::test]
+    async fn set_chat_subject_of_the_public_chat_fails_when_open() {
+        let mut admin = test_session("Admin", Access::all());
+        admin.access_extra.insert(AccessExtra::SET_SUBJECT);
+        let state = Arc::<SharedState>::default();
+
+        let request = request(
+            Opcode::SetChatSubject,
+            1,
+            vec![
+                Field::u32(FieldId::ChatID, 0),
+                Field::string(FieldId::ChatSubject, "Nope"),
+            ],
+        );
+        assert!(admin.try_set_chat_subject(&request, &state).await.is_err());
+        assert_eq!(&*state.chat_room(0).await.unwrap().subject, "");
+    }
+
+    #[tokio::test]
     async fn setting_a_private_rooms_subject_requires_membership() {
         let outsider = test_session("Eve", Access::all());
         let outsider = Session {
             user_id: 2,
             ..outsider
         };
-        let state = Arc::<SharedState>::default();
+        let state = state_with_policy(InvitedChatRooms);
         let chat_id = state.create_chat_room(1).await;
 
         let request = request(
@@ -1397,7 +1495,7 @@ mod tests {
     async fn a_member_can_set_a_private_rooms_password() {
         let encoding = text_encoding::DEFAULT;
         let member = test_session("Alice", Access::all());
-        let state = Arc::<SharedState>::default();
+        let state = state_with_policy(InvitedChatRooms);
         let chat_id = state.create_chat_room(member.user_id).await;
         let mut rx = state.register_recipient(member.user_id).await;
 
@@ -1452,7 +1550,7 @@ mod tests {
     #[tokio::test]
     async fn setting_the_global_room_subject_requires_set_subject() {
         let guest = test_session("Guest", Access::empty());
-        let state = Arc::<SharedState>::default();
+        let state = state_with_policy(InvitedChatRooms);
 
         let request = request(
             Opcode::SetChatSubject,
@@ -1472,7 +1570,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let mut admin = test_session("Admin", Access::empty());
         admin.access_extra.insert(AccessExtra::SET_SUBJECT);
-        let state = Arc::<SharedState>::default();
+        let state = state_with_policy(InvitedChatRooms);
         let mut rx = state.register_recipient(admin.user_id).await;
 
         let request = request(
