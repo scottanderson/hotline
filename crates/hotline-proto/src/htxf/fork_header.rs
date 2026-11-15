@@ -48,7 +48,7 @@ impl ForkHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::htxf::{empty_info, flat_file_header, FLAT_FILE_PREFIX_LEN, INFO_DATA_LEN};
+    use crate::htxf::{FLAT_FILE_PREFIX_LEN, INFO_DATA_LEN, empty_info, flat_file_header};
 
     #[test]
     fn fork_header_round_trips_through_flat_file_header() {

@@ -19,10 +19,10 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use hotline_client::{Ban, ClientInfoText, ClientUserInfo, HotlineClient, UserAccount};
-use hotline_proto::opcode::{Opcode, TransactionType};
-use hotline_proto::text_encoding::{to_wire_lines, EncodingHandle};
-use hotline_proto::types::{FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::FieldId;
+use hotline_proto::opcode::{Opcode, TransactionType};
+use hotline_proto::text_encoding::{EncodingHandle, to_wire_lines};
+use hotline_proto::types::{FileNameWithInfo, HlPath, UserChangeOptions, UserNameWithInfo};
 use hotline_proto::{Access, Field, Received, Transaction};
 
 use crate::line::{Line, LineKind, Scrollback};
@@ -915,8 +915,8 @@ mod tests {
     /// [`myTran_InviteToChat`]: hotline_proto::Opcode::InviteToChat
     #[test]
     fn chat_invite_push_is_recognized_despite_sharing_its_wire_value_with_a_client_opcode() {
-        use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
+        use hotline_proto::opcode::Opcode;
 
         let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let invite = test_support::push(
@@ -927,10 +927,12 @@ mod tests {
             ],
         );
         let _ = session.apply_server_event(&invite);
-        assert!(session
-            .lines
-            .iter()
-            .any(|line| line.text.contains("Alice invited you to a private chat")));
+        assert!(
+            session
+                .lines
+                .iter()
+                .any(|line| line.text.contains("Alice invited you to a private chat"))
+        );
         assert_eq!(
             session.invites.front(),
             Some(&ChatInvite {
@@ -942,8 +944,8 @@ mod tests {
 
     #[test]
     fn notify_change_user_carries_admin_color_for_new_and_existing_users() {
-        use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
+        use hotline_proto::opcode::Opcode;
 
         let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let admin_change = test_support::push(
@@ -978,8 +980,8 @@ mod tests {
 
     #[test]
     fn notify_change_user_notes_a_rename() {
-        use hotline_proto::opcode::Opcode;
         use hotline_proto::FieldId;
+        use hotline_proto::opcode::Opcode;
 
         let mut session = ClientSession::new("me", 0, EncodingHandle::default());
         let joined = test_support::push(

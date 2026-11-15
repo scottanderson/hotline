@@ -68,7 +68,7 @@ impl ClientSession {
         Request::wait({
             let client = client.clone();
             async move {
-                let done = match edit {
+                match edit {
                     FileEdit::NewFolder => client.new_folder(&path, &text).await,
                     FileEdit::Rename => client.set_file_info(&path, &name, &text, None).await,
                     FileEdit::Comment => client.set_file_info(&path, &name, "", Some(&text)).await,
@@ -78,8 +78,7 @@ impl ClientSession {
                             .make_file_alias(&path, &name, &parse_folder(&text))
                             .await
                     }
-                };
-                done
+                }
             }
         })
         .and_then({

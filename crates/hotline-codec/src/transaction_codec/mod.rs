@@ -2,8 +2,8 @@ mod decode_state;
 mod error;
 mod partial;
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use bytes::{Buf, BytesMut};
 use hotline_proto::text_encoding::{Encoding, EncodingHandle};
@@ -181,9 +181,9 @@ impl Encoder<Transaction> for TransactionCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hotline_proto::opcode::{Opcode, TransactionType};
     use hotline_proto::Field;
     use hotline_proto::FieldId;
+    use hotline_proto::opcode::{Opcode, TransactionType};
 
     #[test]
     fn server_codec_stamps_each_push_with_an_increasing_trans() {

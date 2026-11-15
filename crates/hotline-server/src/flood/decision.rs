@@ -10,10 +10,6 @@ pub enum FloodDecision {
 impl FloodDecision {
     /// [`Self::Ban`] if `over` a limit, else [`Self::Allow`].
     pub(crate) const fn ban_if(over: bool) -> Self {
-        if over {
-            Self::Ban
-        } else {
-            Self::Allow
-        }
+        if over { Self::Ban } else { Self::Allow }
     }
 }

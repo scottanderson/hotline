@@ -30,15 +30,15 @@ use hotline_server::{
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::{fmt, prelude::*};
 
-use accounts::{random_password, AccountDeletion, FileAccountProvider, ADMIN_LOGIN, GUEST_LOGIN};
+use accounts::{ADMIN_LOGIN, AccountDeletion, FileAccountProvider, GUEST_LOGIN, random_password};
 use activity::{FileActivityLog, LogPaths};
 use args::Args;
 use banner::FileBannerProvider;
 use bans::FileBanProvider;
 use file::DiskFileProvider;
-use news::{import_openline_news, FileFlatNewsProvider, FileThreadedNewsProvider};
+use news::{FileFlatNewsProvider, FileThreadedNewsProvider, import_openline_news};
 use policy::HlsPolicy;
-use tracker::{run_beacon, TrackerTarget};
+use tracker::{TrackerTarget, run_beacon};
 
 /// Parses `rust_log`, the value of `RUST_LOG`, as the log filter, or logs
 /// at `level` for every target.
@@ -289,7 +289,7 @@ async fn read_quit_message() -> Option<String> {
 async fn shutdown_signal() -> anyhow::Result<()> {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut terminate = signal(SignalKind::terminate())?;
         tokio::select! {
             result = tokio::signal::ctrl_c() => result?,

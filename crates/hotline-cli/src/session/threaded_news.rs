@@ -3,7 +3,7 @@
 
 use hotline_client::{HotlineClient, TEXT_PLAIN};
 use hotline_proto::types::{HlDate, HlPath, NewsArticleSummary, NewsCategoryListEntry};
-use hotline_proto::{text_encoding, Access};
+use hotline_proto::{Access, text_encoding};
 
 use super::{ClientSession, Request};
 use crate::line::LineKind;

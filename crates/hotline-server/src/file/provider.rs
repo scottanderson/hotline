@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 
 use super::{
-    partial_upload_name, validate_file_name, BoxedReader, BoxedWriter, FileRequester, FinderInfo,
-    FolderItem, ItemTimes,
+    BoxedReader, BoxedWriter, FileRequester, FinderInfo, FolderItem, ItemTimes,
+    partial_upload_name, validate_file_name,
 };
 
 /// Storage backing [`myTran_GetFileNameList`] (200),
@@ -72,10 +72,10 @@ pub trait FileProvider: Send + Sync {
                 break;
             };
             let dir = HlPath::new(root.iter().chain(&path));
-            if let Some(resolved) = self.resolved_path(requester, &dir, &entry.name).await {
-                if !seen.insert(resolved) {
-                    continue;
-                }
+            if let Some(resolved) = self.resolved_path(requester, &dir, &entry.name).await
+                && !seen.insert(resolved)
+            {
+                continue;
             }
             let is_folder = entry.is_folder();
             let size = if is_folder {
@@ -265,7 +265,7 @@ pub trait FileProvider: Send + Sync {
 
     /// Create a folder.
     async fn mkdir(&self, requester: FileRequester<'_>, dir: &HlPath, name: &str)
-        -> io::Result<()>;
+    -> io::Result<()>;
 
     /// Rename a file or folder in place.
     async fn rename(

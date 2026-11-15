@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};

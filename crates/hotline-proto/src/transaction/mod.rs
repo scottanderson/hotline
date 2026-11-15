@@ -35,6 +35,7 @@ mod trans_counter;
 pub use header::TransactionHeader;
 pub use trans_counter::TransCounter;
 
+use crate::Access;
 use crate::error::{ProtoError, Result};
 use crate::field::FieldId;
 use crate::field::{Built, Field, FieldList, Received};
@@ -42,7 +43,6 @@ use crate::opcode::{Opcode, TransactionType};
 use crate::text_encoding::Encoding;
 use crate::types::{FileNameWithInfo, HlPath, UserFlags, UserNameWithInfo};
 use crate::wire::VecWriter;
-use crate::Access;
 
 /// A complete transaction: fixed fields plus its field list. `fields.len()`
 /// *is* the wire's `count`; there is no separate count to keep in sync.

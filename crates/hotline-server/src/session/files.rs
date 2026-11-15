@@ -3,16 +3,16 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use hotline_proto::FieldId;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::htxf::{self, FlatFileInfo, ResumedFork};
 use hotline_proto::text_encoding;
 use hotline_proto::types::{self, HlPath};
-use hotline_proto::FieldId;
 use hotline_proto::{Field, ForkHeader, Received, Transaction};
 
 use crate::account::AccessExtra;
 use crate::activity::Activity;
-use crate::file::{creator_name, type_name, FileRequester};
+use crate::file::{FileRequester, creator_name, type_name};
 use crate::state::{
     FileTransfer, FolderTransfer, PendingTransfer, SharedState, TransferDirection, TransferKind,
     TransferRef, TransferTarget,
@@ -693,21 +693,19 @@ impl Session {
         if new_name.is_none() && comment.is_none() {
             return vec![tx.reply(vec![])];
         }
-        if let Some(comment) = &comment {
-            if let Err(reason) = state
+        if let Some(comment) = &comment
+            && let Err(reason) = state
                 .set_file_comment(&*store, requester, &dir, &name, comment, self.access)
                 .await
-            {
-                return vec![tx.reply_error(reason)];
-            }
+        {
+            return vec![tx.reply_error(reason)];
         }
-        if let Some(new_name) = &new_name {
-            if let Err(reason) = state
+        if let Some(new_name) = &new_name
+            && let Err(reason) = state
                 .rename_file(&*store, requester, &dir, &name, new_name, self.access)
                 .await
-            {
-                return vec![tx.reply_error(reason)];
-            }
+        {
+            return vec![tx.reply_error(reason)];
         }
         vec![tx.reply(vec![])]
     }

@@ -1,7 +1,7 @@
 use hotline_proto::text_encoding::Encoding;
 use hotline_proto::wire::ArrayReader;
 
-use crate::{decode_reply_header, Result, TrackedServer, TrackerError, REPLY_HEADER_LEN};
+use crate::{REPLY_HEADER_LEN, Result, TrackedServer, TrackerError, decode_reply_header};
 
 /// Message type a tracker stamps on each chunk of its server list.
 const TYPE_SERVER_LIST: u16 = 1;

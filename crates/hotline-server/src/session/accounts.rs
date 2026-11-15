@@ -2,9 +2,9 @@
 
 use std::borrow::Cow;
 
+use hotline_proto::FieldId;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
-use hotline_proto::FieldId;
 use hotline_proto::{Field, FieldList, Received, Transaction};
 
 use crate::account::{AccessExtra, Account};

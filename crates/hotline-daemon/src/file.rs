@@ -12,8 +12,8 @@ use std::sync::{PoisonError, RwLock};
 use async_trait::async_trait;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
 use hotline_server::{
-    partial_upload_name, type_and_creator_for_name, validate_file_name, BoxedReader, BoxedWriter,
-    FileProvider, FileRequester, FinderInfo, ItemTimes,
+    BoxedReader, BoxedWriter, FileProvider, FileRequester, FinderInfo, ItemTimes,
+    partial_upload_name, type_and_creator_for_name, validate_file_name,
 };
 
 use crate::fork_store::{ForkStore, ForkStoreKind};
@@ -503,10 +503,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
-        assert!(provider
-            .free_space(requester(), &HlPath::default())
-            .await
-            .is_some());
+        assert!(
+            provider
+                .free_space(requester(), &HlPath::default())
+                .await
+                .is_some()
+        );
         assert_eq!(
             provider
                 .free_space(requester(), &HlPath::new(["missing"]))
@@ -585,18 +587,24 @@ mod tests {
         let names: Vec<_> = entries.iter().map(|e| &*e.name).collect();
         assert_eq!(names, ["a.txt"]);
         assert!(!provider.exists(requester(), &root, "._a.txt").await);
-        assert!(provider
-            .open_read(requester(), &root, "._a.txt")
-            .await
-            .is_err());
-        assert!(provider
-            .delete(requester(), &root, "._a.txt", false)
-            .await
-            .is_err());
-        assert!(provider
-            .list(requester(), &HlPath::new(["._a.txt"]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .open_read(requester(), &root, "._a.txt")
+                .await
+                .is_err()
+        );
+        assert!(
+            provider
+                .delete(requester(), &root, "._a.txt", false)
+                .await
+                .is_err()
+        );
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["._a.txt"]))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -627,10 +635,12 @@ mod tests {
         let entries = provider.list(requester(), &root).await.unwrap();
         let names: Vec<_> = entries.iter().map(|e| &*e.name).collect();
         assert_eq!(names, ["._a.txt"]);
-        assert!(provider
-            .set_comment(requester(), &root, "._a.txt", "a note")
-            .await
-            .is_err());
+        assert!(
+            provider
+                .set_comment(requester(), &root, "._a.txt", "a note")
+                .await
+                .is_err()
+        );
 
         provider
             .create_write(requester(), &root, "b.txt")
@@ -842,9 +852,11 @@ mod tests {
         assert!(provider.resolve_file(&HlPath::new([".."]), "etc").is_none());
         assert!(provider.resolve_file(&HlPath::default(), "..").is_none());
         assert!(provider.resolve_file(&HlPath::default(), "a/b").is_none());
-        assert!(provider
-            .resolve_file(&HlPath::default(), "ok.txt")
-            .is_some());
+        assert!(
+            provider
+                .resolve_file(&HlPath::default(), "ok.txt")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -1075,10 +1087,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = DiskFileProvider::open(dir.path()).await.unwrap();
 
-        assert!(provider
-            .open_write_resume(requester(), &HlPath::default(), "missing.txt", 0)
-            .await
-            .is_err());
+        assert!(
+            provider
+                .open_write_resume(requester(), &HlPath::default(), "missing.txt", 0)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1294,10 +1308,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(provider
-            .delete(requester(), &HlPath::default(), "Vacation", false)
-            .await
-            .is_err());
+        assert!(
+            provider
+                .delete(requester(), &HlPath::default(), "Vacation", false)
+                .await
+                .is_err()
+        );
 
         assert_eq!(
             provider
@@ -1409,10 +1425,12 @@ mod tests {
             .await;
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
         assert!(dir.path().join("keep.txt").is_file());
-        assert!(provider
-            .list(requester(), &HlPath::new(["."]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["."]))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

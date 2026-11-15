@@ -1,18 +1,18 @@
 //! Classic (flat) and threaded news handlers.
 
+use hotline_proto::FieldId;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding;
 use hotline_proto::types::HlPath;
-use hotline_proto::FieldId;
 use hotline_proto::{Field, Received, Transaction};
 
 use crate::flood::FloodEvent;
-use crate::news::{body_from_wire, body_to_wire, PostError};
+use crate::news::{PostError, body_from_wire, body_to_wire};
 use crate::policy::Silent;
 use crate::state::SharedState;
 
-use super::connection::{Session, MAX_FLAT_NEWS_LEN};
+use super::connection::{MAX_FLAT_NEWS_LEN, Session};
 
 /// The first client version that reads [`myField_NewsCatListData15`] (323).
 ///

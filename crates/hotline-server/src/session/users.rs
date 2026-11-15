@@ -3,11 +3,11 @@
 
 use std::borrow::Cow;
 
+use hotline_proto::FieldId;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::UserNameWithInfo;
-use hotline_proto::FieldId;
-use hotline_proto::{text_encoding, Field, Received, Transaction};
+use hotline_proto::{Field, Received, Transaction, text_encoding};
 
 use crate::account::AccessExtra;
 use crate::ban::BanRecord;
@@ -228,10 +228,10 @@ impl Session {
         if self.message_flood_banned(tx, state).await {
             return vec![];
         }
-        if let Err(reason) = self.access.require(Access::SEND_MESSAGE) {
-            if !self.access_extra.contains(AccessExtra::MSG_OVERRIDE) {
-                return vec![tx.reply_error(reason)];
-            }
+        if let Err(reason) = self.access.require(Access::SEND_MESSAGE)
+            && !self.access_extra.contains(AccessExtra::MSG_OVERRIDE)
+        {
+            return vec![tx.reply_error(reason)];
         }
         let Some(target_id) = tx.field(FieldId::UserID).map(Field::as_u16) else {
             return vec![tx.reply_error("missing user id")];
@@ -806,16 +806,20 @@ mod tests {
         };
 
         for _ in 0..5 {
-            assert!(!session
-                .on_send_instant_msg(&message(), &state)
-                .await
-                .is_empty());
+            assert!(
+                !session
+                    .on_send_instant_msg(&message(), &state)
+                    .await
+                    .is_empty()
+            );
         }
 
-        assert!(session
-            .on_send_instant_msg(&message(), &state)
-            .await
-            .is_empty());
+        assert!(
+            session
+                .on_send_instant_msg(&message(), &state)
+                .await
+                .is_empty()
+        );
         assert!(rx.is_ended());
     }
 

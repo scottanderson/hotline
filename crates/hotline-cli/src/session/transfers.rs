@@ -7,9 +7,9 @@ use std::time::Instant;
 
 use futures::future::BoxFuture;
 use hotline_client::{FolderDownload, FolderUpload, HotlineClient};
+use hotline_proto::Access;
 use hotline_proto::htxf::FolderItemHeader;
 use hotline_proto::types::{FileNameWithInfo, HlPath};
-use hotline_proto::Access;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, BufReader, BufWriter};
 use tokio::sync::mpsc::UnboundedSender;

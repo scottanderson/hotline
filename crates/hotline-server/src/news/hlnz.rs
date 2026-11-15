@@ -8,7 +8,7 @@ use hotline_proto::wire::{ArrayReader, SliceReader};
 use uuid::Uuid;
 
 use crate::news::category::MAX_REPLY_CHAIN_LEN;
-use crate::news::{body_from_wire, NewsArticle, NewsCategory};
+use crate::news::{NewsArticle, NewsCategory, body_from_wire};
 use crate::policy::to_utc;
 
 /// The file's type code and first four bytes.

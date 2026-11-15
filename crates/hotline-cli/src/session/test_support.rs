@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use hotline_client::{ClientUserInfo, HotlineClient};
 use hotline_proto::opcode::TransactionType;
-use hotline_proto::{text_encoding, Field, Opcode, Received, Transaction};
+use hotline_proto::{Field, Opcode, Received, Transaction, text_encoding};
 use hotline_server::{Providers, Server, ServerConfig};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;

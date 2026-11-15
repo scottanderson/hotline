@@ -3,7 +3,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
-use super::{contains, Action, Hint, Tab, View};
+use super::{Action, Hint, Tab, View, contains};
 use crate::tasks::{Stop, TaskId, TaskRow};
 use crate::ui;
 

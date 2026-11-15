@@ -650,10 +650,12 @@ mod tests {
         provider.put("alice".into(), alice()).await.unwrap();
         std::fs::create_dir_all(dir.path().join("bob").join(FILES_DIR)).unwrap();
 
-        assert!(provider
-            .rename("alice", "bob".into(), alice())
-            .await
-            .is_err());
+        assert!(
+            provider
+                .rename("alice", "bob".into(), alice())
+                .await
+                .is_err()
+        );
 
         assert_eq!(provider.get("alice").await, Some(alice()));
         assert_eq!(provider.get("bob").await, None);

@@ -9,8 +9,8 @@ use hotline_proto::types::{FileNameWithInfo, HlPath};
 
 use crate::file::writer::{ForkWriter, MemWriter};
 use crate::file::{
-    partial_upload_name, type_and_creator_for_name, BoxedReader, BoxedWriter, Dir, FileProvider,
-    FileRequester, FinderInfo, Node,
+    BoxedReader, BoxedWriter, Dir, FileProvider, FileRequester, FinderInfo, Node,
+    partial_upload_name, type_and_creator_for_name,
 };
 use crate::sync::lock;
 
@@ -797,19 +797,23 @@ mod tests {
     #[tokio::test]
     async fn open_write_resume_errors_when_the_file_does_not_exist() {
         let provider = InMemoryFileProvider::default();
-        assert!(provider
-            .open_write_resume(requester(), &HlPath::default(), "missing.txt", 0)
-            .await
-            .is_err());
+        assert!(
+            provider
+                .open_write_resume(requester(), &HlPath::default(), "missing.txt", 0)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn list_of_missing_directory_is_none() {
         let provider = InMemoryFileProvider::default();
-        assert!(provider
-            .list(requester(), &HlPath::new(["nope"]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["nope"]))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -834,10 +838,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(provider
-            .list(requester(), &HlPath::new(["Nope"]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["Nope"]))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -849,10 +855,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(provider
-            .list(requester(), &HlPath::new(["Nope"]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["Nope"]))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -870,10 +878,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(provider
-            .list(requester(), &HlPath::new(["Nope"]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["Nope"]))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -891,10 +901,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(provider
-            .list(requester(), &HlPath::new(["Nope"]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["Nope"]))
+                .await
+                .is_none()
+        );
 
         // The entry should still be where it started.
         assert!(
@@ -966,10 +978,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(provider
-            .create_write(requester(), &through_file, "up.txt")
-            .await
-            .is_err());
+        assert!(
+            provider
+                .create_write(requester(), &through_file, "up.txt")
+                .await
+                .is_err()
+        );
 
         provider
             .mkdir(requester(), &HlPath::default(), "New")
@@ -989,23 +1003,29 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(err.kind(), io::ErrorKind::IsADirectory);
-        assert!(provider
-            .list(requester(), &HlPath::new([partial.as_str()]))
-            .await
-            .is_some());
+        assert!(
+            provider
+                .list(requester(), &HlPath::new([partial.as_str()]))
+                .await
+                .is_some()
+        );
     }
 
     #[tokio::test]
     async fn create_write_into_a_missing_folder_errors() {
         let provider = InMemoryFileProvider::default();
-        assert!(provider
-            .create_write(requester(), &HlPath::new(["Nope"]), "up.txt")
-            .await
-            .is_err());
-        assert!(provider
-            .list(requester(), &HlPath::new(["Nope"]))
-            .await
-            .is_none());
+        assert!(
+            provider
+                .create_write(requester(), &HlPath::new(["Nope"]), "up.txt")
+                .await
+                .is_err()
+        );
+        assert!(
+            provider
+                .list(requester(), &HlPath::new(["Nope"]))
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

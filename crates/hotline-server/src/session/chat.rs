@@ -2,11 +2,11 @@
 
 use std::borrow::Cow;
 
+use hotline_proto::FieldId;
 use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding;
 use hotline_proto::types::UserNameWithInfo;
-use hotline_proto::FieldId;
 use hotline_proto::{Field, Received, Transaction};
 
 use crate::account::AccessExtra;
@@ -540,10 +540,12 @@ mod tests {
         }
         session.access.remove(Access::SEND_CHAT);
 
-        assert!(session
-            .on_chat_send(&line(114), &state, &config)
-            .await
-            .is_empty());
+        assert!(
+            session
+                .on_chat_send(&line(114), &state, &config)
+                .await
+                .is_empty()
+        );
         assert!(rx.is_ended());
         assert!(state.is_banned(session.remote_addr.ip()).await.is_some());
     }
@@ -560,10 +562,12 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session
-            .on_chat_send(&request, &state, &ServerConfig::default())
-            .await
-            .is_empty());
+        assert!(
+            session
+                .on_chat_send(&request, &state, &ServerConfig::default())
+                .await
+                .is_empty()
+        );
 
         let text = rx
             .try_recv()
@@ -591,10 +595,12 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session
-            .on_chat_send(&request, &state, &ServerConfig::default())
-            .await
-            .is_empty());
+        assert!(
+            session
+                .on_chat_send(&request, &state, &ServerConfig::default())
+                .await
+                .is_empty()
+        );
 
         let text = rx
             .try_recv()
@@ -645,10 +651,12 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session
-            .on_chat_send(&request, &state, &ServerConfig::default())
-            .await
-            .is_empty());
+        assert!(
+            session
+                .on_chat_send(&request, &state, &ServerConfig::default())
+                .await
+                .is_empty()
+        );
 
         let text = rx
             .try_recv()
@@ -673,10 +681,12 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session
-            .on_chat_send(&request, &state, &ServerConfig::default())
-            .await
-            .is_empty());
+        assert!(
+            session
+                .on_chat_send(&request, &state, &ServerConfig::default())
+                .await
+                .is_empty()
+        );
 
         let text = rx
             .try_recv()
@@ -704,10 +714,12 @@ mod tests {
         );
 
         let mut rx = state.register_recipient(1).await;
-        assert!(session
-            .on_chat_send(&request, &state, &ServerConfig::default())
-            .await
-            .is_empty());
+        assert!(
+            session
+                .on_chat_send(&request, &state, &ServerConfig::default())
+                .await
+                .is_empty()
+        );
 
         let text = rx
             .try_recv()
@@ -1026,10 +1038,12 @@ mod tests {
                 Field::string(FieldId::ChatSubject, "Topic"),
             ],
         );
-        assert!(session
-            .try_set_chat_subject(&subject, &state)
-            .await
-            .is_err());
+        assert!(
+            session
+                .try_set_chat_subject(&subject, &state)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1563,10 +1577,12 @@ mod tests {
             1,
             vec![Field::u32(FieldId::ChatID, chat_id)],
         );
-        assert!(alice
-            .try_invite_to_chat(&missing_uid, &state)
-            .await
-            .is_err());
+        assert!(
+            alice
+                .try_invite_to_chat(&missing_uid, &state)
+                .await
+                .is_err()
+        );
 
         let zero_chat_id = request(
             Opcode::InviteToChat,
@@ -1576,10 +1592,12 @@ mod tests {
                 Field::u16(FieldId::UserID, 2),
             ],
         );
-        assert!(alice
-            .try_invite_to_chat(&zero_chat_id, &state)
-            .await
-            .is_err());
+        assert!(
+            alice
+                .try_invite_to_chat(&zero_chat_id, &state)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

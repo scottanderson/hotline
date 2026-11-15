@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use async_trait::async_trait;
 

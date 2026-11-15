@@ -226,10 +226,12 @@ mod tests {
             .run(&mut session)
             .await;
         assert_eq!(logins(&session), ["bo"]);
-        assert!(ClientSession::open_account(&client, "admin")
-            .run(&mut session)
-            .await
-            .is_some());
+        assert!(
+            ClientSession::open_account(&client, "admin")
+                .run(&mut session)
+                .await
+                .is_some()
+        );
         assert_eq!(logins(&session), ["admin", "bo"]);
         session
             .delete_account(&client, "bo")

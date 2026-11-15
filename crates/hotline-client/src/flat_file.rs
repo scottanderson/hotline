@@ -2,11 +2,11 @@
 
 use std::io;
 
+use hotline_proto::ForkHeader;
 use hotline_proto::htxf::{
-    decode_flat_file_prefix, empty_info, flat_file_header, FlatFileInfo, FLAT_FILE_PREFIX_LEN,
+    FLAT_FILE_PREFIX_LEN, FlatFileInfo, decode_flat_file_prefix, empty_info, flat_file_header,
 };
 use hotline_proto::text_encoding::Encoding;
-use hotline_proto::ForkHeader;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::Result;

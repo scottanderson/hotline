@@ -2,10 +2,10 @@
 
 use std::io;
 
+use hotline_proto::Encoding;
 use hotline_proto::htxf::{FolderAction, FolderItemHeader};
 use hotline_proto::types;
 use hotline_proto::wire::VecWriter;
-use hotline_proto::Encoding;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 

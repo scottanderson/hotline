@@ -237,9 +237,11 @@ mod tests {
     fn pstring_accepts_exactly_255_bytes() {
         let encoding = text_encoding::DEFAULT;
         let exactly_max = "x".repeat(255);
-        assert!(VecWriter::new()
-            .with_encoding(encoding)
-            .pstring(&exactly_max)
-            .is_ok());
+        assert!(
+            VecWriter::new()
+                .with_encoding(encoding)
+                .pstring(&exactly_max)
+                .is_ok()
+        );
     }
 }

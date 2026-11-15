@@ -4,10 +4,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use hotline_proto::text_encoding;
 use hotline_server::SharedState;
-use hotline_tracker::{with_default_port, ServerBeacon, UDP_PORT};
+use hotline_tracker::{ServerBeacon, UDP_PORT, with_default_port};
 use tokio::net::UdpSocket;
 
 /// How often to re-register, like openline's `mTrackerTimer`.
@@ -117,7 +117,7 @@ pub async fn load_pass_id(path: &Path) -> anyhow::Result<u32> {
             .with_context(|| format!("{} does not hold a tracker ID", path.display()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
         Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", path.display()))
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
     if saved != 0 {

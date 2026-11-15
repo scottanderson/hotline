@@ -7,8 +7,8 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use hotline_proto::text_encoding::Encoding;
 use hotline_server::{
-    FlatNewsProvider, NewsArticle, NewsArticleDetail, NewsBundle, NewsCategory, NewsItemKind,
-    NewsListKind, PostError, ThreadedNewsProvider, HLNZ_MAGIC,
+    FlatNewsProvider, HLNZ_MAGIC, NewsArticle, NewsArticleDetail, NewsBundle, NewsCategory,
+    NewsItemKind, NewsListKind, PostError, ThreadedNewsProvider,
 };
 use tokio::sync::Mutex;
 

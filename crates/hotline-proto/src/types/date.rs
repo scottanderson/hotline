@@ -132,7 +132,7 @@ impl HlDate {
     }
 
     /// The date and time as `locale` writes them, with `%x %X`.
-    pub fn localized(&self, locale: chrono::Locale) -> impl fmt::Display {
+    pub fn localized(&self, locale: chrono::Locale) -> impl fmt::Display + use<> {
         self.to_naive().and_utc().format_localized("%x %X", locale)
     }
 }

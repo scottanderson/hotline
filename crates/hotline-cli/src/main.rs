@@ -20,15 +20,15 @@ use clap::Parser;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::ExecutableCommand;
 use ratatui::crossterm::event::{
     self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
     EventStream, KeyCode, KeyEventKind, KeyboardEnhancementFlags, MouseEventKind,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::crossterm::ExecutableCommand;
 use ratatui::widgets::{ListState, TableState};
-use ratatui::DefaultTerminal;
 
 use args::Args;
 use bell::Bell;
@@ -41,7 +41,7 @@ use hotline_proto::text_encoding::{Encoding, EncodingHandle};
 use hotline_proto::types::HlPath;
 use hotline_proto::{Received, Transaction};
 use session::{
-    ClientSession, Disconnect, EventOutcome, Mode, NewsFolder, NewsTarget, TransferLine, KEEP_ALIVE,
+    ClientSession, Disconnect, EventOutcome, KEEP_ALIVE, Mode, NewsFolder, NewsTarget, TransferLine,
 };
 use tasks::{Step, Task, TaskId, Tasks};
 use tokio::sync::mpsc;
@@ -176,11 +176,11 @@ async fn run(
             Wake::Reply(step) => step(session, &mut view, &mut tasks),
             Wake::Tick => {}
             Wake::KeepAlive => {
-                if let Some(client) = &client {
-                    if idle_since(client, last_keep_alive).elapsed() >= KEEP_ALIVE {
-                        tasks.run(Task::unlisted(), session.keep_alive(client));
-                        last_keep_alive = Instant::now();
-                    }
+                if let Some(client) = &client
+                    && idle_since(client, last_keep_alive).elapsed() >= KEEP_ALIVE
+                {
+                    tasks.run(Task::unlisted(), session.keep_alive(client));
+                    last_keep_alive = Instant::now();
                 }
             }
             Wake::Connected(result) => {
@@ -223,7 +223,7 @@ async fn run(
                 let action = match ev {
                     // A mouse move changes nothing.
                     Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved && !stale => {
-                        continue
+                        continue;
                     }
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if matches!(session.mode, Mode::Agreement(_)) {
@@ -774,10 +774,10 @@ async fn request(
             );
         }
         Action::AskDeleteNews(target) => {
-            if let NewsTarget::Folder(index) = target {
-                if !session.may_delete_news_folder(index) {
-                    return;
-                }
+            if let NewsTarget::Folder(index) = target
+                && !session.may_delete_news_folder(index)
+            {
+                return;
             }
             view.modal = session.news_name(target).map(|name| Modal::DeleteNews {
                 target,

@@ -5,6 +5,7 @@ use hotline_proto::opcode::TransactionType;
 use hotline_proto::text_encoding;
 use hotline_proto::types::{FileNameWithInfo, UserFlags, UserNameWithInfo};
 use hotline_proto::{Access, Field, FieldId, Opcode, Received, Transaction};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::merge::MergeStrategy;
@@ -13,15 +14,14 @@ use ratatui::widgets::{
     Block, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Scrollbar,
     ScrollbarOrientation, ScrollbarState, Table, Wrap,
 };
-use ratatui::Frame;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::transfer::file_size_text;
 use crate::view::{
-    allows, contains, privileges, AccountForm, ConnectForm, Focus, Hint, MenuItem, Modal,
-    OptionsForm, Splits, Tab, TextBox, View, OPTIONS, QUEUE_TRANSFERS,
+    AccountForm, ConnectForm, Focus, Hint, MenuItem, Modal, OPTIONS, OptionsForm, QUEUE_TRANSFERS,
+    Splits, Tab, TextBox, View, allows, contains, privileges,
 };
 
 /// Where each part of the main screen is drawn.
@@ -151,11 +151,7 @@ pub fn news_areas(body: Rect, splits: Splits) -> [Rect; 3] {
 /// The spacing between two panes: one shared border while the second
 /// `shows`, and none when it does not.
 const fn shared(shows: bool) -> i16 {
-    if shows {
-        -1
-    } else {
-        0
-    }
+    if shows { -1 } else { 0 }
 }
 
 /// A bordered pane of the main screen, which joins the borders it shares

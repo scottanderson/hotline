@@ -23,7 +23,7 @@ use std::io::{self, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use hotline_proto::wire::{ArrayWriter, VecWriter};
 use hotline_server::{BoxedReader, FinderInfo};
@@ -670,10 +670,10 @@ async fn open_sidecar(item: &Path, access: Access) -> io::Result<Option<File>> {
         }
         (_, None) => return Ok(None),
     };
-    if existing.is_none() {
-        if let Some(item_metadata) = &item_metadata {
-            set_new_owner(&file, item_metadata).await;
-        }
+    if existing.is_none()
+        && let Some(item_metadata) = &item_metadata
+    {
+        set_new_owner(&file, item_metadata).await;
     }
     let metadata = file.metadata().await?;
     let owner = item_metadata.as_ref().and_then(owner_of);

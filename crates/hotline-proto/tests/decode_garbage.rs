@@ -2,7 +2,7 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
-use hotline_proto::htxf::{decode_flat_file_prefix, FolderItemHeader};
+use hotline_proto::htxf::{FolderItemHeader, decode_flat_file_prefix};
 use hotline_proto::text_encoding::DEFAULT;
 use hotline_proto::types::{
     FileNameWithInfo, HlPath, NewsArticleListData, NewsCategoryListEntry, ResumeData,

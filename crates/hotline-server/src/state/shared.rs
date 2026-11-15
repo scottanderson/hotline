@@ -1,11 +1,11 @@
 use std::borrow::Cow;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::future::Future;
 use std::net::IpAddr;
 use std::num::NonZero;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, SystemTime};
 
 use tokio::sync::{Mutex, RwLock};
@@ -31,13 +31,13 @@ use crate::console::fields::{
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::file::{
-    partial_upload_name, BoxedReader, FileProvider, FileRequester, FinderInfo, FolderItem,
-    PARTIAL_TYPE,
+    BoxedReader, FileProvider, FileRequester, FinderInfo, FolderItem, PARTIAL_TYPE,
+    partial_upload_name,
 };
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
 use crate::news::{
-    body_to_wire, FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind, PostError,
-    ThreadedNewsProvider,
+    FlatNewsProvider, NewsArticleDetail, NewsItemKind, NewsListKind, PostError,
+    ThreadedNewsProvider, body_to_wire,
 };
 use crate::policy::{ServerPolicy, Silent, TakenLogin, TimeZone};
 use crate::providers::Providers;
@@ -47,9 +47,10 @@ use crate::state::download_queue::{DownloadQueue, Limits, QueueUpdate};
 use crate::state::progress::RunningTransfers;
 use crate::state::recipient::{self, Recipient};
 use crate::state::{
-    dropbox_access, dropbox_blocked, upload_destination_access, AccessUpdate, Connection,
-    ConsoleUpdate, NotReplaced, PendingTransfer, ProgressGuard, RecipientMessage, ReplacedAccount,
-    TransferDirection, TransferKind, TransferProgress, TransferRef, TransferReport, UserEntry,
+    AccessUpdate, Connection, ConsoleUpdate, NotReplaced, PendingTransfer, ProgressGuard,
+    RecipientMessage, ReplacedAccount, TransferDirection, TransferKind, TransferProgress,
+    TransferRef, TransferReport, UserEntry, dropbox_access, dropbox_blocked,
+    upload_destination_access,
 };
 use crate::user_list::UserListProvider;
 
@@ -2305,10 +2306,12 @@ mod tests {
     #[tokio::test]
     async fn replace_account_refuses_a_deleted_login_and_writes_a_taken_rename_over_it() {
         let state = Arc::<SharedState>::default();
-        assert!(state
-            .replace_account("bob", "bob", |_| Account::guest())
-            .await
-            .is_err());
+        assert!(
+            state
+                .replace_account("bob", "bob", |_| Account::guest())
+                .await
+                .is_err()
+        );
         assert!(state.account("bob").await.is_none());
 
         state
@@ -2370,16 +2373,18 @@ mod tests {
         let state = state_with_files(files);
         let requester = FileRequester { login: "alice" };
         let store = state.files_for("alice").await.unwrap();
-        assert!(state
-            .walk_folder(
-                &*store,
-                requester,
-                &HlPath::default(),
-                "Drop Box",
-                Access::empty()
-            )
-            .await
-            .is_err());
+        assert!(
+            state
+                .walk_folder(
+                    &*store,
+                    requester,
+                    &HlPath::default(),
+                    "Drop Box",
+                    Access::empty()
+                )
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

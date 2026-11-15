@@ -747,11 +747,13 @@ async fn threaded_news_lists_posts_reads_and_deletes() {
     assert_eq!(article.data, b"first post");
 
     admin.del_news_art(&general, 1, true).await.unwrap();
-    assert!(admin
-        .get_news_art_name_list(&general)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        admin
+            .get_news_art_name_list(&general)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     admin.del_news_item(&general).await.unwrap();
     assert_eq!(admin.get_news_cat_name_list(&root).await.unwrap().len(), 1);
 }

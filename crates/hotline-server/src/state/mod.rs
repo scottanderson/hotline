@@ -23,7 +23,7 @@ use hotline_proto::types::HlPath;
 
 pub use access::AccessUpdate;
 pub use console::ConsoleUpdate;
-pub use entry::{UserEntry, IDLE_THRESHOLD};
+pub use entry::{IDLE_THRESHOLD, UserEntry};
 pub use file_transfer::FileTransfer;
 pub use folder_transfer::FolderTransfer;
 pub(crate) use progress::ProgressGuard;

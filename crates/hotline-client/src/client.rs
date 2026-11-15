@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::num::NonZero;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::stream::{SplitSink, SplitStream};
@@ -10,7 +10,7 @@ use futures::{SinkExt, StreamExt};
 use hotline_proto::text_encoding::EncodingHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;

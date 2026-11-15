@@ -4,11 +4,11 @@ use std::fmt::Write as _;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use hotline_proto::text_encoding::Encoding;
 use hotline_tracker::{
-    decode_server_list, encode_client_request_v1, with_default_port, ServerList, TrackerError,
-    CHUNK_HEADER_LEN, REPLY_HEADER_LEN, TCP_PORT,
+    CHUNK_HEADER_LEN, REPLY_HEADER_LEN, ServerList, TCP_PORT, TrackerError, decode_server_list,
+    encode_client_request_v1, with_default_port,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

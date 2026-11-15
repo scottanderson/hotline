@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use unicode_general_category::{get_general_category, GeneralCategory};
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, Stream, StreamExt};
@@ -14,11 +14,11 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use hotline_codec::TransactionCodec;
+use hotline_proto::FieldId;
 use hotline_proto::consts::Access;
 use hotline_proto::opcode::{Opcode, TransactionType};
 use hotline_proto::text_encoding::{self, Encoding, EncodingHandle};
 use hotline_proto::types::{UserChangeOptions, UserFlags, UserNameWithInfo};
-use hotline_proto::FieldId;
 use hotline_proto::{ClientHandshake, Field, Received, ServerHandshake, Transaction};
 
 use crate::time::deadline;
@@ -30,8 +30,8 @@ use crate::error::{Result, ServerError};
 use crate::flood::{FloodDecision, FloodEvent};
 use crate::server::ServerConfig;
 use crate::state::{
-    AccessUpdate, Connection, ConsoleUpdate, Inbox, RecipientMessage, SharedState, UserEntry,
-    IDLE_THRESHOLD, QUEUE_LEN,
+    AccessUpdate, Connection, ConsoleUpdate, IDLE_THRESHOLD, Inbox, QUEUE_LEN, RecipientMessage,
+    SharedState, UserEntry,
 };
 
 /// [`myField_Options`] (113) values on
@@ -266,11 +266,11 @@ impl Session {
         .await;
         // Runs on every exit from `dispatch`, including an early `?`.
         Self::leave_server(&session, &state).await;
-        if let SessionEnd::Kicked(queued) = outcome? {
-            if write_kick(&mut writer, queued, user_id).await? {
-                // Read the client's unsent requests so the close does not reset the connection.
-                drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
-            }
+        if let SessionEnd::Kicked(queued) = outcome?
+            && write_kick(&mut writer, queued, user_id).await?
+        {
+            // Read the client's unsent requests so the close does not reset the connection.
+            drain_with_timeout(&mut reader, KICK_DRAIN_TIMEOUT).await;
         }
         Ok(())
     }
@@ -1807,9 +1807,11 @@ mod tests {
         );
         let replies = session.on_agreed(&agreed, &state).await;
 
-        assert!(!replies
-            .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner)));
+        assert!(
+            !replies
+                .iter()
+                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner))
+        );
     }
 
     #[tokio::test]
@@ -1830,9 +1832,11 @@ mod tests {
         );
         let replies = session.on_agreed(&agreed, &state).await;
 
-        assert!(!replies
-            .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner)));
+        assert!(
+            !replies
+                .iter()
+                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner))
+        );
     }
 
     #[tokio::test]
@@ -1856,9 +1860,11 @@ mod tests {
         let replies = session.on_login(&login, &state, &config).await;
 
         assert!(matches!(session.state, SessionState::Joined));
-        assert!(!replies
-            .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner)));
+        assert!(
+            !replies
+                .iter()
+                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ServerBanner))
+        );
     }
 
     #[tokio::test]
@@ -1970,9 +1976,11 @@ mod tests {
         );
         let replies = session.on_login(&login, &state, &config).await;
 
-        assert!(!replies
-            .iter()
-            .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement)),);
+        assert!(
+            !replies
+                .iter()
+                .any(|tx| tx.r#type() == TransactionType::Push(Opcode::ShowAgreement)),
+        );
     }
 
     #[tokio::test]

@@ -2,9 +2,9 @@
 
 use std::io;
 
-use hotline_proto::htxf::{FolderAction, FolderItemHeader, FLAT_FILE_HEADER_LEN};
-use hotline_proto::types::ResumeData;
 use hotline_proto::Encoding;
+use hotline_proto::htxf::{FLAT_FILE_HEADER_LEN, FolderAction, FolderItemHeader};
+use hotline_proto::types::ResumeData;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 

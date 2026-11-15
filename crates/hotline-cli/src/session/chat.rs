@@ -4,7 +4,7 @@ use hotline_client::{HotlineClient, JoinedChat};
 use hotline_proto::text_encoding;
 use hotline_proto::{Field, FieldId, Received, Transaction};
 
-use super::{display_text, ChatInvite, ChatRoom, ClientSession, Request};
+use super::{ChatInvite, ChatRoom, ClientSession, Request, display_text};
 use crate::line::LineKind;
 
 /// The most invitations that wait for an answer.
@@ -191,10 +191,10 @@ impl ClientSession {
     ///
     /// [`myTran_SetChatSubject`]: hotline_proto::Opcode::SetChatSubject
     pub async fn set_chat_subject(&mut self, client: &HotlineClient, chat_id: u32, subject: &str) {
-        if let Err(e) = client.set_chat_subject(chat_id, subject).await {
-            if let Some(room) = self.room_mut(chat_id) {
-                room.push(format!("failed to set the subject: {e}"), LineKind::Error);
-            }
+        if let Err(e) = client.set_chat_subject(chat_id, subject).await
+            && let Some(room) = self.room_mut(chat_id)
+        {
+            room.push(format!("failed to set the subject: {e}"), LineKind::Error);
         }
     }
 
@@ -203,19 +203,18 @@ impl ClientSession {
         if let Err(e) = client
             .send_room_chat(chat_id, &text_encoding::to_wire_lines(line))
             .await
+            && let Some(room) = self.room_mut(chat_id)
         {
-            if let Some(room) = self.room_mut(chat_id) {
-                room.push(format!("failed to send: {e}"), LineKind::Error);
-            }
+            room.push(format!("failed to send: {e}"), LineKind::Error);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use hotline_proto::Opcode;
     use hotline_proto::text_encoding::EncodingHandle;
     use hotline_proto::types::{UserFlags, UserNameWithInfo};
-    use hotline_proto::Opcode;
 
     use super::*;
     use crate::line::Scrollback;

@@ -1,7 +1,7 @@
 //! Every decoder returns an error, and does not panic, on any input.
 
 use hotline_proto::text_encoding::DEFAULT;
-use hotline_tracker::{decode_reply_header, decode_server_list, TrackedServer};
+use hotline_tracker::{TrackedServer, decode_reply_header, decode_server_list};
 
 /// A fixed xorshift generator, so a failure repeats.
 struct Rng(u64);

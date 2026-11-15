@@ -7,5 +7,5 @@ mod time_zone;
 
 pub use openline::OpenlinePolicy;
 pub use server_policy::{ServerPolicy, Silent, TakenLogin};
-pub(crate) use time_zone::to_utc;
 pub use time_zone::TimeZone;
+pub(crate) use time_zone::to_utc;

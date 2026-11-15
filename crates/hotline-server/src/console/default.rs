@@ -6,7 +6,7 @@ use hotline_proto::consts::{Access, RequireFlags};
 use hotline_proto::types::UserFlags;
 
 use crate::account::AccessExtra;
-use crate::console::{strtoul, ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
+use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply, strtoul};
 use crate::state::{SharedState, UserEntry};
 
 /// `/users`, `/access`, `/0wn`, and `/unban`. See the module docs for

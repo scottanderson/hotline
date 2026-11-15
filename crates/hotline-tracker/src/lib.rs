@@ -14,7 +14,7 @@ use hotline_proto::wire::{ArrayReader, ArrayWriter};
 
 pub use error::{Result, TrackerError};
 pub use server_beacon::ServerBeacon;
-pub use server_list::{decode_server_list, ServerList, CHUNK_HEADER_LEN};
+pub use server_list::{CHUNK_HEADER_LEN, ServerList, decode_server_list};
 pub use tracked_server::TrackedServer;
 
 const MAGIC: &[u8; 4] = b"HTRK";

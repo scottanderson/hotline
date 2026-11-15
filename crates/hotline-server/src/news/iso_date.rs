@@ -4,7 +4,7 @@
 //! `serde`-free form [`deserialize`] builds on. Call `to_string`
 //! directly on the write side.
 
-use hotline_proto::types::{civil_from_days, days_from_civil, HlDate};
+use hotline_proto::types::{HlDate, civil_from_days, days_from_civil};
 use serde::{Deserialize, Deserializer};
 
 /// Format `date` as an ISO 8601 string.
@@ -80,7 +80,7 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{to_string, HlDate};
+    use super::{HlDate, to_string};
 
     #[derive(serde::Deserialize)]
     struct Wrapper(#[serde(with = "super")] HlDate);

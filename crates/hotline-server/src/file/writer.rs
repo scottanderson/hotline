@@ -5,8 +5,8 @@ use std::task::{Context, Poll};
 
 use tokio::io::AsyncWrite;
 
-use crate::file::memory::Store;
 use crate::file::Node;
+use crate::file::memory::Store;
 use crate::sync::lock;
 
 /// Writes accumulate directly into the shared tree as they arrive

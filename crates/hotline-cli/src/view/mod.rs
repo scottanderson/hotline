@@ -17,8 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use hotline_client::Ban;
-use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use hotline_proto::Access;
+use hotline_proto::types::{FileNameWithInfo, UserNameWithInfo};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -31,14 +31,14 @@ use crate::tasks::TaskRow;
 use crate::transfer::{Conflict, Start};
 use crate::ui::{self, Areas};
 
-pub use account_form::{privileges, AccountForm};
+pub use account_form::{AccountForm, privileges};
 pub use action::Action;
 pub use command::{Command, Palette};
 pub use connect_form::ConnectForm;
 pub use divider::{Divider, Splits};
 pub use hint::Hint;
 pub use modal::{MenuItem, Modal};
-pub use options_form::{OptionsForm, OPTIONS, QUEUE_TRANSFERS};
+pub use options_form::{OPTIONS, OptionsForm, QUEUE_TRANSFERS};
 pub use tab::Tab;
 pub use text_box::TextBox;
 
@@ -1073,11 +1073,11 @@ impl View {
             KeyCode::Up => self.files.select_previous(),
             KeyCode::Down => self.files.select_next(),
             KeyCode::Enter => {
-                return self.open_file(selected(self.files.selected(), files.len()), files)
+                return self.open_file(selected(self.files.selected(), files.len()), files);
             }
             KeyCode::Backspace | KeyCode::Left => return Action::ParentFolder,
             KeyCode::Char('d') => {
-                return self.download(selected(self.files.selected(), files.len()), files)
+                return self.download(selected(self.files.selected(), files.len()), files);
             }
             KeyCode::Char('u') if self.may(Access::UPLOAD_FILE | Access::UPLOAD_FOLDER) => {
                 self.modal = Some(Modal::Upload {
@@ -1678,11 +1678,7 @@ fn selected(selected: Option<usize>, len: usize) -> usize {
 const fn step(index: usize, len: usize, down: bool) -> usize {
     if down {
         let next = index.saturating_add(1);
-        if next < len {
-            next
-        } else {
-            index
-        }
+        if next < len { next } else { index }
     } else {
         index.saturating_sub(1)
     }

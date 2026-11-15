@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, Local, NaiveDateTime, Timelike};
-use hotline_proto::types::{days_from_civil, HlDate};
+use hotline_proto::types::{HlDate, days_from_civil};
 
 /// The time zone of each date that a server sends.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

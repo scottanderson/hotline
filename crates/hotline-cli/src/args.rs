@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use hotline_proto::text_encoding::{self, Encoding};
 
-use crate::connect::{Target, DEFAULT_PORT};
+use crate::connect::{DEFAULT_PORT, Target};
 
 /// Terminal UI Hotline client.
 #[derive(Parser, Debug)]
