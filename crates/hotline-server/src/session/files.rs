@@ -245,8 +245,8 @@ impl Session {
 
     /// [`myTran_DownloadBanner`] (212): request the server banner image over
     /// `HTXF`, the same download-reference-and-second-connection dance as
-    /// [`myTran_DownloadFile`] (202). `Err` if no image banner is configured (a
-    /// URL banner has nothing to fetch this way).
+    /// [`myTran_DownloadFile`] (202). The size is 0 when no image banner is
+    /// configured.
     ///
     /// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
     /// [`myTran_DownloadFile`]: hotline_proto::Opcode::DownloadFile
@@ -258,13 +258,9 @@ impl Session {
         if let Err(reason) = self.access_extra.require(AccessExtra::BANNER_GET) {
             return vec![tx.reply_error(reason)];
         }
-        let (size, reference) = match state
+        let (size, reference) = state
             .start_banner_transfer(self.remote_addr.ip(), self.user_id)
-            .await
-        {
-            Ok(result) => result,
-            Err(reason) => return vec![tx.reply_error(reason)],
-        };
+            .await;
         vec![tx.reply(vec![
             Field::u32(FieldId::RefNum, reference.0),
             Field::u32(FieldId::TransferSize, size as u32),
@@ -854,7 +850,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn download_banner_denied_when_only_a_url_banner_is_configured() {
+    async fn download_banner_sends_size_0_when_only_a_url_banner_is_configured() {
         let state = state_with_banner(std::sync::Arc::new(crate::banner::UrlBannerProvider::new(
             "https://example.com/banner.jpg",
         )));
@@ -867,7 +863,16 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert!(!reply.is_error());
+        let received = reply.received(text_encoding::DEFAULT);
+        assert_eq!(
+            received.field(FieldId::TransferSize).map(Field::as_u32),
+            Some(0)
+        );
+        let reference = received.field(FieldId::RefNum).map(Field::as_u32).unwrap();
+        let transfer = state.take_transfer(TransferRef(reference)).await.unwrap();
+        assert!(matches!(transfer.kind, TransferKind::Banner));
+        assert_eq!(transfer.size, 0);
     }
 
     fn state_with_files(files: crate::file::InMemoryFileProvider) -> Arc<SharedState> {

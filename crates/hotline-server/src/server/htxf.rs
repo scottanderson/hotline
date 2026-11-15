@@ -100,7 +100,7 @@ async fn handle_htxf_connection(
     let mut stream = CountingStream::new(&mut stream, count);
     match &transfer.kind {
         TransferKind::Banner => {
-            let send = send_banner(&mut stream, state);
+            let send = send_banner(&mut stream, state, transfer.size);
             run_until_session_ends(state, transfer.user_id, send).await
         }
         TransferKind::File(file) => match transfer.direction {
@@ -187,15 +187,19 @@ async fn run_download(
 }
 
 /// Send a [`myTran_DownloadBanner`] (212) download: the banner image's raw bytes,
-/// with none of a file transfer's flattened-object framing.
+/// with none of a file transfer's flattened-object framing. It sends at most
+/// the `size` of the reply, then waits for the client to close.
 ///
 /// [`myTran_DownloadBanner`]: hotline_proto::Opcode::DownloadBanner
 async fn send_banner(
     stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     state: &SharedState,
+    size: u64,
 ) -> Result<()> {
-    let mut reader = state.open_banner_read().await?;
-    tokio::io::copy(&mut reader, stream).await?;
+    if size > 0 {
+        let reader = state.open_banner_read().await?;
+        tokio::io::copy(&mut reader.take(size), stream).await?;
+    }
     drain_stream(stream).await
 }
 
@@ -1302,6 +1306,31 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(state.take_transfer(reference).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_banner_download_with_no_banner_sends_nothing() {
+        let state = state_with_files(InMemoryFileProvider::default());
+        let _session = state.register_recipient(1).await;
+        let banner = PendingTransfer {
+            kind: TransferKind::Banner,
+            size: 0,
+            ..a_txt_transfer(&state, TransferDirection::Get, 1).await
+        };
+        let reference = state.register_transfer(banner).await;
+        let (mut client, server_stream, peer) = connect_htxf_as(reference, HtxfType::Banner).await;
+        client.shutdown().await.unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle_htxf_connection(server_stream, peer, &state),
+        )
+        .await;
+
+        assert!(result.expect("the download should end").is_ok());
+        let mut sent = Vec::new();
+        client.read_to_end(&mut sent).await.unwrap();
+        assert!(sent.is_empty());
     }
 
     #[tokio::test]

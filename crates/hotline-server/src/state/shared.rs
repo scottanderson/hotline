@@ -1323,22 +1323,20 @@ impl SharedState {
     }
 
     /// Start a banner-image download over `HTXF`, returning `(byte size,
-    /// reference)` to reply with. `Err` if no image banner is configured
-    /// (a URL banner has nothing to fetch this way).
+    /// reference)` to reply with. The size is 0 when no image banner is
+    /// configured, or when its size cannot be read.
     pub async fn start_banner_transfer(
         self: &Arc<Self>,
         client_ip: IpAddr,
         user_id: u16,
-    ) -> Result<(u64, TransferRef), &'static str> {
-        match self.banner().kind().await {
-            Some(BannerKind::Image { .. }) => {}
-            _ => return Err("no banner is configured."),
-        }
-        let size = self
-            .banner()
-            .size()
-            .await
-            .map_err(|_| "banner is unavailable.")?;
+    ) -> (u64, TransferRef) {
+        let size = match self.banner().kind().await {
+            Some(BannerKind::Image { .. }) => self.banner().size().await.unwrap_or_else(|error| {
+                tracing::debug!(%error, "cannot read the banner size");
+                0
+            }),
+            _ => 0,
+        };
         let reference = self
             .register_transfer(PendingTransfer {
                 kind: TransferKind::Banner,
@@ -1349,7 +1347,7 @@ impl SharedState {
                 user_id,
             })
             .await;
-        Ok((size, reference))
+        (size, reference)
     }
 
     /// Open the banner image for reading, for a [`myTran_DownloadBanner`] (212)
