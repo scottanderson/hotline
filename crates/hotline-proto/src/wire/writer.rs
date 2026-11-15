@@ -47,6 +47,18 @@ impl<S: Storage, E> Writer<S, E> {
         self.storage.append(bytes);
         self
     }
+
+    /// Write zero bytes up to offset `at`.
+    ///
+    /// # Panics
+    /// If more than `at` bytes are written already, or past the end of a
+    /// fixed buffer.
+    pub fn pad_to(mut self, at: usize) -> Self {
+        let written = self.storage.written();
+        assert!(written <= at, "pad_to went back");
+        self.storage.zeros(at.saturating_sub(written));
+        self
+    }
 }
 
 impl<S: Storage> Writer<S, NoEncoding> {
@@ -165,6 +177,26 @@ mod tests {
     #[should_panic]
     fn finishing_early_panics_in_debug_builds() {
         let _ = ArrayWriter::<4>::new().u16(1).finish(); // only 2 of 4 bytes written
+    }
+
+    #[test]
+    fn pad_to_writes_zeros_up_to_an_offset() {
+        let fixed: [u8; 4] = ArrayWriter::new().u8(1).pad_to(3).pad_to(3).u8(2).finish();
+        assert_eq!(fixed, [1, 0, 0, 2]);
+        let grown = VecWriter::new().u8(1).pad_to(3).pad_to(3).u8(2).finish();
+        assert_eq!(grown, fixed);
+    }
+
+    #[test]
+    #[should_panic]
+    fn pad_to_panics_when_the_writer_is_past_the_offset() {
+        let _ = VecWriter::new().u16(1).pad_to(1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn pad_to_panics_past_the_end_of_an_array() {
+        let _ = ArrayWriter::<2>::new().pad_to(3);
     }
 
     #[test]

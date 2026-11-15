@@ -11,4 +11,12 @@ impl Storage for Growable {
     fn append(&mut self, bytes: &[u8]) {
         self.0.extend_from_slice(bytes);
     }
+
+    fn written(&self) -> usize {
+        self.0.len()
+    }
+
+    fn zeros(&mut self, len: usize) {
+        self.0.resize(self.0.len().saturating_add(len), 0);
+    }
 }

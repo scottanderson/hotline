@@ -24,4 +24,14 @@ impl<const N: usize> Storage for Fixed<N> {
         self.buf[self.pos..end].copy_from_slice(bytes);
         self.pos = end;
     }
+
+    fn written(&self) -> usize {
+        self.pos
+    }
+
+    fn zeros(&mut self, len: usize) {
+        let end = self.pos.saturating_add(len);
+        assert!(end <= N, "write past the end of a Fixed buffer");
+        self.pos = end;
+    }
 }
