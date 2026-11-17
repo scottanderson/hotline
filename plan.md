@@ -58,6 +58,12 @@ works this way.
   Without the drain, unread client data makes the close a reset, and
   the client can lose the notice. A full queue drops the notice. A
   disconnect with no notice drops the queue at once, as openline does.
+- **Move and alias check drop boxes.** openline's `ProcessTran_MoveFile`
+  and `ProcessTran_MakeFileAlias` check no drop box. A user who knows a
+  name can move a file out of a drop box, or alias it, and then
+  download it. `hls` refuses both without `VIEW_DROP_BOXES` when the
+  source is in a drop box. Delete has no drop box check, as in
+  openline. It shows no content of the file.
 - **Folder transfer drops one of openline's safeguards.** No skip for
   an item whose path is too long for openline's fixed 1024-byte buffer.
 - **Any received byte restarts a folder upload's idle timer.** openline's

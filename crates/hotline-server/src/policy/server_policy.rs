@@ -28,16 +28,6 @@ pub enum Silent {
         /// Why the request failed.
         reason: Cow<'static, str>,
     },
-    /// The source of [`myTran_MoveFile`] (208) or [`myTran_MakeFileAlias`]
-    /// (209) is in a drop box that the user cannot view. openline moves or
-    /// aliases it.
-    ///
-    /// [`myTran_MoveFile`]: hotline_proto::Opcode::MoveFile
-    /// [`myTran_MakeFileAlias`]: hotline_proto::Opcode::MakeFileAlias
-    DropBoxSource {
-        /// The missing privilege.
-        reason: Cow<'static, str>,
-    },
     /// The category gave out article ID `u32::MAX`, so
     /// [`myTran_PostNewsArt`] (410) has no ID for the article. openline
     /// sends no reply.

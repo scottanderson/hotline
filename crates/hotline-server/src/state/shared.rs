@@ -933,8 +933,7 @@ impl SharedState {
     }
 
     /// Move a file or folder into another directory, keeping its name,
-    /// after checking the matching privilege and the policy's drop box
-    /// check.
+    /// after checking the matching privilege and drop box visibility.
     pub async fn move_file(
         &self,
         requester: FileRequester<'_>,
@@ -944,7 +943,7 @@ impl SharedState {
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
         let files = self.files_for(requester.login).await?;
-        self.drop_box_source(dir, name, access)?;
+        dropbox_access(dir, Some(name), access)?;
         let info = files.info(requester, dir, name).await.ok_or_else(|| {
             format!("Cannot move because there is no file/folder named “{name}”.")
         })?;
@@ -980,7 +979,7 @@ impl SharedState {
     }
 
     /// Create an alias at `link_dir`/`link_name` pointing at
-    /// `target_dir`/`target_name`, after the policy's drop box check.
+    /// `target_dir`/`target_name`, after checking drop box visibility.
     #[allow(clippy::too_many_arguments)]
     pub async fn symlink_file(
         &self,
@@ -992,7 +991,7 @@ impl SharedState {
         link_name: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
-        self.drop_box_source(target_dir, target_name, access)?;
+        dropbox_access(target_dir, Some(target_name), access)?;
         if !files.exists(requester, target_dir, target_name).await {
             Err(format!(
                 "Cannot make alias because there is no file/folder named “{target_name}”."
@@ -1068,22 +1067,6 @@ impl SharedState {
                 name: name.to_owned(),
                 error,
             })
-            .map_or(Ok(()), Err)
-    }
-
-    /// The policy's error for a source in a drop box that `access` cannot
-    /// view.
-    fn drop_box_source(
-        &self,
-        dir: &HlPath,
-        name: &str,
-        access: Access,
-    ) -> Result<(), Cow<'static, str>> {
-        let Err(reason) = dropbox_access(dir, Some(name), access) else {
-            return Ok(());
-        };
-        self.policy()
-            .error(Silent::DropBoxSource { reason })
             .map_or(Ok(()), Err)
     }
 

@@ -18,7 +18,7 @@ impl ServerPolicy for HlsPolicy {
     fn error(&self, case: Silent) -> Option<Cow<'static, str>> {
         match case {
             Silent::MessageWithoutData => Some("missing message".into()),
-            Silent::ChatRequest { reason } | Silent::DropBoxSource { reason } => Some(reason),
+            Silent::ChatRequest { reason } => Some(reason),
             Silent::NoArticleId => {
                 Some("Cannot post article because the category has no article ID left.".into())
             }

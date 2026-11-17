@@ -906,14 +906,6 @@ mod tests {
         })
     }
 
-    struct CheckDropBoxes;
-
-    impl crate::ServerPolicy for CheckDropBoxes {
-        fn error(&self, _case: crate::Silent) -> Option<std::borrow::Cow<'static, str>> {
-            Some("refused".into())
-        }
-    }
-
     #[tokio::test]
     async fn download_file_denied_without_download_files() {
         let state = state_with_files(crate::file::InMemoryFileProvider::default());
@@ -1480,7 +1472,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
-        let state = state_with_files_and_policy(files, CheckDropBoxes);
+        let state = state_with_files(files);
         let mut access = Access::all();
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
@@ -1519,7 +1511,7 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::new(["Drop Box"]), "secret.txt", *b"hi");
-        let state = state_with_files_and_policy(files, CheckDropBoxes);
+        let state = state_with_files(files);
         let mut access = Access::all();
         access.remove(Access::VIEW_DROP_BOXES);
         let session = test_session("Alice", access);
@@ -1551,48 +1543,6 @@ mod tests {
                 .file_exists(requester, &HlPath::default(), "secret.txt")
                 .await
         );
-    }
-
-    #[tokio::test]
-    async fn move_file_and_make_file_alias_of_a_dropbox_file_succeed_by_default() {
-        let encoding = text_encoding::DEFAULT;
-        let files = crate::file::InMemoryFileProvider::default();
-        files.seed(&HlPath::new(["Drop Box"]), "a.txt", *b"hi");
-        files.seed(&HlPath::new(["Drop Box"]), "b.txt", *b"hi");
-        let state = state_with_files(files);
-        let mut access = Access::all();
-        access.remove(Access::VIEW_DROP_BOXES);
-        let session = test_session("Alice", access);
-        let request_for = |opcode, name: &str| {
-            request(
-                opcode,
-                1,
-                vec![
-                    Field::string(FieldId::FileName, name.to_owned()),
-                    Field::bytes(
-                        FieldId::FilePath,
-                        HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
-                    ),
-                    Field::bytes(
-                        FieldId::FileNewPath,
-                        HlPath::default().encode(encoding).unwrap(),
-                    ),
-                ],
-            )
-        };
-
-        let moved = session
-            .on_move_file(&request_for(Opcode::MoveFile, "a.txt"), &state)
-            .await;
-        let aliased = session
-            .on_make_file_alias(&request_for(Opcode::MakeFileAlias, "b.txt"), &state)
-            .await;
-        assert!(!moved[0].is_error());
-        assert!(!aliased[0].is_error());
-        let requester = FileRequester { login: "" };
-        let root = HlPath::default();
-        assert!(state.file_exists(requester, &root, "a.txt").await);
-        assert!(state.file_exists(requester, &root, "b.txt").await);
     }
 
     #[tokio::test]
