@@ -40,7 +40,7 @@ pub use connect_form::ConnectForm;
 pub use divider::{Divider, Splits};
 pub use hint::Hint;
 pub use keymap::{Intent, KeyChord, Keymap, Pane, Scope};
-pub use modal::{MenuItem, Modal};
+pub use modal::{BookmarkRow, MenuItem, Modal};
 pub use options_form::{OPTIONS, OptionsForm, QUEUE_TRANSFERS};
 pub use tab::Tab;
 pub use text_box::TextBox;
@@ -445,6 +445,7 @@ impl View {
             Intent::Actions => matches!(self.pane(), Pane::Users | Pane::Room).then_some("actions"),
             Intent::TasksTab => (self.pane() == Pane::Tasks).then_some("back"),
             Intent::PrevRow
+            | Intent::Bookmarks
             | Intent::Broadcast
             | Intent::Options
             | Intent::InviteToRoom
@@ -540,6 +541,7 @@ impl View {
                 Command::Disconnect
             },
             Command::ConnectTo,
+            Command::Bookmarks,
             Command::Quit,
         ]);
         commands
@@ -615,6 +617,7 @@ impl View {
                 return Action::None;
             }
             Intent::TasksTab => Some(Command::Tasks),
+            Intent::Bookmarks => Some(Command::Bookmarks),
             Intent::Broadcast => Some(Command::Broadcast),
             Intent::Options => Some(Command::Options),
             Intent::InviteToRoom => chat_id.map(Command::Invite),
@@ -657,6 +660,7 @@ impl View {
             Command::Broadcast => (Scope::Global, Intent::Broadcast),
             Command::Options => (Scope::Global, Intent::Options),
             Command::Tasks => (Scope::Global, Intent::TasksTab),
+            Command::Bookmarks => (Scope::Global, Intent::Bookmarks),
             Command::Invite(_) => (Scope::Global, Intent::InviteToRoom),
             Command::Subject(_) => (Scope::Global, Intent::RoomSubject),
             Command::Leave(_) => (Scope::Global, Intent::LeaveRoom),
@@ -707,6 +711,7 @@ impl View {
             Command::Leave(chat_id) => Action::LeaveChat(chat_id),
             Command::Reconnect => Action::Reconnect,
             Command::ConnectTo => Action::OpenConnect,
+            Command::Bookmarks => Action::OpenBookmarks(None),
             Command::Disconnect => Action::Disconnect,
             Command::Quit => {
                 self.modal = Some(Modal::Quit);
@@ -758,6 +763,16 @@ impl View {
         match (&mut modal, intent) {
             (Modal::BookmarkName { form, .. }, Intent::Cancel) => {
                 self.modal = Some(Modal::Connect(form.clone()));
+                return Action::None;
+            }
+            (Modal::Connect(form), Intent::Cancel) if form.edits.is_some() => {
+                return Action::OpenBookmarks(form.edits.take());
+            }
+            (Modal::DeleteBookmark { rows, selected }, Intent::Cancel) => {
+                self.modal = Some(Modal::Bookmarks {
+                    rows: std::mem::take(rows),
+                    selected: *selected,
+                });
                 return Action::None;
             }
             (_, Intent::Close | Intent::Cancel) => return Action::None,
@@ -813,6 +828,7 @@ impl View {
             (Modal::Connect(form), Intent::PrevRow) => form.previous_row(),
             (Modal::Connect(form), Intent::Connect) => {
                 if let Some((host, port)) = form.server() {
+                    let _ = self.set_tab(Tab::Chat);
                     return Action::Connect {
                         host,
                         port,
@@ -831,7 +847,10 @@ impl View {
             }
             (Modal::BookmarkName { form, input }, Intent::Save) => {
                 form.name = input.take().into();
-                let action = form.bookmark().map_or(Action::None, Action::SaveBookmark);
+                let action = form.bookmark().map_or(Action::None, |bookmark| {
+                    let old_name = form.edits.replace(bookmark.name().into());
+                    Action::SaveBookmark { old_name, bookmark }
+                });
                 self.modal = Some(Modal::Connect(form.clone()));
                 return action;
             }
@@ -842,9 +861,36 @@ impl View {
                 _ => {}
             },
             (
-                Modal::UserMenu { selected, .. } | Modal::PickUser { selected, .. },
+                Modal::UserMenu { selected, .. }
+                | Modal::PickUser { selected, .. }
+                | Modal::Bookmarks { selected, .. },
                 Intent::SelectUp,
             ) => *selected = selected.saturating_sub(1),
+            (Modal::Bookmarks { selected, rows }, Intent::SelectDown) => {
+                *selected = selected.saturating_add(1).min(rows.len().saturating_sub(1));
+            }
+            (Modal::Bookmarks { selected, rows }, intent) if *selected < rows.len() => {
+                let index = *selected;
+                match intent {
+                    Intent::Connect => {
+                        let _ = self.set_tab(Tab::Chat);
+                        return Action::ConnectBookmark(index);
+                    }
+                    Intent::EditBookmark => return Action::EditBookmark(index),
+                    Intent::AutoConnect => return Action::ToggleAutoConnect(index),
+                    Intent::Delete => {
+                        self.modal = Some(Modal::DeleteBookmark {
+                            rows: std::mem::take(rows),
+                            selected: index,
+                        });
+                        return Action::None;
+                    }
+                    _ => {}
+                }
+            }
+            (Modal::DeleteBookmark { selected, .. }, Intent::Delete) => {
+                return Action::DeleteBookmark(*selected);
+            }
             (
                 Modal::UserMenu {
                     selected, items, ..
@@ -1269,6 +1315,8 @@ impl View {
                 | Modal::Invite(_)
                 | Modal::Subject { .. }
                 | Modal::PickUser { .. }
+                | Modal::Bookmarks { .. }
+                | Modal::DeleteBookmark { .. }
                 | Modal::Palette(_)
                 | Modal::Post { .. }
                 | Modal::NewsName { .. }
@@ -1688,6 +1736,7 @@ mod tests {
     use hotline_client::{ClientUserInfo, Password, UserAccount};
     use hotline_proto::types::{HlDate, UserChangeOptions, UserFlags};
 
+    use crate::config::{Bookmark, Config};
     use crate::session::{ArticleText, ChatInvite, Disconnect};
     use crate::transfer::Conflict;
     use crate::ui::Side;
@@ -2038,8 +2087,8 @@ mod tests {
     fn a_list_ignores_an_alt_key_with_no_command() {
         let mut view = View::default();
         let _ = view.handle_key(key(KeyCode::F(3)), &users(), &files());
-        let alt_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT);
-        assert_eq!(view.handle_key(alt_r, &users(), &files()), Action::None);
+        let alt_z = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT);
+        assert_eq!(view.handle_key(alt_z, &users(), &files()), Action::None);
         assert_eq!(view.modal, None);
     }
 
@@ -3274,6 +3323,124 @@ mod tests {
         assert_eq!(view.modal, None);
     }
 
+    fn bookmarks_config() -> Config {
+        let bookmark = |name: &str| Bookmark {
+            name: Some(name.into()),
+            address: "example.com".into(),
+            login: "".into(),
+            password: "".into(),
+        };
+        Config {
+            bookmarks: vec![bookmark("One"), bookmark("Two")],
+            auto_connect: Some("Two".into()),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn bookmarks_marks_the_auto_connect_bookmark_and_keeps_the_selection_in_the_list() {
+        let Modal::Bookmarks { rows, selected } = Modal::bookmarks(&bookmarks_config(), 5) else {
+            panic!("no bookmarks");
+        };
+        let marks: Vec<_> = rows
+            .iter()
+            .map(|row| (&*row.name, row.auto_connect))
+            .collect();
+        assert_eq!(marks, [("One", false), ("Two", true)]);
+        assert_eq!(selected, 1);
+    }
+
+    #[test]
+    fn alt_r_opens_the_bookmarks() {
+        let mut view = View::default();
+        assert_eq!(
+            view.handle_key(alt('r'), &users(), &files()),
+            Action::OpenBookmarks(None)
+        );
+    }
+
+    #[test]
+    fn bookmarks_runs_each_key_on_the_selected_bookmark() {
+        let config = bookmarks_config();
+        let mut view = View::default();
+        let mut press = |code| {
+            view.modal = Some(Modal::bookmarks(&config, 0));
+            let _ = view.handle_key(key(KeyCode::Down), &users(), &files());
+            view.handle_key(key(code), &users(), &files())
+        };
+        assert_eq!(press(KeyCode::Char('e')), Action::EditBookmark(1));
+        assert_eq!(press(KeyCode::Char('a')), Action::ToggleAutoConnect(1));
+        assert_eq!(press(KeyCode::Down), Action::None);
+        assert!(matches!(
+            view.modal,
+            Some(Modal::Bookmarks { selected: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn bookmarks_delete_asks_first_and_a_cancel_goes_back_to_the_list() {
+        let mut view = View {
+            modal: Some(Modal::bookmarks(&bookmarks_config(), 1)),
+            ..View::default()
+        };
+        let mut press = |code| view.handle_key(key(code), &users(), &files());
+        assert_eq!(press(KeyCode::Char('x')), Action::None);
+        assert_eq!(press(KeyCode::Esc), Action::None);
+        assert_eq!(press(KeyCode::Char('x')), Action::None);
+        assert_eq!(press(KeyCode::Char('y')), Action::DeleteBookmark(1));
+        view.modal = Some(Modal::bookmarks(&bookmarks_config(), 1));
+        view.handle_key(key(KeyCode::Char('x')), &users(), &files());
+        assert!(matches!(
+            view.modal,
+            Some(Modal::DeleteBookmark { selected: 1, .. })
+        ));
+        view.handle_key(key(KeyCode::Esc), &users(), &files());
+        assert_eq!(view.modal, Some(Modal::bookmarks(&bookmarks_config(), 1)));
+    }
+
+    #[test]
+    fn connect_form_of_a_bookmark_goes_back_to_the_bookmarks_on_esc() {
+        let config = bookmarks_config();
+        let mut view = View {
+            modal: Some(Modal::Connect(ConnectForm::edit(&config.bookmarks[1]))),
+            ..View::default()
+        };
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::OpenBookmarks(Some("Two".into()))
+        );
+        view.modal = Some(Modal::Connect(ConnectForm::new("", "", "")));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Esc), &users(), &files()),
+            Action::None
+        );
+        assert_eq!(view.modal, None);
+    }
+
+    #[test]
+    fn bookmarks_enter_connects_and_shows_the_public_chat() {
+        let mut view = View::default();
+        let _ = view.handle_key(key(KeyCode::F(4)), &users(), &files());
+        view.modal = Some(Modal::bookmarks(&bookmarks_config(), 0));
+        assert_eq!(
+            view.handle_key(key(KeyCode::Enter), &users(), &files()),
+            Action::ConnectBookmark(0)
+        );
+        assert_eq!((view.tab, view.modal.is_none()), (Tab::Chat, true));
+    }
+
+    #[test]
+    fn bookmarks_with_no_bookmark_does_nothing() {
+        let mut view = View {
+            modal: Some(Modal::bookmarks(&Config::default(), 0)),
+            ..View::default()
+        };
+        for code in [KeyCode::Enter, KeyCode::Char('e'), KeyCode::Char('x')] {
+            assert_eq!(view.handle_key(key(code), &users(), &files()), Action::None);
+        }
+        assert!(matches!(view.modal, Some(Modal::Bookmarks { .. })));
+    }
+
     #[test]
     fn connect_form_tab_moves_to_the_next_row_and_back() {
         let mut view = View {
@@ -3303,11 +3470,21 @@ mod tests {
         };
         assert_eq!(view.handle_key(alt('s'), &users(), &files()), Action::None);
         assert!(matches!(view.modal, Some(Modal::BookmarkName { .. })));
+        let bookmark = form.bookmark().unwrap();
         assert_eq!(
             view.handle_key(key(KeyCode::Enter), &users(), &files()),
-            Action::SaveBookmark(form.bookmark().unwrap())
+            Action::SaveBookmark {
+                old_name: None,
+                bookmark: bookmark.clone(),
+            }
         );
-        assert_eq!(view.modal, Some(Modal::Connect(form)));
+        assert_eq!(
+            view.modal,
+            Some(Modal::Connect(ConnectForm {
+                edits: Some(bookmark.name().into()),
+                ..form
+            }))
+        );
     }
 
     #[test]
@@ -3318,7 +3495,7 @@ mod tests {
         };
         view.handle_key(alt('s'), &users(), &files());
         view.handle_key(key(KeyCode::Char('H')), &users(), &files());
-        let Action::SaveBookmark(bookmark) =
+        let Action::SaveBookmark { bookmark, .. } =
             view.handle_key(key(KeyCode::Enter), &users(), &files())
         else {
             panic!("no bookmark");

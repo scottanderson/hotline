@@ -2,6 +2,7 @@ use hotline_client::{ClientInfoText, FileInfo};
 use hotline_proto::Access;
 
 use super::{AccountForm, ConnectForm, OptionsForm, Palette, TextBox};
+use crate::config::Config;
 use crate::file_edit::FileEdit;
 use crate::session::{ArticleText, ChatInvite, Disconnect, NewsFolder, NewsTarget};
 use crate::transfer::Conflict;
@@ -49,6 +50,17 @@ pub enum Modal {
     /// The name of the bookmark of `form`. An empty `input` gives the
     /// default name.
     BookmarkName { form: ConnectForm, input: TextBox },
+    /// The bookmarks of the settings file.
+    Bookmarks {
+        rows: Vec<BookmarkRow>,
+        selected: usize,
+    },
+    /// A check before the bookmark at `selected` of `rows` is deleted.
+    /// `rows` and `selected` come back to [`Modal::Bookmarks`] on a cancel.
+    DeleteBookmark {
+        rows: Vec<BookmarkRow>,
+        selected: usize,
+    },
     /// A check before the file or folder `name` is deleted.
     DeleteFile { name: Box<str> },
     /// The info of a file or folder.
@@ -107,6 +119,8 @@ impl Modal {
             Self::Disconnected(_) => ModalKind::Disconnected,
             Self::Connect(_) => ModalKind::Connect,
             Self::BookmarkName { .. } => ModalKind::BookmarkName,
+            Self::Bookmarks { .. } => ModalKind::Bookmarks,
+            Self::DeleteBookmark { .. } => ModalKind::DeleteBookmark,
             Self::DeleteFile { .. } => ModalKind::DeleteFile,
             Self::FileInfo(_) => ModalKind::FileInfo,
             Self::SaveAs { .. } => ModalKind::SaveAs,
@@ -146,6 +160,28 @@ impl Modal {
         }
     }
 
+    /// The bookmarks of `config`, with the row at `selected` selected, or
+    /// the last row.
+    pub fn bookmarks(config: &Config, selected: usize) -> Self {
+        let rows: Vec<_> = config
+            .bookmarks
+            .iter()
+            .map(|bookmark| {
+                let name = bookmark.name();
+                BookmarkRow {
+                    auto_connect: config.auto_connect.as_deref() == Some(&*name),
+                    name: name.into(),
+                    address: bookmark.address.clone(),
+                    login: bookmark.login.clone(),
+                }
+            })
+            .collect();
+        Self::Bookmarks {
+            selected: selected.min(rows.len().saturating_sub(1)),
+            rows,
+        }
+    }
+
     /// The modal that asks how to start a transfer with `conflict`.
     pub fn ask(conflict: Conflict) -> Self {
         match conflict {
@@ -156,6 +192,16 @@ impl Modal {
             conflict => Self::Confirm(conflict),
         }
     }
+}
+
+/// One row of [`Modal::Bookmarks`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookmarkRow {
+    pub name: Box<str>,
+    pub address: Box<str>,
+    pub login: Box<str>,
+    /// `true` for the bookmark that connects at the start.
+    pub auto_connect: bool,
 }
 
 /// A [`Modal`] variant without its data.
@@ -174,6 +220,8 @@ pub enum ModalKind {
     Disconnected,
     Connect,
     BookmarkName,
+    Bookmarks,
+    DeleteBookmark,
     DeleteFile,
     FileInfo,
     SaveAs,

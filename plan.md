@@ -218,6 +218,16 @@ works this way.
   `hlserver.com` without such a distribution. `hlc` connects to the
   bookmark that `auto_connect` names without a question, and with no
   such bookmark it starts with no connection.
+- **`hlc` lists the bookmarks without the trackers.** openline's client
+  shows the bookmarks and the servers of each tracker in one servers
+  window (`CMyTracker` in `HotlineTracker.cp`). `hlc` shows only the
+  bookmarks, in a box.
+- **`hlc` asks before it deletes a bookmark.** openline's trash button
+  deletes the selected tracker or bookmark without a question, and
+  moves the bookmark file to the trash
+  (`CMyTracker::RemoveSelectedItem` in `HotlineTracker.cp`). `hlc` asks
+  first, as for a file, an account, or news, and removes the bookmark
+  from the settings file.
 
 ## Openline vs. mhxd divergences (resolved)
 

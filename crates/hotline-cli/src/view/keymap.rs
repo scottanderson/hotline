@@ -124,6 +124,10 @@ pub enum Intent {
     StopLogin,
     /// Start the selected queued transfer.
     StartTransfer,
+    /// Open the selected bookmark in the Connect to form.
+    EditBookmark,
+    /// Turn on or off the connection to the selected bookmark at the start.
+    AutoConnect,
     /// Move to the next pane.
     NextPane,
     /// Go back to the previous entry of the row under the tab bar.
@@ -138,6 +142,8 @@ pub enum Intent {
     Actions,
     /// Go to the Tasks tab, or back from it.
     TasksTab,
+    /// Open the bookmarks.
+    Bookmarks,
     /// Send a broadcast.
     Broadcast,
     /// Open the options.
@@ -219,6 +225,8 @@ impl Intent {
         Self::CancelTask,
         Self::StopLogin,
         Self::StartTransfer,
+        Self::EditBookmark,
+        Self::AutoConnect,
         Self::Connect,
         Self::SaveBookmark,
         Self::Resume,
@@ -231,6 +239,7 @@ impl Intent {
         Self::Palette,
         Self::Actions,
         Self::TasksTab,
+        Self::Bookmarks,
         Self::Broadcast,
         Self::Options,
         Self::InviteToRoom,
@@ -300,12 +309,15 @@ impl Intent {
             Self::CancelTask => "cancel",
             Self::StopLogin => "disconnect",
             Self::StartTransfer => "start",
+            Self::EditBookmark => "edit",
+            Self::AutoConnect => "auto-connect",
             Self::NextPane => "next pane",
             Self::PrevSub | Self::NextSub => "switch",
             Self::GoToTab => "tab",
             Self::Palette => "commands",
             Self::Actions => "actions",
             Self::TasksTab => "tasks",
+            Self::Bookmarks => "bookmarks",
             Self::Broadcast => "broadcast",
             Self::Options => "options",
             Self::InviteToRoom => "invite",
@@ -512,7 +524,7 @@ impl Default for Keymap {
             key(KeyCode::Up, Intent::RowUp),
             key(KeyCode::Down, Intent::RowDown),
         ];
-        let modals: [(ModalKind, &[(KeyChord, Intent)]); 27] = [
+        let modals: [(ModalKind, &[(KeyChord, Intent)]); 29] = [
             (
                 ModalKind::Account,
                 &[
@@ -563,6 +575,18 @@ impl Default for Keymap {
                 ],
             ),
             (
+                ModalKind::Bookmarks,
+                &[
+                    SELECT[0],
+                    SELECT[1],
+                    key(KeyCode::Enter, Intent::Connect),
+                    key(KeyCode::Char('e'), Intent::EditBookmark),
+                    key(KeyCode::Char('a'), Intent::AutoConnect),
+                    key(KeyCode::Char('x'), Intent::Delete),
+                    CANCEL,
+                ],
+            ),
+            (
                 ModalKind::PickUser,
                 &[
                     SELECT[0],
@@ -589,6 +613,7 @@ impl Default for Keymap {
             (ModalKind::DeleteFile, DELETE),
             (ModalKind::DeleteNews, DELETE),
             (ModalKind::DeleteAccount, DELETE),
+            (ModalKind::DeleteBookmark, DELETE),
             (
                 ModalKind::Disconnected,
                 &[
@@ -789,6 +814,7 @@ impl Default for Keymap {
                 chord(KeyCode::F(10), KeyModifiers::SHIFT, Intent::Actions),
                 key(KeyCode::Menu, Intent::Actions),
                 alt('t', Intent::TasksTab),
+                alt('r', Intent::Bookmarks),
                 alt('a', Intent::Broadcast),
                 alt('o', Intent::Options),
                 alt('i', Intent::InviteToRoom),

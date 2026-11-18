@@ -16,6 +16,8 @@ pub struct ConnectForm {
     /// The name that [`ConnectForm::bookmark`] gives. Empty for the
     /// default name.
     pub name: Box<str>,
+    /// The name of the bookmark that the form edits, if any.
+    pub edits: Option<Box<str>>,
 }
 
 impl ConnectForm {
@@ -30,6 +32,7 @@ impl ConnectForm {
             password: password.into(),
             row: 0,
             name: "".into(),
+            edits: None,
         }
     }
 
@@ -41,6 +44,18 @@ impl ConnectForm {
     /// Select the previous row, or the last row before the first.
     pub fn previous_row(&mut self) {
         self.row = self.row.checked_sub(1).unwrap_or(Self::ROWS - 1);
+    }
+
+    /// A form that edits `bookmark`. The name is empty when the bookmark
+    /// has no name, or the default name.
+    pub fn edit(bookmark: &Bookmark) -> Self {
+        let default = Bookmark::default_name(&bookmark.login, &bookmark.address);
+        let name = bookmark.name.as_deref().filter(|name| *name != default);
+        Self {
+            name: name.map(Into::into).unwrap_or_default(),
+            edits: Some(bookmark.name().into()),
+            ..Self::new(&bookmark.address, &bookmark.login, &bookmark.password)
+        }
     }
 
     /// The text of the selected row.
@@ -131,6 +146,43 @@ mod tests {
                 password: "".into(),
             })
         );
+    }
+
+    #[test]
+    fn bookmark_keeps_the_own_name_of_the_bookmark_that_the_form_edits() {
+        let old = Bookmark {
+            name: Some("Home".into()),
+            address: "example.com".into(),
+            login: "alice".into(),
+            password: "secret".into(),
+        };
+        let mut form = ConnectForm::edit(&old);
+        assert_eq!(form.edits.as_deref(), Some("Home"));
+        form.address = "example.org".into();
+        assert_eq!(
+            form.bookmark(),
+            Some(Bookmark {
+                address: "example.org".into(),
+                ..old
+            })
+        );
+    }
+
+    #[test]
+    fn bookmark_follows_the_default_name_of_the_bookmark_that_the_form_edits() {
+        let old = Bookmark {
+            name: Some("alice@example.com".into()),
+            address: "example.com".into(),
+            login: "alice".into(),
+            password: "".into(),
+        };
+        let mut form = ConnectForm::edit(&old);
+        assert_eq!(&*form.name, "");
+        assert_eq!(form.edits.as_deref(), Some("alice@example.com"));
+        form.login = "bob".into();
+        let bookmark = form.bookmark().unwrap();
+        assert_eq!(bookmark.name, None);
+        assert_eq!(&*bookmark.name(), "bob@example.com");
     }
 
     #[test]

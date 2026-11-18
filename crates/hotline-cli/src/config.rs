@@ -112,14 +112,47 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Save `bookmark`, in place of the bookmark of the same name if there
-    /// is one.
-    pub fn save_bookmark(&mut self, bookmark: Bookmark) {
-        let name = bookmark.name();
-        match self.bookmarks.iter_mut().find(|b| b.name() == name) {
-            Some(old) => *old = bookmark,
-            None => self.bookmarks.push(bookmark),
+    /// Save `bookmark` in place of the bookmark named `old_name`, else of
+    /// the bookmark of its own name, else at the end. Remove each other
+    /// bookmark of its name. `auto_connect` follows a new name.
+    pub fn save_bookmark(&mut self, old_name: Option<&str>, bookmark: Bookmark) {
+        let name = bookmark.name().into_owned();
+        let position = |name: &str| self.bookmarks.iter().position(|b| *b.name() == *name);
+        let slot = old_name.and_then(position).or_else(|| position(&name));
+        if old_name.is_some() && self.auto_connect.as_deref() == old_name {
+            self.auto_connect = Some(name.as_str().into());
         }
+        let mut new = Some(bookmark);
+        self.bookmarks = std::mem::take(&mut self.bookmarks)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, b)| match Some(i) == slot {
+                true => new.take(),
+                false => (b.name() != name).then_some(b),
+            })
+            .collect();
+        self.bookmarks.extend(new);
+    }
+
+    /// Name the bookmark at `index` in `auto_connect`, or clear
+    /// `auto_connect` if it names that bookmark. `None` when there is no
+    /// such bookmark, else `true` if `auto_connect` names it.
+    pub fn toggle_auto_connect(&mut self, index: usize) -> Option<bool> {
+        let name = self.bookmarks.get(index)?.name();
+        let on = self.auto_connect.as_deref() != Some(&*name);
+        self.auto_connect = on.then(|| name.into());
+        Some(on)
+    }
+
+    /// Remove the bookmark at `index`, and clear `auto_connect` if it names
+    /// no bookmark that is left. `None` when there is no such bookmark.
+    pub fn delete_bookmark(&mut self, index: usize) -> Option<Bookmark> {
+        let bookmark = (index < self.bookmarks.len()).then(|| self.bookmarks.remove(index))?;
+        let name = bookmark.name();
+        if !self.bookmarks.iter().any(|b| b.name() == name) {
+            self.auto_connect.take_if(|auto| **auto == *name);
+        }
+        Some(bookmark)
     }
 
     /// The server of the first bookmark with the name in `auto_connect`.
@@ -447,13 +480,35 @@ mod tests {
     #[test]
     fn save_bookmark_replaces_the_bookmark_of_the_same_name() {
         let mut config = Config::default();
-        config.save_bookmark(bookmark("a", "one"));
-        config.save_bookmark(bookmark("b", "two"));
-        config.save_bookmark(bookmark("a", "three"));
+        config.save_bookmark(None, bookmark("a", "one"));
+        config.save_bookmark(None, bookmark("b", "two"));
+        config.save_bookmark(None, bookmark("a", "three"));
         assert_eq!(
             config.bookmarks,
             [bookmark("a", "three"), bookmark("b", "two")]
         );
+    }
+
+    #[test]
+    fn save_bookmark_renames_the_old_bookmark_and_auto_connect() {
+        let mut config = Config {
+            bookmarks: vec![
+                bookmark("a", "one"),
+                bookmark("b", "two"),
+                bookmark("c", "three"),
+            ],
+            auto_connect: Some("a".into()),
+            ..Config::default()
+        };
+        config.save_bookmark(Some("a"), bookmark("c", "four"));
+        assert_eq!(
+            config.bookmarks,
+            [bookmark("c", "four"), bookmark("b", "two")]
+        );
+        assert_eq!(config.auto_connect.as_deref(), Some("c"));
+        config.save_bookmark(Some("x"), bookmark("d", "five"));
+        assert_eq!(config.bookmarks.len(), 3);
+        assert_eq!(config.auto_connect.as_deref(), Some("c"));
     }
 
     fn bookmark(name: &str, address: &str) -> Bookmark {
@@ -463,6 +518,35 @@ mod tests {
             login: "alice".into(),
             password: "secret".into(),
         }
+    }
+
+    #[test]
+    fn toggle_auto_connect_names_one_bookmark_only() {
+        let mut config = Config {
+            bookmarks: vec![bookmark("a", "one"), bookmark("b", "two")],
+            auto_connect: Some("a".into()),
+            ..Config::default()
+        };
+        assert_eq!(config.toggle_auto_connect(1), Some(true));
+        assert_eq!(config.auto_connect.as_deref(), Some("b"));
+        assert_eq!(config.toggle_auto_connect(1), Some(false));
+        assert_eq!(config.auto_connect, None);
+        assert_eq!(config.toggle_auto_connect(2), None);
+    }
+
+    #[test]
+    fn delete_bookmark_removes_only_a_bookmark_that_is_there() {
+        let mut config = Config {
+            bookmarks: vec![bookmark("a", "one"), bookmark("b", "two")],
+            auto_connect: Some("b".into()),
+            ..Config::default()
+        };
+        assert_eq!(config.delete_bookmark(2), None);
+        assert_eq!(&*config.delete_bookmark(0).unwrap().name(), "a");
+        assert_eq!(config.bookmarks, [bookmark("b", "two")]);
+        assert_eq!(config.auto_connect.as_deref(), Some("b"));
+        config.delete_bookmark(0);
+        assert_eq!(config.auto_connect, None);
     }
 
     #[test]

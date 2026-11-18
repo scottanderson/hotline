@@ -12,7 +12,7 @@ use ratatui::symbols::merge::MergeStrategy;
 use ratatui::text::{Line as UiLine, Span, Text};
 use ratatui::widgets::{
     Block, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Scrollbar,
-    ScrollbarOrientation, ScrollbarState, Table, Wrap,
+    ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -20,8 +20,8 @@ use crate::line::{Line, LineKind};
 use crate::session::{ClientSession, Mode, NewsFolderNode, NewsThread};
 use crate::transfer::file_size_text;
 use crate::view::{
-    AccountForm, ConnectForm, Focus, Hint, MenuItem, Modal, OPTIONS, OptionsForm, QUEUE_TRANSFERS,
-    Splits, Tab, TextBox, View, allows, contains, privileges,
+    AccountForm, BookmarkRow, ConnectForm, Focus, Hint, MenuItem, Modal, OPTIONS, OptionsForm,
+    QUEUE_TRANSFERS, Splits, Tab, TextBox, View, allows, contains, privileges,
 };
 
 /// Where each part of the main screen is drawn.
@@ -1008,6 +1008,7 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
         Modal::Subject { input, .. } => {
             draw_input_modal(frame, screen, "chat subject".into(), input);
         }
+        Modal::Bookmarks { rows, selected } => draw_bookmarks(frame, screen, rows, *selected),
         Modal::PickUser {
             users, selected, ..
         } => {
@@ -1129,6 +1130,15 @@ fn draw_modal(frame: &mut Frame, screen: Rect, modal: &Modal, access: Access) {
         Modal::OpenAccount { input } => {
             draw_input_modal(frame, screen, "open the account with login".into(), input);
         }
+        Modal::DeleteBookmark { rows, selected } => {
+            let name = rows.get(*selected).map_or("", |row| &*row.name);
+            draw_question(
+                frame,
+                screen,
+                "delete?",
+                format!("Delete the bookmark {name}?"),
+            );
+        }
         Modal::DeleteAccount { login } => {
             let text = format!("Delete the account {login}?");
             draw_question(frame, screen, "delete?", text);
@@ -1160,6 +1170,40 @@ fn list_height(len: usize) -> u16 {
     u16::try_from(len.max(1))
         .unwrap_or(u16::MAX)
         .saturating_add(2)
+}
+
+/// Draw the bookmarks as a table. A star marks the bookmark that connects
+/// at the start.
+fn draw_bookmarks(frame: &mut Frame, screen: Rect, rows: &[BookmarkRow], selected: usize) {
+    let area = screen.centered(
+        Constraint::Length(72),
+        Constraint::Length(list_height(rows.len()).saturating_add(1)),
+    );
+    frame.render_widget(Clear, area);
+    let block = modal_block("bookmarks");
+    if rows.is_empty() {
+        let text = "No bookmarks. The Connect to form saves one.";
+        frame.render_widget(Paragraph::new(text).style(HINT).block(block), area);
+        return;
+    }
+    let header = Row::new(["", "Name", "Address", "Login"])
+        .style(Style::default().add_modifier(Modifier::BOLD));
+    let rows = rows.iter().map(|row| {
+        let mark = if row.auto_connect { "*" } else { "" };
+        Row::new([mark, &*row.name, &*row.address, &*row.login])
+    });
+    let widths = [
+        Constraint::Length(1),
+        Constraint::Fill(2),
+        Constraint::Fill(2),
+        Constraint::Fill(1),
+    ];
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(block)
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let mut state = TableState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(table, area, &mut state);
 }
 
 /// Draw a modal that edits `input` under `title`.
@@ -1217,6 +1261,7 @@ mod tests {
     use hotline_proto::text_encoding::EncodingHandle;
 
     use super::*;
+    use crate::config::{Bookmark, Config};
     use crate::line::Scrollback;
     use crate::session::{ChatRoom, Disconnect, NewsTarget};
     use crate::tasks::{Stop, TaskId, TaskRow};
@@ -1540,6 +1585,26 @@ mod tests {
         let text = draw_to_text(&modal);
         assert!(text.contains("delete?"));
         assert!(text.contains("Delete Old news?"));
+
+        let config = Config {
+            bookmarks: vec![Bookmark {
+                name: None,
+                address: "example.com".into(),
+                login: "alice".into(),
+                password: "".into(),
+            }],
+            auto_connect: Some("alice@example.com".into()),
+            ..Config::default()
+        };
+        let text = draw_to_text(&Modal::bookmarks(&config, 0));
+        assert!(text.contains("* alice@example.com"));
+        let text = draw_to_text(&Modal::bookmarks(&Config::default(), 0));
+        assert!(text.contains("No bookmarks."));
+        let Modal::Bookmarks { rows, selected } = Modal::bookmarks(&config, 0) else {
+            panic!("no bookmarks");
+        };
+        let text = draw_to_text(&Modal::DeleteBookmark { rows, selected });
+        assert!(text.contains("Delete the bookmark alice@example.com?"));
 
         let reason = Disconnect::Message("back soon".into());
         let text = draw_to_text(&Modal::Disconnected(reason));

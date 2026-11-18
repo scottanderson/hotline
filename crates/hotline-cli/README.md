@@ -66,7 +66,8 @@ again. "Connect to" in the palette asks for a server, as `host` or
 `host:port`, a login, and a password. It shows the last ones. An empty
 row shows a hint in gray. An empty login logs in as a guest. Tab
 moves to the next row, and Shift-Tab to the previous row. Enter ends
-the connection, if there is one, and connects to the new server.
+the connection, if there is one, connects to the new server, and
+shows the public chat.
 Reconnect then uses the new server. Alt-S in the form asks for a
 name, then Enter saves the server as a bookmark in the settings file,
 and Esc goes back to the form. An empty name shows the default name
@@ -108,6 +109,7 @@ or the folder privilege, for the kind of the selected item.
 | Alt-A  | outside a dialog     | a broadcast                                     |
 | Alt-O  | outside a dialog     | your name, icon, and options                    |
 | Alt-T  | outside a dialog     | the Tasks tab, or back to the tab before it     |
+| Alt-R  | outside a dialog     | the bookmarks                                   |
 | Alt-,  | Chat, a room, News   | the previous entry of the row under the tab bar |
 | Alt-.  | Chat, a room, News   | the next entry of the row under the tab bar     |
 | Alt-I  | a room               | invite a user                                   |
@@ -194,6 +196,17 @@ and Enter opens it. ← goes back to the tree. `p` posts, `r` replies to
 the open article, `x` deletes, and `b` and `c` create a bundle or a
 category in the selected bundle, or in the bundle that holds the
 selected category.
+
+"Bookmarks" in the palette, or Alt-R, lists the bookmarks of the
+settings file. A star marks the bookmark that connects at the start.
+Enter connects to the selected bookmark and shows the public chat.
+`e` opens the bookmark in the Connect to form, where Alt-S saves it.
+The save replaces that bookmark, and the name box shows its name, or
+is empty for the default name. `auto_connect` follows a new name. Esc
+in the form goes back to the list. `a` names the selected bookmark in
+`auto_connect`, or clears `auto_connect` if it names that bookmark.
+`x` asks, then `y` deletes the bookmark. The list works with or
+without a connection.
 
 On the Admin tab, Enter edits an account, `n` creates one, `o` opens
 one by login, and `x` deletes one. In the account form, Space turns

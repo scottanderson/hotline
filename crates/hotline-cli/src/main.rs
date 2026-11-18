@@ -34,7 +34,7 @@ use ratatui::widgets::{ListState, TableState};
 use args::Args;
 use bell::Bell;
 use config::ConfigFile;
-use connect::{Connection, Target, short_address};
+use connect::{Connection, Target, parse_address, short_address};
 use file_edit::FileEdit;
 use futures::future::{BoxFuture, OptionFuture};
 use hotline_client::HotlineClient;
@@ -312,6 +312,7 @@ async fn run(
                         view.modal = Some(Modal::Connect(connect_form(target.as_ref())));
                     }
                     Flow::Connect {
+                        name,
                         host,
                         port,
                         login,
@@ -322,7 +323,7 @@ async fn run(
                             disconnect(&client, session, &mut tasks).await;
                         }
                         let new = Target {
-                            name: None,
+                            name,
                             host,
                             port,
                             login,
@@ -485,6 +486,8 @@ enum Flow {
     OpenConnect,
     /// End the connection, if any, and connect to `host`.
     Connect {
+        /// The name of the bookmark, if any.
+        name: Option<Box<str>>,
         host: String,
         port: u16,
         login: String,
@@ -516,19 +519,62 @@ async fn perform(
             password,
         } => {
             return Flow::Connect {
+                name: None,
                 host,
                 port,
                 login,
                 password,
             };
         }
-        Action::SaveBookmark(bookmark) => {
+        Action::SaveBookmark { old_name, bookmark } => {
             let name = bookmark.name().into_owned();
-            file.config.save_bookmark(bookmark);
-            match file.save() {
-                Ok(()) => session.show_status(format!("saved the bookmark {name}")),
-                Err(e) => session.show_error(format!("failed to save the settings: {e:#}")),
+            file.config.save_bookmark(old_name.as_deref(), bookmark);
+            save(file, session, format!("saved the bookmark {name}"));
+        }
+        Action::ConnectBookmark(index) => {
+            if let Some(bookmark) = file.config.bookmarks.get(index) {
+                match parse_address(&bookmark.address) {
+                    Some((host, port)) => {
+                        return Flow::Connect {
+                            name: Some(bookmark.name().into()),
+                            host,
+                            port,
+                            login: bookmark.login.to_string(),
+                            password: bookmark.password.to_string(),
+                        };
+                    }
+                    None => session.show_error(format!("{} is not an address", bookmark.address)),
+                }
             }
+        }
+        Action::EditBookmark(index) => {
+            if let Some(bookmark) = file.config.bookmarks.get(index) {
+                view.modal = Some(Modal::Connect(ConnectForm::edit(bookmark)));
+            }
+        }
+        Action::ToggleAutoConnect(index) => {
+            if let Some(on) = file.config.toggle_auto_connect(index) {
+                let status = match file.config.bookmarks.get(index) {
+                    Some(bookmark) if on => format!("connect to {} at the start", bookmark.name()),
+                    _ => "connect to no server at the start".into(),
+                };
+                save(file, session, status);
+            }
+            view.modal = Some(Modal::bookmarks(&file.config, index));
+        }
+        Action::DeleteBookmark(index) => {
+            if let Some(bookmark) = file.config.delete_bookmark(index) {
+                let status = format!("deleted the bookmark {}", bookmark.name());
+                save(file, session, status);
+            }
+            view.modal = Some(Modal::bookmarks(&file.config, index));
+        }
+        Action::OpenBookmarks(name) => {
+            let bookmarks = &file.config.bookmarks;
+            let selected = name
+                .and_then(|name| bookmarks.iter().position(|b| *b.name() == *name))
+                .unwrap_or_default();
+            view.modal = Some(Modal::bookmarks(&file.config, selected));
         }
         Action::EditOptions => {
             let form = OptionsForm::edit(&session.user_info(), session.queue_transfers);
@@ -565,6 +611,14 @@ async fn perform(
         },
     }
     Flow::Go
+}
+
+/// Write the settings file, and show `status`, or the error.
+fn save(file: &ConfigFile, session: &mut ClientSession, status: String) {
+    match file.save() {
+        Ok(()) => session.show_status(status),
+        Err(e) => session.show_error(format!("failed to save the settings: {e:#}")),
+    }
 }
 
 /// Run `action`, which sends a request to `client`. A transfer sends its
@@ -928,7 +982,12 @@ async fn request(
         | Action::Disconnect
         | Action::OpenConnect
         | Action::Connect { .. }
-        | Action::SaveBookmark(_)
+        | Action::SaveBookmark { .. }
+        | Action::ConnectBookmark(_)
+        | Action::EditBookmark(_)
+        | Action::ToggleAutoConnect(_)
+        | Action::DeleteBookmark(_)
+        | Action::OpenBookmarks(_)
         | Action::EditOptions
         | Action::SetOptions { .. }
         | Action::StopLogin(_) => {}

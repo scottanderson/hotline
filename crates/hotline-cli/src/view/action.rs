@@ -24,8 +24,24 @@ pub enum Action {
         login: String,
         password: String,
     },
-    /// Save a server in the settings file.
-    SaveBookmark(Bookmark),
+    /// Save a server in the settings file, in place of the bookmark named
+    /// `old_name` if there is one.
+    SaveBookmark {
+        old_name: Option<Box<str>>,
+        bookmark: Bookmark,
+    },
+    /// Connect to the bookmark at this index of the settings.
+    ConnectBookmark(usize),
+    /// Open the bookmark at this index of the settings in the Connect to
+    /// form.
+    EditBookmark(usize),
+    /// Turn on or off the connection at the start to the bookmark at this
+    /// index of the settings.
+    ToggleAutoConnect(usize),
+    /// Delete the bookmark at this index of the settings.
+    DeleteBookmark(usize),
+    /// Open the bookmarks, with the bookmark of this name selected, if any.
+    OpenBookmarks(Option<Box<str>>),
     /// Send public chat, sent unchanged even when it starts with `/`.
     SendChat(String),
     /// Send chat to the private chat room `chat_id`.

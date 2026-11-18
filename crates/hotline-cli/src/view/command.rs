@@ -25,6 +25,8 @@ pub enum Command {
     Disconnect,
     /// Ask for a server, then connect to it.
     ConnectTo,
+    /// Open the bookmarks.
+    Bookmarks,
     Quit,
     /// Run `item` of the user menu on the user `user_id`.
     User(u16, MenuItem),
@@ -47,6 +49,7 @@ impl Command {
             Self::Reconnect => "Reconnect".into(),
             Self::Disconnect => "Disconnect".into(),
             Self::ConnectTo => "Connect to".into(),
+            Self::Bookmarks => "Bookmarks".into(),
             Self::Quit => "Quit".into(),
             Self::User(_, item) => item.label().into(),
         }
