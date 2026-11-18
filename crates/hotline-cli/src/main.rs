@@ -32,7 +32,7 @@ use ratatui::widgets::{ListState, TableState};
 
 use args::Args;
 use bell::Bell;
-use connect::{Connection, Target};
+use connect::{Connection, Target, short_address};
 use file_edit::FileEdit;
 use futures::future::{BoxFuture, OptionFuture};
 use hotline_client::HotlineClient;
@@ -384,7 +384,11 @@ fn start_connect(
 /// The Connect to form, filled with `target` if there is one.
 fn connect_form(target: Option<&Target>) -> ConnectForm {
     match target {
-        Some(target) => ConnectForm::new(&target.address(), &target.login, &target.password),
+        Some(target) => ConnectForm::new(
+            &short_address(&target.host, target.port),
+            &target.login,
+            &target.password,
+        ),
         None => ConnectForm::new("", "", ""),
     }
 }

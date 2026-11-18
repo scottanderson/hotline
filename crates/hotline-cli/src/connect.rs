@@ -26,6 +26,15 @@ impl Target {
     }
 }
 
+/// `host`, or `host:port` when `port` is not [`DEFAULT_PORT`].
+pub fn short_address(host: &str, port: u16) -> String {
+    if port == DEFAULT_PORT {
+        host.to_string()
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 /// A connection that has logged in.
 pub struct Connection {
     pub client: HotlineClient,
@@ -44,4 +53,15 @@ pub async fn connect(target: Target) -> anyhow::Result<Connection> {
         events,
         login,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_address_leaves_out_only_the_default_port() {
+        assert_eq!(short_address("example.com", DEFAULT_PORT), "example.com");
+        assert_eq!(short_address("[::1]", 6000), "[::1]:6000");
+    }
 }
