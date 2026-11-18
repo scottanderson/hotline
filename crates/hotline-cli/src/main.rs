@@ -161,6 +161,7 @@ async fn run(
 ) -> anyhow::Result<()> {
     let mut term_events = EventStream::new();
     let mut view = View::default();
+    view.set_tabs(ui::tab_labels(session));
     // A terminal that does not report focus has it.
     let mut focused = true;
     let mut should_quit = false;
