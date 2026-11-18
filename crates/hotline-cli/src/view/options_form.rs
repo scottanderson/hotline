@@ -16,6 +16,9 @@ pub const OPTIONS: [(&str, UserChangeOptions); 3] = [
     ),
 ];
 
+/// The automatic response that the form gives for an empty one.
+const DEFAULT_AUTOMATIC_RESPONSE: &str = "I'm not able to respond right now. Please try later!";
+
 /// The label of the last row, which only `hlc` keeps.
 pub const QUEUE_TRANSFERS: &str = "queue transfers";
 
@@ -72,13 +75,19 @@ impl OptionsForm {
         }
     }
 
-    /// The info to send, `None` if the icon is not a number.
+    /// The info to send, `None` if the icon is not a number. An empty
+    /// automatic response that is on becomes [`DEFAULT_AUTOMATIC_RESPONSE`].
     pub fn info(&self) -> Option<ClientUserInfo> {
         Some(ClientUserInfo {
             name: self.name.as_str().into(),
             icon: self.icon.as_str().trim().parse().ok()?,
             options: self.options,
-            automatic_response: self.automatic_response.as_str().into(),
+            automatic_response: match self.automatic_response.as_str() {
+                "" if self.options.contains(UserChangeOptions::AUTOMATIC_RESPONSE) => {
+                    DEFAULT_AUTOMATIC_RESPONSE.into()
+                }
+                text => text.into(),
+            },
         })
     }
 }
@@ -98,6 +107,19 @@ mod tests {
         );
         form.icon.insert('x');
         assert_eq!(form.info(), None);
+    }
+
+    #[test]
+    fn info_gives_the_default_for_an_empty_automatic_response_that_is_on() {
+        let mut form = OptionsForm::edit(&ClientUserInfo::default(), true);
+        assert_eq!(form.info().unwrap().automatic_response, "".into());
+        form.options = UserChangeOptions::AUTOMATIC_RESPONSE;
+        assert_eq!(
+            form.info().unwrap().automatic_response,
+            DEFAULT_AUTOMATIC_RESPONSE.into()
+        );
+        form.automatic_response.insert('x');
+        assert_eq!(form.info().unwrap().automatic_response, "x".into());
     }
 
     #[test]
