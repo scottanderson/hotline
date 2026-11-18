@@ -30,7 +30,7 @@ pub struct Args {
     pub name: String,
 
     /// Icon ID.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 414)]
     pub icon: u16,
 
     /// Folder that downloads are saved in.

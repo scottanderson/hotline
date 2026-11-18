@@ -28,7 +28,7 @@ HLC_PASSWORD=secret hlc --host example.com --login alice --name Alice
 | `--login`        | (guest)     | the account login                              |
 | `--password`     | (none)      | the password, also read from `HLC_PASSWORD`    |
 | `--name`         | `RustHL`    | the name in the user list                      |
-| `--icon`         | 0           | the icon ID                                    |
+| `--icon`         | 414         | the icon ID                                    |
 | `--download-dir` | `.`         | the folder that downloads go to                |
 | `--encoding`     | `macintosh` | the text encoding, the same as the server's    |
 | `--tracker`      |             | list a tracker's servers and exit, no login    |
