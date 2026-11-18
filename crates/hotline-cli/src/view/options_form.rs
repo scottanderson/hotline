@@ -10,7 +10,10 @@ pub const TEXT_ROWS: usize = 3;
 pub const OPTIONS: [(&str, UserChangeOptions); 3] = [
     ("refuse private messages", UserChangeOptions::REFUSE_PM),
     ("refuse private chat", UserChangeOptions::REFUSE_CHAT),
-    ("send automatic response", UserChangeOptions::AUTO_RESPONSE),
+    (
+        "send automatic response",
+        UserChangeOptions::AUTOMATIC_RESPONSE,
+    ),
 ];
 
 /// The label of the last row, which only `hlc` keeps.
@@ -91,7 +94,7 @@ mod tests {
         form.toggle();
         assert_eq!(
             form.info().map(|info| info.options),
-            Some(UserChangeOptions::AUTO_RESPONSE)
+            Some(UserChangeOptions::AUTOMATIC_RESPONSE)
         );
         form.icon.insert('x');
         assert_eq!(form.info(), None);

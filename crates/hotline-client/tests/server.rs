@@ -230,7 +230,7 @@ async fn set_client_user_info_renames_and_sets_the_automatic_response() {
     let info = ClientUserInfo {
         name: "robert".into(),
         icon: 7,
-        options: UserChangeOptions::AUTO_RESPONSE,
+        options: UserChangeOptions::AUTOMATIC_RESPONSE,
         automatic_response: "away".into(),
     };
     bob.set_client_user_info(&info).await.unwrap();

@@ -40,7 +40,7 @@ pub struct ClientSession {
     pub name: Box<str>,
     pub icon: u16,
     pub options: UserChangeOptions,
-    /// The reply to a private message while [`UserChangeOptions::AUTO_RESPONSE`] is on.
+    /// The reply to a private message while [`UserChangeOptions::AUTOMATIC_RESPONSE`] is on.
     pub automatic_response: Box<str>,
     pub mode: Mode,
     pub users: Vec<UserNameWithInfo>,

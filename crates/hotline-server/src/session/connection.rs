@@ -809,16 +809,19 @@ impl Session {
         );
         self.refuses_pm = options.contains(UserChangeOptions::REFUSE_PM);
         self.refuses_chat = options.contains(UserChangeOptions::REFUSE_CHAT);
-        self.automatic_response = options.contains(UserChangeOptions::AUTO_RESPONSE).then(|| {
-            tx.string(FieldId::AutomaticResponse)
-                .filter(|text| !text.is_empty())
-                .map_or_else(
-                    || "I'm not able to respond right now. Please try later!".into(),
-                    |text| {
-                        text_encoding::cut(self.encoding(), &text, MAX_AUTOMATIC_RESPONSE).into()
-                    },
-                )
-        });
+        self.automatic_response = options
+            .contains(UserChangeOptions::AUTOMATIC_RESPONSE)
+            .then(|| {
+                tx.string(FieldId::AutomaticResponse)
+                    .filter(|text| !text.is_empty())
+                    .map_or_else(
+                        || "I'm not able to respond right now. Please try later!".into(),
+                        |text| {
+                            text_encoding::cut(self.encoding(), &text, MAX_AUTOMATIC_RESPONSE)
+                                .into()
+                        },
+                    )
+            });
     }
 
     /// Register this session's current name/icon and broadcast a
@@ -2310,7 +2313,10 @@ mod tests {
             vec![
                 Field::string(FieldId::UserName, "Alice".to_string()),
                 Field::u16(FieldId::UserIconID, 0),
-                Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
+                Field::u16(
+                    FieldId::Options,
+                    UserChangeOptions::AUTOMATIC_RESPONSE.bits(),
+                ),
                 Field::string(FieldId::AutomaticResponse, "Back in five."),
             ],
         );
@@ -2330,7 +2336,10 @@ mod tests {
             vec![
                 Field::string(FieldId::UserName, "Alice".to_string()),
                 Field::u16(FieldId::UserIconID, 0),
-                Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
+                Field::u16(
+                    FieldId::Options,
+                    UserChangeOptions::AUTOMATIC_RESPONSE.bits(),
+                ),
                 Field::string(FieldId::AutomaticResponse, "a".repeat(200)),
             ],
         );
@@ -2353,7 +2362,10 @@ mod tests {
             vec![
                 Field::string(FieldId::UserName, "Alice".to_string()),
                 Field::u16(FieldId::UserIconID, 0),
-                Field::u16(FieldId::Options, UserChangeOptions::AUTO_RESPONSE.bits()),
+                Field::u16(
+                    FieldId::Options,
+                    UserChangeOptions::AUTOMATIC_RESPONSE.bits(),
+                ),
             ],
         );
         session.on_set_client_user_info(&request, &state).await;

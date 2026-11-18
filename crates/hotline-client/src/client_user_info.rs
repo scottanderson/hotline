@@ -15,7 +15,7 @@ pub struct ClientUserInfo {
     /// The options.
     pub options: UserChangeOptions,
     /// The reply to a private message, sent with
-    /// [`UserChangeOptions::AUTO_RESPONSE`].
+    /// [`UserChangeOptions::AUTOMATIC_RESPONSE`].
     pub automatic_response: Box<str>,
 }
 
@@ -29,7 +29,7 @@ impl ClientUserInfo {
             Field::u16(FieldId::UserIconID, self.icon),
             Field::u16(FieldId::Options, self.options.bits()),
         ];
-        if self.options.contains(UserChangeOptions::AUTO_RESPONSE) {
+        if self.options.contains(UserChangeOptions::AUTOMATIC_RESPONSE) {
             fields.push(Field::string(
                 FieldId::AutomaticResponse,
                 &*self.automatic_response,
@@ -64,7 +64,7 @@ mod tests {
         let info = ClientUserInfo {
             name: "RustHL".into(),
             icon: 128,
-            options: UserChangeOptions::AUTO_RESPONSE,
+            options: UserChangeOptions::AUTOMATIC_RESPONSE,
             automatic_response: "away".into(),
         };
         assert_eq!(
