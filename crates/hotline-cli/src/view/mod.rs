@@ -461,7 +461,7 @@ impl View {
     /// a range of three or more keys in a row, as in `F1-F9`, or with `/`
     /// between, as in `Esc/Enter`. Two hints in a row with one label and the
     /// same privileges merge, as in `↑↓ scroll`, `PgUp/PgDn page`, and
-    /// `Alt-,. room`.
+    /// `⌥,. room`.
     fn keymap_hints(&self, files: &[FileNameWithInfo]) -> Vec<Hint<'_>> {
         let scopes = self.scopes();
         Intent::ALL
@@ -479,7 +479,7 @@ impl View {
             .fold(Vec::new(), |mut hints: Vec<Hint>, hint| {
                 match hints.last_mut() {
                     Some(last) if last.does == hint.does && last.enabled_by == hint.enabled_by => {
-                        let tail = ["Alt-", "^", "⇧"]
+                        let tail = ["^", "⌥", "⇧"]
                             .into_iter()
                             .filter(|prefix| last.key.starts_with(prefix))
                             .find_map(|prefix| hint.key.strip_prefix(prefix))
@@ -1809,7 +1809,7 @@ mod tests {
             keys
         };
         assert_eq!(join("↑", "↓"), "↑↓");
-        assert_eq!(join("Alt-,", "."), "Alt-,.");
+        assert_eq!(join("⌥,", "."), "⌥,.");
         assert_eq!(join("PgUp", "PgDn"), "PgUp/PgDn");
         assert_eq!(join("Esc", "Enter"), "Esc/Enter");
     }
@@ -2127,7 +2127,7 @@ mod tests {
                 .find(|entry| entry.command == command)
                 .map(|entry| &*entry.key)
         };
-        assert_eq!(key(Command::Tasks), Some("Alt-T"));
+        assert_eq!(key(Command::Tasks), Some("⌥T"));
         assert_eq!(key(Command::Quit), Some("^C"));
     }
 
@@ -2511,7 +2511,7 @@ mod tests {
             [
                 ("Tab".into(), "title or text"),
                 ("Enter".into(), "post"),
-                ("Alt-⇧Enter".into(), "new line"),
+                ("⌥⇧Enter".into(), "new line"),
                 ("Esc".into(), "cancel"),
             ]
         );
@@ -2604,7 +2604,7 @@ mod tests {
                 ("↑↓".into(), "row"),
                 ("Tab".into(), "next row"),
                 ("Enter".into(), "connect"),
-                ("Alt-S".into(), "bookmark"),
+                ("⌥S".into(), "bookmark"),
                 ("Esc".into(), "cancel"),
             ]
         );
@@ -2702,13 +2702,13 @@ mod tests {
             ]
         );
         let _ = view.set_tab(Tab::Tasks);
-        assert_eq!(pairs(&view), ["↑↓ choose", "Alt-T back", "Esc chat"]);
+        assert_eq!(pairs(&view), ["↑↓ choose", "⌥T back", "Esc chat"]);
         let _ = view.set_tab(Tab::Chat);
         assert_eq!(
             pairs(&view),
             [
                 "Enter send",
-                "Alt-⇧Enter new line",
+                "⌥⇧Enter new line",
                 "Tab users",
                 "F1-F9 tab",
                 "^P commands",
@@ -3006,9 +3006,9 @@ mod tests {
         let mut view = granted();
         assert!(view.sub_row().is_empty());
         assert!(!view.has_sub_row());
-        assert_eq!(hint_enabled(&view, "Alt-,.", "room"), None);
+        assert_eq!(hint_enabled(&view, "⌥,.", "room"), None);
         view = view_with_rooms();
-        assert_eq!(hint_enabled(&view, "Alt-,.", "room"), Some(true));
+        assert_eq!(hint_enabled(&view, "⌥,.", "room"), Some(true));
         let row: Vec<Tab> = view.sub_row().into_iter().map(|(tab, _)| tab).collect();
         assert_eq!(row, [Tab::Chat, Tab::Room(7), Tab::Room(9)]);
         assert!(view.has_sub_row());

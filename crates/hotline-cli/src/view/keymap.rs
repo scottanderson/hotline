@@ -433,7 +433,7 @@ impl KeyChord {
     }
 
     /// The chord as a hint shows it, such as `Esc`, `↑`, `y`, `⇧Enter`,
-    /// `^J`, or `Alt-T`.
+    /// `^J`, or `⌥T`.
     pub fn label(self) -> Cow<'static, str> {
         let key = match self.code {
             KeyCode::Char(c)
@@ -457,8 +457,8 @@ impl KeyChord {
             code => code.to_string().into(),
         };
         let mut label: String = [
-            (KeyModifiers::ALT, "Alt-"),
             (KeyModifiers::CONTROL, "^"),
+            (KeyModifiers::ALT, "⌥"),
             (KeyModifiers::SHIFT, "⇧"),
         ]
         .into_iter()
@@ -1023,7 +1023,7 @@ mod tests {
         let label = |code, modifiers| KeyChord::new(code, modifiers).label();
         assert_eq!(label(KeyCode::Enter, KeyModifiers::SHIFT), "⇧Enter");
         assert_eq!(label(KeyCode::Char('j'), KeyModifiers::CONTROL), "^J");
-        assert_eq!(label(KeyCode::Char('t'), KeyModifiers::ALT), "Alt-T");
+        assert_eq!(label(KeyCode::Char('t'), KeyModifiers::ALT), "⌥T");
         assert_eq!(label(KeyCode::Tab, KeyModifiers::NONE), "Tab");
     }
 
@@ -1045,7 +1045,7 @@ mod tests {
         );
     }
 
-    /// The Key column of the key table in the README.
+    /// The Key column of the key table in the README, as hint labels.
     fn readme_keys() -> Vec<Cow<'static, str>> {
         include_str!("../../README.md")
             .lines()
@@ -1053,7 +1053,13 @@ mod tests {
             .skip(2)
             .take_while(|line| line.starts_with('|'))
             .filter_map(|line| line.split('|').nth(1))
-            .map(|key| key.trim().trim_matches('`').replace("Ctrl-", "^"))
+            .map(|key| {
+                key.trim()
+                    .trim_matches('`')
+                    .replace("Ctrl-", "^")
+                    .replace("Alt-", "⌥")
+                    .replace("Shift-", "⇧")
+            })
             .map(Cow::from)
             .collect()
     }

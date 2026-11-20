@@ -102,6 +102,9 @@ To delete a news bundle, a user needs the delete bundle and the delete
 category privileges. On the Files tab, a key needs the file privilege
 or the folder privilege, for the kind of the selected item.
 
+The hints at the bottom show Ctrl as `^`, Alt as `⌥`, and Shift as
+`⇧`, so `⌥⇧Enter` is Alt-Shift-Enter.
+
 | Key             | Where              | Effect                                          |
 |-----------------|--------------------|-------------------------------------------------|
 | Ctrl-P          | outside a dialog   | the commands for this place; type to filter     |
