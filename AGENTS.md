@@ -71,9 +71,9 @@ voice. This applies to replies, comments, docs, and commit messages.
   `tx.reply_error(reason)`.
 - Make a `Cow<'static, str>` error with `?` from a `&'static str` or a
   `String`. Do not write `Cow::Borrowed` or `Cow::Owned`.
-- Privilege errors come from `RequireFlags::require`, which returns a
-  `String`, and from the `actions()` tables. The one exception is the
-  target checks for `/access` and `/0wn` in `console/`. They use mhxd's
+- Each privilege check sends its own text, written at the check, in
+  the form "You are not allowed to …". The one exception is the target
+  checks for `/access` and `/0wn` in `console/`. They use mhxd's
   message.
 - A fixed-size wire struct has a `pub const LEN`. Read it with
   `ArrayReader`. Write it with `ArrayWriter`, or `VecWriter` for a

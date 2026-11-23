@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::htxf::{FlatFileInfo, HtxfType};
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding::Encoding;
@@ -853,12 +853,17 @@ impl SharedState {
             format!("Cannot delete “{name}” because it does not exist or cannot be found.")
         })?;
         let is_dir = info.is_folder();
-        let required = if is_dir {
-            Access::DELETE_FOLDER
+        let (required, denied) = if is_dir {
+            (
+                Access::DELETE_FOLDER,
+                "You are not allowed to delete folders.",
+            )
         } else {
-            Access::DELETE_FILE
+            (Access::DELETE_FILE, "You are not allowed to delete files.")
         };
-        access.require(required)?;
+        if !access.contains(required) {
+            Err(denied)?;
+        }
         files
             .delete(requester, dir, name, is_dir)
             .await
@@ -909,11 +914,17 @@ impl SharedState {
             format!("Cannot set info because there is no file/folder named “{name}”.")
         })?;
         let is_folder = info.is_folder();
-        access.require(if is_folder {
-            Access::RENAME_FOLDER
+        let (required, denied) = if is_folder {
+            (
+                Access::RENAME_FOLDER,
+                "You are not allowed to rename folders.",
+            )
         } else {
-            Access::RENAME_FILE
-        })?;
+            (Access::RENAME_FILE, "You are not allowed to rename files.")
+        };
+        if !access.contains(required) {
+            Err(denied)?;
+        }
         files
             .rename(requester, dir, name, new_name)
             .await
@@ -937,12 +948,14 @@ impl SharedState {
         let info = files.info(requester, dir, name).await.ok_or_else(|| {
             format!("Cannot move because there is no file/folder named “{name}”.")
         })?;
-        let required = if info.is_folder() {
-            Access::MOVE_FOLDER
+        let (required, denied) = if info.is_folder() {
+            (Access::MOVE_FOLDER, "You are not allowed to move folders.")
         } else {
-            Access::MOVE_FILE
+            (Access::MOVE_FILE, "You are not allowed to move files.")
         };
-        access.require(required)?;
+        if !access.contains(required) {
+            Err(denied)?;
+        }
         if !self.folder_exists(&*files, requester, to_dir).await {
             Err(format!(
                 "Cannot move “{name}” because the destination folder could not be found."
@@ -1032,12 +1045,20 @@ impl SharedState {
         let info = files.info(requester, dir, name).await.ok_or_else(|| {
             format!("Cannot set info because there is no file/folder named “{name}”.")
         })?;
-        let required = if info.is_folder() {
-            Access::SET_FOLDER_COMMENT
+        let (required, denied) = if info.is_folder() {
+            (
+                Access::SET_FOLDER_COMMENT,
+                "You are not allowed to set comments for folders.",
+            )
         } else {
-            Access::SET_FILE_COMMENT
+            (
+                Access::SET_FILE_COMMENT,
+                "You are not allowed to set comments for files.",
+            )
         };
-        access.require(required)?;
+        if !access.contains(required) {
+            Err(denied)?;
+        }
         let Err(error) = files.set_comment(requester, dir, name, comment).await else {
             return Ok(());
         };
@@ -1551,11 +1572,19 @@ impl SharedState {
             .item_kind(&path.components)
             .await
             .ok_or(NEWS_ITEM_NOT_FOUND)?;
-        let required = match kind {
-            NewsItemKind::Bundle => Access::NEWS_DELETE_FLDR,
-            NewsItemKind::Category => Access::NEWS_DELETE_CAT,
+        let (required, denied) = match kind {
+            NewsItemKind::Bundle => (
+                Access::NEWS_DELETE_FLDR,
+                "You are not allowed to delete news bundles.",
+            ),
+            NewsItemKind::Category => (
+                Access::NEWS_DELETE_CAT,
+                "You are not allowed to delete news categories.",
+            ),
         };
-        access.require(required)?;
+        if !access.contains(required) {
+            Err(denied)?;
+        }
         news.delete(&path.components)
             .await
             .map_err(|_| "News item could not be deleted.")?;
@@ -1779,7 +1808,9 @@ impl SharedState {
             };
         }
         if is_global {
-            access_extra.require(AccessExtra::SET_SUBJECT)?;
+            if !access_extra.contains(AccessExtra::SET_SUBJECT) {
+                Err("You are not allowed to set the chat subject.")?;
+            }
             return Ok(());
         }
         match members {

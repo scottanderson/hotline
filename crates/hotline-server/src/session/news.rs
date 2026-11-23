@@ -1,7 +1,7 @@
 //! Classic (flat) and threaded news handlers.
 
 use hotline_proto::FieldId;
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding;
 use hotline_proto::types::HlPath;
@@ -28,7 +28,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
+        if !self.access.contains(Access::NEWS_READ_ART) {
+            let reason = "You are not allowed to read articles.";
             return vec![tx.reply_error(reason)];
         }
         let news = text_encoding::encode_truncated(
@@ -47,7 +48,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
+        if !self.access.contains(Access::POST_NEWS_ART) {
+            let reason = "You are not allowed to post articles.";
             return vec![tx.reply_error(reason)];
         }
         let (text, len) = tx.string_len(FieldId::Data).unwrap_or_default();
@@ -172,7 +174,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::NEWS_CREATE_FLDR) {
+        if !self.access.contains(Access::NEWS_CREATE_FLDR) {
+            let reason = "You are not allowed to create news bundles.";
             return vec![tx.reply_error(reason)];
         }
         let name = tx.string(FieldId::FileName).unwrap_or_default();
@@ -194,7 +197,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::NEWS_CREATE_CAT) {
+        if !self.access.contains(Access::NEWS_CREATE_CAT) {
+            let reason = "You are not allowed to create news categories.";
             return vec![tx.reply_error(reason)];
         }
         let name = tx.news_category_name().unwrap_or_default();
@@ -216,7 +220,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::NEWS_READ_ART) {
+        if !self.access.contains(Access::NEWS_READ_ART) {
+            let reason = "You are not allowed to read articles.";
             return vec![tx.reply_error(reason)];
         }
         let path = match self.news_path(tx) {
@@ -265,7 +270,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::POST_NEWS_ART) {
+        if !self.access.contains(Access::POST_NEWS_ART) {
+            let reason = "You are not allowed to post articles.";
             return vec![tx.reply_error(reason)];
         }
         let path = match self.news_path(tx) {
@@ -312,7 +318,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::NEWS_DELETE_ART) {
+        if !self.access.contains(Access::NEWS_DELETE_ART) {
+            let reason = "You are not allowed to delete articles.";
             return vec![tx.reply_error(reason)];
         }
         let path = match self.news_path(tx) {

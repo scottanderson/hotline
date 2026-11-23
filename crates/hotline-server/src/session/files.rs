@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use hotline_proto::FieldId;
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::htxf::{self, ResumedFork};
 use hotline_proto::types::{self, HlPath};
 use hotline_proto::{Field, ForkHeader, Received, Transaction};
@@ -28,7 +28,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::FILE_LIST) {
+        if !self.access_extra.contains(AccessExtra::FILE_LIST) {
+            let reason = "You are not allowed to list files.";
             return vec![tx.reply_error(reason)];
         }
 
@@ -127,7 +128,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::DOWNLOAD_FILE) {
+        if !self.access.contains(Access::DOWNLOAD_FILE) {
+            let reason = "You are not allowed to download files.";
             return vec![tx.reply_error(reason)];
         }
 
@@ -255,7 +257,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::BANNER_GET) {
+        if !self.access_extra.contains(AccessExtra::BANNER_GET) {
+            let reason = "You are not allowed to download the server banner.";
             return vec![tx.reply_error(reason)];
         }
         let (size, reference) = state
@@ -282,7 +285,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::UPLOAD_FILE) {
+        if !self.access.contains(Access::UPLOAD_FILE) {
+            let reason = "You are not allowed to upload files.";
             return vec![tx.reply_error(reason)];
         }
 
@@ -377,7 +381,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::DOWNLOAD_FOLDER) {
+        if !self.access.contains(Access::DOWNLOAD_FOLDER) {
+            let reason = "You are not allowed to download folders.";
             return vec![tx.reply_error(reason)];
         }
 
@@ -439,7 +444,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &Arc<SharedState>,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::UPLOAD_FOLDER) {
+        if !self.access.contains(Access::UPLOAD_FOLDER) {
+            let reason = "You are not allowed to upload folders.";
             return vec![tx.reply_error(reason)];
         }
 
@@ -557,7 +563,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::CREATE_FOLDER) {
+        if !self.access.contains(Access::CREATE_FOLDER) {
+            let reason = "You are not allowed to create folders.";
             return vec![tx.reply_error(reason)];
         }
         let (name, dir) = match self.file_name_and_dir(tx) {
@@ -594,7 +601,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::FILE_GETINFO) {
+        if !self.access_extra.contains(AccessExtra::FILE_GETINFO) {
+            let reason = "You are not allowed to view a file's information.";
             return vec![tx.reply_error(reason)];
         }
         let (name, dir) = match self.file_name_and_dir(tx) {
@@ -741,7 +749,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::MAKE_ALIAS) {
+        if !self.access.contains(Access::MAKE_ALIAS) {
+            let reason = "You are not allowed to make aliases.";
             return vec![tx.reply_error(reason)];
         }
         let (name, dir) = match self.file_name_and_dir(tx) {

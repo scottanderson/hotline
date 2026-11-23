@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use hotline_proto::FieldId;
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::opcode::Opcode;
 use hotline_proto::text_encoding;
 use hotline_proto::types::UserNameWithInfo;
@@ -35,7 +35,8 @@ impl Session {
             return Vec::new();
         }
         let encoding = self.encoding();
-        if let Err(reason) = self.access.require(Access::SEND_CHAT) {
+        if !self.access.contains(Access::SEND_CHAT) {
+            let reason = "You are not allowed to participate in chat.";
             // Sent only to the denied client; `myTran_ChatSend` (105) gets no reply.
             return vec![Transaction::push(
                 Opcode::ServerMsg,
@@ -153,7 +154,8 @@ impl Session {
         if self.flood_banned(FloodEvent::Message, state).await {
             return vec![];
         }
-        if let Err(reason) = self.access.require(Access::CREATE_CHAT) {
+        if !self.access.contains(Access::CREATE_CHAT) {
+            let reason = "You are not allowed to create a new chat.";
             return vec![tx.reply_error(reason)];
         }
         let chat_id = state.create_chat_room(self.user_id).await;
@@ -218,7 +220,9 @@ impl Session {
         if self.flood_banned(FloodEvent::Message, state).await {
             return Ok(vec![]);
         }
-        self.access_extra.require(AccessExtra::CHAT_PRIVATE)?;
+        if !self.access_extra.contains(AccessExtra::CHAT_PRIVATE) {
+            Err("You are not allowed to open or create a private chat.")?;
+        }
         let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32).unwrap_or(0);
         let target_ids: Vec<u16> = tx
             .fields(FieldId::UserID)
@@ -280,7 +284,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Transaction {
-        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+        if !self.access_extra.contains(AccessExtra::CHAT_PRIVATE) {
+            let reason = "You are not allowed to open or create a private chat.";
             return tx.reply_error(reason);
         }
         let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32).unwrap_or(0);
@@ -341,7 +346,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+        if !self.access_extra.contains(AccessExtra::CHAT_PRIVATE) {
+            let reason = "You are not allowed to open or create a private chat.";
             return vec![tx.reply_error(reason)];
         }
         let chat_id = tx.field(FieldId::ChatID).map(Field::as_u32).unwrap_or(0);
@@ -373,7 +379,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::CHAT_PRIVATE) {
+        if !self.access_extra.contains(AccessExtra::CHAT_PRIVATE) {
+            let reason = "You are not allowed to open or create a private chat.";
             return vec![tx.reply_error(reason)];
         }
         if let Some(chat_id) = tx.field(FieldId::ChatID).map(Field::as_u32) {
@@ -417,7 +424,9 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Result<Vec<Transaction>, Cow<'static, str>> {
-        self.access_extra.require(AccessExtra::CHAT_PRIVATE)?;
+        if !self.access_extra.contains(AccessExtra::CHAT_PRIVATE) {
+            Err("You are not allowed to open or create a private chat.")?;
+        }
         let chat_id = tx
             .field(FieldId::ChatID)
             .map(Field::as_u32)

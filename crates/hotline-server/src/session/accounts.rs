@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use hotline_proto::FieldId;
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::opcode::Opcode;
 use hotline_proto::{Field, FieldList, Received, Transaction};
 
@@ -23,7 +23,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::CREATE_USER) {
+        if !self.access.contains(Access::CREATE_USER) {
+            let reason = "You are not allowed to create new accounts.";
             return vec![tx.reply_error(reason)];
         }
         let limits = state.policy().text_limits();
@@ -62,7 +63,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::DELETE_USER) {
+        if !self.access.contains(Access::DELETE_USER) {
+            let reason = "You are not allowed to delete accounts.";
             return vec![tx.reply_error(reason)];
         }
         let login = tx.login().unwrap_or_default();
@@ -109,7 +111,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::OPEN_USER) {
+        if !self.access.contains(Access::OPEN_USER) {
+            let reason = "You are not allowed to get account information.";
             return vec![tx.reply_error(reason)];
         }
         let sent = tx.string(FieldId::UserLogin).unwrap_or_default();
@@ -133,7 +136,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::MODIFY_USER) {
+        if !self.access.contains(Access::MODIFY_USER) {
+            let reason = "You are not allowed to modify account information.";
             return vec![tx.reply_error(reason)];
         }
         let policy = state.policy();
@@ -213,7 +217,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::OPEN_USER) {
+        if !self.access.contains(Access::OPEN_USER) {
+            let reason = "You are not allowed to get account information.";
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
@@ -255,7 +260,8 @@ impl Session {
         state: &SharedState,
     ) -> Vec<Transaction> {
         let account_access = Access::CREATE_USER | Access::MODIFY_USER | Access::DELETE_USER;
-        if let Err(reason) = self.access.require_any(account_access) {
+        if !self.access.intersects(account_access) {
+            let reason = "You are not allowed to create new accounts, delete accounts, modify account information.";
             return vec![tx.reply_error(reason)];
         }
         if tx.field(FieldId::Data).is_none() {
@@ -320,7 +326,9 @@ impl Session {
             let Some(old_login) = old_login else {
                 return Ok(false);
             };
-            self.access.require(Access::DELETE_USER)?;
+            if !self.access.contains(Access::DELETE_USER) {
+                Err("You are not allowed to delete accounts.")?;
+            }
             return match state.delete_account(&old_login).await {
                 Ok(()) => {
                     Self::disconnect_account_sessions(&old_login, state).await;
@@ -342,7 +350,9 @@ impl Session {
 
         if let Some(old_login) = old_login {
             // Modify (and rename, if the login changed).
-            self.access.require(Access::MODIFY_USER)?;
+            if !self.access.contains(Access::MODIFY_USER) {
+                Err("You are not allowed to modify account information.")?;
+            }
             let renamed = old_login != login;
             if renamed
                 && state.policy().taken_login() == TakenLogin::Refuse
@@ -409,7 +419,9 @@ impl Session {
             return Ok(true);
         }
 
-        self.access.require(Access::CREATE_USER)?;
+        if !self.access.contains(Access::CREATE_USER) {
+            Err("You are not allowed to create new accounts.")?;
+        }
         if !self
             .access
             .contains(access.difference(Access::NO_AGREEMENT))
@@ -1179,16 +1191,28 @@ mod tests {
         let login_field = Field::obfuscated_string(FieldId::UserLogin, "bob");
 
         let create = request(Opcode::NewUser, 1, vec![login_field.clone()]);
-        assert!(session.on_new_user(&create, &state).await[0].is_error());
+        assert_eq!(
+            error_text(&session.on_new_user(&create, &state).await[0]),
+            "You are not allowed to create new accounts."
+        );
 
         let read = request(Opcode::GetUser, 2, vec![login_field.clone()]);
-        assert!(session.on_get_user(&read, &state).await[0].is_error());
+        assert_eq!(
+            error_text(&session.on_get_user(&read, &state).await[0]),
+            "You are not allowed to get account information."
+        );
 
         let modify = request(Opcode::SetUser, 3, vec![login_field.clone()]);
-        assert!(session.on_set_user(&modify, &state).await[0].is_error());
+        assert_eq!(
+            error_text(&session.on_set_user(&modify, &state).await[0]),
+            "You are not allowed to modify account information."
+        );
 
         let delete = request(Opcode::DeleteUser, 4, vec![login_field]);
-        assert!(session.on_delete_user(&delete, &state).await[0].is_error());
+        assert_eq!(
+            error_text(&session.on_delete_user(&delete, &state).await[0]),
+            "You are not allowed to delete accounts."
+        );
     }
 
     /// One [`myTran_SetUserList`] (349) record: `old_login` is the account's
@@ -1223,7 +1247,10 @@ mod tests {
         let session = test_session("Alice", Access::empty());
         let state = Arc::<SharedState>::default();
         let request = request(Opcode::GetUserList, 1, vec![]);
-        assert!(session.on_get_user_list(&request, &state).await[0].is_error());
+        assert_eq!(
+            error_text(&session.on_get_user_list(&request, &state).await[0]),
+            "You are not allowed to get account information."
+        );
     }
 
     #[tokio::test]
@@ -1288,7 +1315,56 @@ mod tests {
             .await
             .try_into()
             .unwrap();
-        assert!(reply.is_error());
+        assert_eq!(
+            error_text(&reply),
+            "You are not allowed to create new accounts, delete accounts, modify account information."
+        );
+    }
+
+    /// Sends one [`myTran_SetUserList`] (349) `record` as a user with only
+    /// `access`, and returns the error text.
+    ///
+    /// [`myTran_SetUserList`]: hotline_proto::Opcode::SetUserList
+    async fn set_user_list_error(access: Access, record: Field) -> String {
+        let session = test_session("Alice", access);
+        let state = Arc::<SharedState>::default();
+        let request = request(Opcode::SetUserList, 1, vec![record]);
+        let [reply] = session
+            .on_set_user_list(&request, &state)
+            .await
+            .try_into()
+            .unwrap();
+        error_text(&reply)
+    }
+
+    #[tokio::test]
+    async fn set_user_list_denies_a_delete_without_delete_user() {
+        let password = Field::obfuscated_string(FieldId::UserPassword, "secret");
+        let record = user_list_record(Some("guest"), "", "", password, Access::empty());
+        assert_eq!(
+            set_user_list_error(Access::CREATE_USER, record).await,
+            "You are not allowed to delete accounts."
+        );
+    }
+
+    #[tokio::test]
+    async fn set_user_list_denies_a_modify_without_modify_user() {
+        let password = Field::obfuscated_string(FieldId::UserPassword, "secret");
+        let record = user_list_record(Some("guest"), "Guest", "guest", password, Access::empty());
+        assert_eq!(
+            set_user_list_error(Access::CREATE_USER, record).await,
+            "You are not allowed to modify account information."
+        );
+    }
+
+    #[tokio::test]
+    async fn set_user_list_denies_a_create_without_create_user() {
+        let password = Field::obfuscated_string(FieldId::UserPassword, "secret");
+        let record = user_list_record(None, "Bob", "bob", password, Access::empty());
+        assert_eq!(
+            set_user_list_error(Access::DELETE_USER, record).await,
+            "You are not allowed to create new accounts."
+        );
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use async_trait::async_trait;
 
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::types::UserFlags;
 
 use crate::account::AccessExtra;
@@ -105,8 +105,9 @@ fn user_table(users: &[UserEntry]) -> String {
 /// `/users`: a private message listing connected users, laid out like
 /// mhxd's `cmd_users`.
 async fn cmd_users(actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
-    if let Err(reason) = actor.access_extra.require(AccessExtra::MANAGE_USERS) {
-        return cmd_err("users", &reason);
+    if !actor.access_extra.contains(AccessExtra::MANAGE_USERS) {
+        let reason = "You are not allowed to manage other users.";
+        return cmd_err("users", reason);
     }
     let users = state.users().await;
     ConsoleReply::Message(format!(
@@ -125,8 +126,11 @@ async fn cmd_access(args: &str, actor: &ChatCommandActor, state: &SharedState) -
     if args.is_empty() {
         return ConsoleReply::Silent;
     }
-    if let Err(reason) = actor.access_extra.require(AccessExtra::USER_ACCESS) {
-        return cmd_err("access", &reason);
+    if !actor.access_extra.contains(AccessExtra::USER_ACCESS) {
+        return cmd_err(
+            "access",
+            "You are not allowed to view another user's access.",
+        );
     }
     let (uid, rest) = match target(args, state).await {
         Ok(target) => target,
@@ -156,8 +160,11 @@ async fn cmd_0wn(args: &str, actor: &ChatCommandActor, state: &SharedState) -> C
     if args.is_empty() {
         return ConsoleReply::Silent;
     }
-    if let Err(reason) = actor.access_extra.require(AccessExtra::USER_0WN) {
-        return cmd_err("0wn", &reason);
+    if !actor.access_extra.contains(AccessExtra::USER_0WN) {
+        return cmd_err(
+            "0wn",
+            "You are not allowed to overwrite another user's icon or name.",
+        );
     }
     let (uid, rest) = match target(args, state).await {
         Ok(target) => target,
@@ -181,8 +188,9 @@ async fn cmd_unban(args: &str, actor: &ChatCommandActor, state: &SharedState) ->
     if args.is_empty() {
         return ConsoleReply::Silent;
     }
-    if let Err(reason) = actor.access.require(Access::DISCON_USER) {
-        return cmd_err("unban", &reason);
+    if !actor.access.contains(Access::DISCON_USER) {
+        let reason = "You are not allowed to disconnect users.";
+        return cmd_err("unban", reason);
     }
     let word = args.split(' ').next().unwrap_or_default();
     let Ok(ip) = word.parse::<IpAddr>() else {

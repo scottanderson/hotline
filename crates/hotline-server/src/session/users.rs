@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use hotline_proto::FieldId;
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::opcode::Opcode;
 use hotline_proto::types::UserNameWithInfo;
 use hotline_proto::{Field, Received, Transaction};
@@ -26,7 +26,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access_extra.require(AccessExtra::USER_GETLIST) {
+        if !self.access_extra.contains(AccessExtra::USER_GETLIST) {
+            let reason = "You are not allowed to view the user list.";
             return vec![tx.reply_error(reason)];
         }
         let encoding = self.encoding();
@@ -57,7 +58,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::GET_CLIENT_INFO) {
+        if !self.access.contains(Access::GET_CLIENT_INFO) {
+            let reason = "You are not allowed to get client information.";
             return vec![tx.reply_error(reason)];
         }
         let target_id = tx.field(FieldId::UserID).map(Field::as_u16).unwrap_or(0);
@@ -92,7 +94,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::DISCON_USER) {
+        if !self.access.contains(Access::DISCON_USER) {
+            let reason = "You are not allowed to disconnect users.";
             return vec![tx.reply_error(reason)];
         }
         let target_id = tx.field(FieldId::UserID).map(Field::as_u16).unwrap_or(0);
@@ -170,9 +173,10 @@ impl Session {
         if self.message_flood_banned(tx, state).await {
             return vec![];
         }
-        if let Err(reason) = self.access.require(Access::SEND_MESSAGE)
+        if !self.access.contains(Access::SEND_MESSAGE)
             && !self.access_extra.contains(AccessExtra::MSG_OVERRIDE)
         {
+            let reason = "You are not allowed to send private messages.";
             return vec![tx.reply_error(reason)];
         }
         let target_id = tx.field(FieldId::UserID).map(Field::as_u16).unwrap_or(0);
@@ -273,7 +277,8 @@ impl Session {
         tx: &Transaction<Received>,
         state: &SharedState,
     ) -> Vec<Transaction> {
-        if let Err(reason) = self.access.require(Access::BROADCAST) {
+        if !self.access.contains(Access::BROADCAST) {
+            let reason = "You are not allowed to broadcast.";
             return vec![tx.reply_error(reason)];
         }
         if self.message_flood_banned(tx, state).await {

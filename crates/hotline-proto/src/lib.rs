@@ -21,7 +21,7 @@ pub mod transaction;
 pub mod types;
 pub mod wire;
 
-pub use consts::{Access, RequireFlags};
+pub use consts::Access;
 pub use error::{ProtoError, Result};
 pub use field::{Built, Field, FieldId, FieldList, FieldValue, Received};
 pub use handshake::{ClientHandshake, SUB_PROTOCOL_HOTLINE, ServerHandshake};

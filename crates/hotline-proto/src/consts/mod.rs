@@ -1,7 +1,5 @@
-//! Privilege bits and the extension trait that checks them.
+//! Privilege bits.
 
 mod access;
-mod require;
 
 pub use access::Access;
-pub use require::RequireFlags;

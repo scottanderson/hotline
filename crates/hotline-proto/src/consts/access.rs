@@ -7,8 +7,6 @@
 //!
 //! [`myField_UserAccess`]: crate::FieldId::UserAccess
 
-use super::RequireFlags;
-
 bitflags::bitflags! {
     /// The 64-bit [`myField_UserAccess`] (110) privilege bitmap. Bits 51, 50, 45, and 44 are
     /// named, but have no use. Bits 22..=0 are reserved.
@@ -183,50 +181,6 @@ impl Default for Access {
     }
 }
 
-impl RequireFlags for Access {
-    fn actions(&self) -> String {
-        self.iter_names()
-            .map(|(name, this)| match this {
-                Access::DELETE_FILE => "delete files",
-                Access::UPLOAD_FILE => "upload files",
-                Access::DOWNLOAD_FILE => "download files",
-                Access::RENAME_FILE => "rename files",
-                Access::MOVE_FILE => "move files",
-                Access::CREATE_FOLDER => "create folders",
-                Access::DELETE_FOLDER => "delete folders",
-                Access::RENAME_FOLDER => "rename folders",
-                Access::MOVE_FOLDER => "move folders",
-                Access::SEND_CHAT => "participate in chat",
-                Access::CREATE_CHAT => "create a new chat",
-                Access::CREATE_USER => "create new accounts",
-                Access::DELETE_USER => "delete accounts",
-                Access::OPEN_USER => "get account information",
-                Access::MODIFY_USER => "modify account information",
-                Access::NEWS_READ_ART => "read articles",
-                Access::POST_NEWS_ART => "post articles",
-                Access::DISCON_USER => "disconnect users",
-                Access::GET_CLIENT_INFO => "get client information",
-                Access::UPLOAD_ANYWHERE => "upload anywhere",
-                Access::SET_FILE_COMMENT => "set comments for files",
-                Access::SET_FOLDER_COMMENT => "set comments for folders",
-                Access::MAKE_ALIAS => "make aliases",
-                Access::BROADCAST => "broadcast",
-                Access::NEWS_DELETE_ART => "delete articles",
-                Access::NEWS_CREATE_CAT => "create news categories",
-                Access::NEWS_DELETE_CAT => "delete news categories",
-                Access::NEWS_CREATE_FLDR => "create news bundles",
-                Access::NEWS_DELETE_FLDR => "delete news bundles",
-                Access::UPLOAD_FOLDER => "upload folders",
-                Access::DOWNLOAD_FOLDER => "download folders",
-                Access::SEND_MESSAGE => "send private messages",
-                Access::VIEW_DROP_BOXES => "view drop boxes",
-                _ => name,
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,31 +222,5 @@ mod tests {
         // Bit 0 is reserved.
         let bytes = 1u64.to_be_bytes();
         assert_eq!(Access::from_bits(u64::from_be_bytes(bytes)), None);
-    }
-
-    #[test]
-    fn require_succeeds_when_every_required_flag_is_held() {
-        let held = Access::READ_CHAT | Access::SEND_CHAT;
-        assert!(held.require(Access::READ_CHAT).is_ok());
-        assert!(held.require(held).is_ok());
-    }
-
-    #[test]
-    fn require_describes_the_single_missing_flags_action() {
-        let held = Access::READ_CHAT;
-        let err = held.require(Access::SEND_CHAT).unwrap_err();
-        assert_eq!(err, "You are not allowed to participate in chat.");
-    }
-
-    #[test]
-    fn require_describes_every_missing_flags_action_joined_by_comma() {
-        let held = Access::empty();
-        let err = held
-            .require(Access::READ_CHAT | Access::SEND_CHAT)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            "You are not allowed to READ_CHAT, participate in chat."
-        );
     }
 }

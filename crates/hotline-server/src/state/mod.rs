@@ -18,7 +18,7 @@ mod transfer_target;
 
 use std::borrow::Cow;
 
-use hotline_proto::consts::{Access, RequireFlags};
+use hotline_proto::consts::Access;
 use hotline_proto::types::HlPath;
 
 pub use access::AccessUpdate;
@@ -76,16 +76,15 @@ fn dropbox_blocked(dir: &HlPath, name: Option<&str>, access: Access) -> bool {
         .any(|c| c.to_ascii_lowercase().contains("drop box"))
 }
 
-/// `Err` if `dropbox_blocked` for `dir`/`name`, worded via
-/// [`RequireFlags::require`] so it names `VIEW_DROP_BOXES` like any other
-/// missing-privilege error.
+/// `Err` with the text of a missing `VIEW_DROP_BOXES` if `dropbox_blocked`
+/// for `dir`/`name`.
 fn dropbox_access(
     dir: &HlPath,
     name: Option<&str>,
     access: Access,
 ) -> Result<(), Cow<'static, str>> {
     if dropbox_blocked(dir, name, access) {
-        access.require(Access::VIEW_DROP_BOXES)?;
+        Err("You are not allowed to view drop boxes.")?;
     }
     Ok(())
 }

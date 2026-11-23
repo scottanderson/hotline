@@ -45,8 +45,8 @@ works this way.
   `/access` applies its fields all or nothing, but mhxd keeps the fields
   before an unknown key and notifies no one. `/0wn` ignores `color=`,
   `g0away=`, and `visible=`, since this server has no user color or
-  invisibility. A denied command names the missing privilege through
-  `RequireFlags::require`, not mhxd's fixed text.
+  invisibility. A denied command names the missing privilege, not
+  mhxd's fixed text.
 - **A kicked client gets a drain window.** For a ban,
   `ProcessTran_DisconnectUser` puts `myTran_ServerMsg` (104) in the
   client's send queue, then calls `Disconnect()`, which drops the data
