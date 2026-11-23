@@ -512,14 +512,14 @@ impl SharedState {
         Ok(Some(target.name.into()))
     }
 
-    /// Runs `command` (lowercased, without the prefix) via the
-    /// configured [`ChatCommandDispatcher`]. `None` if unrecognized.
+    /// Runs `command` (as typed, without the prefix) via the configured
+    /// [`ChatCommandDispatcher`].
     pub async fn run_console_command(
         &self,
         command: &str,
         args: &str,
         actor: &ChatCommandActor,
-    ) -> Option<ConsoleReply> {
+    ) -> ConsoleReply {
         self.commands().run(command, args, actor, self).await
     }
 

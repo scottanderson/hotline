@@ -47,6 +47,16 @@ works this way.
   `g0away=`, and `visible=`, since this server has no user color or
   invisibility. A denied command names the missing privilege, not
   mhxd's fixed text.
+- **Console command lines split at the first space.** The session
+  gives the dispatcher the command and the rest of the line. So
+  `/access` and `/0wn` with no space after them reply nothing. mhxd's
+  `command_chat` matches `"access "` and `"0wn "` with the space, so
+  without it mhxd sends "command not found". A command also matches
+  only as the whole word, so `/usersfoo` gets "command not found".
+  mhxd matches the first 5 bytes of `users`, so it runs `/users`.
+- **`/unban <address>` is a console command of `hls` only.** It lifts
+  an address ban, with the privilege that bans. mhxd has no `/unban`,
+  so it sends "command not found".
 - **A kicked client gets a drain window.** For a ban,
   `ProcessTran_DisconnectUser` puts `myTran_ServerMsg` (104) in the
   client's send queue, then calls `Disconnect()`, which drops the data

@@ -119,9 +119,8 @@ impl Session {
             prefix,
         };
         let reply = state
-            .run_console_command(&command.to_ascii_lowercase(), args.trim_start(), &actor)
-            .await
-            .unwrap_or_else(|| ConsoleReply::Chat(format!("command not found: {command}")));
+            .run_console_command(command, args.trim_start(), &actor)
+            .await;
         match reply {
             ConsoleReply::Silent => Vec::new(),
             ConsoleReply::Chat(text) => {
@@ -952,7 +951,7 @@ mod tests {
         let request = request(
             Opcode::ChatSend,
             1,
-            vec![Field::string(FieldId::Data, "/nope")],
+            vec![Field::string(FieldId::Data, "/Nope")],
         );
 
         let reply = session
@@ -963,7 +962,7 @@ mod tests {
             .field(FieldId::Data)
             .unwrap()
             .as_string();
-        assert_eq!(text, "\rcommand not found: nope");
+        assert_eq!(text, "\rcommand not found: Nope");
     }
 
     #[tokio::test]

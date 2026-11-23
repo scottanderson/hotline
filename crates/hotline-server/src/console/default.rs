@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::IpAddr;
 
 use async_trait::async_trait;
@@ -22,21 +23,16 @@ impl ChatCommandDispatcher for DefaultChatCommands {
         args: &str,
         actor: &ChatCommandActor,
         state: &SharedState,
-    ) -> Option<ConsoleReply> {
+    ) -> ConsoleReply {
         let reply = match command {
             "users" => cmd_users(actor, state).await,
             "access" => cmd_access(args, actor, state).await,
             "0wn" => cmd_0wn(args, actor, state).await,
             "unban" => cmd_unban(args, actor, state).await,
-            _ => return None,
+            _ => return ConsoleReply::Chat(format!("command not found: {command}")),
         };
-        Some(reply)
+        reply.unwrap_or_else(|reason| ConsoleReply::Chat(format!("{command}: {reason}")))
     }
-}
-
-/// mhxd's `cmd_err`: `command: text` as a chat line.
-fn cmd_err(command: &str, text: &str) -> ConsoleReply {
-    ConsoleReply::Chat(format!("{command}: {text}"))
 }
 
 /// mhxd's `nick_to_uid`: the user whose name starts with `nick`'s first
@@ -104,105 +100,93 @@ fn user_table(users: &[UserEntry]) -> String {
 
 /// `/users`: a private message listing connected users, laid out like
 /// mhxd's `cmd_users`.
-async fn cmd_users(actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+async fn cmd_users(
+    actor: &ChatCommandActor,
+    state: &SharedState,
+) -> Result<ConsoleReply, Cow<'static, str>> {
     if !actor.access_extra.contains(AccessExtra::MANAGE_USERS) {
-        let reason = "You are not allowed to manage other users.";
-        return cmd_err("users", reason);
+        Err("You are not allowed to manage other users.")?;
     }
     let users = state.users().await;
-    ConsoleReply::Message(format!(
+    Ok(ConsoleReply::Message(format!(
         "(chat 0x0): {} users:\r*** Visible Users ***\r\r{}\r*** Invisible Users ***\r\r{}",
         users.len(),
         user_table(&users),
         // No user is ever invisible here.
         user_table(&[]),
-    ))
+    )))
 }
 
 /// `/access <uid|nick>` shows a user's privileges, and `/access <uid|nick>
 /// FIELD=0|1 ...` changes them live. Needs [`AccessExtra::USER_ACCESS`].
 /// The target must hold [`AccessExtra::ACCESS_VOLATILE`].
-async fn cmd_access(args: &str, actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+async fn cmd_access(
+    args: &str,
+    actor: &ChatCommandActor,
+    state: &SharedState,
+) -> Result<ConsoleReply, Cow<'static, str>> {
     if args.is_empty() {
-        return ConsoleReply::Silent;
+        return Ok(ConsoleReply::Silent);
     }
     if !actor.access_extra.contains(AccessExtra::USER_ACCESS) {
-        return cmd_err(
-            "access",
-            "You are not allowed to view another user's access.",
-        );
+        Err("You are not allowed to view another user's access.")?;
     }
-    let (uid, rest) = match target(args, state).await {
-        Ok(target) => target,
-        Err(reason) => return cmd_err("access", &reason),
-    };
+    let (uid, rest) = target(args, state).await?;
 
     if rest.is_empty() {
-        return match state.describe_access(uid).await {
-            Ok(description) => ConsoleReply::Chat(description),
-            Err(reason) => cmd_err("access", &reason),
-        };
+        let description = state.describe_access(uid).await?;
+        return Ok(ConsoleReply::Chat(description));
     }
 
-    match state.apply_access_fields(uid, rest).await {
-        Ok(name) => {
-            log_console_change("access", actor, &name, uid, rest);
-            ConsoleReply::Silent
-        }
-        Err(reason) => cmd_err("access", &reason),
-    }
+    let name = state.apply_access_fields(uid, rest).await?;
+    log_console_change("access", actor, &name, uid, rest);
+    Ok(ConsoleReply::Silent)
 }
 
 /// `/0wn <uid|nick> icon=<n> name=<text>` sets a user's icon or name
 /// live. Needs [`AccessExtra::USER_0WN`]. The target must hold
 /// [`AccessExtra::IS_0WN3D`]. `name=` takes the rest of the line.
-async fn cmd_0wn(args: &str, actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+async fn cmd_0wn(
+    args: &str,
+    actor: &ChatCommandActor,
+    state: &SharedState,
+) -> Result<ConsoleReply, Cow<'static, str>> {
     if args.is_empty() {
-        return ConsoleReply::Silent;
+        return Ok(ConsoleReply::Silent);
     }
     if !actor.access_extra.contains(AccessExtra::USER_0WN) {
-        return cmd_err(
-            "0wn",
-            "You are not allowed to overwrite another user's icon or name.",
-        );
+        Err("You are not allowed to overwrite another user's icon or name.")?;
     }
-    let (uid, rest) = match target(args, state).await {
-        Ok(target) => target,
-        Err(reason) => return cmd_err("0wn", &reason),
-    };
-    match state.apply_0wn_fields(uid, rest).await {
-        Ok(Some(name)) => {
-            log_console_change("0wn", actor, &name, uid, rest);
-            ConsoleReply::Silent
-        }
-        Ok(None) => ConsoleReply::Silent,
-        Err(reason) => cmd_err("0wn", &reason),
+    let (uid, rest) = target(args, state).await?;
+    let name = state.apply_0wn_fields(uid, rest).await?;
+    if let Some(name) = name {
+        log_console_change("0wn", actor, &name, uid, rest);
     }
+    Ok(ConsoleReply::Silent)
 }
 
 /// `/unban <address>` lifts an address ban. Needs [`Access::DISCON_USER`],
 /// the privilege that bans through [`myTran_DisconnectUser`] (110).
 ///
 /// [`myTran_DisconnectUser`]: hotline_proto::Opcode::DisconnectUser
-async fn cmd_unban(args: &str, actor: &ChatCommandActor, state: &SharedState) -> ConsoleReply {
+async fn cmd_unban(
+    args: &str,
+    actor: &ChatCommandActor,
+    state: &SharedState,
+) -> Result<ConsoleReply, Cow<'static, str>> {
     if args.is_empty() {
-        return ConsoleReply::Silent;
+        return Ok(ConsoleReply::Silent);
     }
     if !actor.access.contains(Access::DISCON_USER) {
-        let reason = "You are not allowed to disconnect users.";
-        return cmd_err("unban", reason);
+        Err("You are not allowed to disconnect users.")?;
     }
     let word = args.split(' ').next().unwrap_or_default();
-    let Ok(ip) = word.parse::<IpAddr>() else {
-        return cmd_err("unban", &format!("not an address \"{word}\""));
-    };
-    match state.unban(ip).await {
-        Ok(()) => {
-            tracing::debug!(actor = %actor.login, actor_uid = actor.user_id, %ip, "console unban");
-            ConsoleReply::Silent
-        }
-        Err(reason) => cmd_err("unban", &reason),
-    }
+    let ip = word
+        .parse::<IpAddr>()
+        .map_err(|_| format!("not an address \"{word}\""))?;
+    state.unban(ip).await?;
+    tracing::debug!(actor = %actor.login, actor_uid = actor.user_id, %ip, "console unban");
+    Ok(ConsoleReply::Silent)
 }
 
 #[cfg(test)]
@@ -257,11 +241,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_matches_a_command_only_in_lowercase() {
+        let state = Arc::<SharedState>::default();
+        let actor = actor(AccessExtra::MANAGE_USERS);
+        let reply = DefaultChatCommands.run("USERS", "", &actor, &state).await;
+        assert_eq!(chat(reply), "command not found: USERS");
+    }
+
+    #[tokio::test]
+    async fn run_matches_only_the_whole_command() {
+        let state = Arc::<SharedState>::default();
+        let actor = actor(AccessExtra::MANAGE_USERS);
+        let reply = DefaultChatCommands
+            .run("usersfoo", "", &actor, &state)
+            .await;
+        assert_eq!(chat(reply), "command not found: usersfoo");
+    }
+
+    #[tokio::test]
+    async fn run_sends_an_error_after_the_command_name() {
+        let state = Arc::<SharedState>::default();
+        let actor = actor(AccessExtra::USER_ACCESS);
+        let reply = DefaultChatCommands
+            .run("access", "99", &actor, &state)
+            .await;
+        assert_eq!(chat(reply), "access: no such user (uid:99)");
+    }
+
+    #[tokio::test]
     async fn users_denied_without_manage_users() {
         let state = Arc::<SharedState>::default();
-        let reply = chat(cmd_users(&actor(AccessExtra::empty()), &state).await);
-        assert!(reply.starts_with("users: "), "{reply}");
-        assert!(reply.contains("not allowed"), "{reply}");
+        let reply = cmd_users(&actor(AccessExtra::empty()), &state)
+            .await
+            .unwrap_err();
+        assert_eq!(reply, "You are not allowed to manage other users.");
     }
 
     /// mhxd's `cmd_users` layout, sent as a private message.
@@ -279,30 +292,38 @@ mod tests {
              2   | Bob                       | LUSER\r\
              \r*** Invisible Users ***\r\rnone.\r"
         );
-        assert_eq!(reply, ConsoleReply::Message(expected));
+        assert_eq!(reply, Ok(ConsoleReply::Message(expected)));
     }
 
     #[tokio::test]
     async fn empty_arguments_reply_nothing() {
         let state = Arc::<SharedState>::default();
         let actor = actor(AccessExtra::all());
-        assert_eq!(cmd_access("", &actor, &state).await, ConsoleReply::Silent);
-        assert_eq!(cmd_0wn("", &actor, &state).await, ConsoleReply::Silent);
+        assert_eq!(
+            cmd_access("", &actor, &state).await,
+            Ok(ConsoleReply::Silent)
+        );
+        assert_eq!(cmd_0wn("", &actor, &state).await, Ok(ConsoleReply::Silent));
     }
 
     #[tokio::test]
     async fn access_denied_without_user_access() {
         let state = Arc::<SharedState>::default();
-        let reply = chat(cmd_access("2", &actor(AccessExtra::empty()), &state).await);
-        assert!(reply.starts_with("access: "), "{reply}");
-        assert!(reply.contains("not allowed"), "{reply}");
+        let reply = cmd_access("2", &actor(AccessExtra::empty()), &state)
+            .await
+            .unwrap_err();
+        assert_eq!(reply, "You are not allowed to view another user's access.");
     }
 
     #[tokio::test]
     async fn access_view_reports_current_flags() {
         let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
-        let reply = chat(cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state).await);
+        let reply = chat(
+            cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state)
+                .await
+                .unwrap(),
+        );
         assert!(reply.contains("Bob"));
         assert!(reply.contains("Access:"));
         assert!(reply.contains("AccessExtra:"));
@@ -314,7 +335,11 @@ mod tests {
         let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
 
-        let reply = chat(cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state).await);
+        let reply = chat(
+            cmd_access("2", &actor(AccessExtra::USER_ACCESS), &state)
+                .await
+                .unwrap(),
+        );
 
         assert!(reply.contains("download_files"), "{reply}");
         assert!(reply.contains("chat_private"), "{reply}");
@@ -325,7 +350,7 @@ mod tests {
     async fn access_unknown_user_is_reported() {
         let state = Arc::<SharedState>::default();
         let reply = cmd_access("99", &actor(AccessExtra::USER_ACCESS), &state).await;
-        assert_eq!(reply, cmd_err("access", "no such user (uid:99)"));
+        assert_eq!(reply.unwrap_err(), "no such user (uid:99)");
     }
 
     #[tokio::test]
@@ -333,7 +358,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = cmd_access("Zed x=1", &actor(AccessExtra::USER_ACCESS), &state).await;
-        assert_eq!(reply, cmd_err("access", "no such user \"Zed\""));
+        assert_eq!(reply.unwrap_err(), "no such user \"Zed\"");
     }
 
     #[tokio::test]
@@ -341,7 +366,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = cmd_access("2 not_a_field=1", &actor(AccessExtra::USER_ACCESS), &state).await;
-        assert_eq!(reply, cmd_err("access", "unknown argument \"not_a_field\""));
+        assert_eq!(reply.unwrap_err(), "unknown argument \"not_a_field\"");
     }
 
     /// A change replies nothing, like mhxd.
@@ -355,7 +380,7 @@ mod tests {
             &state,
         )
         .await;
-        assert_eq!(reply, ConsoleReply::Silent);
+        assert_eq!(reply, Ok(ConsoleReply::Silent));
     }
 
     #[tokio::test]
@@ -375,7 +400,8 @@ mod tests {
             .unwrap();
         connect(&state, 2, "bob", "Bob").await;
 
-        cmd_access("2 delete_files=1", &actor(AccessExtra::USER_ACCESS), &state).await;
+        let reply = cmd_access("2 delete_files=1", &actor(AccessExtra::USER_ACCESS), &state).await;
+        assert_eq!(reply, Ok(ConsoleReply::Silent));
 
         let account = state.account("bob").await.expect("account exists");
         assert!(!account.access.contains(Access::DELETE_FILE));
@@ -384,9 +410,13 @@ mod tests {
     #[tokio::test]
     async fn zeroown_denied_without_user_0wn() {
         let state = Arc::<SharedState>::default();
-        let reply = chat(cmd_0wn("2 icon=5", &actor(AccessExtra::empty()), &state).await);
-        assert!(reply.starts_with("0wn: "), "{reply}");
-        assert!(reply.contains("not allowed"), "{reply}");
+        let reply = cmd_0wn("2 icon=5", &actor(AccessExtra::empty()), &state)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            reply,
+            "You are not allowed to overwrite another user's icon or name."
+        );
     }
 
     #[tokio::test]
@@ -394,7 +424,7 @@ mod tests {
         let state = Arc::<SharedState>::default();
         connect(&state, 2, "bob", "Bob").await;
         let reply = cmd_0wn("2 icon=5", &actor(AccessExtra::USER_0WN), &state).await;
-        assert_eq!(reply, ConsoleReply::Silent);
+        assert_eq!(reply, Ok(ConsoleReply::Silent));
     }
 
     #[test]
@@ -417,9 +447,8 @@ mod tests {
             access: Access::empty(),
             ..actor(AccessExtra::all())
         };
-        let reply = chat(cmd_unban(BANNED, &actor, &state).await);
-        assert!(reply.starts_with("unban: "), "{reply}");
-        assert!(reply.contains("not allowed"), "{reply}");
+        let reply = cmd_unban(BANNED, &actor, &state).await.unwrap_err();
+        assert_eq!(reply, "You are not allowed to disconnect users.");
     }
 
     #[tokio::test]
@@ -430,7 +459,7 @@ mod tests {
 
         let reply = cmd_unban(BANNED, &actor(AccessExtra::empty()), &state).await;
 
-        assert_eq!(reply, ConsoleReply::Silent);
+        assert_eq!(reply, Ok(ConsoleReply::Silent));
         assert!(state.is_banned(ip).await.is_none());
     }
 
@@ -438,13 +467,13 @@ mod tests {
     async fn unban_reports_an_address_that_is_not_banned() {
         let state = Arc::<SharedState>::default();
         let reply = cmd_unban(BANNED, &actor(AccessExtra::empty()), &state).await;
-        assert_eq!(reply, cmd_err("unban", "address is not banned"));
+        assert_eq!(reply.unwrap_err(), "address is not banned");
     }
 
     #[tokio::test]
     async fn unban_rejects_a_word_that_is_not_an_address() {
         let state = Arc::<SharedState>::default();
         let reply = cmd_unban("bob", &actor(AccessExtra::empty()), &state).await;
-        assert_eq!(reply, cmd_err("unban", "not an address \"bob\""));
+        assert_eq!(reply.unwrap_err(), "not an address \"bob\"");
     }
 }
