@@ -644,14 +644,14 @@ impl Session {
                 Field::u32(FieldId::FileSize, info.size),
             ]
         };
-        fields.push(Field::string(FieldId::FileName, info.name));
+        fields.push(Field::string(FieldId::FileName, info.name.into_string()));
         if times.created.is_some() {
             fields.push(Field::bytes(FieldId::FileCreateDate, date(times.created)));
         }
         fields.push(Field::bytes(FieldId::FileModifyDate, date(times.modified)));
         if let Some(comment) = comment {
             let comment = self.cut_text(state.policy().text_limits().file_comment, &comment);
-            fields.push(Field::string(FieldId::FileComment, comment));
+            fields.push(Field::string(FieldId::FileComment, comment.to_owned()));
         }
         vec![tx.reply(fields)]
     }
@@ -1568,7 +1568,7 @@ mod tests {
                 opcode,
                 1,
                 vec![
-                    Field::string(FieldId::FileName, name),
+                    Field::string(FieldId::FileName, name.to_owned()),
                     Field::bytes(
                         FieldId::FilePath,
                         HlPath::new(["Drop Box"]).encode(encoding).unwrap(),
@@ -1726,7 +1726,7 @@ mod tests {
     ) -> Transaction<Received> {
         let encoding = text_encoding::DEFAULT;
         let mut fields = vec![
-            Field::string(FieldId::FileName, name),
+            Field::string(FieldId::FileName, name.to_owned()),
             Field::bytes(
                 FieldId::FilePath,
                 HlPath::new(dir.iter().copied()).encode(encoding).unwrap(),
@@ -2802,7 +2802,7 @@ mod tests {
         let delete = request(
             Opcode::DeleteFile,
             1,
-            vec![Field::string(FieldId::FileName, &*partial)],
+            vec![Field::string(FieldId::FileName, partial.clone())],
         );
         let [reply] = session
             .on_delete_file(&delete, &state)
@@ -3186,7 +3186,7 @@ mod tests {
             Opcode::SetFileInfo,
             1,
             vec![
-                Field::string(FieldId::FileName, &*partial),
+                Field::string(FieldId::FileName, partial.clone()),
                 Field::string(FieldId::FileNewName, "b.txt"),
             ],
         );
@@ -3229,7 +3229,7 @@ mod tests {
             Opcode::MoveFile,
             1,
             vec![
-                Field::string(FieldId::FileName, &*partial),
+                Field::string(FieldId::FileName, partial.clone()),
                 Field::bytes(
                     FieldId::FileNewPath,
                     HlPath::new(["Sub"]).encode(encoding).unwrap(),

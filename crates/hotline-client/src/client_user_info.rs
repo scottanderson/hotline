@@ -25,14 +25,14 @@ impl ClientUserInfo {
     /// [`myField_Options`]: hotline_proto::FieldId::Options
     pub(crate) fn fields(&self) -> Vec<Field> {
         let mut fields = vec![
-            Field::string(FieldId::UserName, &*self.name),
+            Field::string(FieldId::UserName, self.name.to_string()),
             Field::u16(FieldId::UserIconID, self.icon),
             Field::u16(FieldId::Options, self.options.bits()),
         ];
         if self.options.contains(UserChangeOptions::AUTOMATIC_RESPONSE) {
             fields.push(Field::string(
                 FieldId::AutomaticResponse,
-                &*self.automatic_response,
+                self.automatic_response.to_string(),
             ));
         }
         fields

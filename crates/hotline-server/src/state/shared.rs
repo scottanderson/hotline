@@ -337,7 +337,7 @@ impl SharedState {
     /// `message` and disconnects.
     ///
     /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
-    pub async fn announce_quit(&self, message: &str) {
+    pub async fn announce_quit(&self, message: impl Into<Cow<'static, str>>) {
         let data = vec![Field::string(FieldId::Data, message)];
         self.publish(Transaction::push(Opcode::DisconnectMsg, data))
             .await;

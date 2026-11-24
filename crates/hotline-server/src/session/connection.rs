@@ -379,7 +379,7 @@ impl Session {
         let Some(reason) = kick else {
             return SessionEnd::Closed;
         };
-        let data = vec![Field::string(FieldId::Data, &*reason)];
+        let data = vec![Field::string(FieldId::Data, reason.into_string())];
         queued.push(Transaction::push(Opcode::ServerMsg, data));
         SessionEnd::Kicked(queued)
     }
@@ -620,7 +620,7 @@ impl Session {
         let fields = vec![
             Field::u16(FieldId::Vers, 190),
             Field::u16(FieldId::CommunityBannerID, 0),
-            Field::string(FieldId::ServerName, config.server_name.clone()),
+            Field::string(FieldId::ServerName, config.server_name.to_string()),
         ];
         let mut replies = vec![tx.reply(fields)];
 
@@ -649,7 +649,7 @@ impl Session {
         if show_agreement && have_agreement {
             replies.push(Transaction::push(
                 Opcode::ShowAgreement,
-                vec![Field::string(FieldId::Data, config.agreement.clone())],
+                vec![Field::string(FieldId::Data, config.agreement.to_string())],
             ));
         } else if modern {
             replies.push(Transaction::push(
@@ -662,7 +662,11 @@ impl Session {
     }
 
     /// Reply with `reason`. The login then fails.
-    fn reject_login(&mut self, tx: &Transaction<Received>, reason: &str) -> Vec<Transaction> {
+    fn reject_login(
+        &mut self,
+        tx: &Transaction<Received>,
+        reason: &'static str,
+    ) -> Vec<Transaction> {
         self.state = SessionState::LoginFailed;
         vec![tx.reply_error(reason)]
     }
@@ -862,7 +866,7 @@ impl Session {
             vec![
                 Field::u16(FieldId::UserID, self.user_id),
                 Field::u16(FieldId::UserIconID, icon),
-                Field::string(FieldId::UserName, self.name.clone()),
+                Field::string(FieldId::UserName, self.name.to_string()),
                 Field::u16(FieldId::UserFlags, self.user_flags().bits()),
             ],
         );
@@ -956,7 +960,7 @@ impl Session {
                 vec![
                     Field::u16(FieldId::UserID, self.user_id),
                     Field::u16(FieldId::UserIconID, entry.icon),
-                    Field::string(FieldId::UserName, entry.name),
+                    Field::string(FieldId::UserName, entry.name.into_string()),
                     Field::u16(FieldId::UserFlags, self.user_flags().bits()),
                 ],
             ))
@@ -2071,7 +2075,7 @@ mod tests {
             Opcode::Agreed,
             1,
             vec![
-                Field::string(FieldId::UserName, name),
+                Field::string(FieldId::UserName, name.to_owned()),
                 Field::u16(FieldId::UserIconID, 42),
                 Field::u16(FieldId::Options, options.bits()),
             ],

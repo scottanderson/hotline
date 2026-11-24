@@ -221,8 +221,8 @@ impl HotlineClient {
             .request(
                 Opcode::Login,
                 vec![
-                    Field::obfuscated_string(FieldId::UserLogin, login),
-                    Field::obfuscated_string(FieldId::UserPassword, password),
+                    Field::obfuscated_string(FieldId::UserLogin, login.to_owned()),
+                    Field::obfuscated_string(FieldId::UserPassword, password.to_owned()),
                     Field::u16(FieldId::Vers, 190),
                 ],
             )
@@ -249,7 +249,7 @@ impl HotlineClient {
     pub async fn send_chat(&self, message: &str) -> Result<()> {
         self.send_without_reply(
             Opcode::ChatSend,
-            vec![Field::string(FieldId::Data, message)],
+            vec![Field::string(FieldId::Data, message.to_owned())],
         )
         .await
     }
@@ -262,7 +262,7 @@ impl HotlineClient {
         self.send_without_reply(
             Opcode::ChatSend,
             vec![
-                Field::string(FieldId::Data, message),
+                Field::string(FieldId::Data, message.to_owned()),
                 Field::u32(FieldId::ChatID, chat_id),
             ],
         )
@@ -351,7 +351,7 @@ impl HotlineClient {
             Opcode::SetChatSubject,
             vec![
                 Field::u32(FieldId::ChatID, chat_id),
-                Field::string(FieldId::ChatSubject, subject),
+                Field::string(FieldId::ChatSubject, subject.to_owned()),
             ],
         )
         .await
@@ -406,7 +406,7 @@ impl HotlineClient {
             vec![
                 Field::u16(FieldId::UserID, user_id),
                 Field::u16(FieldId::Options, USER_MESSAGE),
-                Field::string(FieldId::Data, message),
+                Field::string(FieldId::Data, message.to_owned()),
             ],
         )
         .await?;
@@ -425,7 +425,7 @@ impl HotlineClient {
             fields.push(Field::u16(FieldId::Options, options));
         }
         if ban == Ban::Permanent && !name.is_empty() {
-            fields.push(Field::string(FieldId::Data, name));
+            fields.push(Field::string(FieldId::Data, name.to_owned()));
         }
         self.request(Opcode::DisconnectUser, fields).await?;
         Ok(())
@@ -437,7 +437,7 @@ impl HotlineClient {
     pub async fn user_broadcast(&self, message: &str) -> Result<()> {
         self.request(
             Opcode::UserBroadcast,
-            vec![Field::string(FieldId::Data, message)],
+            vec![Field::string(FieldId::Data, message.to_owned())],
         )
         .await?;
         Ok(())
@@ -490,7 +490,7 @@ impl HotlineClient {
     pub async fn old_post_news(&self, text: &str) -> Result<()> {
         self.request(
             Opcode::OldPostNews,
-            vec![Field::string(FieldId::Data, text)],
+            vec![Field::string(FieldId::Data, text.to_owned())],
         )
         .await?;
         Ok(())

@@ -103,7 +103,7 @@ impl HotlineClient {
     ) -> Result<NewsArticle> {
         let mut fields: Vec<_> = self.news_path_field(path)?.into_iter().collect();
         fields.push(Field::u32(FieldId::NewsArtID, id));
-        fields.push(Field::string(FieldId::NewsArtDataFlav, flavor));
+        fields.push(Field::string(FieldId::NewsArtDataFlav, flavor.to_owned()));
         let reply = self.request(Opcode::GetNewsArtData, fields).await?;
         let text = |id| reply.string(id).unwrap_or_default().into();
         let article_id = |field| reply.field(field).map(Field::as_u32).unwrap_or_default();
@@ -141,10 +141,10 @@ impl HotlineClient {
         let mut fields: Vec<_> = self.news_path_field(path)?.into_iter().collect();
         fields.extend([
             Field::u32(FieldId::NewsArtID, parent_id),
-            Field::string(FieldId::NewsArtTitle, title),
+            Field::string(FieldId::NewsArtTitle, title.to_owned()),
             Field::u32(FieldId::NewsArtFlags, 0),
             Field::string(FieldId::NewsArtDataFlav, TEXT_PLAIN),
-            Field::string(FieldId::NewsArtData, text),
+            Field::string(FieldId::NewsArtData, text.to_owned()),
         ]);
         self.request(Opcode::PostNewsArt, fields).await?;
         Ok(())
@@ -177,7 +177,7 @@ impl HotlineClient {
     /// [`myTran_NewNewsFldr`]: hotline_proto::Opcode::NewNewsFldr
     pub async fn new_news_fldr(&self, path: &HlPath, name: &str) -> Result<()> {
         let mut fields: Vec<_> = self.news_path_field(path)?.into_iter().collect();
-        fields.push(Field::string(FieldId::FileName, name));
+        fields.push(Field::string(FieldId::FileName, name.to_owned()));
         self.request(Opcode::NewNewsFldr, fields).await?;
         Ok(())
     }
@@ -188,7 +188,7 @@ impl HotlineClient {
     /// [`myTran_NewNewsCat`]: hotline_proto::Opcode::NewNewsCat
     pub async fn new_news_cat(&self, path: &HlPath, name: &str) -> Result<()> {
         let mut fields: Vec<_> = self.news_path_field(path)?.into_iter().collect();
-        fields.push(Field::string(FieldId::NewsCatName, name));
+        fields.push(Field::string(FieldId::NewsCatName, name.to_owned()));
         self.request(Opcode::NewNewsCat, fields).await?;
         Ok(())
     }

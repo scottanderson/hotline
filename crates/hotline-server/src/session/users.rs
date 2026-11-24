@@ -74,7 +74,7 @@ impl Session {
 
         vec![tx.reply(vec![
             Field::string(FieldId::Data, text),
-            Field::string(FieldId::UserName, target.name),
+            Field::string(FieldId::UserName, target.name.into_string()),
         ])]
     }
 
@@ -206,16 +206,16 @@ impl Session {
         if !target.refuses_pm && !message.is_empty() {
             let mut fields = vec![
                 Field::u16(FieldId::UserID, self.user_id),
-                Field::string(FieldId::UserName, self.name.clone()),
+                Field::string(FieldId::UserName, self.name.to_string()),
                 Field::u16(FieldId::Options, options),
-                Field::string(FieldId::Data, message),
+                Field::string(FieldId::Data, message.to_owned()),
             ];
             if let Some(quote) = tx
                 .string(FieldId::QuotingMsg)
                 .filter(|quote| !quote.is_empty())
             {
                 let quote = self.cut_text(limits.message, &quote);
-                fields.push(Field::string(FieldId::QuotingMsg, quote));
+                fields.push(Field::string(FieldId::QuotingMsg, quote.to_owned()));
             }
             state
                 .send_to(target_id, Transaction::push(Opcode::ServerMsg, fields))
@@ -260,9 +260,9 @@ impl Session {
             Opcode::ServerMsg,
             vec![
                 Field::u16(FieldId::UserID, target_id),
-                Field::string(FieldId::UserName, target.name.clone()),
+                Field::string(FieldId::UserName, target.name.to_string()),
                 Field::u16(FieldId::Options, option.into()),
-                Field::string(FieldId::Data, text),
+                Field::string(FieldId::Data, text.into_string()),
             ],
         ))
     }
@@ -300,8 +300,8 @@ impl Session {
                     Opcode::UserBroadcast,
                     vec![
                         Field::u16(FieldId::UserID, self.user_id),
-                        Field::string(FieldId::Data, message),
-                        Field::string(FieldId::UserName, self.name.clone()),
+                        Field::string(FieldId::Data, message.to_owned()),
+                        Field::string(FieldId::UserName, self.name.to_string()),
                     ],
                 ),
             )

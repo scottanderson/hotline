@@ -26,7 +26,7 @@ pub struct FileInfo {
 impl HotlineClient {
     /// The file or folder `name` in the folder at `path` and its path field.
     pub(crate) fn name_fields(&self, path: &HlPath, name: &str) -> Result<Vec<Field>> {
-        let mut fields = vec![Field::string(FieldId::FileName, name)];
+        let mut fields = vec![Field::string(FieldId::FileName, name.to_owned())];
         fields.extend(self.file_path_field(path)?);
         Ok(fields)
     }
@@ -84,11 +84,11 @@ impl HotlineClient {
     ) -> Result<()> {
         let mut fields = self.name_fields(path, name)?;
         if !new_name.is_empty() {
-            fields.push(Field::string(FieldId::FileNewName, new_name));
+            fields.push(Field::string(FieldId::FileNewName, new_name.to_owned()));
         }
         match comment {
             Some("") => fields.push(Field::bytes(FieldId::FileComment, vec![0])),
-            Some(comment) => fields.push(Field::string(FieldId::FileComment, comment)),
+            Some(comment) => fields.push(Field::string(FieldId::FileComment, comment.to_owned())),
             None => {}
         }
         self.request(Opcode::SetFileInfo, fields).await?;

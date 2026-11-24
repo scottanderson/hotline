@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::numbers::encode;
 use crate::text_encoding::{self, Encoding};
 
@@ -11,9 +13,9 @@ pub enum FieldValue {
     /// Text, held as UTF-8, written on the wire as whatever encoding the
     /// caller passes to [`Field::encode`](super::Field::encode) (see
     /// [`Field::as_string`](super::Field::as_string)).
-    Text(String),
+    Text(Cow<'static, str>),
     /// XOR-0xFF obfuscated text, used for `LOGIN`/`PASSWORD` on the wire.
-    ObfuscatedText(String),
+    ObfuscatedText(Cow<'static, str>),
     /// A 16-bit field (`UID`, `ICON`, length prefixes, ...).
     U16(u16),
     /// A 32-bit field (file/transfer sizes, chat/thread IDs, ...).

@@ -119,7 +119,7 @@ impl Session {
             return vec![tx.reply_error(format!("No account with login “{sent}”."))];
         };
         vec![tx.reply(vec![
-            Field::string(FieldId::UserName, account.name),
+            Field::string(FieldId::UserName, account.name.into_string()),
             Field::obfuscated_string(FieldId::UserLogin, login),
             Self::redacted_password_field(&account.password),
             Field::u64(FieldId::UserAccess, account.access.bits()),
@@ -227,8 +227,8 @@ impl Session {
             .filter_map(|(login, account)| {
                 FieldList::encode(
                     &[
-                        Field::string(FieldId::UserName, account.name),
-                        Field::obfuscated_string(FieldId::UserLogin, login),
+                        Field::string(FieldId::UserName, account.name.into_string()),
+                        Field::obfuscated_string(FieldId::UserLogin, login.into_string()),
                         Self::redacted_password_field(&account.password),
                         Field::u64(FieldId::UserAccess, account.access.bits()),
                     ],
@@ -953,7 +953,7 @@ mod tests {
             request(
                 Opcode::GetUser,
                 1,
-                vec![Field::string(FieldId::UserLogin, login)],
+                vec![Field::string(FieldId::UserLogin, login.to_owned())],
             )
         };
 
@@ -1238,13 +1238,19 @@ mod tests {
         let encoding = text_encoding::DEFAULT;
         let mut fields = Vec::new();
         if let Some(old_login) = old_login {
-            fields.push(Field::obfuscated_string(FieldId::Data, old_login));
+            fields.push(Field::obfuscated_string(
+                FieldId::Data,
+                old_login.to_owned(),
+            ));
         }
         if !name.is_empty() {
-            fields.push(Field::string(FieldId::UserName, name));
+            fields.push(Field::string(FieldId::UserName, name.to_owned()));
         }
         if !login.is_empty() {
-            fields.push(Field::obfuscated_string(FieldId::UserLogin, login));
+            fields.push(Field::obfuscated_string(
+                FieldId::UserLogin,
+                login.to_owned(),
+            ));
         }
         fields.push(password);
         fields.push(Field::u64(FieldId::UserAccess, access.bits()));
@@ -1547,7 +1553,12 @@ mod tests {
     async fn account_changes_are_recorded_after_they_succeed() {
         let session = test_session("Admin", Access::all());
         let (state, log) = state_recording_activity(Default::default());
-        let login = |login: &str| vec![Field::obfuscated_string(FieldId::UserLogin, login)];
+        let login = |login: &str| {
+            vec![Field::obfuscated_string(
+                FieldId::UserLogin,
+                login.to_owned(),
+            )]
+        };
 
         let create = request(Opcode::NewUser, 1, login("bob"));
         session.on_new_user(&create, &state).await;

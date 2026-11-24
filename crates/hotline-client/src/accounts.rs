@@ -24,7 +24,7 @@ impl Password {
         match self {
             Self::Empty => Field::string(FieldId::UserPassword, ""),
             Self::Unchanged => Field::bytes(FieldId::UserPassword, [0]),
-            Self::New(password) => Field::obfuscated_string(FieldId::UserPassword, &**password),
+            Self::New(text) => Field::obfuscated_string(FieldId::UserPassword, text.to_string()),
         }
     }
 }
@@ -74,8 +74,8 @@ impl UserAccount {
     /// The name, login, password, and access fields.
     fn fields(&self) -> [Field; 4] {
         [
-            Field::string(FieldId::UserName, &*self.name),
-            Field::obfuscated_string(FieldId::UserLogin, &*self.login),
+            Field::string(FieldId::UserName, self.name.to_string()),
+            Field::obfuscated_string(FieldId::UserLogin, self.login.to_string()),
             self.password.field(),
             Field::u64(FieldId::UserAccess, self.access.bits()),
         ]
@@ -104,10 +104,10 @@ impl AccountChange {
         match self {
             Self::Save { old_login, account } => old_login
                 .iter()
-                .map(|old| Field::obfuscated_string(FieldId::Data, &**old))
+                .map(|old| Field::obfuscated_string(FieldId::Data, old.to_string()))
                 .chain(account.fields())
                 .collect(),
-            Self::Delete(login) => vec![Field::obfuscated_string(FieldId::Data, &**login)],
+            Self::Delete(login) => vec![Field::obfuscated_string(FieldId::Data, login.to_string())],
         }
     }
 }
@@ -152,7 +152,10 @@ impl HotlineClient {
     ///
     /// [`myTran_DeleteUser`]: hotline_proto::Opcode::DeleteUser
     pub async fn delete_user(&self, login: &str) -> Result<()> {
-        let fields = vec![Field::obfuscated_string(FieldId::UserLogin, login)];
+        let fields = vec![Field::obfuscated_string(
+            FieldId::UserLogin,
+            login.to_owned(),
+        )];
         self.request(Opcode::DeleteUser, fields).await?;
         Ok(())
     }
@@ -161,7 +164,7 @@ impl HotlineClient {
     ///
     /// [`myTran_GetUser`]: hotline_proto::Opcode::GetUser
     pub async fn get_user(&self, login: &str) -> Result<UserAccount> {
-        let fields = vec![Field::string(FieldId::UserLogin, login)];
+        let fields = vec![Field::string(FieldId::UserLogin, login.to_owned())];
         let reply = self.request(Opcode::GetUser, fields).await?;
         Ok(UserAccount::from_fields(&reply.fields))
     }

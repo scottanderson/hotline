@@ -10,6 +10,8 @@
 //! wire and the connection's encoding, until a reader such as
 //! [`Field::as_string`] interprets them.
 
+use std::borrow::Cow;
+
 use crate::error::{ProtoError, Result};
 use crate::numbers::decode as decode_number;
 use crate::text_encoding::{self, Encoding};
@@ -104,15 +106,15 @@ impl Field {
     }
 
     /// Build a string field, written to the wire in the encoding that
-    /// [`Field::encode`] gets.
-    pub fn string(id: FieldId, value: impl Into<String>) -> Self {
+    /// [`Field::encode`] gets. A `&'static str` is kept without a copy.
+    pub fn string(id: FieldId, value: impl Into<Cow<'static, str>>) -> Self {
         Self::new(id, FieldValue::Text(value.into()))
     }
 
     /// Build a `LOGIN`/`PASSWORD`-style field: text obfuscated with
     /// Hotline's symmetric XOR-0xFF transform (`hl_code` in the
     /// reference C implementation).
-    pub fn obfuscated_string(id: FieldId, value: impl Into<String>) -> Self {
+    pub fn obfuscated_string(id: FieldId, value: impl Into<Cow<'static, str>>) -> Self {
         Self::new(id, FieldValue::ObfuscatedText(value.into()))
     }
 

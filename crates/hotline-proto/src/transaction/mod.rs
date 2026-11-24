@@ -28,6 +28,7 @@
 //! field name, as a raw identifier since `type` is a Rust keyword) rather than
 //! kept as a raw `u32`.
 
+use std::borrow::Cow;
 use std::{debug_assert_matches, fmt};
 
 mod header;
@@ -181,7 +182,7 @@ impl Transaction<Received> {
     /// one of these.
     ///
     /// [`myField_ErrorText`]: crate::FieldId::ErrorText
-    pub fn reply_error(&self, message: impl Into<String>) -> Transaction {
+    pub fn reply_error(&self, message: impl Into<Cow<'static, str>>) -> Transaction {
         Transaction::assemble(
             TransactionType::Reply,
             self.trans,

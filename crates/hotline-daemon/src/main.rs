@@ -262,7 +262,7 @@ async fn quit_politely(state: &SharedState) -> anyhow::Result<()> {
         return Ok(());
     };
     state.start_quit();
-    state.announce_quit(&message).await;
+    state.announce_quit(message).await;
     tracing::info!(
         connections = state.connection_count().await,
         "waiting for the users to leave"

@@ -182,7 +182,7 @@ impl Session {
                         vec![
                             Field::u32(FieldId::ChatID, chat_id),
                             Field::u16(FieldId::UserID, self.user_id),
-                            Field::string(FieldId::UserName, self.name.clone()),
+                            Field::string(FieldId::UserName, self.name.to_string()),
                         ],
                     ),
                 )
@@ -193,7 +193,7 @@ impl Session {
             Field::u16(FieldId::UserID, self.user_id),
             Field::u16(FieldId::UserIconID, icon),
             Field::u16(FieldId::UserFlags, self.user_flags().bits()),
-            Field::string(FieldId::UserName, self.name.clone()),
+            Field::string(FieldId::UserName, self.name.to_string()),
         ]));
         replies
     }
@@ -258,7 +258,7 @@ impl Session {
                             vec![
                                 Field::u32(FieldId::ChatID, chat_id),
                                 Field::u16(FieldId::UserID, self.user_id),
-                                Field::string(FieldId::UserName, self.name.clone()),
+                                Field::string(FieldId::UserName, self.name.to_string()),
                             ],
                         ),
                     )
@@ -304,14 +304,17 @@ impl Session {
                 Field::u16(FieldId::UserID, self.user_id),
                 Field::u16(FieldId::UserIconID, icon),
                 Field::u16(FieldId::UserFlags, self.user_flags().bits()),
-                Field::string(FieldId::UserName, self.name.clone()),
+                Field::string(FieldId::UserName, self.name.to_string()),
             ],
         );
 
         let room = state.chat_room(chat_id).await.unwrap_or_default();
         let mut fields = Vec::new();
         if !room.subject.is_empty() {
-            fields.push(Field::string(FieldId::ChatSubject, room.subject));
+            fields.push(Field::string(
+                FieldId::ChatSubject,
+                room.subject.into_string(),
+            ));
         }
         for member_id in room.members {
             if new && member_id != self.user_id {
