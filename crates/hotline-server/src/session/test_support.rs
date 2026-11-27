@@ -51,7 +51,7 @@ pub(super) fn error_text(reply: &Transaction) -> String {
         .unwrap()
 }
 
-/// Shared state with openline's flood limits.
+/// Shared state with the in-memory flood limits.
 pub(super) fn state_with_flood() -> Arc<SharedState> {
     SharedState::new(Providers {
         flood: Arc::new(crate::flood::InMemoryFloodPolicy::default()),

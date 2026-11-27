@@ -79,19 +79,20 @@ impl TransferProgress {
         })
     }
 
-    /// openline's `%#-21.21s %#-4.4s %#s` transfer line.
+    /// A transfer line: the name column, the percent in 4 columns, and the
+    /// size.
     pub fn line(&self) -> String {
         let name = name_column(&self.name);
         let percent = format!("{}%", self.percent());
         format!("{name} {percent:<4} {}\r", size_text(self.size))
     }
 
-    /// openline's `%#-21.21s (File)` or `(Folder)` waiting line.
+    /// A waiting line: the name column, then `(File)` or `(Folder)`.
     pub fn waiting_line(&self) -> String {
         format!("{} ({})\r", name_column(&self.name), self.section.noun())
     }
 
-    /// openline's `done / (size / 100)`, at most 100, or 0 under 100 bytes.
+    /// `done / (size / 100)`, at most 100, or 0 under 100 bytes.
     fn percent(&self) -> u64 {
         self.done
             .checked_div(self.size / 100)
@@ -105,7 +106,7 @@ fn name_column(name: &str) -> String {
     format!("{name:<21}")
 }
 
-/// openline's `UText::SizeToText` with `kDontShowBytes`.
+/// `size` as `0K`, `<1K`, whole kilobytes, or megabytes with a tenth.
 fn size_text(size: u64) -> String {
     const K: u64 = 1 << 10;
     const M: u64 = 1 << 20;
@@ -130,7 +131,7 @@ pub struct TransferReport {
 }
 
 impl TransferReport {
-    /// openline's transfer sections of the client info text.
+    /// The transfer sections of the client info text.
     pub fn text(&self) -> String {
         let section = |section| {
             let lines = self.active.iter().filter(|p| p.section == section);

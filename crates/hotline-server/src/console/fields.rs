@@ -1,4 +1,4 @@
-//! The `field=value` grammar of `/access` and `/0wn`, parsed like mhxd.
+//! The `field=value` grammar of `/access` and `/0wn`.
 
 use hotline_proto::consts::Access;
 
@@ -15,7 +15,7 @@ fn join_flag_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
     }
 }
 
-/// `name` cut to the 31 bytes mhxd's name buffer holds.
+/// `name` cut to 31 bytes.
 fn truncate_name(name: &str) -> &str {
     name.get(..name.floor_char_boundary(31)).unwrap_or(name)
 }
@@ -38,8 +38,8 @@ pub(crate) fn format_access_extra(value: AccessExtra) -> String {
     )
 }
 
-/// Applies `/access` fields to `access` and `access_extra`, like mhxd's
-/// `cmd_access`. `Err` names the first unknown key.
+/// Applies `/access` fields to `access` and `access_extra`. `Err` names
+/// the first unknown key.
 pub(crate) fn parse_access_fields(
     fields: &str,
     access: &mut Access,
@@ -59,7 +59,7 @@ pub(crate) fn parse_access_fields(
         if let Some(flag) = flag {
             access.set(flag, value);
         }
-        // mhxd steps past the value's first character, then the word.
+        // Step past the value's first character, then the word.
         let mut after = after.chars();
         after.next();
         rest = after
@@ -70,8 +70,8 @@ pub(crate) fn parse_access_fields(
     Ok(())
 }
 
-/// The icon and name from `/0wn` fields, like mhxd's `cmd_0wn`. A key
-/// matches by prefix, and `name=` takes the rest of the line.
+/// The icon and name from `/0wn` fields. A key matches by prefix, and
+/// `name=` takes the rest of the line.
 pub(crate) fn parse_0wn_fields(fields: &str) -> (Option<u16>, Option<String>) {
     let mut icon = None;
     let mut name = None;

@@ -46,9 +46,8 @@ pub type BoxedReader = Box<dyn AsyncRead + Send + Unpin>;
 /// A boxed, already-open async byte sink. See [`BoxedReader`].
 pub type BoxedWriter = Box<dyn AsyncWrite + Send + Unpin>;
 
-/// Suffix an upload's on-disk name carries until it's finished. Matches
-/// openline's non-HFS `HTft`/`HTLC` "still uploading" marker convention,
-/// via [`type_and_creator_for_name`].
+/// Suffix an upload's on-disk name carries until it's finished.
+/// [`type_and_creator_for_name`] gives it `HTft`/`HTLC`.
 pub const PARTIAL_SUFFIX: &str = ".hpf";
 
 pub use hotline_proto::types::{PARTIAL_CREATOR, PARTIAL_TYPE};
@@ -81,9 +80,7 @@ pub(crate) const fn creator_name(creator: [u8; 4]) -> Option<&'static str> {
     }
 }
 
-/// `file_type`/`creator` inferred from a file's extension, the same
-/// fallback openline's non-HFS (Windows) build uses in place of real Mac
-/// type/creator metadata (`_FSWinExtToMacTypeCode` in `UFileSys(W).cp`).
+/// `file_type`/`creator` inferred from a file's extension.
 pub fn type_and_creator_for_name(name: &str) -> ([u8; 4], [u8; 4]) {
     let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext);
     match ext.to_ascii_uppercase().as_str() {

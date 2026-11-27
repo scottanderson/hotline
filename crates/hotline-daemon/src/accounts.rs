@@ -43,7 +43,7 @@ const NEWS_FILE: &str = "news.json";
 /// What a delete does with the folder of an account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountDeletion {
-    /// Move the folder into this trash folder, as openline does.
+    /// Move the folder into this trash folder.
     Trash(PathBuf),
     /// Remove the folder with all that it holds.
     Remove,
@@ -123,7 +123,7 @@ impl FileAccountProvider {
     }
 
     /// The folder of `login`. `None` for a login that can't be a safe
-    /// folder name. mhxd also rejects a `/`.
+    /// folder name.
     fn folder_for(&self, login: &str) -> Option<PathBuf> {
         is_safe_login(login).then(|| self.dir.join(login))
     }
@@ -377,7 +377,7 @@ async fn create_private_dir(dir: &Path) -> std::io::Result<()> {
 }
 
 /// `name` in `dir`, or else `name` with the first number from 1 that
-/// gives a name not in `dir`, as openline names an item in the trash.
+/// gives a name not in `dir`.
 async fn free_path(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
     let mut path = dir.join(name);
     for number in 1u32.. {

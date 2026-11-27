@@ -47,25 +47,24 @@ impl Conflict {
     }
 }
 
-/// `bytes` as openline's `UText::SizeToText` shows them: `0K`, the bytes
-/// under 1K, whole kilobytes, or megabytes with a tenth.
+/// `bytes` as a transfer shows them: `0K`, the bytes under 1K, whole
+/// kilobytes, or megabytes with a tenth.
 pub fn size_text(bytes: u64) -> String {
     size_to_text(bytes, false, false)
 }
 
-/// `bytes` with `<1K` for 1 to 1023 bytes, as openline's file list shows
-/// a size (`kDontShowBytes`).
+/// `bytes` with `<1K` for 1 to 1023 bytes, as the file list shows a
+/// size.
 pub fn file_size_text(bytes: u64) -> String {
     size_to_text(bytes, true, false)
 }
 
-/// A rate of `bytes` a second, with a tenth of a kilobyte under 10K
-/// (`kSmallKilobyteFrac`).
+/// A rate of `bytes` a second, with a tenth of a kilobyte under 10K.
 pub fn rate_text(bytes: u64) -> String {
     size_to_text(bytes, false, true)
 }
 
-/// openline's `UText::SizeToText`. Each fraction drops its remainder.
+/// The size text of `bytes`. Each fraction drops its remainder.
 fn size_to_text(bytes: u64, dont_show_bytes: bool, small_kilobyte_frac: bool) -> String {
     const K: u64 = 1 << 10;
     const M: u64 = 1 << 20;

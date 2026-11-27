@@ -112,8 +112,7 @@ impl Field {
     }
 
     /// Build a `LOGIN`/`PASSWORD`-style field: text obfuscated with
-    /// Hotline's symmetric XOR-0xFF transform (`hl_code` in the
-    /// reference C implementation).
+    /// Hotline's symmetric XOR-0xFF transform.
     pub fn obfuscated_string(id: FieldId, value: impl Into<Cow<'static, str>>) -> Self {
         Self::new(id, FieldValue::ObfuscatedText(value.into()))
     }

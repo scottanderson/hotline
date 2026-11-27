@@ -88,8 +88,7 @@ impl Session {
     }
 
     /// Disconnect every session currently logged in under `login`, with
-    /// openline's own message text for an account deleted out from
-    /// under it.
+    /// the message text for a deleted account.
     pub(super) async fn disconnect_account_sessions(login: &str, state: &SharedState) {
         for target in state.user_ids_for_login(login).await {
             state
@@ -888,8 +887,7 @@ mod tests {
             .await
             .unwrap();
 
-        // No PASSWORD field at all, not the "unchanged" sentinel: this
-        // clears the password, matching openline's own behavior.
+        // A request with no PASSWORD field at all clears the password.
         let modify = request(
             Opcode::SetUser,
             1,

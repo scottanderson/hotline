@@ -15,12 +15,10 @@ pub use error::CodecError;
 use partial::Partial;
 
 /// Cap on a transaction's declared total size (`len`) and on each part's
-/// declared size (`len2`), on a server's connection. Matches openline's
-/// own server override of `_gTransactMaxReceiveSize` (`HotlineServ.cp`).
+/// declared size (`len2`), on a server's connection.
 const SERVER_MAX_TRANSACTION_LEN: u32 = 512 * 1024;
 
-/// The same cap on a client's connection. Matches openline's
-/// transport default `_gTransactMaxReceiveSize` (`UTransact.cp`).
+/// The same cap on a client's connection.
 const CLIENT_MAX_TRANSACTION_LEN: u32 = 2 * 1024 * 1024;
 
 /// Cap on the bytes one connection may hold in reassembly. A decoder-side

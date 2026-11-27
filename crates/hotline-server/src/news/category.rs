@@ -25,8 +25,7 @@ pub struct NewsCategory {
     pub guid: Uuid,
     /// Incremented by one each time an article is added, and wraps.
     pub add_sn: u32,
-    /// Always `1`: openline's own `delSN` never actually updates past its
-    /// initial value once a category is created.
+    /// Always `1`.
     pub del_sn: u32,
     /// The ID of the next article, or 0 after the category gave out
     /// `u32::MAX` articles.

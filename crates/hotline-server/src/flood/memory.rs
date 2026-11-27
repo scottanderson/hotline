@@ -123,7 +123,7 @@ struct ConnectionRun {
     count: u32,
 }
 
-/// A [`FloodPolicy`] with openline's fixed limits, kept in memory only.
+/// A [`FloodPolicy`] with fixed limits, kept in memory only.
 #[derive(Debug, Default)]
 pub struct InMemoryFloodPolicy {
     users: Mutex<HashMap<u16, UserFlood>>,

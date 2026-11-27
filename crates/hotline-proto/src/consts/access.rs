@@ -100,8 +100,7 @@ bitflags::bitflags! {
     }
 }
 
-/// Each flag's mhxd `/access` console config key. [`Access::BROADCAST`]
-/// is absent: mhxd's `set_access_bit` has no case for it.
+/// Each flag's `/access` console key. [`Access::BROADCAST`] has none.
 const CONSOLE_NAMES: &[(&str, Access)] = &[
     ("delete_files", Access::DELETE_FILE),
     ("upload_files", Access::UPLOAD_FILE),

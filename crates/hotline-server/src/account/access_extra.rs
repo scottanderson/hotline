@@ -129,7 +129,7 @@ impl AccessExtra {
 }
 
 impl Default for AccessExtra {
-    /// Matches mhxd's own defaults for a fresh account.
+    /// The extra privileges of a new account.
     fn default() -> Self {
         Self::CHAT_PRIVATE
             | Self::USER_GETLIST
@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(AccessExtra::from_console_name("nope"), None);
     }
 
-    /// The key stays mhxd's own `msg`.
+    /// The key stays `msg`.
     #[test]
     fn msg_override_keeps_the_msg_key() {
         assert_eq!(

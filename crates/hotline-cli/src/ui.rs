@@ -578,7 +578,7 @@ fn draw_accounts(frame: &mut Frame, area: Rect, session: &ClientSession, view: &
 /// The privileges that make an account an admin: all but `NO_AGREEMENT`.
 const ALL_PRIV: Access = Access::all().difference(Access::NO_AGREEMENT);
 
-/// The color of openline's account icon for `access`, as a circle: black
+/// The color of the account icon for `access`, as a circle: black
 /// for an admin, red for a moderator, green for no privileges, and yellow
 /// for a guest.
 const fn account_circle(access: Access) -> &'static str {

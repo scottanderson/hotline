@@ -4,7 +4,6 @@ use hotline_proto::wire::VecWriter;
 use crate::Result;
 
 /// Message type for a beacon that registers or refreshes a server.
-/// openline's `ProcessRegister` ignores type 2 (remove).
 const TYPE_ADD: u16 = 1;
 
 /// A server's periodic UDP beacon to a tracker.
@@ -49,9 +48,8 @@ mod tests {
     use crate::TrackerError;
     use hotline_proto::text_encoding;
 
-    /// openline's `ProcessRegister` reads
-    /// `type | port | userCount | flags | passID` then three pstrings,
-    /// in that order and with nothing between them.
+    /// A beacon is `type | port | userCount | flags | passID`, then three
+    /// pstrings, in that order and with nothing between them.
     #[test]
     fn server_beacon_encodes_fields_in_order() {
         let beacon = ServerBeacon {

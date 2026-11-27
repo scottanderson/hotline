@@ -35,8 +35,8 @@ impl ChatCommandDispatcher for DefaultChatCommands {
     }
 }
 
-/// mhxd's `nick_to_uid`: the user whose name starts with `nick`'s first
-/// word. An exact match wins over the first prefix match.
+/// The user whose name starts with `nick`'s first word. An exact match
+/// wins over the first prefix match.
 fn nick_to_uid(users: &[UserEntry], nick: &str) -> Option<u16> {
     let word = nick.split(' ').next().unwrap_or_default();
     let mut matches = users.iter().filter(|user| user.name.starts_with(word));
@@ -98,8 +98,7 @@ fn user_table(users: &[UserEntry]) -> String {
     )
 }
 
-/// `/users`: a private message listing connected users, laid out like
-/// mhxd's `cmd_users`.
+/// `/users`: a private message listing connected users.
 async fn cmd_users(
     actor: &ChatCommandActor,
     state: &SharedState,
@@ -277,7 +276,7 @@ mod tests {
         assert_eq!(reply, "You are not allowed to manage other users.");
     }
 
-    /// mhxd's `cmd_users` layout, sent as a private message.
+    /// The `/users` layout, sent as a private message.
     #[tokio::test]
     async fn users_lists_connected_users_like_mhxd() {
         let state = Arc::<SharedState>::default();
@@ -369,7 +368,7 @@ mod tests {
         assert_eq!(reply.unwrap_err(), "unknown argument \"not_a_field\"");
     }
 
-    /// A change replies nothing, like mhxd.
+    /// A change replies nothing.
     #[tokio::test]
     async fn access_change_by_nickname_replies_nothing() {
         let state = Arc::<SharedState>::default();

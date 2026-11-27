@@ -10,6 +10,6 @@ pub enum ConsoleReply {
 }
 
 impl ConsoleReply {
-    /// Sender name on a [`ConsoleReply::Message`], mhxd's own.
+    /// Sender name on a [`ConsoleReply::Message`].
     pub const SENDER: &'static str = "hxd";
 }

@@ -56,7 +56,7 @@ use crate::state::{
 use crate::user_list::UserListProvider;
 
 /// How long an active download or an upload may wait for its `HTXF`
-/// connection, openline's 500 s.
+/// connection.
 const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(500);
 
 /// The bytes an upload must leave free on the disk.
@@ -333,8 +333,8 @@ impl SharedState {
     }
 
     /// Tell each logged-in user that the server quits, with
-    /// [`myTran_DisconnectMsg`] (111). openline's client then shows
-    /// `message` and disconnects.
+    /// [`myTran_DisconnectMsg`] (111). A client then shows `message` and
+    /// disconnects.
     ///
     /// [`myTran_DisconnectMsg`]: hotline_proto::Opcode::DisconnectMsg
     pub async fn announce_quit(&self, message: impl Into<Cow<'static, str>>) {
@@ -454,9 +454,9 @@ impl SharedState {
     }
 
     /// `/access <uid> field=0|1 ...`: applies each field to `target_id`'s
-    /// live privileges, all or nothing, parsed like mhxd's `cmd_access`. A
-    /// field is an [`Access`] or [`AccessExtra`] console key. The target
-    /// must hold [`AccessExtra::ACCESS_VOLATILE`].
+    /// live privileges, all or nothing. A field is an [`Access`] or
+    /// [`AccessExtra`] console key. The target must hold
+    /// [`AccessExtra::ACCESS_VOLATILE`].
     pub async fn apply_access_fields(
         &self,
         target_id: u32,
@@ -482,9 +482,9 @@ impl SharedState {
     }
 
     /// `/0wn <uid> icon=<n> name=<text>`: overwrites `target_id`'s live icon
-    /// and display name, parsed like mhxd's `cmd_0wn`. A key matches by
-    /// prefix, and `name=` takes the rest of the line. The target must hold
-    /// [`AccessExtra::IS_0WN3D`]. `None` if nothing changed.
+    /// and display name. A key matches by prefix, and `name=` takes the
+    /// rest of the line. The target must hold [`AccessExtra::IS_0WN3D`].
+    /// `None` if nothing changed.
     pub async fn apply_0wn_fields(
         &self,
         target_id: u32,
@@ -1213,9 +1213,8 @@ impl SharedState {
         self.push_download_updates(updates).await;
     }
 
-    /// Cancel `user_id`'s download `reference`, queued or running, like
-    /// openline's `KillDownloadByRefNum`. Another user's download is left
-    /// alone.
+    /// Cancel `user_id`'s download `reference`, queued or running. Another
+    /// user's download is left alone.
     pub async fn kill_download(self: &Arc<Self>, reference: TransferRef, user_id: u16) {
         let Some(updates) = self.download_queue.kill(reference, user_id) else {
             return;
@@ -1376,8 +1375,7 @@ impl SharedState {
 
     /// Prepend a new post to the classic news. Returns the formatted entry.
     ///
-    /// Matches openline's `AddToMsgBoard` (`HotlineServ.cp`) byte for byte,
-    /// including its missing space between month and day.
+    /// The date has no space between the month and the day.
     pub async fn post_news(&self, poster: &str, text: &str) -> String {
         use chrono::{Datelike, Timelike};
 
@@ -1958,7 +1956,7 @@ impl SharedState {
         self.flood().reset(user_id).await;
     }
 
-    /// Delete an account. The error names `login`, as openline's does.
+    /// Delete an account. The error names `login`.
     pub async fn delete_account(&self, login: &str) -> Result<(), Cow<'static, str>> {
         let _writes = self.account_writes.lock().await;
         match self.accounts().delete(login).await {
@@ -2316,8 +2314,7 @@ mod tests {
         assert_eq!(state.is_banned(ip).await.unwrap().until, None);
     }
 
-    /// Matches openline's `AddToMsgBoard` header, body, and footer shape,
-    /// with no `<` byte.
+    /// A post has a header, the body, and a footer, with no `<` byte.
     #[tokio::test]
     async fn post_news_matches_openlines_header_and_footer_shape() {
         let state = Arc::<SharedState>::default();
@@ -2835,7 +2832,7 @@ mod tests {
         assert_eq!(result, Err("unknown argument \"broadcast\"".into()));
     }
 
-    /// mhxd matches console keys with `strcmp`.
+    /// A console key matches only in the same case.
     #[tokio::test]
     async fn apply_access_fields_console_key_is_case_sensitive() {
         let state = Arc::<SharedState>::default();
@@ -2848,7 +2845,7 @@ mod tests {
         assert_eq!(result, Err("unknown argument \"DELETE_FILES\"".into()));
     }
 
-    /// mhxd stops at a word with no `=` and still applies what came before.
+    /// A word with no `=` stops the parse, and what came before still applies.
     #[tokio::test]
     async fn apply_access_fields_stops_at_a_word_without_equals() {
         let state = Arc::<SharedState>::default();
@@ -2914,7 +2911,7 @@ mod tests {
         assert_eq!(result, Err("User cannot be 0wned".into()));
     }
 
-    /// mhxd's `user_0wn` ignores a key it doesn't know.
+    /// An unknown key is ignored.
     #[tokio::test]
     async fn apply_0wn_fields_ignores_an_unknown_key() {
         let state = Arc::<SharedState>::default();
@@ -2927,7 +2924,7 @@ mod tests {
         assert_eq!(result, Ok(None));
     }
 
-    /// mhxd reads the icon with `strtoul`, so a non-number is `0`.
+    /// The icon reads like `strtoul`, so a non-number is `0`.
     #[tokio::test]
     async fn apply_0wn_fields_reads_the_icon_like_strtoul() {
         let state = Arc::<SharedState>::default();

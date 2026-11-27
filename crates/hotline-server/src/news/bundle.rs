@@ -182,12 +182,7 @@ impl NewsBundle {
         mime_type: Box<str>,
         data: Box<[u8]>,
     ) -> Result<u32, PostError> {
-        // Each is wire-encoded with a 1-byte length prefix in the
-        // article listing (`myField_NewsArtListData` (321)). Openline
-        // actually caps title/flavor at a much smaller fixed buffer and
-        // truncates silently rather than rejecting; this server accepts
-        // up to the wire format's real 255-byte limit and errors past
-        // it, a deliberate, more permissive divergence.
+        // The article list's 1-byte lengths cap each at 255 bytes; openline cuts them shorter.
         if title.len() > 255 || poster.len() > 255 || mime_type.len() > 255 {
             Err("post data too long")?;
         }

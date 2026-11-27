@@ -1041,7 +1041,7 @@ mod tests {
         assert!(reply.field(FieldId::WaitingCount).is_none());
     }
 
-    /// openline's `ProcessTran_KillDownload` always replies with no error.
+    /// A kill always replies with no error.
     #[tokio::test]
     async fn kill_download_cancels_this_sessions_download() {
         let files = crate::file::InMemoryFileProvider::default();

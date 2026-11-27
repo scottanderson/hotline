@@ -47,10 +47,8 @@ impl Session {
         vec![tx.reply(fields)]
     }
 
-    /// [`myTran_GetClientInfoText`] (303): renders as a single scrollable text
-    /// block in the client's "Get Info" window, so its shape follows openline's
-    /// own labels and section order rather than this server's own report
-    /// design.
+    /// [`myTran_GetClientInfoText`] (303): one text block, which the client
+    /// shows in its "Get Info" window.
     ///
     /// [`myTran_GetClientInfoText`]: hotline_proto::Opcode::GetClientInfoText
     pub(super) async fn on_get_client_info_text(
@@ -229,8 +227,7 @@ impl Session {
     /// private messages/chat invites or has an automatic response
     /// configured, or `None` when delivery should proceed normally. Gated
     /// on this session's own PM-refusal setting for both message and
-    /// chat-invite bounces, matching openline's own reuse of that
-    /// one flag.
+    /// chat-invite bounces.
     pub(super) fn refusal_bounce(
         &self,
         target_id: u16,

@@ -73,8 +73,7 @@ pub struct ServerList {
 /// Decode a whole tracker reply: the `HTRK` header, then one or more
 /// chunks of server entries.
 ///
-/// A tracker splits its list into chunks of at most 8192 bytes
-/// (openline's `SendServerList`).
+/// A tracker splits its list into chunks of at most 8192 bytes.
 pub fn decode_server_list(buf: &[u8], encoding: &'static Encoding) -> Result<ServerList> {
     decode_reply_header(buf)?;
 

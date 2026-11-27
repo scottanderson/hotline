@@ -1,4 +1,4 @@
-//! An [`ActivityLog`] that appends to openline's tab-separated log files.
+//! An [`ActivityLog`] that appends to tab-separated log files.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};

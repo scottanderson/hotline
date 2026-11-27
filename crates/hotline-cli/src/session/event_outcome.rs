@@ -12,7 +12,7 @@ pub enum EventOutcome {
     Disconnected(Disconnect),
 }
 
-/// Why the connection ended, in the words of openline's alerts.
+/// Why the connection ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disconnect {
     /// [`myTran_DisconnectMsg`] (111) with the server's text.

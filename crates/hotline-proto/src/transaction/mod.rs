@@ -24,9 +24,7 @@
 //! producing the real `Transaction`.
 //!
 //! The wire's `type` value is resolved into a [`TransactionType`] once,
-//! at decode time, and stored under `r#type` (mhxd's `struct hl_hdr`
-//! field name, as a raw identifier since `type` is a Rust keyword) rather than
-//! kept as a raw `u32`.
+//! at decode time, and stored under `r#type`.
 
 use std::borrow::Cow;
 use std::{debug_assert_matches, fmt};

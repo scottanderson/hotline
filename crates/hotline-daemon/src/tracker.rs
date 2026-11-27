@@ -10,7 +10,7 @@ use hotline_server::SharedState;
 use hotline_tracker::{ServerBeacon, UDP_PORT, with_default_port};
 use tokio::net::UdpSocket;
 
-/// How often to re-register, like openline's `mTrackerTimer`.
+/// How often to re-register.
 pub const BEACON_INTERVAL: Duration = Duration::from_secs(300);
 
 /// One tracker to register with, and the shared secret it expects.
@@ -193,8 +193,8 @@ mod tests {
         assert!(error.to_string().contains("tracker.example"), "{error}");
     }
 
-    /// mhxd's own `password@host` form; the split is from the right, so
-    /// an `@` inside the password still parses.
+    /// A `password@host` target splits at the last `@`, so an `@` inside
+    /// the password still parses.
     #[test]
     fn a_password_is_split_off_the_front() {
         let target = TrackerTarget::parse("s3cr3t@tracker.example:5499");
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    /// openline replaces a saved `0` with a random ID.
+    /// A saved `0` gets a random ID.
     #[tokio::test]
     async fn a_saved_zero_tracker_id_is_replaced() {
         let dir = tempfile::tempdir().unwrap();

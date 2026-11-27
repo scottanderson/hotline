@@ -44,7 +44,7 @@ impl FlatFileInfo {
     /// Byte length of the fields before the name: platform through name size.
     pub const FIXED_LEN: usize = 72;
 
-    /// The most bytes [`Self::decode`] reads, the same as openline.
+    /// The most bytes [`Self::decode`] reads.
     pub const MAX_LEN: usize = Self::FIXED_LEN + 520;
 
     /// The longest name [`Self::encode`] writes, in bytes.

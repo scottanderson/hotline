@@ -14,8 +14,8 @@ use tokio::sync::Mutex;
 
 /// Flat news as a plain text file.
 ///
-/// Entries keep the wire's bare `\r` separators, like openline's
-/// `MessageBoard.txt`. The text is UTF-8, not the wire encoding.
+/// Entries keep the wire's bare `\r` separators. The text is UTF-8, not
+/// the wire encoding.
 pub struct FileFlatNewsProvider {
     path: PathBuf,
     cache: RwLock<Arc<str>>,

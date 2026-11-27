@@ -1,5 +1,5 @@
-//! Download admission past `max_downloads`/`max_downloads_per_client`,
-//! like openline's `mDownloadWaitingList`. Uploads are not capped.
+//! Download admission past `max_downloads`/`max_downloads_per_client`.
+//! Uploads are not capped.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -131,7 +131,7 @@ impl DownloadQueue {
     }
 
     /// Drop `reference`, active or queued, and promote waiting downloads
-    /// that now fit, like openline's `ProcessDownloadsWaiting`.
+    /// that now fit.
     pub(crate) fn release(&self, reference: TransferRef) -> Vec<QueueUpdate> {
         let mut inner = lock(&self.inner);
         inner.active.remove(&reference);
@@ -422,7 +422,7 @@ mod tests {
         assert!(queue.cancel_token(TransferRef(2)).is_none());
     }
 
-    /// openline's `KillDownloadByRefNum` leaves another client's download alone.
+    /// A kill leaves another client's download alone.
     #[test]
     fn another_users_download_is_not_killed() {
         let queue = with_limits(1, 10);

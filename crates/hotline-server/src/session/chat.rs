@@ -757,7 +757,7 @@ mod tests {
             .on_chat_send(&request, &state, &console_config())
             .await;
 
-        // `/users` answers with a private message from `hxd`, like mhxd.
+        // `/users` answers with a private message from `hxd`.
         assert!(rx.try_recv().is_err());
         assert_eq!(reply.len(), 1);
         assert_eq!(reply[0].r#type(), TransactionType::Push(Opcode::ServerMsg));

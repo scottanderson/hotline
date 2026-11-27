@@ -13,22 +13,22 @@ pub struct ActivityEntry {
     pub activity: Activity,
 }
 
-/// What a session did, one kind for each of openline's logs.
+/// What a session did, one kind for each log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Activity {
-    /// Completed login, openline's `LogConnect`.
+    /// Completed login.
     Connect,
-    /// Started a file or folder download, openline's `LogDownload`.
+    /// Started a file or folder download.
     Download {
         /// The file or folder name.
         name: Box<str>,
     },
-    /// Started a file or folder upload, openline's `LogUpload`.
+    /// Started a file or folder upload.
     Upload {
         /// The file or folder name.
         name: Box<str>,
     },
-    /// Changed an account, openline's `LogAccountChange`.
+    /// Changed an account.
     AccountChange {
         /// The kind of change.
         action: AccountAction,
@@ -54,7 +54,7 @@ pub enum AccountAction {
 }
 
 impl AccountAction {
-    /// openline's action text.
+    /// The action text in the log.
     pub const fn label(&self) -> &'static str {
         match self {
             Self::Create => "Create",

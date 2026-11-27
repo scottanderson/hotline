@@ -3,20 +3,19 @@ use std::time::Duration;
 
 use hotline_proto::text_encoding::{self, Encoding};
 
-/// `max_downloads`'s default, openline's `mOptions.nMaxDownloads`.
+/// `max_downloads`'s default.
 pub const DEFAULT_MAX_DOWNLOADS: usize = 100;
 
-/// `max_downloads_per_client`'s default, openline's `mOptions.nMaxDownloadsClient`.
+/// `max_downloads_per_client`'s default.
 pub const DEFAULT_MAX_DOWNLOADS_PER_CLIENT: usize = 10;
 
 /// `max_connections`'s default.
 pub const DEFAULT_MAX_CONNECTIONS: usize = 500;
 
-/// `max_connections_per_address`'s default, openline's
-/// `mOptions.nMaxConnectionsIP`.
+/// `max_connections_per_address`'s default.
 pub const DEFAULT_MAX_CONNECTIONS_PER_ADDRESS: usize = 5;
 
-/// `login_timeout`'s default, openline's 60 seconds.
+/// `login_timeout`'s default.
 pub const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Server configuration.

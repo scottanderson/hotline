@@ -25,7 +25,7 @@ use crate::state::{
 /// Time a new `HTXF` connection may take to send its header.
 const HEADER_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Time an upload may go without receiving a byte, openline's 120 s.
+/// Time an upload may go without receiving a byte.
 const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Accept `HTXF` data connections forever, spawning one task per
