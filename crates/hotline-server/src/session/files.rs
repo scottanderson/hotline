@@ -3231,6 +3231,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_file_info_rename_of_a_drop_box_is_denied_without_view_drop_boxes() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES);
+        let session = test_session("Alice", access);
+
+        let setinfo = request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "Drop Box"),
+                Field::string(FieldId::FileNewName, "Box"),
+            ],
+        );
+        let [reply] = session
+            .on_set_file_info(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            error_text(&reply),
+            "You are not allowed to rename drop boxes."
+        );
+    }
+
+    #[tokio::test]
+    async fn set_file_info_rename_of_a_drop_box_checks_the_rename_privilege_first() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::new(["Drop Box"]), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let mut access = Access::all();
+        access.remove(Access::VIEW_DROP_BOXES | Access::RENAME_FOLDER);
+        let session = test_session("Alice", access);
+
+        let setinfo = request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "Drop Box"),
+                Field::string(FieldId::FileNewName, "Box"),
+            ],
+        );
+        let [reply] = session
+            .on_set_file_info(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        assert_eq!(error_text(&reply), "You are not allowed to rename folders.");
+    }
+
+    #[tokio::test]
+    async fn set_file_info_rename_to_a_lnk_name_is_denied_only_on_windows() {
+        let files = crate::file::InMemoryFileProvider::default();
+        files.seed(&HlPath::default(), "a.txt", *b"hi");
+        let state = state_with_files(files);
+        let session = test_session("Alice", Access::all());
+
+        let setinfo = request(
+            Opcode::SetFileInfo,
+            1,
+            vec![
+                Field::string(FieldId::FileName, "a.txt"),
+                Field::string(FieldId::FileNewName, "a.lnk"),
+            ],
+        );
+        let [reply] = session
+            .on_set_file_info(&setinfo, &state)
+            .await
+            .try_into()
+            .unwrap();
+        if cfg!(windows) {
+            assert_eq!(error_text(&reply), "You are not allowed to hack servers.");
+        } else {
+            assert!(!reply.is_error());
+        }
+    }
+
+    #[tokio::test]
     async fn set_file_info_without_a_new_name_is_a_no_op() {
         let files = crate::file::InMemoryFileProvider::default();
         files.seed(&HlPath::default(), "a.txt", *b"hi");

@@ -22,6 +22,14 @@ pub fn validate_file_name(name: &str) -> Result<String, &'static str> {
     })
 }
 
+/// `true` if `name` ends in `.lnk` (case-insensitive), the name of a
+/// Windows shortcut.
+pub(crate) fn is_link_name(name: &str) -> bool {
+    name.as_bytes()
+        .last_chunk::<4>()
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(b".lnk"))
+}
+
 /// `name` with each `/`, `\`, and NUL mapped to `-`, and `.` and `..`
 /// mapped to dashes, cut to 255 bytes.
 fn unix_name(name: &str) -> String {
@@ -83,6 +91,15 @@ fn truncate(name: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_link_name_matches_a_lnk_ending_in_any_case() {
+        assert!(is_link_name(".lnk"));
+        assert!(is_link_name("Notes.LNK"));
+        assert!(!is_link_name("lnk"));
+        assert!(!is_link_name("Notes.lnk.txt"));
+        assert!(!is_link_name("ü.lnkx"));
+    }
 
     #[test]
     fn windows_name_keeps_a_plain_name() {

@@ -73,7 +73,12 @@ fn dropbox_blocked(dir: &HlPath, name: Option<&str>, access: Access) -> bool {
         .iter()
         .map(String::as_str)
         .chain(name)
-        .any(|c| c.to_ascii_lowercase().contains("drop box"))
+        .any(is_dropbox_name)
+}
+
+/// `true` if `name` contains "drop box" (case-insensitive).
+fn is_dropbox_name(name: &str) -> bool {
+    name.to_ascii_lowercase().contains("drop box")
 }
 
 /// `Err` with the text of a missing `VIEW_DROP_BOXES` if `dropbox_blocked`

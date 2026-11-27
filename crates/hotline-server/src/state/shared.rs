@@ -32,7 +32,7 @@ use crate::console::fields::{
 };
 use crate::console::{ChatCommandActor, ChatCommandDispatcher, ConsoleReply};
 use crate::file::{
-    BoxedReader, FileProvider, FileRequester, FinderInfo, FolderItem, PARTIAL_TYPE,
+    BoxedReader, FileProvider, FileRequester, FinderInfo, FolderItem, PARTIAL_TYPE, is_link_name,
     partial_upload_name,
 };
 use crate::flood::{FloodDecision, FloodEvent, FloodPolicy};
@@ -50,7 +50,7 @@ use crate::state::recipient::{self, Recipient};
 use crate::state::{
     AccessUpdate, Connection, ConsoleUpdate, NotReplaced, PendingTransfer, ProgressGuard,
     RecipientMessage, ReplacedAccount, TransferDirection, TransferKind, TransferProgress,
-    TransferRef, TransferReport, UserEntry, dropbox_access, dropbox_blocked,
+    TransferRef, TransferReport, UserEntry, dropbox_access, dropbox_blocked, is_dropbox_name,
     upload_destination_access,
 };
 use crate::user_list::UserListProvider;
@@ -899,7 +899,8 @@ impl SharedState {
     }
 
     /// Rename a file or folder in place, after checking the matching
-    /// privilege and drop box visibility.
+    /// privilege and drop box visibility. On Windows, a new name cannot
+    /// add a `.lnk` ending.
     pub async fn rename_file(
         &self,
         files: &dyn FileProvider,
@@ -909,7 +910,7 @@ impl SharedState {
         new_name: &str,
         access: Access,
     ) -> Result<(), Cow<'static, str>> {
-        dropbox_access(dir, Some(name), access)?;
+        dropbox_access(dir, None, access)?;
         let info = files.info(requester, dir, name).await.ok_or_else(|| {
             format!("Cannot set info because there is no file/folder named “{name}”.")
         })?;
@@ -924,6 +925,12 @@ impl SharedState {
         };
         if !access.contains(required) {
             Err(denied)?;
+        }
+        if !access.contains(Access::VIEW_DROP_BOXES) && is_dropbox_name(name) {
+            Err("You are not allowed to rename drop boxes.")?;
+        }
+        if cfg!(windows) && is_link_name(new_name) && !is_link_name(name) {
+            Err("You are not allowed to hack servers.")?;
         }
         files
             .rename(requester, dir, name, new_name)
