@@ -45,8 +45,11 @@ works this way.
   `/access` applies its fields all or nothing, but mhxd keeps the fields
   before an unknown key and notifies no one. `/0wn` ignores `color=`,
   `g0away=`, and `visible=`, since this server has no user color or
-  invisibility. A denied command names the missing privilege, not
-  mhxd's fixed text.
+  invisibility. A denied command says what the user is not allowed to
+  do, where mhxd's `cmd_denied` sends "permission denied". The checks
+  of the target of `/access` and `/0wn` send mhxd's text. mhxd sends
+  the `/users` list from the fixed name `hxd`, and `hls` sends it from
+  the server name.
 - **Console command lines split at the first space.** The session
   gives the dispatcher the command and the rest of the line. So
   `/access` and `/0wn` with no space after them reply nothing. mhxd's

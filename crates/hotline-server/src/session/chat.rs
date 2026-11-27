@@ -54,7 +54,7 @@ impl Session {
             .and_then(|prefix| Some((prefix, message.strip_prefix(prefix)?)))
         {
             return self
-                .on_console_command(prefix, command_line, chat_id, state)
+                .on_console_command(prefix, command_line, chat_id, state, config)
                 .await;
         }
 
@@ -106,6 +106,7 @@ impl Session {
         line: &str,
         chat_id: Option<u32>,
         state: &SharedState,
+        config: &ServerConfig,
     ) -> Vec<Transaction> {
         if line.is_empty() {
             return Vec::new();
@@ -135,7 +136,7 @@ impl Session {
                 vec![
                     Field::u16(FieldId::UserID, self.user_id),
                     Field::string(FieldId::Data, text),
-                    Field::string(FieldId::UserName, ConsoleReply::SENDER),
+                    Field::string(FieldId::UserName, config.server_name.to_string()),
                 ],
             )],
         }
@@ -752,12 +753,15 @@ mod tests {
             vec![Field::string(FieldId::Data, "/users")],
         );
 
-        let mut rx = state.register_recipient(1).await;
-        let reply = session
-            .on_chat_send(&request, &state, &console_config())
-            .await;
+        let config = ServerConfig {
+            server_name: "Example".into(),
+            ..console_config()
+        };
 
-        // `/users` answers with a private message from `hxd`.
+        let mut rx = state.register_recipient(1).await;
+        let reply = session.on_chat_send(&request, &state, &config).await;
+
+        // `/users` answers with a private message from the server name.
         assert!(rx.try_recv().is_err());
         assert_eq!(reply.len(), 1);
         assert_eq!(reply[0].r#type(), TransactionType::Push(Opcode::ServerMsg));
@@ -766,7 +770,7 @@ mod tests {
                 .received(text_encoding::DEFAULT)
                 .string(FieldId::UserName)
                 .as_deref(),
-            Some("hxd")
+            Some("Example")
         );
         assert_eq!(
             reply[0]

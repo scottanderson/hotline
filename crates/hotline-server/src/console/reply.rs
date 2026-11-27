@@ -5,11 +5,6 @@ pub enum ConsoleReply {
     Silent,
     /// A chat line, in the command's room if it has one.
     Chat(String),
-    /// A private message from [`ConsoleReply::SENDER`].
+    /// A private message from the server, under its name.
     Message(String),
-}
-
-impl ConsoleReply {
-    /// Sender name on a [`ConsoleReply::Message`].
-    pub const SENDER: &'static str = "hxd";
 }
